@@ -244,7 +244,7 @@ std::string ResolveTraverseScaleFactor(const AppCommandState& st, TraverseData::
   // withTransform=true unconditionally (unlike DrawingWorldToGrid): REQ-401 wants the Transformation
   // tab's factor whether or not "Apply transform settings" is itself turned on, same as the tab's
   // own readouts (ResolveDrawingTransform's comment on checked.transform.apply).
-  const DrawingTransformFactors f = ResolveDrawingTransform(st.drawingSettings, st.drawingInsUnits, true);
+  const DrawingTransformFactors f = ResolveDrawingTransform(st.drawing.drawingSettings, st.drawing.drawingInsUnits, true);
   if (!f.ok)
     return f.error;
   if (!f.transformOk)
@@ -255,29 +255,29 @@ std::string ResolveTraverseScaleFactor(const AppCommandState& st, TraverseData::
 
 geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY) {
   // world = local + origin, in double (REQ-101).
-  return DrawingWorldToGrid(st.drawingSettings, st.drawingInsUnits, localX + st.worldDocumentOriginX,
-                            localY + st.worldDocumentOriginY);
+  return DrawingWorldToGrid(st.drawing.drawingSettings, st.drawing.drawingInsUnits, localX + st.drawing.worldDocumentOriginX,
+                            localY + st.drawing.worldDocumentOriginY);
 }
 
 geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY) {
   const geo::GeoResult grid = DrawingPointToGrid(st, localX, localY);
   if (!grid.ok)
     return grid;
-  return geo::GridToLatLong(st.drawingSettings.zoneCode, grid.x, grid.y);
+  return geo::GridToLatLong(st.drawing.drawingSettings.zoneCode, grid.x, grid.y);
 }
 
 geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing) {
-  geo::GeoResult r = GridToDrawingWorld(st.drawingSettings, st.drawingInsUnits, easting, northing);
+  geo::GeoResult r = GridToDrawingWorld(st.drawing.drawingSettings, st.drawing.drawingInsUnits, easting, northing);
   if (r.ok) {
-    r.x -= st.worldDocumentOriginX;
-    r.y -= st.worldDocumentOriginY;
+    r.x -= st.drawing.worldDocumentOriginX;
+    r.y -= st.drawing.worldDocumentOriginY;
   }
   return r;
 }
 
 bool DrawingWgs84Frame::Open(const AppCommandState& st, std::string* error) {
-  const DrawingSettings& s = st.drawingSettings;
-  const DrawingTransformFactors f = ResolveDrawingTransform(s, st.drawingInsUnits, s.transform.apply);
+  const DrawingSettings& s = st.drawing.drawingSettings;
+  const DrawingTransformFactors f = ResolveDrawingTransform(s, st.drawing.drawingInsUnits, s.transform.apply);
   auto fail = [&](std::string why) {
     if (error)
       *error = std::move(why);
@@ -296,8 +296,8 @@ bool DrawingWgs84Frame::Open(const AppCommandState& st, std::string* error) {
   applyTransform_ = s.transform.apply;
   transform_ = applyTransform_ ? TransformOf(s.transform, f) : geo::LocalGridTransform{};
   zoneUnitsPerDrawingUnit_ = f.zoneUnitsPerDrawingUnit;
-  originX_ = st.worldDocumentOriginX;
-  originY_ = st.worldDocumentOriginY;
+  originX_ = st.drawing.worldDocumentOriginX;
+  originY_ = st.drawing.worldDocumentOriginY;
   return true;
 }
 
@@ -455,7 +455,7 @@ std::string GeoDataCoordinateSystemCode(const std::string& definition) {
 }
 
 void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::string>& log) {
-  DrawingSettings& ds = st.drawingSettings;
+  DrawingSettings& ds = st.drawing.drawingSettings;
   ds.markerX = g.designX;  // GEODATA's design point is WCS, as the marker is (REQ-359 item 4)
   ds.markerY = g.designY;
   double north = 90.0;  // grid north when the file gives no direction
@@ -516,19 +516,19 @@ void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::
 }
 
 bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* why) {
-  const DrawingSettings& ds = st.drawingSettings;
+  const DrawingSettings& ds = st.drawing.drawingSettings;
   if (!ds.Geolocated()) {
     *why = "the drawing has no zone";
     return false;
   }
-  const double metersPerUnit = MetersPerDrawingUnit(ds, st.drawingInsUnits);
+  const double metersPerUnit = MetersPerDrawingUnit(ds, st.drawing.drawingInsUnits);
   if (metersPerUnit <= 0.0) {
     *why = "the drawing is Unitless, so the location has no unit";
     return false;
   }
   // The marker is WORLD (REQ-359 item 4); the lat/long helper takes a LOCAL point.
   const geo::GeoResult ll =
-      DrawingPointToLatLong(st, ds.markerX - st.worldDocumentOriginX, ds.markerY - st.worldDocumentOriginY);
+      DrawingPointToLatLong(st, ds.markerX - st.drawing.worldDocumentOriginX, ds.markerY - st.drawing.worldDocumentOriginY);
   if (!ll.ok) {
     *why = "the marker's latitude / longitude in zone " + ds.zoneCode + " cannot be computed (" + ll.error + ")";
     return false;
@@ -549,7 +549,7 @@ bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* wh
   g.seaLevelElevation = t.elevation;
   g.projectionRadius = t.spheroidRadiusM;
   g.coordinateSystemDefinition = ds.zoneCode;
-  g.horizontalUnits = st.drawingInsUnits;
+  g.horizontalUnits = st.drawing.drawingInsUnits;
   g.horizontalUnitScale = metersPerUnit;
   *out = g;
   return true;
@@ -560,29 +560,29 @@ bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* wh
 // ---------------------------------------------------------------------------
 
 bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log) {
-  if (!st.drawingSettings.Geolocated()) {
+  if (!st.drawing.drawingSettings.Geolocated()) {
     log.push_back("Remove Location — the drawing has no location (No Datum, No Projection).");
     return false;
   }
   PushUndoSnapshot(st, "Remove Location");
-  st.drawingSettings.zoneCode.clear();
-  st.drawingSettings.ResetGeographicMarker();
-  st.drawingSettings.transform = DrawingSettings::Transform{};  // REQ-360: belongs to the zone
-  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;  // REQ-363 item 8
+  st.drawing.drawingSettings.zoneCode.clear();
+  st.drawing.drawingSettings.ResetGeographicMarker();
+  st.drawing.drawingSettings.transform = DrawingSettings::Transform{};  // REQ-360: belongs to the zone
+  st.drawing.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;  // REQ-363 item 8
   BumpCadGpuCache(st);  // document property: marks the drawing modified
   log.push_back("Remove Location — the drawing is no longer geolocated (No Datum, No Projection).");
   return true;
 }
 
 bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vector<std::string>& log) {
-  if (map == st.drawingSettings.onlineMap)
+  if (map == st.drawing.drawingSettings.onlineMap)
     return true;
-  if (map != DrawingSettings::OnlineMap::Off && !st.drawingSettings.Geolocated()) {
+  if (map != DrawingSettings::OnlineMap::Off && !st.drawing.drawingSettings.Geolocated()) {
     log.push_back("Online map — the drawing has no location; assign a zone in Drawing Settings first.");
     return false;
   }
   PushUndoSnapshot(st, "Online Map");
-  st.drawingSettings.onlineMap = map;
+  st.drawing.drawingSettings.onlineMap = map;
   BumpCadGpuCache(st);  // document property: marks the drawing modified
   log.push_back(std::string("Online map — ") + OnlineMapInfoOf(map).label + ".");
   return true;
@@ -593,7 +593,7 @@ static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const 
                             std::vector<std::string>& log, bool needsZone = true);
 
 bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string>& log) {
-  if (st.drawingSettings.Geolocated() && st.drawingSettings.onlineMap == DrawingSettings::OnlineMap::Off) {
+  if (st.drawing.drawingSettings.Geolocated() && st.drawing.drawingSettings.onlineMap == DrawingSettings::OnlineMap::Off) {
     log.push_back("Capture Area — choose a map first (Map Off shows nothing to capture).");
     return false;
   }
@@ -614,7 +614,7 @@ void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, s
   const size_t n = area.tiles.size();
   if (n > 0) {
     PushUndoSnapshot(st, "Capture Area");
-    st.drawingSettings.capturedAreas.push_back(std::move(area));
+    st.drawing.drawingSettings.capturedAreas.push_back(std::move(area));
     BumpCadGpuCache(st);  // document content: marks the drawing modified
   }
   st.active = AppCommandState::Kind::None;
@@ -632,13 +632,13 @@ void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std
 }
 
 bool RemoveCapturedMapAreas(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.drawingSettings.capturedAreas.empty()) {
+  if (st.drawing.drawingSettings.capturedAreas.empty()) {
     log.push_back("Remove Captured Areas — the drawing has no captured map areas.");
     return false;
   }
   PushUndoSnapshot(st, "Remove Captured Areas");
-  const size_t n = st.drawingSettings.capturedAreas.size();
-  st.drawingSettings.capturedAreas.clear();
+  const size_t n = st.drawing.drawingSettings.capturedAreas.size();
+  st.drawing.drawingSettings.capturedAreas.clear();
   BumpCadGpuCache(st);
   log.push_back("Remove Captured Areas — " + std::to_string(n) + " captured area(s) removed.");
   return true;
@@ -646,7 +646,7 @@ bool RemoveCapturedMapAreas(AppCommandState& st, std::vector<std::string>& log) 
 
 bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,
                          std::vector<std::string>& log) {
-  if (!st.drawingSettings.Geolocated()) {
+  if (!st.drawing.drawingSettings.Geolocated()) {
     log.push_back("Geographic marker — the drawing has no location; assign a zone in Drawing Settings first.");
     return false;
   }
@@ -658,9 +658,9 @@ bool SetGeographicMarker(AppCommandState& st, double localX, double localY, doub
   if (north < 0.0)
     north += 360.0;
   PushUndoSnapshot(st, "Reorient Marker");
-  st.drawingSettings.markerX = localX + st.worldDocumentOriginX;
-  st.drawingSettings.markerY = localY + st.worldDocumentOriginY;
-  st.drawingSettings.markerNorthDeg = north;
+  st.drawing.drawingSettings.markerX = localX + st.drawing.worldDocumentOriginX;
+  st.drawing.drawingSettings.markerY = localY + st.drawing.worldDocumentOriginY;
+  st.drawing.drawingSettings.markerNorthDeg = north;
   BumpCadGpuCache(st);
   char buf[160];
   std::snprintf(buf, sizeof(buf), "Geographic marker — design point set; north is %.4f\xC2\xB0 from the X axis.", north);
@@ -675,7 +675,7 @@ bool SetGeographicMarker(AppCommandState& st, double localX, double localY, doub
 float PositionMarkerRadiusWorld(const AppCommandState& st) {
   // Position markers are annotative by default (D-2026-11-06-a): in model space they follow the annotation scale.
   return kPositionMarkerPlottedRadiusIn * std::max(ModelObjectUnitsPerPlottedInch(true,
-      st.activeSpaceIndex == kModelSpaceIndex, st.modelUnitsPerPlottedInch, st.annotationScales,
+      st.activeSpaceIndex == kModelSpaceIndex, st.drawing.modelUnitsPerPlottedInch, st.drawing.annotationScales,
       st.currentAnnotationScaleIndex), 1.e-6f);
 }
 
@@ -695,13 +695,13 @@ void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, doub
 }
 
 void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY) {
-  MarkerBox(st.cadPositionMarkers[i], PositionMarkerRadiusWorld(st), mnX, mnY, mxX, mxY);
+  MarkerBox(st.drawing.cadPositionMarkers[i], PositionMarkerRadiusWorld(st), mnX, mnY, mxX, mxY);
 }
 
 bool CadPositionMarkerHit(const AppCommandState& st, size_t i, double x, double y, float tolWorld, double* distSq) {
-  if (i >= st.cadPositionMarkers.size())
+  if (i >= st.drawing.cadPositionMarkers.size())
     return false;
-  const CadPositionMarker& m = st.cadPositionMarkers[i];
+  const CadPositionMarker& m = st.drawing.cadPositionMarkers[i];
   const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
   const double dx = x - m.x;
   const double dy = y - m.y;
@@ -720,7 +720,7 @@ bool CadPositionMarkerHit(const AppCommandState& st, size_t i, double x, double 
 }
 
 void OpenPositionMarkerLabelEditor(AppCommandState& st, int markerIndex, bool justPlaced) {
-  if (markerIndex < 0 || static_cast<size_t>(markerIndex) >= st.cadPositionMarkers.size())
+  if (markerIndex < 0 || static_cast<size_t>(markerIndex) >= st.drawing.cadPositionMarkers.size())
     return;
   CloseMtextRichEditorUi(st);
   st.mtextRichEditorPlacement = false;
@@ -729,7 +729,7 @@ void OpenPositionMarkerLabelEditor(AppCommandState& st, int markerIndex, bool ju
   st.mtextRichEditorAnnIndex = -1;
   st.mtextRichEditorMarkerIndex = markerIndex;
   st.mtextRichEditorMarkerJustPlaced = justPlaced;
-  st.mtextRichEditorBuf = st.cadPositionMarkers[static_cast<size_t>(markerIndex)].label.text;
+  st.mtextRichEditorBuf = st.drawing.cadPositionMarkers[static_cast<size_t>(markerIndex)].label.text;
   st.mtextRichEditorOpen = true;
   st.mtextRichEditorFocusRequest = true;
 }
@@ -749,12 +749,12 @@ int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY
   m.longitudeDeg = ll.x;
   // The label: an MTEXT box beside the marker, up and to the right, sized in plotted inches so it
   // reads the same at every drawing scale (REQ-359 item 3).
-  const float mup = std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+  const float mup = std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
   const float r = PositionMarkerRadiusWorld(st);
-  const float h = std::max(st.defaultPlottedTextHeightInches, 0.01f) * mup;
+  const float h = std::max(st.drawing.defaultPlottedTextHeightInches, 0.01f) * mup;
   CadAnnotation& a = m.label;
   a.kind = CadAnnotation::Kind::Mtext;
-  a.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  a.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
   a.boxMinX = static_cast<float>(localX) + 1.5f * r;
   a.boxMaxX = a.boxMinX + 22.f * h;
   a.boxMaxY = static_cast<float>(localY) + 1.5f * r + 2.6f * h;
@@ -764,10 +764,10 @@ int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY
   a.insZ = m.z;
   a.text = FormatLatLongLabel(m.latitudeDeg, m.longitudeDeg);
   StampActiveTextStyleOnNewText(st, a);
-  st.cadPositionMarkers.push_back(std::move(m));
-  st.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.cadPositionMarkers.push_back(std::move(m));
+  st.drawing.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
-  const int ix = static_cast<int>(st.cadPositionMarkers.size()) - 1;
+  const int ix = static_cast<int>(st.drawing.cadPositionMarkers.size()) - 1;
   log.push_back("Mark Position — Position Marker placed; edit its label (Esc keeps the latitude/longitude).");
   OpenPositionMarkerLabelEditor(st, ix, /*justPlaced=*/true);
   return ix;
@@ -775,11 +775,11 @@ int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY
 
 int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double longitudeDeg,
                                  std::vector<std::string>& log) {
-  if (!st.drawingSettings.Geolocated()) {
+  if (!st.drawing.drawingSettings.Geolocated()) {
     log.push_back("Mark Position — the drawing has no location; assign a zone in Drawing Settings first.");
     return -1;
   }
-  const geo::GeoResult grid = geo::LatLongToGrid(st.drawingSettings.zoneCode, longitudeDeg, latitudeDeg);
+  const geo::GeoResult grid = geo::LatLongToGrid(st.drawing.drawingSettings.zoneCode, longitudeDeg, latitudeDeg);
   if (!grid.ok) {
     log.push_back("Mark Position — " + grid.error);
     return -1;
@@ -792,7 +792,7 @@ int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double
   const int ix = PlacePositionMarkerAtLocal(st, local.x, local.y, log);
   if (ix >= 0) {
     // Keep exactly what the user typed, not the inverse of the float-rounded grid (and the label).
-    CadPositionMarker& m = st.cadPositionMarkers[static_cast<size_t>(ix)];
+    CadPositionMarker& m = st.drawing.cadPositionMarkers[static_cast<size_t>(ix)];
     m.latitudeDeg = latitudeDeg;
     m.longitudeDeg = longitudeDeg;
     m.label.text = FormatLatLongLabel(latitudeDeg, longitudeDeg);
@@ -946,7 +946,7 @@ static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const 
     log.push_back(std::string(name) + " — finish or cancel the active command first.");
     return false;
   }
-  if (needsZone && !st.drawingSettings.Geolocated()) {
+  if (needsZone && !st.drawing.drawingSettings.Geolocated()) {
     log.push_back(std::string(name) + " — the drawing has no location; assign a zone in Drawing Settings first.");
     return false;
   }
@@ -999,7 +999,7 @@ int SurveyPointNumberAt(const AppCommandState& st, double localX, double localY)
   const double tol = std::max(1e-6, 4.0 * 1.1920929e-7 * std::max(std::fabs(localX), std::fabs(localY)));
   int best = 0;
   double bestD = tol;
-  for (const SurveyPoint& p : st.surveyPoints) {
+  for (const SurveyPoint& p : st.drawing.surveyPoints) {
     const double d = std::hypot(p.easting - localX, p.northing - localY);
     if (d <= bestD) {
       bestD = d;
@@ -1014,8 +1014,8 @@ bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY
   using GP = AppCommandState::GeoCmdPhase;
   AppCommandState::DrawingSettingsPickState& pick = st.drawingSettingsPick;
   if (pick.target == T::ReferencePoint || pick.target == T::RotationPoint) {
-    pick.worldX = localX + st.worldDocumentOriginX;
-    pick.worldY = localY + st.worldDocumentOriginY;
+    pick.worldX = localX + st.drawing.worldDocumentOriginX;
+    pick.worldY = localY + st.drawing.worldDocumentOriginY;
     pick.pointNumber = SurveyPointNumberAt(st, localX, localY);
     pick.done = true;
     st.active = AppCommandState::Kind::None;

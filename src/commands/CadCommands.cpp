@@ -156,7 +156,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.activeViewName         = cmd.activeViewName;
   doc.ucsFollow              = cmd.ucsFollow;
   // ADR-0010: everything the drawing saves and the user edits, in one assignment.
-  doc.content = static_cast<const DrawingContent&>(cmd);
+  doc.content = static_cast<const DrawingContent&>(cmd.drawing);
   doc.dwgImportedLights           = cmd.dwgImportedLights;
   doc.dwgImportedSun              = cmd.dwgImportedSun;
   doc.dwgImportedSunPresent       = cmd.dwgImportedSunPresent;
@@ -209,8 +209,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.ucsPrevious                = doc.ucsPrevious;
   cmd.activeViewName             = doc.activeViewName;
   cmd.ucsFollow                  = doc.ucsFollow;
-  static_cast<DrawingContent&>(cmd) = doc.content;  // ADR-0010
-  FillEmptyDrawingContentTables(cmd);
+  static_cast<DrawingContent&>(cmd.drawing) = doc.content;  // ADR-0010
+  FillEmptyDrawingContentTables(cmd.drawing);
   cmd.dwgImportedLights           = doc.dwgImportedLights;
   cmd.dwgImportedSun              = doc.dwgImportedSun;
   cmd.dwgImportedSunPresent       = doc.dwgImportedSunPresent;
@@ -232,7 +232,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pipeRunWorldSolidOwnerIndex.clear();
   cmd.pipeRunWorldSolidsSig = 0;  // 0 is never a real signature — forces the next refresh to derive
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
-  cmd.mleaderStyleDraft          = cmd.activeMultileaderStyle;
+  cmd.mleaderStyleDraft          = cmd.drawing.activeMultileaderStyle;
   cmd.selection                  = doc.selection;
   cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
@@ -261,9 +261,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
 
 int AddPaperLayout(AppCommandState& cmd) {
   // Pick a unique "Layout N" name.
-  int n = static_cast<int>(cmd.paperLayouts.size()) + 1;
+  int n = static_cast<int>(cmd.drawing.paperLayouts.size()) + 1;
   auto nameTaken = [&](const std::string& s) {
-    for (const PaperLayout& l : cmd.paperLayouts)
+    for (const PaperLayout& l : cmd.drawing.paperLayouts)
       if (l.name == s)
         return true;
     return false;
@@ -274,15 +274,15 @@ int AddPaperLayout(AppCommandState& cmd) {
   } while (nameTaken(name));
   PaperLayout layout;  // defaults: ARCH D, landscape
   layout.name = name;
-  cmd.paperLayouts.push_back(layout);
-  const int idx = static_cast<int>(cmd.paperLayouts.size()) - 1;
+  cmd.drawing.paperLayouts.push_back(layout);
+  const int idx = static_cast<int>(cmd.drawing.paperLayouts.size()) - 1;
   cmd.lastPaperLayoutIndex = idx;
   BumpCadGpuCache(cmd);
   return idx;
 }
 
 void DeletePaperLayout(AppCommandState& cmd, int idx) {
-  if (idx < 0 || static_cast<size_t>(idx) >= cmd.paperLayouts.size())
+  if (idx < 0 || static_cast<size_t>(idx) >= cmd.drawing.paperLayouts.size())
     return;
   PushUndoSnapshot(cmd, "Delete layout");  // before the erase, so UNDO brings the layout back (#763)
   // Leave floating model space first when it targets the doomed layout (restores the drawing's UCS).
@@ -290,7 +290,7 @@ void DeletePaperLayout(AppCommandState& cmd, int idx) {
     std::vector<std::string> ignored;
     ExitFloatingModelSpace(cmd, ignored);
   }
-  cmd.paperLayouts.erase(cmd.paperLayouts.begin() + idx);
+  cmd.drawing.paperLayouts.erase(cmd.drawing.paperLayouts.begin() + idx);
   // Re-point everything that holds a layout index.
   if (cmd.floatingViewportLayout > idx)
     --cmd.floatingViewportLayout;
@@ -305,7 +305,7 @@ void DeletePaperLayout(AppCommandState& cmd, int idx) {
     --cmd.activeSpaceIndex;                            // indices after the removed one shift down
   }
   cmd.lastPaperLayoutIndex =
-      std::clamp(cmd.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(cmd.paperLayouts.size()) - 1));
+      std::clamp(cmd.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(cmd.drawing.paperLayouts.size()) - 1));
   BumpCadGpuCache(cmd);
 }
 
@@ -334,8 +334,8 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
     cmd.modelViewPanY = cmd.viewportPanY;
     cmd.modelViewZoom = cmd.viewportZoom;
     cmd.modelViewSaved = true;
-  } else if (prev >= 0 && static_cast<size_t>(prev) < cmd.paperLayouts.size()) {
-    PaperLayout& pl = cmd.paperLayouts[static_cast<size_t>(prev)];
+  } else if (prev >= 0 && static_cast<size_t>(prev) < cmd.drawing.paperLayouts.size()) {
+    PaperLayout& pl = cmd.drawing.paperLayouts[static_cast<size_t>(prev)];
     pl.viewPanX = cmd.viewportPanX;
     pl.viewPanY = cmd.viewportPanY;
     pl.viewZoom = cmd.viewportZoom;
@@ -343,10 +343,10 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
   }
 
   int ns;
-  if (spaceIndex < 0 || cmd.paperLayouts.empty()) {
+  if (spaceIndex < 0 || cmd.drawing.paperLayouts.empty()) {
     ns = kModelSpaceIndex;
   } else {
-    ns = std::clamp(spaceIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1);
+    ns = std::clamp(spaceIndex, 0, static_cast<int>(cmd.drawing.paperLayouts.size()) - 1);
     cmd.lastPaperLayoutIndex = ns;
   }
   cmd.activeSpaceIndex = ns;
@@ -359,7 +359,7 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
       cmd.viewportZoom = cmd.modelViewZoom;
     }
   } else {
-    PaperLayout& pl = cmd.paperLayouts[static_cast<size_t>(ns)];
+    PaperLayout& pl = cmd.drawing.paperLayouts[static_cast<size_t>(ns)];
     if (pl.viewInit) {
       cmd.viewportPanX = pl.viewPanX;
       cmd.viewportPanY = pl.viewPanY;
@@ -378,9 +378,9 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
 
 void ToggleModelPaperSpace(AppCommandState& cmd) {
   if (cmd.activeSpaceIndex == kModelSpaceIndex) {
-    if (cmd.paperLayouts.empty())
+    if (cmd.drawing.paperLayouts.empty())
       AddPaperLayout(cmd);  // create one on first switch so PAPER has somewhere to go
-    SetActiveSpace(cmd, std::clamp(cmd.lastPaperLayoutIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1));
+    SetActiveSpace(cmd, std::clamp(cmd.lastPaperLayoutIndex, 0, static_cast<int>(cmd.drawing.paperLayouts.size()) - 1));
   } else {
     cmd.lastPaperLayoutIndex = cmd.activeSpaceIndex;
     SetActiveSpace(cmd, kModelSpaceIndex);
@@ -388,9 +388,9 @@ void ToggleModelPaperSpace(AppCommandState& cmd) {
 }
 
 int AddViewport(AppCommandState& cmd, int layoutIdx) {
-  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.drawing.paperLayouts.size())
     return -1;
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   const float sw = L.sheetWidthIn();
   const float sh = L.sheetHeightIn();
   Viewport vp;
@@ -400,11 +400,11 @@ int AddViewport(AppCommandState& cmd, int layoutIdx) {
   vp.paperYIn = (sh - vp.paperHIn) * 0.5f;
   // worldDocumentOrigin is ~the model centroid (the load/import rebase centers on it), so it makes a
   // sensible default viewport center; scale defaults to the drawing's plot scale.
-  vp.modelCenterX = cmd.worldDocumentOriginX;
-  vp.modelCenterY = cmd.worldDocumentOriginY;
-  vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
-  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
-                                                        nullptr, cmd.modelUnitsPerPlottedInch);
+  vp.modelCenterX = cmd.drawing.worldDocumentOriginX;
+  vp.modelCenterY = cmd.drawing.worldDocumentOriginY;
+  vp.scaleModelPerPaperIn = cmd.drawing.modelUnitsPerPlottedInch > 1.e-6f ? cmd.drawing.modelUnitsPerPlottedInch : 50.f;
+  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.drawing.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                        nullptr, cmd.drawing.modelUnitsPerPlottedInch);
   L.viewports.push_back(vp);
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;
@@ -415,19 +415,19 @@ int AddViewport(AppCommandState& cmd, int layoutIdx) {
 }
 
 int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In, float x1In, float y1In) {
-  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.drawing.paperLayouts.size())
     return -1;
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   Viewport vp;
   vp.paperXIn = std::min(x0In, x1In);
   vp.paperYIn = std::min(y0In, y1In);
   vp.paperWIn = std::max(0.1f, std::fabs(x1In - x0In));
   vp.paperHIn = std::max(0.1f, std::fabs(y1In - y0In));
-  vp.modelCenterX = cmd.worldDocumentOriginX;
-  vp.modelCenterY = cmd.worldDocumentOriginY;
-  vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
-  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
-                                                        nullptr, cmd.modelUnitsPerPlottedInch);
+  vp.modelCenterX = cmd.drawing.worldDocumentOriginX;
+  vp.modelCenterY = cmd.drawing.worldDocumentOriginY;
+  vp.scaleModelPerPaperIn = cmd.drawing.modelUnitsPerPlottedInch > 1.e-6f ? cmd.drawing.modelUnitsPerPlottedInch : 50.f;
+  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.drawing.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                        nullptr, cmd.drawing.modelUnitsPerPlottedInch);
   L.viewports.push_back(vp);
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;
@@ -439,9 +439,9 @@ int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In,
 
 static bool AddViewportFromPaperPolyline(AppCommandState& cmd, int layoutIdx, int polylineIndex,
                                          std::vector<std::string>& log) {
-  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.drawing.paperLayouts.size())
     return false;
-  PaperLayout& layout = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout& layout = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (polylineIndex < 0 || static_cast<size_t>(polylineIndex + 1) >= layout.paperPolyOffsets.size() ||
       static_cast<size_t>(polylineIndex) >= layout.paperPolyClosed.size() ||
       layout.paperPolyClosed[static_cast<size_t>(polylineIndex)] == 0) {
@@ -487,11 +487,11 @@ static bool AddViewportFromPaperPolyline(AppCommandState& cmd, int layoutIdx, in
   viewport.paperYIn = minY;
   viewport.paperWIn = maxX - minX;
   viewport.paperHIn = maxY - minY;
-  viewport.modelCenterX = cmd.worldDocumentOriginX;
-  viewport.modelCenterY = cmd.worldDocumentOriginY;
-  viewport.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
-  viewport.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
-                                                                nullptr, cmd.modelUnitsPerPlottedInch);
+  viewport.modelCenterX = cmd.drawing.worldDocumentOriginX;
+  viewport.modelCenterY = cmd.drawing.worldDocumentOriginY;
+  viewport.scaleModelPerPaperIn = cmd.drawing.modelUnitsPerPlottedInch > 1.e-6f ? cmd.drawing.modelUnitsPerPlottedInch : 50.f;
+  viewport.annotationScaleName = CadActiveAnnotationScaleName(&cmd.drawing.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                                nullptr, cmd.drawing.modelUnitsPerPlottedInch);
   PushUndoSnapshot(cmd, "Create MVIEW object viewport");
   layout.viewports.push_back(std::move(viewport));
   const int idx = static_cast<int>(layout.viewports.size()) - 1;
@@ -504,7 +504,7 @@ static bool AddViewportFromPaperPolyline(AppCommandState& cmd, int layoutIdx, in
 }
 
 static bool CreateMviewPreset(AppCommandState& st, const std::string& option, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+  if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size()) {
     log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
     return false;
   }
@@ -514,7 +514,7 @@ static bool CreateMviewPreset(AppCommandState& st, const std::string& option, st
     log.push_back("MVIEW Object — select a closed paper-space polyline (Esc to cancel).");
     return true;
   }
-  PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
   const float width = layout.sheetWidthIn(), height = layout.sheetHeightIn();
   if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.f || height <= 0.f) {
     log.push_back("MVIEW — the active layout has invalid paper dimensions.");
@@ -557,7 +557,7 @@ static bool CreateMviewPreset(AppCommandState& st, const std::string& option, st
 
 void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.activeSpaceIndex == kModelSpaceIndex || cmd.activeSpaceIndex < 0 ||
-      static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size()) {
+      static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.drawing.paperLayouts.size()) {
     log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
     return;
   }
@@ -569,9 +569,9 @@ void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string
 }
 
 void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
-  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.drawing.paperLayouts.size())
     return;
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
     return;
   L.viewports.erase(L.viewports.begin() + vpIdx);
@@ -621,12 +621,12 @@ void ClearViewportSelection(AppCommandState& cmd) {
 }
 
 void DeleteSelectedViewports(AppCommandState& cmd, std::vector<std::string>& log) {
-  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size() ||
+  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.drawing.paperLayouts.size() ||
       cmd.selectedViewports.empty()) {
     log.push_back("DELETE — no viewport selected.");
     return;
   }
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
   std::vector<int> idxs = cmd.selectedViewports;
   std::sort(idxs.begin(), idxs.end(), [](int a, int b) { return a > b; });  // erase high→low keeps indices valid
   int n = 0;
@@ -642,10 +642,10 @@ void DeleteSelectedViewports(AppCommandState& cmd, std::vector<std::string>& log
 
 void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bool copy,
                                 std::vector<std::string>& log) {
-  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size() ||
+  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.drawing.paperLayouts.size() ||
       cmd.selectedViewports.empty())
     return;
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
   std::vector<int> newSel;
   for (int vi : cmd.selectedViewports) {
     if (vi < 0 || static_cast<size_t>(vi) >= L.viewports.size())
@@ -749,9 +749,9 @@ const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st) {
   // layout is active and NOT in floating model space; otherwise it targets model space (→ nullptr).
   if (st.activeSpaceIndex < 0 || InFloatingModelSpace(st))
     return nullptr;
-  if (static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size())
+  if (static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size())
     return nullptr;
-  return &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  return &st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
 }
 
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
@@ -810,54 +810,54 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // header-only box-select + unit tests can share it.
 
 void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
-  for (size_t i = 0; i < scratch.circleCount(); ++i) {
-    const CadCircleRecord c = scratch.circle(i);
+  for (size_t i = 0; i < scratch.drawing.circleCount(); ++i) {
+    const CadCircleRecord c = scratch.drawing.circle(i);
     L.paperCircles.push_back(static_cast<float>(c.cx));
     L.paperCircles.push_back(static_cast<float>(c.cy));
     L.paperCircles.push_back(static_cast<float>(c.r));
   }
-  L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(), scratch.userCircleAttrs.end());
-  L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
-  L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
-  L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
-  L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
-  for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
+  L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.drawing.userCircleAttrs.begin(), scratch.drawing.userCircleAttrs.end());
+  L.paperArcs.insert(L.paperArcs.end(), scratch.drawing.userArcs.begin(), scratch.drawing.userArcs.end());
+  L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.drawing.userArcAttrs.begin(), scratch.drawing.userArcAttrs.end());
+  L.paperEllipses.insert(L.paperEllipses.end(), scratch.drawing.userEllipses.begin(), scratch.drawing.userEllipses.end());
+  L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.drawing.userEllAttrs.begin(), scratch.drawing.userEllAttrs.end());
+  for (size_t p = 0; p + 1 < scratch.drawing.userPolylineOffsets.size(); ++p) {
     if (L.paperPolyOffsets.empty())
       L.paperPolyOffsets.push_back(0);
-    const int a = scratch.userPolylineOffsets[p];
-    const int b = scratch.userPolylineOffsets[p + 1];
+    const int a = scratch.drawing.userPolylineOffsets[p];
+    const int b = scratch.drawing.userPolylineOffsets[p + 1];
     for (int v = a; v < b; ++v) {
       const size_t base = static_cast<size_t>(v);
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).x));
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).y));
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).z));
-      const float bg = static_cast<size_t>(v) < scratch.userPolylineVertsBulge.size()
-                           ? scratch.userPolylineVertsBulge[static_cast<size_t>(v)]
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.drawing.vertex(base).x));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.drawing.vertex(base).y));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.drawing.vertex(base).z));
+      const float bg = static_cast<size_t>(v) < scratch.drawing.userPolylineVertsBulge.size()
+                           ? scratch.drawing.userPolylineVertsBulge[static_cast<size_t>(v)]
                            : 0.f;
       L.paperPolyVertsBulge.push_back(bg);
     }
     L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
-    L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
-    L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
+    L.paperPolyClosed.push_back(scratch.drawing.userPolylineClosed[p]);
+    L.paperPolyAttrs.push_back(scratch.drawing.userPolylineAttrs[p]);
   }
-  L.paperLines.insert(L.paperLines.end(), scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
-  L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.userLineAttrs.begin(), scratch.userLineAttrs.end());
-  L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
-  L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(), scratch.cadAnnotationAttrs.end());
-  L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.cadFilledRegions.begin(),
-                              scratch.cadFilledRegions.end());
-  L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.cadFilledRegionAttrs.begin(),
-                                  scratch.cadFilledRegionAttrs.end());
-  L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.cadMultileaders.begin(),
-                             scratch.cadMultileaders.end());
-  L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
-                                 scratch.cadMultileaderAttrs.end());
-  L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
-  L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
-  L.paperPoints.insert(L.paperPoints.end(), scratch.cadPoints.begin(), scratch.cadPoints.end());
-  L.paperPointAttrs.insert(L.paperPointAttrs.end(), scratch.cadPointAttrs.begin(), scratch.cadPointAttrs.end());
-  L.paperSplines.insert(L.paperSplines.end(), scratch.cadSplines.begin(), scratch.cadSplines.end());
-  L.paperSplineAttrs.insert(L.paperSplineAttrs.end(), scratch.cadSplineAttrs.begin(), scratch.cadSplineAttrs.end());
+  L.paperLines.insert(L.paperLines.end(), scratch.drawing.userLinesFlat.begin(), scratch.drawing.userLinesFlat.end());
+  L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.drawing.userLineAttrs.begin(), scratch.drawing.userLineAttrs.end());
+  L.paperTexts.insert(L.paperTexts.end(), scratch.drawing.cadAnnotations.begin(), scratch.drawing.cadAnnotations.end());
+  L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.drawing.cadAnnotationAttrs.begin(), scratch.drawing.cadAnnotationAttrs.end());
+  L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.drawing.cadFilledRegions.begin(),
+                              scratch.drawing.cadFilledRegions.end());
+  L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.drawing.cadFilledRegionAttrs.begin(),
+                                  scratch.drawing.cadFilledRegionAttrs.end());
+  L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.drawing.cadMultileaders.begin(),
+                             scratch.drawing.cadMultileaders.end());
+  L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.drawing.cadMultileaderAttrs.begin(),
+                                 scratch.drawing.cadMultileaderAttrs.end());
+  L.paperTables.insert(L.paperTables.end(), scratch.drawing.cadTables.begin(), scratch.drawing.cadTables.end());
+  L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.drawing.cadTableAttrs.begin(), scratch.drawing.cadTableAttrs.end());
+  L.paperPoints.insert(L.paperPoints.end(), scratch.drawing.cadPoints.begin(), scratch.drawing.cadPoints.end());
+  L.paperPointAttrs.insert(L.paperPointAttrs.end(), scratch.drawing.cadPointAttrs.begin(), scratch.drawing.cadPointAttrs.end());
+  L.paperSplines.insert(L.paperSplines.end(), scratch.drawing.cadSplines.begin(), scratch.drawing.cadSplines.end());
+  L.paperSplineAttrs.insert(L.paperSplineAttrs.end(), scratch.drawing.cadSplineAttrs.begin(), scratch.drawing.cadSplineAttrs.end());
 }
 
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
@@ -1647,8 +1647,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     switch (sel.type) {
     case SelectedEntity::Type::LineSeg: {
       const size_t li = static_cast<size_t>(sel.index);
-      if (li < cmd.lineCount()) {
-        const CadLineRecord ln = cmd.line(li);
+      if (li < cmd.drawing.lineCount()) {
+        const CadLineRecord ln = cmd.drawing.line(li);
         tryGrip(sel, static_cast<float>(ln.x0), static_cast<float>(ln.y0), 0);
         tryGrip(sel, static_cast<float>(ln.x1), static_cast<float>(ln.y1), 1);
       }
@@ -1656,8 +1656,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     }
     case SelectedEntity::Type::Circle: {
       const size_t ci = static_cast<size_t>(sel.index);
-      if (ci < cmd.circleCount()) {
-        const CadCircleRecord c = cmd.circle(ci);
+      if (ci < cmd.drawing.circleCount()) {
+        const CadCircleRecord c = cmd.drawing.circle(ci);
         const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
         tryGrip(sel, cx, cy, 0);
         tryGrip(sel, cx + r, cy, 1);
@@ -1665,15 +1665,15 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Polyline: {
-      const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+      const int np = cmd.drawing.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.drawing.userPolylineOffsets.size() - 1) : 0;
       if (sel.index >= 0 && sel.index < np) {
-        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-        const int endV = cmd.userPolylineOffsets[(static_cast<size_t>(sel.index)+ 1)];
+        const int startV = cmd.drawing.userPolylineOffsets[static_cast<size_t>(sel.index)];
+        const int endV = cmd.drawing.userPolylineOffsets[(static_cast<size_t>(sel.index)+ 1)];
         for (int vi = 0; vi < endV - startV; ++vi) {
           const size_t xIdx = (static_cast<size_t>(startV)+ vi);
-          if (xIdx >= cmd.vertexCount())
+          if (xIdx >= cmd.drawing.vertexCount())
             break;
-          tryGrip(sel, static_cast<float>(cmd.vertex(xIdx).x), static_cast<float>(cmd.vertex(xIdx).y), vi);
+          tryGrip(sel, static_cast<float>(cmd.drawing.vertex(xIdx).x), static_cast<float>(cmd.drawing.vertex(xIdx).y), vi);
         }
         CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float) {
           tryGrip(sel, mx, my, kPolyBulgeGripBase + seg);  // REQ-316 / ADR-047
@@ -1682,8 +1682,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Arc: {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
-        const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userArcs.size()) {
+        const CadArc& a = cmd.drawing.userArcs[static_cast<size_t>(sel.index)];
         const float endRad = a.startRad + a.sweepRad;
         tryGrip(sel, static_cast<float>(a.cx), static_cast<float>(a.cy), 0);
         tryGrip(sel, static_cast<float>(a.cx + a.r * std::cos(a.startRad)), static_cast<float>(a.cy + a.r * std::sin(a.startRad)), 1);
@@ -1692,8 +1692,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Ellipse: {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
-        const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userEllipses.size()) {
+        const CadEllipse& el = cmd.drawing.userEllipses[static_cast<size_t>(sel.index)];
         // Centre, major end, minor end — through the shared helper, so this asks the same question
         // src/ui/CadUi.cpp asks when it DRAWS them (GitHub #531). They disagreed before: a tilted
         // ellipse drew no grips and still offered them here, which is an invisible handle sitting
@@ -1708,11 +1708,11 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::BlockRef: {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
-        const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
-        const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.cadBlockRefs.size()) {
+        const CadBlockRef& r = cmd.drawing.cadBlockRefs[static_cast<size_t>(sel.index)];
+        const int di = CadBlockFindDef(cmd.drawing.blockDefs, r.defName);
         if (di >= 0) {
-          const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+          const CadBlockDefinition& def = cmd.drawing.blockDefs[static_cast<size_t>(di)];
           const int nG = CadBlockDynGripCount(def);
           for (int g = 0; g < nG; ++g) {
             if (!CadBlockDynGripShownOnInsert(g))
@@ -1726,8 +1726,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Spline: {  // REQ-443: fit points, or control vertices for a CV spline
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadSplines.size()) {
-        const CadSpline& sp = cmd.cadSplines[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.cadSplines.size()) {
+        const CadSpline& sp = cmd.drawing.cadSplines[static_cast<size_t>(sel.index)];
         for (size_t i = 0; i < spline::EditablePointCount(sp); ++i) {
           const spline::Vec3 v = spline::EditablePoint(sp, i);
           tryGrip(sel, static_cast<float>(v.x), static_cast<float>(v.y), static_cast<int>(i));
@@ -1736,15 +1736,15 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Point: {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadPoints.size()) {
-        const CadPoint& p = cmd.cadPoints[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.cadPoints.size()) {
+        const CadPoint& p = cmd.drawing.cadPoints[static_cast<size_t>(sel.index)];
         tryGrip(sel, static_cast<float>(p.x), static_cast<float>(p.y), 0);
       }
       break;
     }
     case SelectedEntity::Type::Alignment: {  // REQ-487.1: start, tangent ends, curve radius grips
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.alignments.size()) {
-        for (const alignment::Grip& g : alignment::GripPoints(cmd.alignments[static_cast<size_t>(sel.index)]))
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.alignments.size()) {
+        for (const alignment::Grip& g : alignment::GripPoints(cmd.drawing.alignments[static_cast<size_t>(sel.index)]))
           tryGrip(sel, static_cast<float>(g.point.x), static_cast<float>(g.point.y), g.which);
       }
       break;
@@ -1779,7 +1779,7 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   cmd.entityGripTypedDistanceValid = false;
   switch (bestSel.type) {  // store originals for RMB / Esc cancel
   case SelectedEntity::Type::LineSeg: {
-    const CadLineRecord ln = cmd.line(static_cast<size_t>(bestSel.index));
+    const CadLineRecord ln = cmd.drawing.line(static_cast<size_t>(bestSel.index));
     cmd.entityGripOrigX0 = static_cast<float>(ln.x0);
     cmd.entityGripOrigY0 = static_cast<float>(ln.y0);
     cmd.entityGripOrigX1 = static_cast<float>(ln.x1);
@@ -1787,31 +1787,31 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const CadCircleRecord c = cmd.circle(static_cast<size_t>(bestSel.index));
+    const CadCircleRecord c = cmd.drawing.circle(static_cast<size_t>(bestSel.index));
     cmd.entityGripOrigCx = static_cast<float>(c.cx);
     cmd.entityGripOrigCy = static_cast<float>(c.cy);
     cmd.entityGripOrigR = static_cast<float>(c.r);
     break;
   }
   case SelectedEntity::Type::Polyline: {
-    const int startV = cmd.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
+    const int startV = cmd.drawing.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
     cmd.entityGripOrigPolyBulgeVi = -1;
     if (bestWhich >= kPolyBulgeGripBase) {  // REQ-316 / ADR-047: arc-segment bulge grip
       const int va = startV + (bestWhich - kPolyBulgeGripBase);
       cmd.entityGripOrigPolyBulgeVi = va;
-      cmd.entityGripOrigPolyBulge = static_cast<size_t>(va) < cmd.userPolylineVertsBulge.size()
-                                        ? cmd.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
+      cmd.entityGripOrigPolyBulge = static_cast<size_t>(va) < cmd.drawing.userPolylineVertsBulge.size()
+                                        ? cmd.drawing.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
       cmd.entityGripOrigPolylineXIdx = -1;
       break;
     }
     const size_t xIdx = (static_cast<size_t>(startV)+ bestWhich);
     cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
-    cmd.entityGripOrigPolyVertX = static_cast<float>(cmd.vertex(xIdx).x);
-    cmd.entityGripOrigPolyVertY = static_cast<float>(cmd.vertex(xIdx).y);
+    cmd.entityGripOrigPolyVertX = static_cast<float>(cmd.drawing.vertex(xIdx).x);
+    cmd.entityGripOrigPolyVertY = static_cast<float>(cmd.drawing.vertex(xIdx).y);
     break;
   }
   case SelectedEntity::Type::Arc: {
-    const CadArc& a = cmd.userArcs[static_cast<size_t>(bestSel.index)];
+    const CadArc& a = cmd.drawing.userArcs[static_cast<size_t>(bestSel.index)];
     cmd.entityGripOrigCx = static_cast<float>(a.cx);
     cmd.entityGripOrigCy = static_cast<float>(a.cy);
     cmd.entityGripOrigR = static_cast<float>(a.r);
@@ -1820,7 +1820,7 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     break;
   }
   case SelectedEntity::Type::Ellipse: {
-    const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(bestSel.index)];
+    const CadEllipse& el = cmd.drawing.userEllipses[static_cast<size_t>(bestSel.index)];
     cmd.entityGripOrigEllCx = static_cast<float>(el.cx);
     cmd.entityGripOrigEllCy = static_cast<float>(el.cy);
     cmd.entityGripOrigEllMajVx = el.majVx;
@@ -1829,10 +1829,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     break;
   }
   case SelectedEntity::Type::Spline:  // REQ-443
-    cmd.entityGripOrigSpline = cmd.cadSplines[static_cast<size_t>(bestSel.index)];
+    cmd.entityGripOrigSpline = cmd.drawing.cadSplines[static_cast<size_t>(bestSel.index)];
     break;
   case SelectedEntity::Type::Alignment:  // REQ-487.1
-    cmd.entityGripOrigAlignment = cmd.alignments[static_cast<size_t>(bestSel.index)];
+    cmd.entityGripOrigAlignment = cmd.drawing.alignments[static_cast<size_t>(bestSel.index)];
     break;
   default:
     break;
@@ -1841,9 +1841,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
 }
 
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log) {
-  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.drawing.paperLayouts.size())
     return;
-  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
     return;
   if (!L.viewports[static_cast<size_t>(vpIdx)].on) {
@@ -1877,8 +1877,8 @@ void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log)
   // the indices are cleared because it needs them to find the viewport.
   if (cmd.floatingUcsSwapActive) {
     if (cmd.floatingViewportLayout >= 0 &&
-        static_cast<size_t>(cmd.floatingViewportLayout) < cmd.paperLayouts.size()) {
-      PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+        static_cast<size_t>(cmd.floatingViewportLayout) < cmd.drawing.paperLayouts.size()) {
+      PaperLayout& L = cmd.drawing.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
       if (cmd.floatingViewportIndex >= 0 &&
           static_cast<size_t>(cmd.floatingViewportIndex) < L.viewports.size())
         L.viewports[static_cast<size_t>(cmd.floatingViewportIndex)].activeUcs = cmd.activeUcs;
@@ -1896,12 +1896,12 @@ void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log)
 // --- Page setups (named, drawing-wide) ---
 
 void EnsureStandardPageSetup(AppCommandState& cmd) {
-  for (const PageSetup& p : cmd.savedPageSetups)
+  for (const PageSetup& p : cmd.drawing.savedPageSetups)
     if (p.name == "Standard")
       return;
   PageSetup std;
   std.name = "Standard";  // defaults: ARCH D, landscape, 1:1
-  cmd.savedPageSetups.insert(cmd.savedPageSetups.begin(), std);
+  cmd.drawing.savedPageSetups.insert(cmd.drawing.savedPageSetups.begin(), std);
 }
 
 void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps) {
@@ -1938,20 +1938,20 @@ PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name
 
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy,
                       std::vector<std::string>& log) {
-  const int n = static_cast<int>(cmd.paperLayouts.size());
+  const int n = static_cast<int>(cmd.drawing.paperLayouts.size());
   if (layoutIdx < 0 || layoutIdx >= n)
     return;
   if (makeCopy) {
     CopyPaperLayout(cmd, layoutIdx, {}, log);
     return;
   }
-  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
-  cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
+  PaperLayout item = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
+  cmd.drawing.paperLayouts.erase(cmd.drawing.paperLayouts.begin() + layoutIdx);
   int insertAt = beforeIdx;
   if (insertAt > layoutIdx)
     --insertAt;  // account for the removed slot
-  insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
-  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
+  insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.drawing.paperLayouts.size()));
+  cmd.drawing.paperLayouts.insert(cmd.drawing.paperLayouts.begin() + insertAt, item);
   SetActiveSpace(cmd, insertAt);
   log.push_back("Layout \"" + item.name + "\" moved.");
   BumpCadGpuCache(cmd);
@@ -1959,7 +1959,7 @@ void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool m
 
 int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
                     std::vector<std::string>& log) {
-  const int n = static_cast<int>(cmd.paperLayouts.size());
+  const int n = static_cast<int>(cmd.drawing.paperLayouts.size());
   if (layoutIdx < 0 || layoutIdx >= n) {
     log.push_back("LAYOUT COPY - no source layout was found.");
     return -1;
@@ -1967,12 +1967,12 @@ int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requ
 
   auto nameTaken = [&](const std::string& name) {
     const std::string folded = StringUtil::toLowerAsciiCopy(name);
-    return std::any_of(cmd.paperLayouts.begin(), cmd.paperLayouts.end(), [&](const PaperLayout& layout) {
+    return std::any_of(cmd.drawing.paperLayouts.begin(), cmd.drawing.paperLayouts.end(), [&](const PaperLayout& layout) {
       return StringUtil::toLowerAsciiCopy(layout.name) == folded;
     });
   };
 
-  PaperLayout copy = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  PaperLayout copy = cmd.drawing.paperLayouts[static_cast<size_t>(layoutIdx)];
   std::string name = StringUtil::trimCopy(requestedName);
   if (name.empty()) {
     const std::string base = copy.name;
@@ -1992,7 +1992,7 @@ int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requ
   const int insertAt = n;
   // Validation above must finish before this snapshot so a collision is a true no-op, including history.
   PushUndoSnapshot(cmd, "Copy layout");
-  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, std::move(copy));
+  cmd.drawing.paperLayouts.insert(cmd.drawing.paperLayouts.begin() + insertAt, std::move(copy));
 
   BumpCadGpuCache(cmd);
   log.push_back("Layout copied as \"" + name + "\".");
@@ -2032,7 +2032,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   // ADR-0010: one assignment. Meshes, point clouds, surfaces and solids copy as shared pointers,
   // not payloads (architecture §11.5 as amended 2026-08-12), so this stays O(entities), not
   // O(triangles) — which is what makes undo affordable with a model loaded.
-  snap.content = static_cast<const DrawingContent&>(st);
+  snap.content = static_cast<const DrawingContent&>(st.drawing);
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
   for (auto& att : snap.content.pdfAttachments)
     att.glTexId = 0;
@@ -2059,25 +2059,25 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
 void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
   // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
   // index, so the floating/viewport/active-space state would point at the wrong layout (#763).
-  const bool layoutCountChanged = st.paperLayouts.size() != snap.content.paperLayouts.size();
+  const bool layoutCountChanged = st.drawing.paperLayouts.size() != snap.content.paperLayouts.size();
   if (layoutCountChanged && st.floatingViewportIndex >= 0) {
     std::vector<std::string> ignored;
     ExitFloatingModelSpace(st, ignored);  // before the swap, so the drawing's UCS is restored
   }
   // A restored plot scale resizes the survey-point labels exactly as setting it does (REQ-357),
   // so remember the live one before the content swap overwrites it.
-  const float previousPlotScale = st.modelUnitsPerPlottedInch;
-  static_cast<DrawingContent&>(st) = snap.content;  // ADR-0010
-  FillEmptyDrawingContentTables(st);
+  const float previousPlotScale = st.drawing.modelUnitsPerPlottedInch;
+  static_cast<DrawingContent&>(st.drawing) = snap.content;  // ADR-0010
+  FillEmptyDrawingContentTables(st.drawing);
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
-  st.mleaderStyleDraft = st.activeMultileaderStyle;
+  st.mleaderStyleDraft = st.drawing.activeMultileaderStyle;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   if (layoutCountChanged) {
     ClearViewportSelection(st);
-    if (st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size()))
+    if (st.activeSpaceIndex >= static_cast<int>(st.drawing.paperLayouts.size()))
       st.activeSpaceIndex = kModelSpaceIndex;
     st.lastPaperLayoutIndex =
-        std::clamp(st.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(st.paperLayouts.size()) - 1));
+        std::clamp(st.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(st.drawing.paperLayouts.size()) - 1));
   }
   // Section plane (REQ-343 amended, issue #479 acceptance 8).
   //
@@ -2112,8 +2112,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.sectionPlaneSelected = false;
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
-  if (st.modelUnitsPerPlottedInch != previousPlotScale)
-    SetDrawingPlotScale(st, st.modelUnitsPerPlottedInch);
+  if (st.drawing.modelUnitsPerPlottedInch != previousPlotScale)
+    SetDrawingPlotScale(st, st.drawing.modelUnitsPerPlottedInch);
 }
 
 } // namespace
@@ -2175,56 +2175,56 @@ const EntityKind kEntityKindsInSweepOrder[] = {
 template <typename StateT>
 auto* AttrsForKind(StateT& st, EntityKind k) {
   switch (k) {
-  case EntityKind::Line:         return &st.userLineAttrs;
-  case EntityKind::Circle:       return &st.userCircleAttrs;
-  case EntityKind::Arc:          return &st.userArcAttrs;
-  case EntityKind::Ellipse:      return &st.userEllAttrs;
-  case EntityKind::Polyline:     return &st.userPolylineAttrs;
-  case EntityKind::Annotation:   return &st.cadAnnotationAttrs;
-  case EntityKind::FilledRegion: return &st.cadFilledRegionAttrs;
-  case EntityKind::Mesh:         return &st.cadMeshAttrs;
-  case EntityKind::FeatureLine:  return &st.featureLineAttrs;
-  case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
-  case EntityKind::Table:        return &st.cadTableAttrs;    // REQ-148
-  case EntityKind::BlockRef:     return &st.cadBlockRefAttrs;
-  case EntityKind::Solid:        return &st.cadSolidAttrs;     // REQ-313 / ADR-045
-  case EntityKind::PointCloud:   return &st.cadPointCloudAttrs; // REQ-171 / ADR-042
-  case EntityKind::PositionMarker: return &st.cadPositionMarkerAttrs; // REQ-359
-  case EntityKind::Multileader:    return &st.cadMultileaderAttrs;   // REQ-367
-  case EntityKind::Spline:         return &st.cadSplineAttrs;        // REQ-443
-  case EntityKind::Point:          return &st.cadPointAttrs;         // REQ-456
+  case EntityKind::Line:         return &st.drawing.userLineAttrs;
+  case EntityKind::Circle:       return &st.drawing.userCircleAttrs;
+  case EntityKind::Arc:          return &st.drawing.userArcAttrs;
+  case EntityKind::Ellipse:      return &st.drawing.userEllAttrs;
+  case EntityKind::Polyline:     return &st.drawing.userPolylineAttrs;
+  case EntityKind::Annotation:   return &st.drawing.cadAnnotationAttrs;
+  case EntityKind::FilledRegion: return &st.drawing.cadFilledRegionAttrs;
+  case EntityKind::Mesh:         return &st.drawing.cadMeshAttrs;
+  case EntityKind::FeatureLine:  return &st.drawing.featureLineAttrs;
+  case EntityKind::Surface:      return &st.drawing.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
+  case EntityKind::Table:        return &st.drawing.cadTableAttrs;    // REQ-148
+  case EntityKind::BlockRef:     return &st.drawing.cadBlockRefAttrs;
+  case EntityKind::Solid:        return &st.drawing.cadSolidAttrs;     // REQ-313 / ADR-045
+  case EntityKind::PointCloud:   return &st.drawing.cadPointCloudAttrs; // REQ-171 / ADR-042
+  case EntityKind::PositionMarker: return &st.drawing.cadPositionMarkerAttrs; // REQ-359
+  case EntityKind::Multileader:    return &st.drawing.cadMultileaderAttrs;   // REQ-367
+  case EntityKind::Spline:         return &st.drawing.cadSplineAttrs;        // REQ-443
+  case EntityKind::Point:          return &st.drawing.cadPointAttrs;         // REQ-456
   }
-  return &st.userLineAttrs;
+  return &st.drawing.userLineAttrs;
 }
 
 } // namespace
 
 bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
-  if (surfaceIndex >= st.cadSurfaces.size())
+  if (surfaceIndex >= st.drawing.cadSurfaces.size())
     return false;
-  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  const CadSurface& s = st.drawing.cadSurfaces[surfaceIndex];
   if (!s.tin || s.tin->indices.empty())
     return false;
-  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+  if (surfaceIndex >= st.drawing.cadSurfaceAttrs.size())
     return true;  // attrs are length-locked to cadSurfaces; a short array means "defaults", not hidden
-  const EntityAttributes& a = st.cadSurfaceAttrs[surfaceIndex];
+  const EntityAttributes& a = st.drawing.cadSurfaceAttrs[surfaceIndex];
   // REQ-084 (d): an isolated-out surface is invisible, so it must not be drawn OR answer a click.
   if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
     return false;
   // REQ-068: a surface on a frozen or off layer is not drawn.
-  const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+  const auto it = std::find_if(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                                [&](const CadLayerRow& r) { return r.name == a.layer; });
-  return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
+  return !(it != st.drawing.drawingLayerTable.end() && (!it->on || it->frozen));
 }
 
 SurfaceState SurfaceRebuildStateOf(const AppCommandState& st, size_t surfaceIndex) {
-  if (surfaceIndex >= st.cadSurfaces.size())
+  if (surfaceIndex >= st.drawing.cadSurfaces.size())
     return SurfaceState::Current;
-  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  const CadSurface& s = st.drawing.cadSurfaces[surfaceIndex];
   // By stable id, matching how the job itself is keyed (ADR-036 (a)). Keying this on the name showed
   // "Rebuilding" against the wrong surface the moment one was renamed mid-rebuild.
   const std::uint64_t id =
-      surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
+      surfaceIndex < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[surfaceIndex].id : 0;
   if (id != 0)
     for (const auto& job : st.surfaceRebuildAsync)
       if (job && job->surfaceId == id)
@@ -2580,16 +2580,16 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
                      }),
       st.surfaceDisplayCache.end());
 
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
+    const std::uint64_t id = si < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[si].id : 0;
     if (id == 0)
       continue;  // not swept yet; it gets an entry next frame rather than one under an unusable key
-    const CadSurface& surf = st.cadSurfaces[si];
+    const CadSurface& surf = st.drawing.cadSurfaces[si];
     const std::shared_ptr<const CadTin>& tin = surf.tin;
 
     // Resolve-on-read (ADR-036 (d)): nothing is baked onto the surface, so a style edit touches the
     // table and nothing else — which is why it cannot reach the definition and cannot retriangulate.
-    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.drawing.surfaceStyles, surf.styleName);
     const SurfaceStyle resolved = style ? *style : SurfaceStyles::StandardSurfaceStyle();
 
     auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
@@ -2702,7 +2702,7 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     const int six = FindSurfaceIndexById(st, e.surfaceId);
     if (six < 0)
       continue;
-    const auto& tin = st.cadSurfaces[static_cast<size_t>(six)].tin;
+    const auto& tin = st.drawing.cadSurfaces[static_cast<size_t>(six)].tin;
     if (!tin || e.builtFrom.lock() != tin) {
       e.analysis = {};
       e.basinOutlines.clear();
@@ -2720,17 +2720,17 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
   // can change without any surface's geometry changing at all.
   st.surfaceDisplayGeometry.bandTriangles.clear();
   st.surfaceDisplayGeometry.lines.clear();
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;  // layer off/frozen or isolated out — filtered here, so the renderer stays ignorant
-    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    const std::uint64_t id = si < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[si].id : 0;
     if (id == 0)
       continue;
     const auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
                                  [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
     if (it == st.surfaceDisplayCache.end())
       continue;
-    const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+    const EntityAttributes& attr = st.drawing.cadSurfaceAttrs[si];
 
     // REQ-072 band fills, FIRST — see CadSurfaceDisplayGeometry::bandTriangles. Bucket
     // `it->style.bands.size()` is the "unbanded" overflow (TASK-086 §6 (2)); it takes the plain
@@ -2778,7 +2778,7 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
                                   [&](const AppCommandState::SurfaceWatershedCacheEntry& e) {
                                     return e.surfaceId == id;
                                   });
-    if (wit != st.surfaceWatershedCache.end() && wit->builtFrom.lock() == st.cadSurfaces[si].tin) {
+    if (wit != st.surfaceWatershedCache.end() && wit->builtFrom.lock() == st.drawing.cadSurfaces[si].tin) {
       const auto addWs = [&](const std::vector<float>* verts, float r, float g, float bch) {
         if (!verts || verts->empty())
           return;
@@ -2814,9 +2814,9 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex, int* levelsAsked) {
   if (levelsAsked)
     *levelsAsked = 0;
-  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+  if (surfaceIndex >= st.drawing.cadSurfaceAttrs.size())
     return false;
-  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[surfaceIndex].id;
   if (id == 0)
     return false;
   for (const auto& e : st.surfaceDisplayCache) {
@@ -2837,9 +2837,9 @@ int SurfaceDisplayContourSegs(const AppCommandState& st) {
 }
 
 const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex) {
-  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+  if (surfaceIndex >= st.drawing.cadSurfaceAttrs.size())
     return nullptr;
-  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[surfaceIndex].id;
   if (id == 0)
     return nullptr;
   for (const auto& e : st.surfaceDisplayCache)
@@ -2857,8 +2857,8 @@ int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
         return false;
     return true;
   };
-  for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
-    if (eqCI(st.cadSurfaces[i].name, name))
+  for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i)
+    if (eqCI(st.drawing.cadSurfaces[i].name, name))
       return static_cast<int>(i);
   return -1;
 }
@@ -2866,8 +2866,8 @@ int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
 int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id) {
   if (id == 0)
     return -1;  // 0 is "unassigned", never a real id — it must not match the first id-less surface
-  for (size_t i = 0; i < st.cadSurfaceAttrs.size() && i < st.cadSurfaces.size(); ++i)
-    if (st.cadSurfaceAttrs[i].id == id)
+  for (size_t i = 0; i < st.drawing.cadSurfaceAttrs.size() && i < st.drawing.cadSurfaces.size(); ++i)
+    if (st.drawing.cadSurfaceAttrs[i].id == id)
       return static_cast<int>(i);
   return -1;
 }
@@ -2877,7 +2877,7 @@ namespace {
   const int ix = FindSurfaceIndexById(st, id);
   if (ix < 0)
     return {};
-  return st.cadSurfaces[static_cast<size_t>(ix)].name;
+  return st.drawing.cadSurfaces[static_cast<size_t>(ix)].name;
 }
 
 void RememberVolumeResult(AppCommandState& st, const SurfaceVolumeResult& r, const std::string& baseName,
@@ -2933,31 +2933,31 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
     if (requireClosed)
       return false;  // a 2-point line can never be a closed boundary ring
     const size_t li = static_cast<size_t>(ref.index);
-    if (li >= st.lineCount())
+    if (li >= st.drawing.lineCount())
       return false;
-    const CadLineRecord ln = st.line(li);
-    out.verts.push_back({ln.x0 + st.worldDocumentOriginX, ln.y0 + st.worldDocumentOriginY, ln.z0});
-    out.verts.push_back({ln.x1 + st.worldDocumentOriginX, ln.y1 + st.worldDocumentOriginY, ln.z1});
+    const CadLineRecord ln = st.drawing.line(li);
+    out.verts.push_back({ln.x0 + st.drawing.worldDocumentOriginX, ln.y0 + st.drawing.worldDocumentOriginY, ln.z0});
+    out.verts.push_back({ln.x1 + st.drawing.worldDocumentOriginX, ln.y1 + st.drawing.worldDocumentOriginY, ln.z1});
     return true;
   }
 
   if (ref.kind == EntityKind::Polyline) {
     const size_t pi = static_cast<size_t>(ref.index);
-    if (pi + 1 >= st.userPolylineOffsets.size())
+    if (pi + 1 >= st.drawing.userPolylineOffsets.size())
       return false;
-    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    const bool closed = pi < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[pi] != 0;
     if (requireClosed && !closed)
       return false;
-    const int vBegin = st.userPolylineOffsets[pi], vEnd = st.userPolylineOffsets[pi + 1];
+    const int vBegin = st.drawing.userPolylineOffsets[pi], vEnd = st.drawing.userPolylineOffsets[pi + 1];
     if (vEnd - vBegin < 2)
       return false;
     for (int v = vBegin; v < vEnd; ++v) {
       const size_t base = static_cast<size_t>(v);
-      if (base >= st.vertexCount())
+      if (base >= st.drawing.vertexCount())
         return false;
-      out.verts.push_back({static_cast<double>(st.vertex(base).x) + st.worldDocumentOriginX,
-                           static_cast<double>(st.vertex(base).y) + st.worldDocumentOriginY,
-                           static_cast<double>(st.vertex(base).z)});
+      out.verts.push_back({static_cast<double>(st.drawing.vertex(base).x) + st.drawing.worldDocumentOriginX,
+                           static_cast<double>(st.drawing.vertex(base).y) + st.drawing.worldDocumentOriginY,
+                           static_cast<double>(st.drawing.vertex(base).z)});
     }
     out.closed = closed;
     return true;
@@ -2973,21 +2973,21 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
   // its elevation in with every other vertex's and the constraint edge follows the line exactly.
   if (ref.kind == EntityKind::FeatureLine) {
     const size_t fi = static_cast<size_t>(ref.index);
-    if (fi + 1 >= st.featureLineOffsets.size())
+    if (fi + 1 >= st.drawing.featureLineOffsets.size())
       return false;
-    const bool closed = fi < st.featureLineClosed.size() && st.featureLineClosed[fi] != 0;
+    const bool closed = fi < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[fi] != 0;
     if (requireClosed && !closed)
       return false;
-    const int vBegin = st.featureLineOffsets[fi], vEnd = st.featureLineOffsets[fi + 1];
+    const int vBegin = st.drawing.featureLineOffsets[fi], vEnd = st.drawing.featureLineOffsets[fi + 1];
     if (vEnd - vBegin < 2)
       return false;
     for (int v = vBegin; v < vEnd; ++v) {
       const size_t base = static_cast<size_t>(v) * 3;
-      if (base + 2 >= st.featureLineVerts.size())
+      if (base + 2 >= st.drawing.featureLineVerts.size())
         return false;
-      out.verts.push_back({static_cast<double>(st.featureLineVerts[base + 0]) + st.worldDocumentOriginX,
-                           static_cast<double>(st.featureLineVerts[base + 1]) + st.worldDocumentOriginY,
-                           static_cast<double>(st.featureLineVerts[base + 2])});
+      out.verts.push_back({static_cast<double>(st.drawing.featureLineVerts[base + 0]) + st.drawing.worldDocumentOriginX,
+                           static_cast<double>(st.drawing.featureLineVerts[base + 1]) + st.drawing.worldDocumentOriginY,
+                           static_cast<double>(st.drawing.featureLineVerts[base + 2])});
     }
     out.closed = closed;
     return true;
@@ -2997,9 +2997,9 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
     if (requireClosed)
       return false;
     const size_t ai = static_cast<size_t>(ref.index);
-    if (ai >= st.userArcs.size())
+    if (ai >= st.drawing.userArcs.size())
       return false;
-    const CadArc& arc = st.userArcs[ai];
+    const CadArc& arc = st.drawing.userArcs[ai];
     const double sweep = static_cast<double>(arc.sweepRad);
     const double r = std::max(static_cast<double>(arc.r), 1.0e-9);
     const double dangChord = 2.0 * std::acos(std::clamp(1.0 - 1.0 / r, -1.0, 1.0));
@@ -3012,8 +3012,8 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
     const double ds = sweep / static_cast<double>(n);
     for (int i = 0; i <= n; ++i) {
       const double ang = static_cast<double>(arc.startRad) + ds * static_cast<double>(i);
-      out.verts.push_back({static_cast<double>(arc.cx) + st.worldDocumentOriginX + r * std::cos(ang),
-                           static_cast<double>(arc.cy) + st.worldDocumentOriginY + r * std::sin(ang),
+      out.verts.push_back({static_cast<double>(arc.cx) + st.drawing.worldDocumentOriginX + r * std::cos(ang),
+                           static_cast<double>(arc.cy) + st.drawing.worldDocumentOriginY + r * std::sin(ang),
                            static_cast<double>(arc.z)});
     }
     out.closed = false;
@@ -3039,7 +3039,7 @@ bool VolumeClipRingLocalXy(const AppCommandState& st, std::uint64_t entityId,
   }
   out->reserve(chain.verts.size());
   for (const auto& v : chain.verts)
-    out->push_back({v[0] - st.worldDocumentOriginX, v[1] - st.worldDocumentOriginY});
+    out->push_back({v[0] - st.drawing.worldDocumentOriginX, v[1] - st.drawing.worldDocumentOriginY});
   return true;
 }
 
@@ -3250,8 +3250,8 @@ static void ApplyDefinitionPointEdits(const CadSurface& surface, SurfaceBuildInp
 /// \c AppCommandState; everything after it (\ref RunSurfaceBuild) is pure and thread-safe.
 SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
   SurfaceBuildInputs in;
-  in.originX = st.worldDocumentOriginX;
-  in.originY = st.worldDocumentOriginY;
+  in.originX = st.drawing.worldDocumentOriginX;
+  in.originY = st.drawing.worldDocumentOriginY;
 
   if (surface.gradingGroup) {
     for (const auto &member : surface.gradingMembers) {
@@ -3313,12 +3313,12 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       log.push_back("Surface \"" + surface.name + "\": point group \"" + gname + "\" no longer exists.");
       continue;
     }
-    for (int pi : ResolvePointGroup(st, st.pointGroups[static_cast<size_t>(gi)], &log)) {
-      const SurveyPoint& p = st.surveyPoints[static_cast<size_t>(pi)];
+    for (int pi : ResolvePointGroup(st, st.drawing.pointGroups[static_cast<size_t>(gi)], &log)) {
+      const SurveyPoint& p = st.drawing.surveyPoints[static_cast<size_t>(pi)];
       // Triangulate in WORLD coordinates, in double: at state-plane magnitudes the local frame is
       // what keeps float storage precise, but the predicates need the real spacing between points
       // (ADR-028 (d)). The result is converted back to local by \ref ToLocalTin.
-      in.pts.push_back({p.easting + st.worldDocumentOriginX, p.northing + st.worldDocumentOriginY,
+      in.pts.push_back({p.easting + st.drawing.worldDocumentOriginX, p.northing + st.drawing.worldDocumentOriginY,
                         static_cast<float>(p.elevation)});  // TIN vertex Z stays float (Phase G, #453)
     }
   }
@@ -3472,8 +3472,8 @@ bool FillVolumeSurfaceInputs(AppCommandState& st, const CadSurface& surface, boo
   if (!in)
     return false;
   *in = {};
-  in->originX = st.worldDocumentOriginX;
-  in->originY = st.worldDocumentOriginY;
+  in->originX = st.drawing.worldDocumentOriginX;
+  in->originY = st.drawing.worldDocumentOriginY;
   in->isVolume = true;
   if (surface.volumeBaseName.empty() || surface.volumeComparisonName.empty()) {
     if (whyNotReady)
@@ -3498,8 +3498,8 @@ bool FillVolumeSurfaceInputs(AppCommandState& st, const CadSurface& surface, boo
     in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
     return false;
   }
-  const CadSurface& base = st.cadSurfaces[static_cast<size_t>(bi)];
-  const CadSurface& comp = st.cadSurfaces[static_cast<size_t>(ci)];
+  const CadSurface& base = st.drawing.cadSurfaces[static_cast<size_t>(bi)];
+  const CadSurface& comp = st.drawing.cadSurfaces[static_cast<size_t>(ci)];
   if (base.isVolumeSurface() || comp.isVolumeSurface()) {
     if (whyNotReady)
       *whyNotReady = "a volume surface cannot use another volume surface as a parent";
@@ -3508,9 +3508,9 @@ bool FillVolumeSurfaceInputs(AppCommandState& st, const CadSurface& surface, boo
     return false;
   }
   const std::uint64_t baseId =
-      static_cast<size_t>(bi) < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[static_cast<size_t>(bi)].id : 0;
+      static_cast<size_t>(bi) < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[static_cast<size_t>(bi)].id : 0;
   const std::uint64_t compId =
-      static_cast<size_t>(ci) < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[static_cast<size_t>(ci)].id : 0;
+      static_cast<size_t>(ci) < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[static_cast<size_t>(ci)].id : 0;
   if (waitForParentsCurrent) {
     if (base.builtAtRevision != st.cadGpuRevision || comp.builtAtRevision != st.cadGpuRevision ||
         SurfaceRebuildInFlight(st, baseId) || SurfaceRebuildInFlight(st, compId)) {
@@ -3534,7 +3534,7 @@ bool FillVolumeSurfaceInputs(AppCommandState& st, const CadSurface& surface, boo
 }
 
 void MarkVolumeSurfacesDirtyForParent(AppCommandState& st, const std::string& parentName) {
-  for (CadSurface& s : st.cadSurfaces) {
+  for (CadSurface& s : st.drawing.cadSurfaces) {
     if (!s.isVolumeSurface())
       continue;
     if (s.volumeBaseName == parentName || s.volumeComparisonName == parentName)
@@ -3583,8 +3583,8 @@ bool BuildGridKindSurface(AppCommandState& st, CadSurface& surface, std::vector<
       log.push_back("Surface \"" + surface.name + "\" not built: missing grid-volume parent.");
       return false;
     }
-    const CadSurface& base = st.cadSurfaces[static_cast<size_t>(bi)];
-    const CadSurface& comp = st.cadSurfaces[static_cast<size_t>(ci)];
+    const CadSurface& base = st.drawing.cadSurfaces[static_cast<size_t>(bi)];
+    const CadSurface& comp = st.drawing.cadSurfaces[static_cast<size_t>(ci)];
     if (base.kind != SurfaceKind::Grid || comp.kind != SurfaceKind::Grid) {
       surface.lastBuildMessage = "Grid-volume parents must be grid surfaces.";
       log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
@@ -3624,7 +3624,7 @@ bool BuildGridKindSurface(AppCommandState& st, CadSurface& surface, std::vector<
   TinBuildResult r;
   GridBuildDisplayTin(surface.gridOriginX, surface.gridOriginY, surface.gridSpacingX, surface.gridSpacingY,
                       surface.gridCols, surface.gridRows, surface.gridZ, &r);
-  std::shared_ptr<CadTin> tin = ToLocalTin(r, st.worldDocumentOriginX, st.worldDocumentOriginY);
+  std::shared_ptr<CadTin> tin = ToLocalTin(r, st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY);
   if (!tin) {
     surface.lastBuildMessage = "Grid display TIN is empty.";
     log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
@@ -3689,18 +3689,18 @@ namespace {
 bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true,
                                       std::uint64_t alignmentId = 0);
 bool RefreshSurfaceLabelValues(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true) {
-  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+  const auto surfaceIt = std::find_if(st.drawing.cadSurfaces.begin(), st.drawing.cadSurfaces.end(),
                                      [&](const CadSurface& candidate) { return &candidate == &surface; });
-  if (surfaceIt == st.cadSurfaces.end()) return false;
-  const size_t si = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
-  if (si >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[si].id == 0) return false;
-  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  if (surfaceIt == st.drawing.cadSurfaces.end()) return false;
+  const size_t si = static_cast<size_t>(surfaceIt - st.drawing.cadSurfaces.begin());
+  if (si >= st.drawing.cadSurfaceAttrs.size() || st.drawing.cadSurfaceAttrs[si].id == 0) return false;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[si].id;
   const bool hasBuiltTin = surface.tin && !surface.tin->indices.empty();
   auto elevation = [&](double x, double y, double* z) {
     return hasBuiltTin && TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, x, y, z);
   };
   bool changed = false;
-  for (CadAnnotation& label : st.cadAnnotations) {
+  for (CadAnnotation& label : st.drawing.cadAnnotations) {
     if (label.surfaceLabelForId != id) continue;
     if (!hasBuiltTin) {
       const std::string unavailable = "Surface value unavailable";
@@ -3752,7 +3752,7 @@ bool RefreshSurfaceLabelValues(AppCommandState& st, const CadSurface& surface, b
   auto legendCells = [&](const std::string& kind) {
     std::vector<std::string> cells = {"Range", "Upper bound", "Color"};
     if (!hasBuiltTin) return std::vector<std::string>{"Analysis", "Surface value unavailable", "—"};
-    const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+    const SurfaceStyle* style = SurfaceStyles::Find(st.drawing.surfaceStyles, surface.styleName);
     if (kind == "watershed") {
       const WatershedResult result = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
       for (const WatershedBasin& basin : result.basins) {
@@ -3785,13 +3785,13 @@ bool RefreshSurfaceLabelValues(AppCommandState& st, const CadSurface& surface, b
     }
     return cells;
   };
-  for (CadTable& table : st.cadTables) {
+  for (CadTable& table : st.drawing.cadTables) {
     if (table.surfaceLegendForId != id) continue;
     std::vector<std::string> cells = legendCells(table.surfaceLegendKind);
     if (table.cells != cells || table.cols != 3) {
       table.cells = std::move(cells);
       table.cols = 3;
-      if (table.cells.size() > 3) CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+      if (table.cells.size() > 3) CadTableFitToContent(&table, st.drawing.modelUnitsPerPlottedInch);
       changed = true;
     }
   }
@@ -3909,7 +3909,7 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 
 void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName) {
   bool changed = false;
-  for (const CadSurface& surface : st.cadSurfaces)
+  for (const CadSurface& surface : st.drawing.cadSurfaces)
     if (surface.styleName == styleName)
       changed = RefreshSurfaceLabelValues(st, surface, false) || changed;
   if (changed) BumpCadGpuCacheOnly(st);
@@ -3917,8 +3917,8 @@ void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& 
 
 void RefreshSurfaceDependentsAfterReplacement(AppCommandState& st, size_t surfaceIndex,
                                               std::vector<std::string>& log) {
-  if (surfaceIndex >= st.cadSurfaces.size()) return;
-  CadSurface& surface = st.cadSurfaces[surfaceIndex];
+  if (surfaceIndex >= st.drawing.cadSurfaces.size()) return;
+  CadSurface& surface = st.drawing.cadSurfaces[surfaceIndex];
   ReDrapeLinkedToSurface(st, surfaceIndex, log, false);
   (void)RefreshSurfaceLabelValues(st, surface, false);
   (void)RefreshSurfaceProfilesForSurface(st, surface, false);
@@ -3929,11 +3929,11 @@ void RefreshSurfaceProfilesForAlignment(AppCommandState& st, std::uint64_t align
                                         std::vector<std::string>& log) {
   if (alignmentId == 0) return;
   bool changed = false;
-  for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
+  for (const CadSurfaceProfile& profile : st.drawing.surfaceProfiles) {
     if (profile.alignmentId != alignmentId) continue;
     const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
     if (surfaceIndex < 0) continue;
-    changed = RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+    changed = RefreshSurfaceProfilesForSurface(st, st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
                                                alignmentId) || changed;
   }
   if (changed) {
@@ -3967,11 +3967,11 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
   if (groupNames.empty() && !s.tin)
     log.push_back("Surface \"" + name + "\" created (empty — add points, breaklines or files, then rebuild).");
 
-  st.cadSurfaces.push_back(std::move(s));
-  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                       st.cadSurfaces.back().name);  // REQ-361
+  st.drawing.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.drawing.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
-  return static_cast<int>(st.cadSurfaces.size()) - 1;
+  return static_cast<int>(st.drawing.cadSurfaces.size()) - 1;
 }
 
 int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name, const std::string& baseName,
@@ -3993,23 +3993,23 @@ int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name,
   const bool built = BuildSurfaceFromSources(st, s, log);
   if (!built && s.lastBuildMessage.empty())
     s.lastBuildMessage = "Not built.";
-  st.cadSurfaces.push_back(std::move(s));
-  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                       st.cadSurfaces.back().name);  // REQ-361
+  st.drawing.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.drawing.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
-  return static_cast<int>(st.cadSurfaces.size()) - 1;
+  return static_cast<int>(st.drawing.cadSurfaces.size()) - 1;
 }
 
 bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>* log) {
-  if (surfaceIndex >= st.cadSurfaces.size())
+  if (surfaceIndex >= st.drawing.cadSurfaces.size())
     return false;
-  SurfaceStyles::EnsureStandard(st.surfaceStyles);
-  CadSurface& surf = st.cadSurfaces[surfaceIndex];
-  const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+  SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
+  CadSurface& surf = st.drawing.cadSurfaces[surfaceIndex];
+  const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.drawing.surfaceStyles, surf.styleName);
   if (!resolved)
     return false;
   const int users =
-      SurfaceStyles::CountSurfacesResolvingTo(st.cadSurfaces, st.surfaceStyles, resolved->name);
+      SurfaceStyles::CountSurfacesResolvingTo(st.drawing.cadSurfaces, st.drawing.surfaceStyles, resolved->name);
   if (users <= 1) {
     if (log)
       log->push_back("SURFSTYLE — \"" + surf.name + "\" already uses its own style \"" + resolved->name +
@@ -4018,8 +4018,8 @@ bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::v
   }
   const std::string from = resolved->name;
   SurfaceStyle copy = *resolved;
-  copy.name = SurfaceStyles::UniqueCopyName(st.surfaceStyles, surf.name);
-  st.surfaceStyles.push_back(copy);
+  copy.name = SurfaceStyles::UniqueCopyName(st.drawing.surfaceStyles, surf.name);
+  st.drawing.surfaceStyles.push_back(copy);
   surf.styleName = copy.name;
   BumpCadGpuCache(st);
   if (log)
@@ -4029,7 +4029,7 @@ bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::v
 }
 
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
-  if (index >= st.cadSurfaces.size())
+  if (index >= st.drawing.cadSurfaces.size())
     return;
   // Surface selections are index-based; remove the deleted reference and shift later surfaces down.
   for (size_t i = st.selection.size(); i > 0; --i) {
@@ -4041,9 +4041,9 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
     else if (selected.index > static_cast<int>(index))
       --selected.index;
   }
-  st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
-  if (index < st.cadSurfaceAttrs.size())
-    st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
+  st.drawing.cadSurfaces.erase(st.drawing.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
+  if (index < st.drawing.cadSurfaceAttrs.size())
+    st.drawing.cadSurfaceAttrs.erase(st.drawing.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
   BumpCadGpuCache(st);
 }
 
@@ -4051,17 +4051,17 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
   bool appliedSurface = false;
   std::unordered_set<std::uint64_t> presentSurfaceIds;
-  for (size_t i = 0; i < st.cadSurfaces.size() && i < st.cadSurfaceAttrs.size(); ++i)
-    if (st.cadSurfaceAttrs[i].id != 0) presentSurfaceIds.insert(st.cadSurfaceAttrs[i].id);
-  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
-    const bool hasAlignment = std::any_of(st.alignments.begin(), st.alignments.end(),
+  for (size_t i = 0; i < st.drawing.cadSurfaces.size() && i < st.drawing.cadSurfaceAttrs.size(); ++i)
+    if (st.drawing.cadSurfaceAttrs[i].id != 0) presentSurfaceIds.insert(st.drawing.cadSurfaceAttrs[i].id);
+  for (CadSurfaceProfile& profile : st.drawing.surfaceProfiles) {
+    const bool hasAlignment = std::any_of(st.drawing.alignments.begin(), st.drawing.alignments.end(),
         [&](const alignment::Alignment& a) { return a.id == profile.alignmentId; });
     const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
     std::string unavailable;
     if (!hasAlignment) unavailable = "Source alignment is missing.";
     else if (surfaceIndex < 0) unavailable = "Source surface is missing.";
     else {
-      const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+      const CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)];
       if (!surface.tin || surface.tin->indices.empty()) unavailable = "Source surface has no built TIN.";
     }
     if (!unavailable.empty()) {
@@ -4076,7 +4076,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
                profile.sourceStatus == "Source surface unavailable.") {
       const std::string priorStatus = profile.sourceStatus;
       appliedSurface = RefreshSurfaceProfilesForSurface(
-          st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+          st, st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
           profile.alignmentId) || appliedSurface;
       if (profile.sourceStatus.empty())
         log.push_back("Profile \"" + profile.name + "\" source is available again; profile view refreshed.");
@@ -4085,7 +4085,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     }
   }
   bool invalidatedMissingLabel = false;
-  for (CadAnnotation& label : st.cadAnnotations) {
+  for (CadAnnotation& label : st.drawing.cadAnnotations) {
     if (label.surfaceLabelForId != 0 && presentSurfaceIds.find(label.surfaceLabelForId) == presentSurfaceIds.end() &&
         label.text != "Surface value unavailable") {
       label.text = "Surface value unavailable";
@@ -4094,7 +4094,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   }
   const std::vector<std::string> unavailableLegend = {
       "Analysis", "Surface value unavailable", "—"};
-  for (CadTable& table : st.cadTables) {
+  for (CadTable& table : st.drawing.cadTables) {
     if (table.surfaceLegendForId == 0 || presentSurfaceIds.find(table.surfaceLegendForId) != presentSurfaceIds.end())
       continue;
     if (table.cells != unavailableLegend || table.cols != 3) {
@@ -4103,7 +4103,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       invalidatedMissingLabel = true;
     }
   }
-  for (const CadSurface& surface : st.cadSurfaces)
+  for (const CadSurface& surface : st.drawing.cadSurfaces)
     if (!surface.tin || surface.tin->indices.empty())
       invalidatedMissingLabel = RefreshSurfaceLabelValues(st, surface, false) || invalidatedMissingLabel;
   if (invalidatedMissingLabel) BumpCadGpuCacheOnly(st);
@@ -4123,7 +4123,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     // erased, or an undo / further edit landed while this ran — REQ-069's "the in-flight result is
     // discarded." A discarded surface simply looks dirty again next tick and gets redispatched.
     if (si >= 0 && st.cadGpuRevision == job.generation) {
-      CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+      CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
       const TinBuildResult& r = job.result;
       std::shared_ptr<CadTin> tin = ToLocalTin(r, job.originX, job.originY);
       if (tin) {
@@ -4160,8 +4160,8 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   // Dispatch a rebuild for every surface whose definition might have changed and does not already
   // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
   // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
-  for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
-    CadSurface& surface = st.cadSurfaces[sIdx];
+  for (size_t sIdx = 0; sIdx < st.drawing.cadSurfaces.size(); ++sIdx) {
+    CadSurface& surface = st.drawing.cadSurfaces[sIdx];
     if (surface.dataShortcutReadOnly) {
       surface.builtAtRevision = st.cadGpuRevision;
       continue; // shortcut TINs update only through RefreshProjectSurfaceReferences
@@ -4178,7 +4178,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     // A surface created since that sweep has id 0 and is skipped for exactly one frame rather than
     // dispatched under a key that cannot be looked up again.
     const std::uint64_t surfaceId =
-        sIdx < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[sIdx].id : 0;
+        sIdx < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[sIdx].id : 0;
     if (surfaceId == 0)
       continue;
     const bool alreadyRunning = SurfaceRebuildInFlight(st, surfaceId);
@@ -4246,8 +4246,8 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     auto job = std::make_unique<SurfaceJob>();
     job->surfaceId = surfaceId;
     job->generation = st.cadGpuRevision;
-    job->originX = st.worldDocumentOriginX;
-    job->originY = st.worldDocumentOriginY;
+    job->originX = st.drawing.worldDocumentOriginX;
+    job->originY = st.drawing.worldDocumentOriginY;
     SurfaceJob* jobPtr = job.get();
     jobPtr->thread = std::thread([jobPtr, in = std::move(inputs)]() {
       if (jobPtr->cancel.load(std::memory_order_acquire)) {
@@ -4275,8 +4275,8 @@ bool VolumeDashboardReady(const AppCommandState& st, std::uint64_t baseId, std::
       *whyNot = "a picked surface no longer exists";
     return false;
   }
-  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(baseIx)];
-  const CadSurface& compSurf = st.cadSurfaces[static_cast<size_t>(compIx)];
+  const CadSurface& baseSurf = st.drawing.cadSurfaces[static_cast<size_t>(baseIx)];
+  const CadSurface& compSurf = st.drawing.cadSurfaces[static_cast<size_t>(compIx)];
   if (baseSurf.builtAtRevision != st.cadGpuRevision || compSurf.builtAtRevision != st.cadGpuRevision) {
     if (whyNot)
       *whyNot = "waiting for a surface to finish rebuilding";
@@ -4328,9 +4328,9 @@ void TickVolumeDashboard(AppCommandState& st) {
   if (!VolumeDashboardReady(st, dash.baseSurfaceId, dash.comparisonSurfaceId, nullptr))
     return;  // not resolvable, or a picked surface is itself out of date — REQ-073's own gate
 
-  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+  const CadSurface& baseSurf = st.drawing.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
   const CadSurface& compSurf =
-      st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+      st.drawing.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
 
   // Already current for this exact pick, revision AND map want — nothing to recompute. The map-want
   // half is what makes turning the map ON after a mapless result redispatch: `resultHasMap` was
@@ -4403,13 +4403,13 @@ std::vector<std::string> SplitCommaFields(const std::string& s) {
 /// nothing else in the command layer can report one, and the Surfaces panel is unreachable from the
 /// REQ-203 driver. The per-item indices printed here are exactly what UNDESIGNATE takes.
 void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
-  if (st.cadSurfaces.empty()) {
+  if (st.drawing.cadSurfaces.empty()) {
     log.push_back("SURFACELIST — no surfaces in the drawing.");
     return;
   }
-  for (size_t surfaceIndex = 0; surfaceIndex < st.cadSurfaces.size(); ++surfaceIndex) {
-    const CadSurface& s = st.cadSurfaces[surfaceIndex];
-    const std::uint64_t id = surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
+  for (size_t surfaceIndex = 0; surfaceIndex < st.drawing.cadSurfaces.size(); ++surfaceIndex) {
+    const CadSurface& s = st.drawing.cadSurfaces[surfaceIndex];
+    const std::uint64_t id = surfaceIndex < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[surfaceIndex].id : 0;
     std::string line = "Surface \"" + s.name + "\": ";
     const char* kn = s.kind == SurfaceKind::Grid          ? "grid"
                      : s.kind == SurfaceKind::TinVolume   ? "tin-volume"
@@ -4558,9 +4558,9 @@ void RunSurfaceCreateGrid(AppCommandState& st, const std::string& args, std::vec
   PushUndoSnapshot(st, "Create grid surface");
   BumpCadGpuCache(st);
   (void)BuildSurfaceFromSources(st, s, log);
-  st.cadSurfaces.push_back(std::move(s));
-  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                       st.cadSurfaces.back().name);  // REQ-361
+  st.drawing.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.drawing.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -4580,9 +4580,9 @@ void RunSurfaceCreateCorr(AppCommandState& st, const std::string& args, std::vec
   s.name = name;
   s.kind = SurfaceKind::Corridor;
   (void)BuildSurfaceFromSources(st, s, log);
-  st.cadSurfaces.push_back(std::move(s));
-  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                       st.cadSurfaces.back().name);  // REQ-361
+  st.drawing.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.drawing.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -4604,9 +4604,9 @@ void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::
   s.volumeBaseName = f[1];
   s.volumeComparisonName = f[2];
   (void)BuildSurfaceFromSources(st, s, log);
-  st.cadSurfaces.push_back(std::move(s));
-  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                       st.cadSurfaces.back().name);  // REQ-361
+  st.drawing.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.drawing.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -4647,7 +4647,7 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFSWAPEDGE — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* ex = nullptr;
   char* ey = nullptr;
   const double wx = std::strtod(f[1].c_str(), &ex);
@@ -4787,7 +4787,7 @@ void RunSurfMovePoint(AppCommandState& st, const std::string& args, std::vector<
     log.push_back("SURFACEMOVEPOINT — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* e[5] = {};
   const double w1x = std::strtod(f[1].c_str(), &e[0]);
   const double w1y = std::strtod(f[2].c_str(), &e[1]);
@@ -4822,7 +4822,7 @@ void RunSurfDelLine(AppCommandState& st, const std::string& args, std::vector<st
     log.push_back("SURFDELLINE — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* ex = nullptr;
   char* ey = nullptr;
   const double wx = std::strtod(f[1].c_str(), &ex);
@@ -4852,7 +4852,7 @@ void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFACEADDPOINT — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* ex = nullptr;
   char* ey = nullptr;
   char* ez = nullptr;
@@ -4885,7 +4885,7 @@ void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFACEDELPOINT — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* ex = nullptr;
   char* ey = nullptr;
   const double wx = std::strtod(f[1].c_str(), &ex);
@@ -4904,7 +4904,7 @@ static std::unique_ptr<ISurfaceQuery> MakeSurfaceQuery(const AppCommandState& st
   if ((surf.kind == SurfaceKind::Grid || surf.kind == SurfaceKind::GridVolume) &&
       GridIndexValid(surf.gridCols, surf.gridRows, surf.gridZ)) {
     return std::make_unique<GridSurfaceQuery>(
-        surf.gridOriginX - st.worldDocumentOriginX, surf.gridOriginY - st.worldDocumentOriginY, surf.gridSpacingX,
+        surf.gridOriginX - st.drawing.worldDocumentOriginX, surf.gridOriginY - st.drawing.worldDocumentOriginY, surf.gridSpacingX,
         surf.gridSpacingY, surf.gridCols, surf.gridRows, surf.gridZ);
   }
   if (surf.tin)
@@ -4914,30 +4914,30 @@ static std::unique_ptr<ISurfaceQuery> MakeSurfaceQuery(const AppCommandState& st
 
 bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache,
                                       std::uint64_t alignmentId) {
-  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+  const auto surfaceIt = std::find_if(st.drawing.cadSurfaces.begin(), st.drawing.cadSurfaces.end(),
                                      [&](const CadSurface& value) { return &value == &surface; });
-  if (surfaceIt == st.cadSurfaces.end()) return false;
-  const size_t surfaceIndex = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
-  if (surfaceIndex >= st.cadSurfaceAttrs.size()) return false;
-  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (surfaceIt == st.drawing.cadSurfaces.end()) return false;
+  const size_t surfaceIndex = static_cast<size_t>(surfaceIt - st.drawing.cadSurfaces.begin());
+  if (surfaceIndex >= st.drawing.cadSurfaceAttrs.size()) return false;
+  const std::uint64_t surfaceId = st.drawing.cadSurfaceAttrs[surfaceIndex].id;
   if (surfaceId == 0) return false;
   bool changed = false;
   auto eraseEntities = [&](const std::vector<std::uint64_t>& ids) {
     const std::unordered_set<std::uint64_t> remove(ids.begin(), ids.end());
     std::vector<CadLineRecord> lines;
     std::vector<EntityAttributes> attrs;
-    std::vector<int> oldToNew(st.userLineAttrs.size(), -1);
-    lines.reserve(st.lineCount()); attrs.reserve(st.userLineAttrs.size());
-    for (size_t i = 0; i < st.userLineAttrs.size(); ++i) {
-      if (remove.find(st.userLineAttrs[i].id) != remove.end()) continue;
-      if (i >= st.lineCount()) continue;
+    std::vector<int> oldToNew(st.drawing.userLineAttrs.size(), -1);
+    lines.reserve(st.drawing.lineCount()); attrs.reserve(st.drawing.userLineAttrs.size());
+    for (size_t i = 0; i < st.drawing.userLineAttrs.size(); ++i) {
+      if (remove.find(st.drawing.userLineAttrs[i].id) != remove.end()) continue;
+      if (i >= st.drawing.lineCount()) continue;
       oldToNew[i] = static_cast<int>(attrs.size());
-      lines.push_back(st.line(i));
-      attrs.push_back(st.userLineAttrs[i]);
+      lines.push_back(st.drawing.line(i));
+      attrs.push_back(st.drawing.userLineAttrs[i]);
     }
-    st.userLinesFlat.clear();
-    for (const CadLineRecord& l : lines) st.pushLine(l);
-    st.userLineAttrs.swap(attrs);
+    st.drawing.userLinesFlat.clear();
+    for (const CadLineRecord& l : lines) st.drawing.pushLine(l);
+    st.drawing.userLineAttrs.swap(attrs);
     for (size_t i = st.selection.size(); i > 0; --i) {
       SelectedEntity& selected = st.selection[i - 1];
       if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0 ||
@@ -4947,20 +4947,20 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
       else selected.index = mapped;
     }
   };
-  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
+  for (CadSurfaceProfile& profile : st.drawing.surfaceProfiles) {
     if (profile.surfaceId != surfaceId || (alignmentId != 0 && profile.alignmentId != alignmentId)) continue;
     auto setStatus = [&](const std::string& status) {
       if (profile.sourceStatus == status) return;
       profile.sourceStatus = status;
       changed = true;
     };
-    const auto alignmentIt = std::find_if(st.alignments.begin(), st.alignments.end(),
+    const auto alignmentIt = std::find_if(st.drawing.alignments.begin(), st.drawing.alignments.end(),
                                           [&](const alignment::Alignment& value) { return value.id == profile.alignmentId; });
-    if (alignmentIt == st.alignments.end()) {
+    if (alignmentIt == st.drawing.alignments.end()) {
       setStatus("Source alignment unavailable.");
       continue;
     }
-    const size_t alignmentIndex = static_cast<size_t>(alignmentIt - st.alignments.begin());
+    const size_t alignmentIndex = static_cast<size_t>(alignmentIt - st.drawing.alignments.begin());
     auto query = MakeSurfaceQuery(st, surface);
     if (!query) {
       setStatus("Source surface unavailable.");
@@ -4968,7 +4968,7 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
     }
     std::vector<alignment::GroundPoint> sampled;
     std::string why;
-    if (!alignment::SampleGround(st.alignments[alignmentIndex], *query,
+    if (!alignment::SampleGround(st.drawing.alignments[alignmentIndex], *query,
                                 profile.sampleInterval, 100000, &sampled, &why)) {
       setStatus("Surface profile unavailable: " + why + ".");
       continue;
@@ -4989,12 +4989,12 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
     eraseEntities(profile.viewEntityIds);
     profile.viewEntityIds.clear(); profile.stations = std::move(stations); profile.elevations = std::move(elevations);
     changed = true;
-    const size_t firstLine = st.userLineAttrs.size();
+    const size_t firstLine = st.drawing.userLineAttrs.size();
     auto addLine = [&](double x0, double y0, double x1, double y1) {
-      st.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
+      st.drawing.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
       EntityAttributes attrs = MakeNewEntityAttrs(st);
       attrs.id = st.nextEntityId++;
-      st.userLineAttrs.push_back(std::move(attrs));
+      st.drawing.userLineAttrs.push_back(std::move(attrs));
     };
     const double endX = profile.viewX + profile.stations.back() * profile.horizontalScale;
     const double graphHeight = std::max(0.1, (maxZ - minZ) * profile.verticalScale);
@@ -5008,7 +5008,7 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
               profile.viewY + (profile.elevations[i] - minZ) * profile.verticalScale);
     }
     EnsureEntityIds(st);
-    for (size_t i = firstLine; i < st.userLineAttrs.size(); ++i) profile.viewEntityIds.push_back(st.userLineAttrs[i].id);
+    for (size_t i = firstLine; i < st.drawing.userLineAttrs.size(); ++i) profile.viewEntityIds.push_back(st.drawing.userLineAttrs[i].id);
     if (invalidateCache) BumpCadGpuCache(st);
   }
   return changed;
@@ -5019,45 +5019,45 @@ void RunCreateSurfaceProfile(AppCommandState& st, const std::string& args, std::
   if (f.size() != 8) { log.push_back("CREATEPROFILEFROMSURFACE — usage: <surface>, <alignment>, <profile name>, interval, viewX, viewY, horizontal scale, vertical scale."); return; }
   const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
   if (si < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no surface named \"" + f[0] + "\"."); return; }
-  if (!st.cadSurfaces[static_cast<size_t>(si)].tin) { log.push_back("CREATEPROFILEFROMSURFACE — surface has no built TIN."); return; }
+  if (!st.drawing.cadSurfaces[static_cast<size_t>(si)].tin) { log.push_back("CREATEPROFILEFROMSURFACE — surface has no built TIN."); return; }
   int ai = -1;
-  for (size_t i = 0; i < st.alignments.size(); ++i) if (st.alignments[i].name == StringUtil::trimCopy(f[1])) { ai = static_cast<int>(i); break; }
+  for (size_t i = 0; i < st.drawing.alignments.size(); ++i) if (st.drawing.alignments[i].name == StringUtil::trimCopy(f[1])) { ai = static_cast<int>(i); break; }
   if (ai < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no alignment named \"" + f[1] + "\"."); return; }
   const std::string name = StringUtil::trimCopy(f[2]);
-  if (name.empty() || std::any_of(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == name; })) {
+  if (name.empty() || std::any_of(st.drawing.surfaceProfiles.begin(), st.drawing.surfaceProfiles.end(), [&](const auto& p) { return p.name == name; })) {
     log.push_back("CREATEPROFILEFROMSURFACE — profile name must be non-empty and unique."); return;
   }
   double values[5]{};
   for (size_t i = 0; i < 5; ++i) { char* end = nullptr; values[i] = std::strtod(f[i + 3].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(values[i])) { log.push_back("CREATEPROFILEFROMSURFACE — interval, view origin, and scales must be finite numbers."); return; } }
   if (values[0] <= 0.0 || values[3] <= 0.0 || values[4] <= 0.0) { log.push_back("CREATEPROFILEFROMSURFACE — interval and profile-view scales must be positive."); return; }
   EnsureEntityIds(st);
-  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0 || st.alignments[static_cast<size_t>(ai)].id == 0) {
+  if (static_cast<size_t>(si) >= st.drawing.cadSurfaceAttrs.size() || st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0 || st.drawing.alignments[static_cast<size_t>(ai)].id == 0) {
     log.push_back("CREATEPROFILEFROMSURFACE — a source has no stable drawing identifier."); return;
   }
   CadSurfaceProfile profile;
   profile.id = st.nextEntityId++;
   profile.name = name;
-  profile.surfaceId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
-  profile.alignmentId = st.alignments[static_cast<size_t>(ai)].id;
+  profile.surfaceId = st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  profile.alignmentId = st.drawing.alignments[static_cast<size_t>(ai)].id;
   profile.sampleInterval = values[0];
   CadCoord::LocalFromWorld(st, values[1], values[2], &profile.viewX, &profile.viewY);
   profile.horizontalScale = values[3]; profile.verticalScale = values[4];
   PushUndoSnapshot(st, "Create surface profile");
-  st.surfaceProfiles.push_back(profile);
-  st.alignments[static_cast<size_t>(ai)].profileIds.push_back(profile.id);
-  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
-  if (st.surfaceProfiles.back().sourceStatus.empty())
+  st.drawing.surfaceProfiles.push_back(profile);
+  st.drawing.alignments[static_cast<size_t>(ai)].profileIds.push_back(profile.id);
+  RefreshSurfaceProfilesForSurface(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
+  if (st.drawing.surfaceProfiles.back().sourceStatus.empty())
     log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" sampled and profile view placed.");
   else
     log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" unavailable: " +
-                  st.surfaceProfiles.back().sourceStatus + " Last saved view retained.");
+                  st.drawing.surfaceProfiles.back().sourceStatus + " Last saved view retained.");
 }
 
 void RunSurfaceProfileView(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const auto f = SplitCommaFields(args);
   if (f.size() != 5) { log.push_back("PROFILEVIEW — usage: <profile>, viewX, viewY, horizontal scale, vertical scale."); return; }
-  auto it = std::find_if(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == StringUtil::trimCopy(f[0]); });
-  if (it == st.surfaceProfiles.end()) { log.push_back("PROFILEVIEW — no saved profile named \"" + f[0] + "\"."); return; }
+  auto it = std::find_if(st.drawing.surfaceProfiles.begin(), st.drawing.surfaceProfiles.end(), [&](const auto& p) { return p.name == StringUtil::trimCopy(f[0]); });
+  if (it == st.drawing.surfaceProfiles.end()) { log.push_back("PROFILEVIEW — no saved profile named \"" + f[0] + "\"."); return; }
   double v[4]{};
   for (size_t i = 0; i < 4; ++i) { char* end = nullptr; v[i] = std::strtod(f[i + 1].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(v[i])) { log.push_back("PROFILEVIEW — origin and scales must be finite numbers."); return; } }
   if (v[2] <= 0.0 || v[3] <= 0.0) { log.push_back("PROFILEVIEW — scales must be positive."); return; }
@@ -5066,7 +5066,7 @@ void RunSurfaceProfileView(AppCommandState& st, const std::string& args, std::ve
   PushUndoSnapshot(st, "Move profile view");
   CadCoord::LocalFromWorld(st, v[0], v[1], &it->viewX, &it->viewY);
   it->horizontalScale = v[2]; it->verticalScale = v[3];
-  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  RefreshSurfaceProfilesForSurface(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
   log.push_back("PROFILEVIEW — \"" + it->name + "\" view updated.");
 }
 
@@ -5146,7 +5146,7 @@ void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<s
   float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
   CadCoord::LocalFromWorld(st, w0x, w0y, &lx0, &ly0);
   CadCoord::LocalFromWorld(st, w1x, w1y, &lx1, &ly1);
-  CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(lx0),
+  CommitQuickProfileLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(lx0),
                           static_cast<double>(ly0), static_cast<double>(lx1), static_cast<double>(ly1), log);
 }
 
@@ -5184,13 +5184,13 @@ void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std:
     }
     if (const TextStyle* ts = ActiveTextStyle(st))
       tbl.fontFamily = ts->fontFamily;
-    tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
-    CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+    tbl.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
+    CadTableFitToContent(&tbl, st.drawing.modelUnitsPerPlottedInch);
     tbl.insX = 0.f;
     tbl.insY = tbl.height;
     tbl.insZ = CadCommitElevation(st);
-    st.cadTables.push_back(std::move(tbl));
-    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+    st.drawing.cadTables.push_back(std::move(tbl));
+    AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
     EnsureAttrCounts(st);
     BumpCadGpuCache(st);
     log.push_back("VOLREPORT TABLE — TABLE inserted.");
@@ -5205,10 +5205,10 @@ void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std:
   ann.insX = 0.f;
   ann.insY = 0.f;
   ann.text = text;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  ann.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
   ann.insZ = CadCommitElevation(st);
   StampActiveTextStyleOnNewText(st, ann);
-  st.cadAnnotations.push_back(std::move(ann));
+  st.drawing.cadAnnotations.push_back(std::move(ann));
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
   log.push_back("VOLREPORT — MTEXT inserted.");
@@ -5274,8 +5274,8 @@ void RunSurfaceRename(AppCommandState& st, const std::string& args, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Rename surface");
-  log.push_back("Renamed surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\" to \"" + f[1] + "\".");
-  st.cadSurfaces[static_cast<size_t>(si)].name = f[1];
+  log.push_back("Renamed surface \"" + st.drawing.cadSurfaces[static_cast<size_t>(si)].name + "\" to \"" + f[1] + "\".");
+  st.drawing.cadSurfaces[static_cast<size_t>(si)].name = f[1];
   BumpCadGpuCache(st);
 }
 
@@ -5291,7 +5291,7 @@ void RunSurfaceDelete(AppCommandState& st, const std::string& name, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Delete surface");
-  log.push_back("Deleted surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\".");
+  log.push_back("Deleted surface \"" + st.drawing.cadSurfaces[static_cast<size_t>(si)].name + "\".");
   EraseSurfaceAtIndex(st, static_cast<size_t>(si));
 }
 
@@ -5299,24 +5299,24 @@ void RunSurfaceDelete(AppCommandState& st, const std::string& name, std::vector<
 /// Synchronous (\ref BuildSurfaceFromSources), so the result is in the log by the time the command
 /// returns — which is what lets a REQ-203 transcript assert on it without pumping a frame loop.
 void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
-  if (st.cadSurfaces.empty()) {
+  if (st.drawing.cadSurfaces.empty()) {
     log.push_back("SURFACEREBUILD — no surfaces in the drawing.");
     return;
   }
   if (name.empty()) {
-    const bool hasEditableSurface = std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+    const bool hasEditableSurface = std::any_of(st.drawing.cadSurfaces.begin(), st.drawing.cadSurfaces.end(),
         [](const CadSurface& surface) { return !surface.dataShortcutReadOnly; });
     if (!hasEditableSurface) {
       log.push_back("SURFACEREBUILD — all surfaces are read-only project references.");
       return;
     }
     PushUndoSnapshot(st, "Rebuild surfaces");
-    for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
-      if (st.cadSurfaces[i].dataShortcutReadOnly) {
-        log.push_back("SURFACEREBUILD — reference \"" + st.cadSurfaces[i].name + "\" skipped; it is refreshed from its project source.");
+    for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i) {
+      if (st.drawing.cadSurfaces[i].dataShortcutReadOnly) {
+        log.push_back("SURFACEREBUILD — reference \"" + st.drawing.cadSurfaces[i].name + "\" skipped; it is refreshed from its project source.");
         continue;
       }
-      BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
+      BuildSurfaceFromSources(st, st.drawing.cadSurfaces[i], log);
       ReDrapeLinkedToSurface(st, i, log);  // ADR-069 (b)
     }
     BumpCadGpuCache(st);
@@ -5327,12 +5327,12 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     log.push_back("SURFACEREBUILD — no surface named \"" + name + "\".");
     return;
   }
-  if (st.cadSurfaces[static_cast<size_t>(si)].dataShortcutReadOnly) {
+  if (st.drawing.cadSurfaces[static_cast<size_t>(si)].dataShortcutReadOnly) {
     log.push_back("SURFACEREBUILD — surface reference \"" + name + "\" is read-only; refresh it from the project source.");
     return;
   }
   PushUndoSnapshot(st, "Rebuild surface");
-  BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
+  BuildSurfaceFromSources(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], log);
   ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-069 (b)
   BumpCadGpuCache(st);
 }
@@ -5357,7 +5357,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
     return;
   }
   CadSurfacePointFile pf;
-  if (SurfaceRefusesPointEdits(st.cadSurfaces[static_cast<size_t>(si)], "SURFACEADDFILE", log)) return;
+  if (SurfaceRefusesPointEdits(st.drawing.cadSurfaces[static_cast<size_t>(si)], "SURFACEADDFILE", log)) return;
   pf.path = f[1];
   if (f.size() >= 3 && !f[2].empty()) {
     const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
@@ -5384,7 +5384,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
   }
 
   PushUndoSnapshot(st, "Link point file to surface");
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (SurfaceRefusesPointEdits(s, "SURFACEIMPORTFILE", log)) return;
   log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
                 std::to_string(probe.size()) + " point(s)" +
@@ -5408,7 +5408,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
     log.push_back("SURFACEIMPORTFILE — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   char* numEnd = nullptr;
   const long parsed = std::strtol(f[1].c_str(), &numEnd, 10);
   const bool numOk = !f[1].empty() && numEnd && *numEnd == '\0';
@@ -5430,7 +5430,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
   std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", pf.path.c_str());
   st.surveyImportCsvLayoutIdx = pf.layoutIndex;
   st.surveyImportCsvSkipFirstRow = pf.skipFirstRow;
-  const size_t before = st.surveyPoints.size();
+  const size_t before = st.drawing.surveyPoints.size();
   const bool ok = SurveyCsvImportFile(st, log);
   std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", savedPath.c_str());
   st.surveyImportCsvLayoutIdx = savedLayout;
@@ -5440,7 +5440,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
     log.push_back("SURFACEIMPORTFILE — import failed; the link is left in place.");
     return;
   }
-  const size_t added = st.surveyPoints.size() - before;
+  const size_t added = st.drawing.surveyPoints.size() - before;
   if (added == 0) {
     // The importer skips rows whose point id already exists (REQ-083's rule), so a file whose ids
     // collide with the drawing imports nothing. Breaking the link here would silently delete the
@@ -5459,9 +5459,9 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
     g.name = "Imported: " + std::filesystem::path(pf.path).filename().string() + " (" + std::to_string(i + 1) + ")";
   // Explicit ids, not a description rule: the group must mean "exactly the points this file brought
   // in", and a description wildcard would silently pick up unrelated shots that happen to match.
-  for (size_t i = before; i < st.surveyPoints.size(); ++i)
-    g.rule.explicitIds.push_back(st.surveyPoints[i].id);
-  st.pointGroups.push_back(g);
+  for (size_t i = before; i < st.drawing.surveyPoints.size(); ++i)
+    g.rule.explicitIds.push_back(st.drawing.surveyPoints[i].id);
+  st.drawing.pointGroups.push_back(g);
 
   s.sourcePointGroups.push_back(g.name);
   s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
@@ -5530,7 +5530,7 @@ bool ParseIntervalField(const std::string& text, const char* which, double* out,
 
 void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
                              std::vector<std::string>& log) {
-  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
 
   std::string rest;
   const std::string verb = StringUtil::toLowerAsciiCopy(
@@ -5563,7 +5563,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    if (SurfaceStyles::Find(st.surfaceStyles, name)) {
+    if (SurfaceStyles::Find(st.drawing.surfaceStyles, name)) {
       log.push_back("SURFSTYLE — a style named \"" + name + "\" already exists.");
       return;
     }
@@ -5572,7 +5572,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     // like the create had failed.
     SurfaceStyle s = SurfaceStyles::StandardSurfaceStyle();
     s.name = name;
-    st.surfaceStyles.push_back(std::move(s));
+    st.drawing.surfaceStyles.push_back(std::move(s));
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — created style \"" + name + "\" (copied from Standard).");
     return;
@@ -5589,9 +5589,9 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
                     "name falls back to.");
       return;
     }
-    const auto it = std::find_if(st.surfaceStyles.begin(), st.surfaceStyles.end(),
+    const auto it = std::find_if(st.drawing.surfaceStyles.begin(), st.drawing.surfaceStyles.end(),
                                  [&](const SurfaceStyle& s) { return s.name == name; });
-    if (it == st.surfaceStyles.end()) {
+    if (it == st.drawing.surfaceStyles.end()) {
       log.push_back("SURFSTYLE — no style named \"" + name + "\".");
       return;
     }
@@ -5601,11 +5601,11 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     // and untested. The surfaces keep their styleName, so re-creating a style with that name adopts
     // them back rather than leaving the reference silently rewritten.
     int usedBy = 0;
-    for (const CadSurface& s : st.cadSurfaces)
+    for (const CadSurface& s : st.drawing.cadSurfaces)
       if (s.styleName == name)
         ++usedBy;
     PushUndoSnapshot(st, "Surface style");
-    st.surfaceStyles.erase(it);
+    st.drawing.surfaceStyles.erase(it);
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — deleted style \"" + name + "\"." +
                   (usedBy > 0 ? " " + std::to_string(usedBy) +
@@ -5620,7 +5620,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5632,7 +5632,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     // REQ-070: rejected with a SPECIFIC message, and rejected BEFORE the value is stored, so the
     // invalid pair never exists to generate mis-labelled contours from.
     std::string why;
-    const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawingInsUnits);  // issue #832
+    const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawing.drawingInsUnits);  // issue #832
     if (!SurfaceStyles::IntervalsCompatible(minor, major, &why, distUnit)) {
       log.push_back("SURFSTYLE — " + why);
       return;
@@ -5656,7 +5656,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5686,15 +5686,15 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       log.push_back("SURFSTYLE — no surface named \"" + f[0] + "\".");
       return;
     }
-    if (!SurfaceStyles::Find(st.surfaceStyles, f[1])) {
+    if (!SurfaceStyles::Find(st.drawing.surfaceStyles, f[1])) {
       log.push_back("SURFSTYLE — no style named \"" + f[1] + "\".");
       return;
     }
     PushUndoSnapshot(st, "Surface style");
-    st.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
-    (void)RefreshSurfaceLabelValues(st, st.cadSurfaces[static_cast<size_t>(si)], false);
+    st.drawing.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
+    (void)RefreshSurfaceLabelValues(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], false);
     BumpCadGpuCache(st);
-    log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
+    log.push_back("SURFSTYLE — surface \"" + st.drawing.cadSurfaces[static_cast<size_t>(si)].name +
                   "\" now uses style \"" + f[1] + "\".");
     return;
   }
@@ -5710,9 +5710,9 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       log.push_back("SURFSTYLE — no surface named \"" + name + "\".");
       return;
     }
-    CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
-    const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
-    const int users = resolved ? SurfaceStyles::CountSurfacesResolvingTo(st.cadSurfaces, st.surfaceStyles,
+    CadSurface& surf = st.drawing.cadSurfaces[static_cast<size_t>(si)];
+    const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.drawing.surfaceStyles, surf.styleName);
+    const int users = resolved ? SurfaceStyles::CountSurfacesResolvingTo(st.drawing.cadSurfaces, st.drawing.surfaceStyles,
                                                                          resolved->name)
                                : 0;
     if (users <= 1) {
@@ -5735,7 +5735,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5764,7 +5764,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5786,7 +5786,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5810,7 +5810,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5834,7 +5834,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5857,7 +5857,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
 
   if (verb == "clearbands" || verb == "cleararrowbands") {
     const std::string name = StringUtil::trimCopy(rest);
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, name);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, name);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + name + "\".");
       return;
@@ -5875,7 +5875,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
       usage();
       return;
     }
-    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    SurfaceStyle* s = SurfaceStyles::Find(st.drawing.surfaceStyles, f[0]);
     if (!s) {
       log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
       return;
@@ -5920,8 +5920,8 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
     log.push_back("VOLUMES — no surface named \"" + f[1] + "\".");
     return;
   }
-  const std::shared_ptr<const CadTin>& baseTin = st.cadSurfaces[static_cast<size_t>(baseIx)].tin;
-  const std::shared_ptr<const CadTin>& compTin = st.cadSurfaces[static_cast<size_t>(compIx)].tin;
+  const std::shared_ptr<const CadTin>& baseTin = st.drawing.cadSurfaces[static_cast<size_t>(baseIx)].tin;
+  const std::shared_ptr<const CadTin>& compTin = st.drawing.cadSurfaces[static_cast<size_t>(compIx)].tin;
   if (!baseTin || !compTin) {
     log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" must both have a triangulation "
                   "before a volume can be reported.");
@@ -6033,8 +6033,8 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
       log.push_back("VOLDASH — no surface named \"" + f[1] + "\".");
       return;
     }
-    dash.baseSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(baseIx)].id;
-    dash.comparisonSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(compIx)].id;
+    dash.baseSurfaceId = st.drawing.cadSurfaceAttrs[static_cast<size_t>(baseIx)].id;
+    dash.comparisonSurfaceId = st.drawing.cadSurfaceAttrs[static_cast<size_t>(compIx)].id;
     log.push_back("VOLDASH — base \"" + f[0] + "\", comparison \"" + f[1] + "\".");
     return;
   }
@@ -6116,9 +6116,9 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
       return;
     }
     const CadSurface& baseSurf =
-        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+        st.drawing.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
     const CadSurface& compSurf =
-        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+        st.drawing.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
     dash.mapCutTrianglesXyz.clear();
     dash.mapFillTrianglesXyz.clear();
     std::vector<std::pair<double, double>> clipRing;
@@ -6242,7 +6242,7 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   const bool numOk = !f[2].empty() && numEnd && *numEnd == '\0';
   const int n = numOk ? static_cast<int>(parsed) : 0;  // 0 fails the range check below
 
-  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   const size_t count = isBoundary     ? s.boundaries.size()
                        : isPointFile  ? s.sourcePointFiles.size()
                        : isContour    ? s.contourSources.size()
@@ -6297,11 +6297,11 @@ void RunSurfaceStats(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back(std::move(line));
   };
   if (name.empty()) {
-    if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.empty()) {
       log.push_back("SURFACESTATS — no surfaces in the drawing.");
       return;
     }
-    for (const CadSurface& s : st.cadSurfaces)
+    for (const CadSurface& s : st.drawing.cadSurfaces)
       reportOne(s);
     return;
   }
@@ -6310,7 +6310,7 @@ void RunSurfaceStats(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFACESTATS — no surface named \"" + name + "\".");
     return;
   }
-  reportOne(st.cadSurfaces[static_cast<size_t>(si)]);
+  reportOne(st.drawing.cadSurfaces[static_cast<size_t>(si)]);
 }
 
 const char* DrainKindLabel(DrainKind k) {
@@ -6318,12 +6318,12 @@ const char* DrainKindLabel(DrainKind k) {
 }
 
 AppCommandState::SurfaceWatershedCacheEntry* WatershedCacheOf(AppCommandState& st, size_t si) {
-  if (si >= st.cadSurfaces.size() || si >= st.cadSurfaceAttrs.size())
+  if (si >= st.drawing.cadSurfaces.size() || si >= st.drawing.cadSurfaceAttrs.size())
     return nullptr;
-  const CadSurface& s = st.cadSurfaces[si];
+  const CadSurface& s = st.drawing.cadSurfaces[si];
   if (!s.tin || s.tin->indices.empty())
     return nullptr;
-  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[si].id;
   auto it = std::find_if(st.surfaceWatershedCache.begin(), st.surfaceWatershedCache.end(),
                          [&](const AppCommandState::SurfaceWatershedCacheEntry& e) { return e.surfaceId == id; });
   if (it != st.surfaceWatershedCache.end() && it->builtFrom.lock() == s.tin && it->analysis.ok)
@@ -6344,7 +6344,7 @@ AppCommandState::SurfaceWatershedCacheEntry* WatershedCacheOf(AppCommandState& s
 }
 
 void ReportWatershedOne(AppCommandState& st, size_t si, std::vector<std::string>& log) {
-  const CadSurface& s = st.cadSurfaces[si];
+  const CadSurface& s = st.drawing.cadSurfaces[si];
   if (!s.tin || s.tin->indices.empty()) {
     log.push_back("WATERSHED — \"" + s.name + "\": not built.");
     return;
@@ -6371,11 +6371,11 @@ void ReportWatershedOne(AppCommandState& st, size_t si, std::vector<std::string>
 void RunWatershed(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string name = StringUtil::trimCopy(args);
   if (name.empty()) {
-    if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.empty()) {
       log.push_back("WATERSHED — no surfaces in the drawing.");
       return;
     }
-    for (size_t si = 0; si < st.cadSurfaces.size(); ++si)
+    for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si)
       ReportWatershedOne(st, si, log);
     return;
   }
@@ -6391,21 +6391,21 @@ int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, 
   const int n = static_cast<int>(xyz.size() / 3);
   if (n < 2)
     return 0;
-  if (st.userPolylineOffsets.empty())
-    st.userPolylineOffsets.push_back(0);
-  const int baseVert = st.userPolylineOffsets.back();
+  if (st.drawing.userPolylineOffsets.empty())
+    st.drawing.userPolylineOffsets.push_back(0);
+  const int baseVert = st.drawing.userPolylineOffsets.back();
   for (int v = 0; v < n; ++v) {
-    st.pushVertex(CadPolyVertex{xyz[static_cast<size_t>(v) * 3 + 0], xyz[static_cast<size_t>(v) * 3 + 1], xyz[static_cast<size_t>(v) * 3 + 2]});
+    st.drawing.pushVertex(CadPolyVertex{xyz[static_cast<size_t>(v) * 3 + 0], xyz[static_cast<size_t>(v) * 3 + 1], xyz[static_cast<size_t>(v) * 3 + 2]});
   }
-  st.userPolylineOffsets.push_back(baseVert + n);
-  st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));  // current layer and colour (REQ-356)
+  st.drawing.userPolylineOffsets.push_back(baseVert + n);
+  st.drawing.userPolylineClosed.push_back(closed ? 1u : 0u);
+  st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));  // current layer and colour (REQ-356)
   return 1;
 }
 
 EntityAttributes WaterDropEntityAttrs(const AppCommandState& st) {
   EntityAttributes a;
-  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  a.layer = st.drawing.currentLayer.empty() ? std::string("0") : st.drawing.currentLayer;
   a.color = "Yellow";
   a.linetype = "ByLayer";
   a.lineweightMm = 0.35f;
@@ -6416,14 +6416,14 @@ EntityAttributes WaterDropEntityAttrs(const AppCommandState& st) {
 void AppendYellowLineSegs(AppCommandState& st, const std::vector<float>& glLines) {
   const EntityAttributes a = WaterDropEntityAttrs(st);
   for (size_t i = 0; i + 5 < glLines.size(); i += 6) {
-    st.pushLine(CadLineRecord{glLines[i + 0], glLines[i + 1], glLines[i + 2], glLines[i + 3], glLines[i + 4],
+    st.drawing.pushLine(CadLineRecord{glLines[i + 0], glLines[i + 1], glLines[i + 2], glLines[i + 3], glLines[i + 4],
                               glLines[i + 5]});
-    st.userLineAttrs.push_back(a);
+    st.drawing.userLineAttrs.push_back(a);
   }
 }
 
 void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log) {
-  const CadSurface& s = st.cadSurfaces[si];
+  const CadSurface& s = st.drawing.cadSurfaces[si];
   if (!s.tin || s.tin->indices.empty()) {
     log.push_back("WATERDROP — \"" + s.name + "\": not built.");
     return;
@@ -6445,8 +6445,8 @@ void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vec
   PushUndoSnapshot(st, "WATERDROP");
   st.lastWaterDropPathXyz = lifted;
   AppendXyzPathAsPolyline(st, lifted, false);
-  if (!st.userPolylineAttrs.empty())
-    st.userPolylineAttrs.back() = WaterDropEntityAttrs(st);
+  if (!st.drawing.userPolylineAttrs.empty())
+    st.drawing.userPolylineAttrs.back() = WaterDropEntityAttrs(st);
   std::vector<float> arrows;
   AppendPathFlowArrows(lifted, &arrows);
   AppendYellowLineSegs(st, arrows);
@@ -6461,7 +6461,7 @@ void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vec
 }
 
 void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log) {
-  const CadSurface& s = st.cadSurfaces[si];
+  const CadSurface& s = st.drawing.cadSurfaces[si];
   if (!s.tin || s.tin->indices.empty()) {
     log.push_back("CATCHMENT — \"" + s.name + "\": not built.");
     st.lastCatchmentPathXyz.clear();
@@ -6502,19 +6502,19 @@ void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vect
       }
       const size_t nvert = st.lastWaterDropPathXyz.size() / 3;
       PushUndoSnapshot(st, "WATERDROP EXTRACT FL");
-      if (st.featureLineOffsets.empty())
-        st.featureLineOffsets.push_back(0);
-      const int baseVert = st.featureLineOffsets.back();
-      st.featureLineVerts.insert(st.featureLineVerts.end(), st.lastWaterDropPathXyz.begin(),
+      if (st.drawing.featureLineOffsets.empty())
+        st.drawing.featureLineOffsets.push_back(0);
+      const int baseVert = st.drawing.featureLineOffsets.back();
+      st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), st.lastWaterDropPathXyz.begin(),
                                  st.lastWaterDropPathXyz.end());
-      st.featureLineElevPt.insert(st.featureLineElevPt.end(), nvert, static_cast<uint8_t>(0));
-      st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
-      st.featureLineClosed.push_back(0);
+      st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), nvert, static_cast<uint8_t>(0));
+      st.drawing.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+      st.drawing.featureLineClosed.push_back(0);
       CadFeatureLineInfo info;
       info.name = "Water drop";
-      st.featureLineInfo.push_back(std::move(info));
-      AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
-                           st.featureLineInfo.back().name);  // REQ-361
+      st.drawing.featureLineInfo.push_back(std::move(info));
+      AppendNewObjectAttrs(st, st.drawing.featureLineAttrs, st.drawing.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                           st.drawing.featureLineInfo.back().name);  // REQ-361
       EnsureAttrCounts(st);
       BumpCadGpuCache(st);
       log.push_back("WATERDROP EXTRACT FL — 1 feature line (unlinked).");
@@ -6533,10 +6533,10 @@ void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vect
     return;
   }
   std::string name = f.empty() ? std::string() : f[0];
-  if (name.empty() && st.cadSurfaces.size() == 1)
-    name = st.cadSurfaces[0].name;
+  if (name.empty() && st.drawing.cadSurfaces.size() == 1)
+    name = st.drawing.cadSurfaces[0].name;
   if (name.empty()) {
-    if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.empty()) {
       log.push_back("WATERDROP — no surfaces in the drawing.");
       return;
     }
@@ -6587,10 +6587,10 @@ void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vect
     return;
   }
   std::string name = f.empty() ? std::string() : f[0];
-  if (name.empty() && st.cadSurfaces.size() == 1)
-    name = st.cadSurfaces[0].name;
+  if (name.empty() && st.drawing.cadSurfaces.size() == 1)
+    name = st.drawing.cadSurfaces[0].name;
   if (name.empty()) {
-    if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.empty()) {
       log.push_back("CATCHMENT — no surfaces in the drawing.");
       return;
     }
@@ -6622,11 +6622,11 @@ std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState
 }
 
 bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log) {
-  if (surfaceIndex >= st.cadSurfaces.size()) {
+  if (surfaceIndex >= st.drawing.cadSurfaces.size()) {
     log.push_back("Move to Surface — the selected surface no longer exists.");
     return false;
   }
-  const auto query = MakeSurfaceQuery(st, st.cadSurfaces[surfaceIndex]);
+  const auto query = MakeSurfaceQuery(st, st.drawing.cadSurfaces[surfaceIndex]);
   if (!query) {
     log.push_back("Move to Surface — the selected surface has no built data.");
     return false;
@@ -6634,9 +6634,9 @@ bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, st
   std::vector<std::pair<size_t, double>> elevations;
   for (const SelectedEntity& selected : st.selection) {
     if (selected.type != SelectedEntity::Type::BlockRef || selected.index < 0 ||
-        static_cast<size_t>(selected.index) >= st.cadBlockRefs.size())
+        static_cast<size_t>(selected.index) >= st.drawing.cadBlockRefs.size())
       continue;
-    const CadBlockRef& block = st.cadBlockRefs[static_cast<size_t>(selected.index)];
+    const CadBlockRef& block = st.drawing.cadBlockRefs[static_cast<size_t>(selected.index)];
     double z = 0.0;
     if (!query->elevationAt(block.xf.x, block.xf.y, &z)) {
       log.push_back("Move to Surface — a selected block is outside the surface; no blocks were moved.");
@@ -6650,18 +6650,18 @@ bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, st
   }
   PushUndoSnapshot(st, "Move blocks to surface");
   for (const auto& [index, z] : elevations)
-    st.cadBlockRefs[index].xf.z = static_cast<float>(z);
+    st.drawing.cadBlockRefs[index].xf.z = static_cast<float>(z);
   BumpCadGpuCache(st);
   log.push_back("Move to Surface — moved " + std::to_string(elevations.size()) + " block reference(s) to \"" +
-                st.cadSurfaces[surfaceIndex].name + "\".");
+                st.drawing.cadSurfaces[surfaceIndex].name + "\".");
   return true;
 }
 
 bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced) {
-  if (surfaceIndex >= st.cadSurfaces.size() || st.cadSurfaces[surfaceIndex].reducedDisplayLod == reduced)
+  if (surfaceIndex >= st.drawing.cadSurfaces.size() || st.drawing.cadSurfaces[surfaceIndex].reducedDisplayLod == reduced)
     return false;
   PushUndoSnapshot(st, reduced ? "Reduced surface display detail" : "High surface display detail");
-  st.cadSurfaces[surfaceIndex].reducedDisplayLod = reduced;
+  st.drawing.cadSurfaces[surfaceIndex].reducedDisplayLod = reduced;
   BumpCadGpuCache(st);
   return true;
 }
@@ -6684,41 +6684,41 @@ bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float 
   }
   EnsureEntityIds(st);
   image.id = AllocEntityId(st);
-  image.layer = st.currentLayer.empty() ? "0" : st.currentLayer;
+  image.layer = st.drawing.currentLayer.empty() ? "0" : st.drawing.currentLayer;
   PushUndoSnapshot(st, "Attach image");
-  st.cadRasterImages.push_back(std::move(image));
+  st.drawing.cadRasterImages.push_back(std::move(image));
   BumpCadGpuCache(st);
   log.push_back("IMAGEATTACH — attached \"" + path + "\" as image " +
-                std::to_string(st.cadRasterImages.back().id) + ".");
+                std::to_string(st.drawing.cadRasterImages.back().id) + ".");
   return true;
 }
 
 bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceIndex,
                          std::vector<std::string>& log) {
-  if (imageIndex >= st.cadRasterImages.size()) {
+  if (imageIndex >= st.drawing.cadRasterImages.size()) {
     log.push_back("SURFDRAPE — the selected image no longer exists; no change was made.");
     return false;
   }
-  if (surfaceIndex >= st.cadSurfaces.size() || !st.cadSurfaces[surfaceIndex].tin ||
-      st.cadSurfaces[surfaceIndex].tin->indices.empty()) {
+  if (surfaceIndex >= st.drawing.cadSurfaces.size() || !st.drawing.cadSurfaces[surfaceIndex].tin ||
+      st.drawing.cadSurfaces[surfaceIndex].tin->indices.empty()) {
     log.push_back("SURFDRAPE — the selected surface has no built TIN; no change was made.");
     return false;
   }
   EnsureEntityIds(st);
-  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  const std::uint64_t surfaceId = st.drawing.cadSurfaceAttrs[surfaceIndex].id;
   if (surfaceId == 0) {
     log.push_back("SURFDRAPE — the selected surface has no stable identity; no change was made.");
     return false;
   }
-  if (st.cadRasterImages[imageIndex].surfaceId == surfaceId) {
+  if (st.drawing.cadRasterImages[imageIndex].surfaceId == surfaceId) {
     log.push_back("SURFDRAPE — the image is already draped on this surface.");
     return false;
   }
   PushUndoSnapshot(st, "Drape image on surface");
-  st.cadRasterImages[imageIndex].surfaceId = surfaceId;
+  st.drawing.cadRasterImages[imageIndex].surfaceId = surfaceId;
   BumpCadGpuCache(st);
-  log.push_back("SURFDRAPE — image " + std::to_string(st.cadRasterImages[imageIndex].id) +
-                " is draped on \"" + st.cadSurfaces[surfaceIndex].name + "\".");
+  log.push_back("SURFDRAPE — image " + std::to_string(st.drawing.cadRasterImages[imageIndex].id) +
+                " is draped on \"" + st.drawing.cadSurfaces[surfaceIndex].name + "\".");
   return true;
 }
 
@@ -6736,7 +6736,7 @@ void RunSurfaceLodCommand(AppCommandState& st, const std::string& args, bool red
     return;
   }
   const bool changed = SetSurfaceDisplayLod(st, static_cast<size_t>(index), reduced);
-  log.push_back(std::string(command) + " — \"" + st.cadSurfaces[static_cast<size_t>(index)].name +
+  log.push_back(std::string(command) + " — \"" + st.drawing.cadSurfaces[static_cast<size_t>(index)].name +
                 (changed ? (reduced ? "\" now uses Reduced display detail." : "\" now uses High display detail.")
                          : (reduced ? "\" already uses Reduced display detail." : "\" already uses High display detail.")));
 }
@@ -6824,10 +6824,10 @@ bool SurfaceSightVisible(const CadTin& tin, double ox, double oy, double oz,
 
 void AddSurfaceResultLine(AppCommandState& st, double ax, double ay, double az,
                           double bx, double by, double bz, const char* color) {
-  st.pushLine(CadLineRecord{ax, ay, az, bx, by, bz});
+  st.drawing.pushLine(CadLineRecord{ax, ay, az, bx, by, bz});
   EntityAttributes attrs = MakeNewEntityAttrs(st);
   attrs.color = color;
-  st.userLineAttrs.push_back(std::move(attrs));
+  st.drawing.userLineAttrs.push_back(std::move(attrs));
 }
 
 void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
@@ -6841,7 +6841,7 @@ void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vec
     log.push_back("SURFACEVISIBILITY — no surface named \"" + f[0] + "\".");
     return;
   }
-  const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   const auto query = MakeSurfaceQueryForCommands(st, surface);
   if (!query || !surface.tin || surface.tin->indices.empty()) {
     log.push_back("SURFACEVISIBILITY — surface \"" + surface.name + "\" has no built TIN.");
@@ -6891,8 +6891,8 @@ void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vec
       AddSurfaceResultLine(st, x0, y0, z0, bx, by, bz, "#25a55b");
       AddSurfaceResultLine(st, bx, by, bz, x1, y1, z1, "#d64545");
       log.push_back("SURFACEVISIBILITY LOS — target is obstructed; first obstruction at " +
-                    std::to_string(bx + st.worldDocumentOriginX) + ", " +
-                    std::to_string(by + st.worldDocumentOriginY) + ".");
+                    std::to_string(bx + st.drawing.worldDocumentOriginX) + ", " +
+                    std::to_string(by + st.drawing.worldDocumentOriginY) + ".");
     }
     BumpCadGpuCache(st);
     return;
@@ -6999,10 +6999,10 @@ void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vec
     }
     PushUndoSnapshot(st, "Surface zone of visual influence");
     for (auto& [region, color] : cells) {
-      st.cadFilledRegions.push_back(std::move(region));
+      st.drawing.cadFilledRegions.push_back(std::move(region));
       EntityAttributes attrs = MakeNewEntityAttrs(st);
       attrs.color = color;
-      st.cadFilledRegionAttrs.push_back(std::move(attrs));
+      st.drawing.cadFilledRegionAttrs.push_back(std::move(attrs));
     }
     EnsureAttrCounts(st);
     BumpCadGpuCache(st);
@@ -7022,7 +7022,7 @@ void RunSurfaceLabel(AppCommandState& st, const std::string& args, std::vector<s
   }
   const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
   if (si < 0) { log.push_back("SURFLABEL — no surface named \"" + f[0] + "\"."); return; }
-  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFLABEL — surface \"" + surface.name + "\" has no built TIN."); return; }
   const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
   std::vector<std::vector<double>> values;
@@ -7117,20 +7117,20 @@ void RunSurfaceLabel(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFLABEL — choose SPOT, SLOPE, CONTOUR, or WATERSHED with the documented arguments."); return;
   }
   EnsureEntityIds(st);
-  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) {
+  if (static_cast<size_t>(si) >= st.drawing.cadSurfaceAttrs.size() || st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) {
     log.push_back("SURFLABEL — surface has no stable drawing identifier."); return;
   }
   PushUndoSnapshot(st, "Surface labels");
   for (size_t i = 0; i < values.size(); ++i) {
     CadAnnotation label;
     label.insX = static_cast<float>(anchors[i].first); label.insY = static_cast<float>(anchors[i].second);
-    label.surfaceLabelForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+    label.surfaceLabelForId = st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id;
     label.surfaceLabelKind = kind == "spot" ? 1 : kind == "slope" ? 2 : kind == "contour" ? 3 : 4;
     label.surfaceLabelValues = values[i];
-    label.plottedHeightInches = st.defaultPlottedTextHeightInches;
+    label.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
     StampActiveTextStyleOnNewText(st, label);
-    st.cadAnnotations.push_back(std::move(label));
-    st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.cadAnnotations.push_back(std::move(label));
+    st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
   }
   RefreshSurfaceLabelValues(st, surface);
   BumpCadGpuCache(st);
@@ -7142,19 +7142,19 @@ void RunSurfaceLegend(AppCommandState& st, const std::string& args, std::vector<
   if (f.size() < 2) { log.push_back("SURFACELEGEND — usage: SURFACELEGEND <surface>, ELEVATION|SLOPE|SLOPEARROW|CONTOUR|WATERSHED, x, y."); return; }
   const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
   if (si < 0) { log.push_back("SURFACELEGEND — no surface named \"" + f[0] + "\"."); return; }
-  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFACELEGEND — surface \"" + surface.name + "\" has no built TIN."); return; }
   const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
   double wx = 0.0, wy = 0.0;
   auto number = [&](size_t i, double* out) { if (i >= f.size()) return false; char* end = nullptr; *out = std::strtod(f[i].c_str(), &end); return end && *end == '\0' && std::isfinite(*out); };
   if (f.size() != 4 || !number(2,&wx) || !number(3,&wy)) { log.push_back("SURFACELEGEND — insertion X and Y must be finite numbers."); return; }
-  const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+  const SurfaceStyle* style = SurfaceStyles::Find(st.drawing.surfaceStyles, surface.styleName);
   CadTable table; table.cols = 3;
   CadCoord::LocalFromWorld(st, wx, wy, &table.insX, &table.insY);
   table.insZ = CadCommitElevation(st); table.surfaceLegendKind = kind;
   EnsureEntityIds(st);
-  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) { log.push_back("SURFACELEGEND — surface has no stable drawing identifier."); return; }
-  table.surfaceLegendForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  if (static_cast<size_t>(si) >= st.drawing.cadSurfaceAttrs.size() || st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) { log.push_back("SURFACELEGEND — surface has no stable drawing identifier."); return; }
+  table.surfaceLegendForId = st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id;
   table.cells = {"Range", "Upper bound", "Color"};
   const int p = st.displayLinearPrecision;
   if ((kind == "elevation" && style && style->analysisMode == SurfaceAnalysisMode::Elevation) ||
@@ -7181,11 +7181,11 @@ void RunSurfaceLegend(AppCommandState& st, const std::string& args, std::vector<
   }
   if (table.cells.size() <= 3) { log.push_back("SURFACELEGEND — the requested analysis has no computed rows on surface \"" + surface.name + "\"."); return; }
   if (const TextStyle* ts = ActiveTextStyle(st)) table.fontFamily = ts->fontFamily;
-  table.plottedHeightInches = st.defaultPlottedTextHeightInches;
-  CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+  table.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
+  CadTableFitToContent(&table, st.drawing.modelUnitsPerPlottedInch);
   PushUndoSnapshot(st, "Surface analysis legend");
-  st.cadTables.push_back(std::move(table));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});
+  st.drawing.cadTables.push_back(std::move(table));
+  AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});
   EnsureAttrCounts(st); BumpCadGpuCache(st);
   log.push_back("SURFACELEGEND — linked " + kind + " table added for \"" + surface.name + "\".");
 }
@@ -7201,7 +7201,7 @@ void RunSurfaceCrossings(AppCommandState& st, const std::string& args, std::vect
     log.push_back("SURFCROSSBL — no surface named \"" + f[0] + "\".");
     return;
   }
-  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (surface.dataShortcutReadOnly && f.size() > 1 && StringUtil::toLowerAsciiCopy(f[1]) != "list") {
     log.push_back("SURFCROSSBL — surface reference \"" + surface.name + "\" is read-only.");
     return;
@@ -7290,7 +7290,7 @@ void EnsureEntityIds(AppCommandState& st) {
   // Model raster IMAGEs carry their own stable ID in CadRasterImage rather than a parallel
   // EntityAttributes array. Keep the shared drawing counter above those IDs so loading and then
   // attaching another raster cannot recycle an existing image identity.
-  for (const CadRasterImage& image : st.cadRasterImages)
+  for (const CadRasterImage& image : st.drawing.cadRasterImages)
     if (image.id >= st.nextEntityId && image.id != std::numeric_limits<std::uint64_t>::max())
       st.nextEntityId = image.id + 1;
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
@@ -7529,18 +7529,18 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
-  d.dimensionStyleName = st.activeDimensionStyle.name;
+  d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
   d.dimExt2X = x2;
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
-  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  d.fontFamily = st.activeDimensionStyle.textFont;
-  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
+  d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.drawing.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.drawing.activeDimensionStyle);
   d.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
-  const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
+  const float hWorld = CadAnnotationHeightWorld(d, st.drawing.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
   return true;
@@ -7618,7 +7618,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   }
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimLinear;
-  d.dimensionStyleName = st.activeDimensionStyle.name;
+  d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -7626,9 +7626,9 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
   d.dimLinearVertical = vert;
-  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  d.fontFamily = st.activeDimensionStyle.textFont;
-  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
+  d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.drawing.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.drawing.activeDimensionStyle);
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -7638,7 +7638,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
   d.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-  const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
+  const float hWorld = CadAnnotationHeightWorld(d, st.drawing.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
   return true;
@@ -7747,7 +7747,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float vx = st.dimAngVx, vy = st.dimAngVy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
-  d.dimensionStyleName = st.activeDimensionStyle.name;
+  d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
@@ -7763,10 +7763,10 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, cursorWx, cursorWy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.drawing.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
-  CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
+  CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   *out = std::move(d);
   return true;
 }
@@ -7862,12 +7862,12 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
     const float dy = py - qy;
     return dx * dx + dy * dy;
   };
-  for (int i = static_cast<int>(cmd.cadAnnotations.size()) - 1; i >= 0; --i) {
+  for (int i = static_cast<int>(cmd.drawing.cadAnnotations.size()) - 1; i >= 0; --i) {
     // REQ-084 (d): isolated-out text is not drawn, so it must not be pickable or hoverable.
-    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.cadAnnotationAttrs.size() &&
-        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadAnnotationAttrs[static_cast<size_t>(i)].id))
+    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.drawing.cadAnnotationAttrs.size() &&
+        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.drawing.cadAnnotationAttrs[static_cast<size_t>(i)].id))
       continue;
-    const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
+    const CadAnnotation& a = cmd.drawing.cadAnnotations[static_cast<size_t>(i)];
     // Orbited (issue #564 §2): test the annotation where the camera ray meets ITS plane, not where
     // it meets the work plane — the two differ as soon as the text is not at the work plane's Z.
     float wx = wxIn;
@@ -7895,7 +7895,7 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
       upd(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
       upd(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
       upd(sx1, sy1, sx2, sy2);
-      const float h = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      const float h = CadAnnotationHeightWorld(a, cmd.drawing.modelUnitsPerPlottedInch);
       const float charFactor = 0.55f;
       const float tw = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
       const float c = std::cos(a.rotationRad);
@@ -7926,7 +7926,7 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
     float mnY = 0.f;
     float mxX = 0.f;
     float mxY = 0.f;
-    CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
+    CadAnnotationRoughBounds(a, cmd.drawing.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
     if (wx >= mnX - tol && wx <= mxX + tol && wy >= mnY - tol && wy <= mxY + tol)
       return i;
   }
@@ -7937,11 +7937,11 @@ int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHa
                    float viewportHeightPx) {
   const float tol =
       CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, cmd.objectSnapAperturePx);
-  for (int i = static_cast<int>(cmd.cadTables.size()) - 1; i >= 0; --i) {
-    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.cadTableAttrs.size() &&
-        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadTableAttrs[static_cast<size_t>(i)].id))
+  for (int i = static_cast<int>(cmd.drawing.cadTables.size()) - 1; i >= 0; --i) {
+    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.drawing.cadTableAttrs.size() &&
+        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.drawing.cadTableAttrs[static_cast<size_t>(i)].id))
       continue;
-    if (CadTableContainsLocal(cmd.cadTables[static_cast<size_t>(i)], wx, wy, tol))
+    if (CadTableContainsLocal(cmd.drawing.cadTables[static_cast<size_t>(i)], wx, wy, tol))
       return i;
   }
   return -1;
@@ -7956,10 +7956,10 @@ void CancelTableCellEditor(AppCommandState& st) {
 }
 
 void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex) {
-  if (tableIndex < 0 || static_cast<size_t>(tableIndex) >= st.cadTables.size() || cellIndex < 0)
+  if (tableIndex < 0 || static_cast<size_t>(tableIndex) >= st.drawing.cadTables.size() || cellIndex < 0)
     return;
-  CadTable& t = st.cadTables[static_cast<size_t>(tableIndex)];
-  if (CadTableCellIsSurveyPointData(st.tableStyles, t, cellIndex))
+  CadTable& t = st.drawing.cadTables[static_cast<size_t>(tableIndex)];
+  if (CadTableCellIsSurveyPointData(st.drawing.tableStyles, t, cellIndex))
     return;
   const int n = CadTableRowCount(t) * std::max(t.cols, 1);
   if (cellIndex >= n)
@@ -7978,9 +7978,9 @@ void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
     return;
   const int ti = st.tableCellEditorIndex;
   const int ci = st.tableCellEditorCell;
-  if (ti >= 0 && static_cast<size_t>(ti) < st.cadTables.size() && ci >= 0) {
-    CadTable& t = st.cadTables[static_cast<size_t>(ti)];
-    if (CadTableCellIsSurveyPointData(st.tableStyles, t, ci)) {
+  if (ti >= 0 && static_cast<size_t>(ti) < st.drawing.cadTables.size() && ci >= 0) {
+    CadTable& t = st.drawing.cadTables[static_cast<size_t>(ti)];
+    if (CadTableCellIsSurveyPointData(st.drawing.tableStyles, t, ci)) {
       CancelTableCellEditor(st);
       return;
     }
@@ -7988,7 +7988,7 @@ void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
     while (static_cast<int>(t.cells.size()) <= ci)
       t.cells.emplace_back();
     t.cells[static_cast<size_t>(ci)] = st.tableCellEditorBuf;
-    CadTableFitToContent(&t, st.modelUnitsPerPlottedInch);
+    CadTableFitToContent(&t, st.drawing.modelUnitsPerPlottedInch);
     BumpCadGpuCache(st);
     log.push_back("TABLE — cell updated.");
   }
@@ -7996,17 +7996,17 @@ void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void MigrateLegacyAnnotationTables(AppCommandState& st) {
-  for (int i = static_cast<int>(st.cadAnnotations.size()) - 1; i >= 0; --i) {
-    const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(i)];
+  for (int i = static_cast<int>(st.drawing.cadAnnotations.size()) - 1; i >= 0; --i) {
+    const CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(i)];
     if (a.kind != CadAnnotation::Kind::Table)
       continue;
     CadTable t = CadTableFromAxisAlignedBox(a.boxMinX, a.boxMinY, a.boxMaxX, a.boxMaxY, a.tableCols, a.tableCells,
                                             a.insZ, a.plottedHeightInches, a.fontFamily);
-    st.cadTables.push_back(std::move(t));
+    st.drawing.cadTables.push_back(std::move(t));
     EntityAttributes at{};
-    if (static_cast<size_t>(i) < st.cadAnnotationAttrs.size())
-      at = st.cadAnnotationAttrs[static_cast<size_t>(i)];
-    st.cadTableAttrs.push_back(std::move(at));
+    if (static_cast<size_t>(i) < st.drawing.cadAnnotationAttrs.size())
+      at = st.drawing.cadAnnotationAttrs[static_cast<size_t>(i)];
+    st.drawing.cadTableAttrs.push_back(std::move(at));
     EraseCadAnnotationAtIndex(st, static_cast<size_t>(i));
   }
   EnsureAttrCounts(st);
@@ -8264,8 +8264,8 @@ void ResetAllCadDraftTools(AppCommandState& st) {
 // External linkage (CadCommandsInternal.hpp) for the split-out command slices — TASK-150 Phase 2.
 EntityAttributes MakeNewEntityAttrs(const AppCommandState& st) {
   EntityAttributes a;
-  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
+  a.layer = st.drawing.currentLayer.empty() ? std::string("0") : st.drawing.currentLayer;
+  a.color = st.drawing.currentColor.empty() ? std::string("ByLayer") : st.drawing.currentColor;  // REQ-356
   a.linetype = "ByLayer";
   a.lineweightMm = -1.f;
   a.transparency = -1.f;
@@ -8819,7 +8819,7 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
-  d.dimensionStyleName = st.activeDimensionStyle.name;
+  d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   d.dimAngVertexX = st.dimAngVx;
   d.dimAngVertexY = st.dimAngVy;
@@ -8842,15 +8842,15 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.drawing.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
-  CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
+  CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
   PushUndoSnapshot(st, "DIMANGULAR");
-  st.cadAnnotations.push_back(std::move(d));
-  st.cadAnnotationAttrs.push_back(at);
+  st.drawing.cadAnnotations.push_back(std::move(d));
+  st.drawing.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
   ResetDimAngularDraft(st);
   ResetDimDraft(st);
@@ -8898,9 +8898,9 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, fl
     L->paperCircleAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
     // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
-    st.pushCircle(CadCircleRecord{cx, cy, cz, r});
-    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
-    PushCircleNormal(st.userCircleNormals, nx, ny, nz);
+    st.drawing.pushCircle(CadCircleRecord{cx, cy, cz, r});
+    st.drawing.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+    PushCircleNormal(st.drawing.userCircleNormals, nx, ny, nz);
   }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
@@ -8966,12 +8966,12 @@ void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string
   std::vector<Mark> marks;
   for (const SelectedEntity& entity : st.selection) {
     if (entity.type == SelectedEntity::Type::Circle && entity.index >= 0 &&
-        static_cast<std::size_t>(entity.index) < st.circleCount()) {
-      const CadCircleRecord c = st.circle(static_cast<std::size_t>(entity.index));
+        static_cast<std::size_t>(entity.index) < st.drawing.circleCount()) {
+      const CadCircleRecord c = st.drawing.circle(static_cast<std::size_t>(entity.index));
       marks.push_back({c.cx, c.cy, c.cz, c.r});
     } else if (entity.type == SelectedEntity::Type::Arc && entity.index >= 0 &&
-               static_cast<std::size_t>(entity.index) < st.userArcs.size()) {
-      const CadArc& arc = st.userArcs[static_cast<std::size_t>(entity.index)];
+               static_cast<std::size_t>(entity.index) < st.drawing.userArcs.size()) {
+      const CadArc& arc = st.drawing.userArcs[static_cast<std::size_t>(entity.index)];
       marks.push_back({arc.cx, arc.cy, arc.z, arc.r});
     }
   }
@@ -8980,11 +8980,11 @@ void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string
   for (const Mark& mark : marks) {
     const double half = std::max(mark.radius * 0.18, 0.01);
     const double gap = half * 0.16;
-    st.pushLine(CadLineRecord{mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z});
-    st.pushLine(CadLineRecord{mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z});
-    st.pushLine(CadLineRecord{mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z});
-    st.pushLine(CadLineRecord{mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
-    for (int i = 0; i < 4; ++i) st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.pushLine(CadLineRecord{mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z});
+    st.drawing.pushLine(CadLineRecord{mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z});
+    st.drawing.pushLine(CadLineRecord{mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z});
+    st.drawing.pushLine(CadLineRecord{mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
+    for (int i = 0; i < 4; ++i) st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   log.push_back("CENTERMARK — center marks created for " + std::to_string(marks.size()) + " selected circle/arc(s).");
@@ -8994,17 +8994,17 @@ void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string
   std::vector<const SelectedEntity*> lines;
   for (const SelectedEntity& entity : st.selection)
     if (entity.type == SelectedEntity::Type::LineSeg && entity.index >= 0 &&
-        static_cast<std::size_t>(entity.index) < st.lineCount()) lines.push_back(&entity);
+        static_cast<std::size_t>(entity.index) < st.drawing.lineCount()) lines.push_back(&entity);
   if (lines.size() != 2) { log.push_back("CENTERLINE — select exactly two lines first, then run CENTERLINE."); return; }
-  const CadLineRecord la = st.line(static_cast<std::size_t>(lines[0]->index));
-  CadLineRecord lb = st.line(static_cast<std::size_t>(lines[1]->index));
+  const CadLineRecord la = st.drawing.line(static_cast<std::size_t>(lines[0]->index));
+  CadLineRecord lb = st.drawing.line(static_cast<std::size_t>(lines[1]->index));
   const double same = std::hypot(la.x0 - lb.x0, la.y0 - lb.y0) + std::hypot(la.x1 - lb.x1, la.y1 - lb.y1);
   const double reverse = std::hypot(la.x0 - lb.x1, la.y0 - lb.y1) + std::hypot(la.x1 - lb.x0, la.y1 - lb.y0);
   if (reverse < same) { std::swap(lb.x0, lb.x1); std::swap(lb.y0, lb.y1); std::swap(lb.z0, lb.z1); }
   PushUndoSnapshot(st, "CENTERLINE");
-  st.pushLine(CadLineRecord{(la.x0 + lb.x0) * 0.5, (la.y0 + lb.y0) * 0.5, (la.z0 + lb.z0) * 0.5,
+  st.drawing.pushLine(CadLineRecord{(la.x0 + lb.x0) * 0.5, (la.y0 + lb.y0) * 0.5, (la.z0 + lb.z0) * 0.5,
                             (la.x1 + lb.x1) * 0.5, (la.y1 + lb.y1) * 0.5, (la.z1 + lb.z1) * 0.5});
-  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("CENTERLINE — centerline created between the two selected lines.");
 }
@@ -9311,7 +9311,7 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     return true;
   }
   if (primary == "style") {
-    TextStyles::EnsureStandard(st.textStyles);
+    TextStyles::EnsureStandard(st.drawing.textStyles);
     st.showTextStyleManagerWindow = true;
     log.push_back("STYLE — text style manager opened.");
     return true;
@@ -9871,9 +9871,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   std::vector<SelectedEntity> hits;
   std::vector<int> surveyHits;
   std::vector<ray3d::Vec3> curvePts;  // reused by the circle / arc / ellipse walks below
-  if (st.lineStoreWellFormed()) {
-    for (size_t li = 0; li < st.lineCount(); ++li) {
-      const CadLineRecord ln = st.line(li);
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+      const CadLineRecord ln = st.drawing.line(li);
       // Endpoint-wise projection keeps the line test EXACT in screen space (each endpoint carries
       // its own Z, so a sloped line is tested where it actually appears).
       float x0, y0, x1, y1;
@@ -9893,9 +9893,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       }
     }
   }
-  if (st.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
-      const CadCircleRecord cc = st.circle(ci);
+  if (st.drawing.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+      const CadCircleRecord cc = st.drawing.circle(ci);
       const float cx = static_cast<float>(cc.cx);
       const float cy = static_cast<float>(cc.cy);
       const float r = static_cast<float>(cc.r);
@@ -9908,7 +9908,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
         float cnx = 0.f;
         float cny = 0.f;
         float cnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, ci, &cnx, &cny, &cnz);
+        CircleNormalAt(st.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
         constexpr double kTwoPi = 6.28318530717958647692;
         SampleCurveWorld(curvePts,
                          CurvePlane(static_cast<double>(cx), static_cast<double>(cy),
@@ -9930,13 +9930,13 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       }
     }
   }
-  const size_t nAnn = st.cadAnnotations.size();
+  const size_t nAnn = st.drawing.cadAnnotations.size();
   for (size_t ai = 0; ai < nAnn; ++ai) {
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
     float amxY = 0.f;
-    CadAnnotationRoughBounds(st.cadAnnotations[ai], st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    CadAnnotationRoughBounds(st.drawing.cadAnnotations[ai], st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
     bool hit = false;
     if (windowMode)
@@ -9950,9 +9950,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
     float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
-    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    CadTableWorldAabb(st.drawing.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
     SPBox(tmnX, tmnY, tmxX, tmxY, &tmnX, &tmnY, &tmxX, &tmxY);
     bool hit = false;
     if (windowMode)
@@ -9966,7 +9966,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+  for (size_t mi = 0; mi < st.drawing.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
     float mmnX = 0.f, mmnY = 0.f, mmxX = 0.f, mmxY = 0.f;
     CadPositionMarkerLocalBox(st, mi, &mmnX, &mmnY, &mmxX, &mmxY);
     SPBox(mmnX, mmnY, mmxX, mmxY, &mmnX, &mmnY, &mmxX, &mmxY);
@@ -9982,9 +9982,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+  for (size_t li = 0; li < st.drawing.cadMultileaders.size(); ++li) {  // REQ-367: path + label
     float lmnX = 0.f, lmnY = 0.f, lmxX = 0.f, lmxY = 0.f;
-    CadMultileaderLocalBox(st.cadMultileaders[li], &lmnX, &lmnY, &lmxX, &lmxY);
+    CadMultileaderLocalBox(st.drawing.cadMultileaders[li], &lmnX, &lmnY, &lmxX, &lmxY);
     SPBox(lmnX, lmnY, lmxX, lmxY, &lmnX, &lmnY, &lmxX, &lmxY);
     bool hit = false;
     if (windowMode)
@@ -9998,9 +9998,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
     float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
-    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    CadBlockWorldAabb(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
     SPBox(bmnX, bmnY, bmxX, bmxY, &bmnX, &bmnY, &bmxX, &bmxY);
     bool hit = false;
     if (windowMode)
@@ -10014,11 +10014,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+  for (size_t ai = 0; ai < st.drawing.userArcs.size(); ++ai) {
     // The arc it draws, in its own plane (REQ-312), in every view. An arc had no analytic fence
     // test to lose: it was tested against its bounding box in PLAN view as well, and a box round
     // a semicircle is mostly the empty space under it.
-    const CadArc& a = st.userArcs[ai];
+    const CadArc& a = st.drawing.userArcs[ai];
     if (!(a.r > 1e-12f))
       continue;
     SampleCurveWorld(curvePts, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
@@ -10030,12 +10030,12 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
+  for (size_t ei = 0; ei < st.drawing.userEllipses.size(); ++ei) {
     // The ellipse it draws, in every view — same story as the arc above. Its bounding box was the
     // worst offender of the three: an ellipse fills pi/4 of its box and nothing of its middle.
     // The count follows the DRAWN span, exactly as the arc's does, so a short elliptical arc is not
     // sampled more coarsely than the whole oval it was cut from.
-    const CadEllipse& el = st.userEllipses[ei];
+    const CadEllipse& el = st.drawing.userEllipses[ei];
     SampleEllipseWorld(curvePts, el, CurveSegmentCount(std::fabs(static_cast<double>(el.sweepRad))));
     if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
@@ -10045,8 +10045,8 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
   // REQ-443: a spline is tested as the curve it draws, by the same rule as the arc and ellipse above.
-  for (size_t si = 0; si < st.cadSplines.size(); ++si) {
-    spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &curvePts);
+  for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
+    spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &curvePts);
     if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Spline;
@@ -10056,11 +10056,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   }
   // REQ-480: an alignment is tested as the curve it draws (sampled to a hundredth of a unit), by the same rule as
   // the arc and spline above.
-  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
-    if (st.alignments[ai].Empty())
+  for (size_t ai = 0; ai < st.drawing.alignments.size(); ++ai) {
+    if (st.drawing.alignments[ai].Empty())
       continue;
     curvePts.clear();
-    for (const alignment::Point2& p : st.alignments[ai].SampleForDisplay(0.01))
+    for (const alignment::Point2& p : st.drawing.alignments[ai].SampleForDisplay(0.01))
       curvePts.push_back(ray3d::Vec3{p.x, p.y, 0.0});
     if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
@@ -10069,8 +10069,8 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
-  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
-    const CadPoint& p = st.cadPoints[pi];
+  for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.drawing.cadPoints[pi];
     bool hit = false;
     if (windowMode)
       hit = p.x >= mnX && p.x <= mxX && p.y >= mnY && p.y <= mxY;
@@ -10084,10 +10084,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    if (ChainHitsRect(st.userPolylineOffsets, st.userPolylineVerts, st.userPolylineClosed, pi, mnX, mxX,
-                      mnY, mxY, windowMode, proj ? &projFn : nullptr, &st.userPolylineVertsBulge)) {
+    if (ChainHitsRect(st.drawing.userPolylineOffsets, st.drawing.userPolylineVerts, st.drawing.userPolylineClosed, pi, mnX, mxX,
+                      mnY, mxY, windowMode, proj ? &projFn : nullptr, &st.drawing.userPolylineVertsBulge)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Polyline;
       e.index = pi;
@@ -10099,9 +10099,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   // funnels; both now know about feature lines.
   {
     const int nFl =
-        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
+        static_cast<int>(st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0);
     for (int fi = 0; fi < nFl; ++fi) {
-      if (ChainHitsRect(st.featureLineOffsets, st.featureLineVerts, st.featureLineClosed, fi, mnX, mxX,
+      if (ChainHitsRect(st.drawing.featureLineOffsets, st.drawing.featureLineVerts, st.drawing.featureLineClosed, fi, mnX, mxX,
                         mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
         SelectedEntity e{};
         e.type = SelectedEntity::Type::FeatureLine;
@@ -10115,10 +10115,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   // there is nothing a per-triangle test would decide differently: window mode requires the whole
   // surface inside the rect and crossing requires it to overlap, and both answers come from the
   // bounds. Walking 200k triangles to reach the same conclusion would only cost the frame.
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;
-    const CadTin& t = *st.cadSurfaces[si].tin;
+    const CadTin& t = *st.drawing.cadSurfaces[si].tin;
     float smnX = 0.f, smxX = 0.f, smnY = 0.f, smxY = 0.f;
     bool first = true;
     for (size_t v = 0; v + 2 < t.vertsXyz.size(); v += 3) {
@@ -10153,10 +10153,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   // has two stored vertices and a torus four, so a bbox built from points would enclose almost none
   // of the solid — a window drag right around a sphere would select it, and one around a quarter of
   // it would too.
-  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+  for (size_t soi = 0; soi < st.drawing.cadSolids.size(); ++soi) {
     if (!SolidVisible(st, soi))
       continue;
-    const brep::Bounds bb = brep::ComputeBounds(*st.cadSolids[soi]);
+    const brep::Bounds bb = brep::ComputeBounds(*st.drawing.cadSolids[soi]);
     if (!bb.valid)
       continue;
     float bmnX = static_cast<float>(bb.mn.x);
@@ -10176,10 +10176,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
 
   // Point clouds (REQ-171 part 14): bbox over the bounded PREVIEW sample only, mirroring the
   // zoom-extents box walk (same reasoning — the full out-of-core cache is not resident memory).
-  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+  for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
     if (!PointCloudVisible(st, pci))
       continue;
-    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    const std::shared_ptr<const CadPointCloud>& pc = st.drawing.cadPointClouds[pci];
     if (!pc || pc->pointsXyz.size() < 3)
       continue;
     const std::vector<double>& P = pc->pointsXyz;
@@ -10203,9 +10203,9 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
 
   // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
   // requires the bbox fully inside; crossing requires the bbox to intersect the rect.
-  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
+  for (size_t fi = 0; fi < st.drawing.cadFilledRegions.size(); ++fi) {
     float fmnX = 0.f, fmxX = 0.f, fmnY = 0.f, fmxY = 0.f;
-    if (!hatchgeom::OuterBounds(st.cadFilledRegions[fi], &fmnX, &fmnY, &fmxX, &fmxY))
+    if (!hatchgeom::OuterBounds(st.drawing.cadFilledRegions[fi], &fmnX, &fmnY, &fmxX, &fmxY))
       continue;
     SPBox(fmnX, fmnY, fmxX, fmxY, &fmnX, &fmnY, &fmxX, &fmxY);  // screen space when orbited
     const bool hit = windowMode ? (fmnX >= mnX && fmxX <= mxX && fmnY >= mnY && fmxY <= mxY)
@@ -10218,8 +10218,8 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
   if (includeSurveyPoints) {
-    for (size_t si = 0; si < st.surveyPoints.size(); ++si) {
-      const SurveyPoint& sp = st.surveyPoints[si];
+    for (size_t si = 0; si < st.drawing.surveyPoints.size(); ++si) {
+      const SurveyPoint& sp = st.drawing.surveyPoints[si];
       // The point's elevation IS its Z (REQ-057), so an orbited box-select tests it where it is
       // actually drawn rather than at its plan position.
       float spx, spy;
@@ -10231,13 +10231,13 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       bool hitLabel = false;
       const int lix = FindSurveyLabelAnnIndex(st, sp);
       if (lix >= 0) {
-        const CadAnnotation& lab = st.cadAnnotations[static_cast<size_t>(lix)];
+        const CadAnnotation& lab = st.drawing.cadAnnotations[static_cast<size_t>(lix)];
         if (lab.kind == CadAnnotation::Kind::Mtext && lab.surveyPointLabelForId == sp.id) {
           float amnX = 0.f;
           float amnY = 0.f;
           float amxX = 0.f;
           float amxY = 0.f;
-          CadAnnotationRoughBounds(lab, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+          CadAnnotationRoughBounds(lab, st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
           SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
           if (windowMode)
             hitLabel = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
@@ -10252,8 +10252,8 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
 
   // PDF underlays: hit if the rotated bounding box intersects/is-contained-by the selection rect.
   constexpr float kPdfPi = 3.14159265f;
-  for (int pi = 0; pi < static_cast<int>(st.pdfAttachments.size()); ++pi) {
-    const PdfAttachment& patt = st.pdfAttachments[static_cast<size_t>(pi)];
+  for (int pi = 0; pi < static_cast<int>(st.drawing.pdfAttachments.size()); ++pi) {
+    const PdfAttachment& patt = st.drawing.pdfAttachments[static_cast<size_t>(pi)];
     if (patt.pageWidthPts <= 0.f || patt.pageHeightPts <= 0.f)
       continue;
     const float W    = patt.pageWidthPts  * patt.scale;
@@ -10443,13 +10443,13 @@ static void ApplyTranslationToSelectedSurveyPoints(AppCommandState& st, float dx
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
   for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size()) {
-      st.surveyPoints[static_cast<size_t>(i)].easting += dx;
-      st.surveyPoints[static_cast<size_t>(i)].northing += dy;
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size()) {
+      st.drawing.surveyPoints[static_cast<size_t>(i)].easting += dx;
+      st.drawing.surveyPoints[static_cast<size_t>(i)].northing += dy;
     }
   }
   for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
       RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
   }
 }
@@ -10459,16 +10459,16 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
   for (int i : ix) {
-    if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+    if (i < 0 || static_cast<size_t>(i) >= st.drawing.surveyPoints.size())
       continue;
-    double x = st.surveyPoints[static_cast<size_t>(i)].easting;
-    double y = st.surveyPoints[static_cast<size_t>(i)].northing;
+    double x = st.drawing.surveyPoints[static_cast<size_t>(i)].easting;
+    double y = st.drawing.surveyPoints[static_cast<size_t>(i)].northing;
     RotateAroundBase(bx, by, rad, &x, &y);
-    st.surveyPoints[static_cast<size_t>(i)].easting = x;
-    st.surveyPoints[static_cast<size_t>(i)].northing = y;
+    st.drawing.surveyPoints[static_cast<size_t>(i)].easting = x;
+    st.drawing.surveyPoints[static_cast<size_t>(i)].northing = y;
   }
   for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
       RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
   }
 }
@@ -10496,8 +10496,8 @@ static void MapSelectedSplines(AppCommandState& st, const F& f) {
     if (e.type != SelectedEntity::Type::Spline || e.index < 0)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k < st.cadSplines.size())
-      spline::MapPoints(&st.cadSplines[k], f);
+    if (k < st.drawing.cadSplines.size())
+      spline::MapPoints(&st.drawing.cadSplines[k], f);
   }
 }
 
@@ -10507,13 +10507,13 @@ static void MapSelectedSplines(AppCommandState& st, const F& f) {
 static void EraseSelectedSplines(AppCommandState& st) {
   std::set<int> ix;
   for (const auto& e : st.selection)
-    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < st.cadSplines.size())
+    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadSplines.size())
       ix.insert(e.index);
   for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
     const size_t k = static_cast<size_t>(*it);
-    st.cadSplines.erase(st.cadSplines.begin() + static_cast<std::ptrdiff_t>(k));
-    if (k < st.cadSplineAttrs.size())
-      st.cadSplineAttrs.erase(st.cadSplineAttrs.begin() + static_cast<std::ptrdiff_t>(k));
+    st.drawing.cadSplines.erase(st.drawing.cadSplines.begin() + static_cast<std::ptrdiff_t>(k));
+    if (k < st.drawing.cadSplineAttrs.size())
+      st.drawing.cadSplineAttrs.erase(st.drawing.cadSplineAttrs.begin() + static_cast<std::ptrdiff_t>(k));
   }
 }
 
@@ -10522,20 +10522,20 @@ static void EraseSelectedSplines(AppCommandState& st) {
 /// source's layer and colour but not its id (see DuplicatedEntityAttrs).
 template <class F>
 static void DuplicateSelectedSplines(AppCommandState& st, const F& f) {
-  const size_t n0 = st.cadSplines.size();
+  const size_t n0 = st.drawing.cadSplines.size();
   std::vector<size_t> sources;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < n0)
       sources.push_back(static_cast<size_t>(e.index));
   if (sources.empty())
     return;
-  while (st.cadSplineAttrs.size() < n0)
-    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadSplineAttrs.size() < n0)
+    st.drawing.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
   for (const size_t k : sources) {
-    CadSpline c = st.cadSplines[k];
+    CadSpline c = st.drawing.cadSplines[k];
     spline::MapPoints(&c, f);
-    st.cadSplines.push_back(std::move(c));
-    st.cadSplineAttrs.push_back(DuplicatedEntityAttrs(st.cadSplineAttrs[k]));
+    st.drawing.cadSplines.push_back(std::move(c));
+    st.drawing.cadSplineAttrs.push_back(DuplicatedEntityAttrs(st.drawing.cadSplineAttrs[k]));
   }
   BumpCadGpuCache(st);
 }
@@ -10546,12 +10546,12 @@ static void MapSelectedCadPoints(AppCommandState& st, const F& f) {
     if (e.type != SelectedEntity::Type::Point || e.index < 0)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.cadPoints.size())
+    if (k >= st.drawing.cadPoints.size())
       continue;
-    const spline::Vec3 mapped = f(spline::Vec3{st.cadPoints[k].x, st.cadPoints[k].y, st.cadPoints[k].z});
-    st.cadPoints[k].x = mapped.x;
-    st.cadPoints[k].y = mapped.y;
-    st.cadPoints[k].z = mapped.z;
+    const spline::Vec3 mapped = f(spline::Vec3{st.drawing.cadPoints[k].x, st.drawing.cadPoints[k].y, st.drawing.cadPoints[k].z});
+    st.drawing.cadPoints[k].x = mapped.x;
+    st.drawing.cadPoints[k].y = mapped.y;
+    st.drawing.cadPoints[k].z = mapped.z;
   }
 }
 
@@ -10559,35 +10559,35 @@ static void EraseSelectedCadPoints(AppCommandState& st) {
   std::set<int> ix;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::Point && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.cadPoints.size())
+        static_cast<size_t>(e.index) < st.drawing.cadPoints.size())
       ix.insert(e.index);
   for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
     const size_t k = static_cast<size_t>(*it);
-    st.cadPoints.erase(st.cadPoints.begin() + static_cast<std::ptrdiff_t>(k));
-    if (k < st.cadPointAttrs.size())
-      st.cadPointAttrs.erase(st.cadPointAttrs.begin() + static_cast<std::ptrdiff_t>(k));
+    st.drawing.cadPoints.erase(st.drawing.cadPoints.begin() + static_cast<std::ptrdiff_t>(k));
+    if (k < st.drawing.cadPointAttrs.size())
+      st.drawing.cadPointAttrs.erase(st.drawing.cadPointAttrs.begin() + static_cast<std::ptrdiff_t>(k));
   }
 }
 
 template <class F>
 static void DuplicateSelectedCadPoints(AppCommandState& st, const F& f) {
-  const size_t n0 = st.cadPoints.size();
+  const size_t n0 = st.drawing.cadPoints.size();
   std::vector<size_t> sources;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::Point && e.index >= 0 && static_cast<size_t>(e.index) < n0)
       sources.push_back(static_cast<size_t>(e.index));
   if (sources.empty())
     return;
-  while (st.cadPointAttrs.size() < n0)
-    st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadPointAttrs.size() < n0)
+    st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
   for (const size_t k : sources) {
-    CadPoint c = st.cadPoints[k];
+    CadPoint c = st.drawing.cadPoints[k];
     const spline::Vec3 mapped = f(spline::Vec3{c.x, c.y, c.z});
     c.x = mapped.x;
     c.y = mapped.y;
     c.z = mapped.z;
-    st.cadPoints.push_back(c);
-    st.cadPointAttrs.push_back(DuplicatedEntityAttrs(st.cadPointAttrs[k]));
+    st.drawing.cadPoints.push_back(c);
+    st.drawing.cadPointAttrs.push_back(DuplicatedEntityAttrs(st.drawing.cadPointAttrs[k]));
   }
 }
 
@@ -10607,11 +10607,11 @@ static void ForEachSelectedFeatureLine(const AppCommandState& st, Fn&& fn) {
     if (e.type != SelectedEntity::Type::FeatureLine)
       continue;
     const int fi = e.index;
-    if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.featureLineOffsets.size())
+    if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.drawing.featureLineOffsets.size())
       continue;
-    const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
-    const int v1 = st.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
-    if (v1 <= v0 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+    const int v0 = st.drawing.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = st.drawing.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
+    if (v1 <= v0 || static_cast<size_t>(v1) * 3 > st.drawing.featureLineVerts.size())
       continue;
     ranges.push_back({fi, v0, v1});
   }
@@ -10628,7 +10628,7 @@ static void TransformSelectedFeatureLinesInPlace(AppCommandState& st, Xf&& xform
   ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
     for (int vi = v0; vi < v1; ++vi) {
       const size_t b = static_cast<size_t>(vi) * 3;
-      xform(&st.featureLineVerts[b], &st.featureLineVerts[b + 1]);
+      xform(&st.drawing.featureLineVerts[b], &st.drawing.featureLineVerts[b + 1]);
     }
   });
 }
@@ -10644,34 +10644,34 @@ static void TransformSelectedFeatureLinesInPlace(AppCommandState& st, Xf&& xform
 template <class Xf>
 static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, Xf&& xform) {
   const int nv = v1 - v0;
-  if (nv < 2 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+  if (nv < 2 || static_cast<size_t>(v1) * 3 > st.drawing.featureLineVerts.size())
     return;
-  if (st.featureLineOffsets.empty())
-    st.featureLineOffsets.push_back(0);
-  const int baseVert = st.featureLineOffsets.back();
+  if (st.drawing.featureLineOffsets.empty())
+    st.drawing.featureLineOffsets.push_back(0);
+  const int baseVert = st.drawing.featureLineOffsets.back();
   for (int vi = v0; vi < v1; ++vi) {
     const size_t b = static_cast<size_t>(vi) * 3;
-    float x = static_cast<float>(st.featureLineVerts[b]);
-    float y = static_cast<float>(st.featureLineVerts[b + 1]);
-    const float z = static_cast<float>(st.featureLineVerts[b + 2]);
+    float x = static_cast<float>(st.drawing.featureLineVerts[b]);
+    float y = static_cast<float>(st.drawing.featureLineVerts[b + 1]);
+    const float z = static_cast<float>(st.drawing.featureLineVerts[b + 2]);
     xform(&x, &y);
-    st.featureLineVerts.push_back(x);
-    st.featureLineVerts.push_back(y);
-    st.featureLineVerts.push_back(z);
-    st.featureLineElevPt.push_back(static_cast<size_t>(vi) < st.featureLineElevPt.size()
-                                       ? st.featureLineElevPt[static_cast<size_t>(vi)]
+    st.drawing.featureLineVerts.push_back(x);
+    st.drawing.featureLineVerts.push_back(y);
+    st.drawing.featureLineVerts.push_back(z);
+    st.drawing.featureLineElevPt.push_back(static_cast<size_t>(vi) < st.drawing.featureLineElevPt.size()
+                                       ? st.drawing.featureLineElevPt[static_cast<size_t>(vi)]
                                        : static_cast<uint8_t>(0));
   }
-  st.featureLineOffsets.push_back(baseVert + nv);
-  st.featureLineClosed.push_back(static_cast<size_t>(fi) < st.featureLineClosed.size()
-                                     ? st.featureLineClosed[static_cast<size_t>(fi)]
+  st.drawing.featureLineOffsets.push_back(baseVert + nv);
+  st.drawing.featureLineClosed.push_back(static_cast<size_t>(fi) < st.drawing.featureLineClosed.size()
+                                     ? st.drawing.featureLineClosed[static_cast<size_t>(fi)]
                                      : static_cast<uint8_t>(0));
-  st.featureLineInfo.push_back(static_cast<size_t>(fi) < st.featureLineInfo.size()
-                                   ? st.featureLineInfo[static_cast<size_t>(fi)]
+  st.drawing.featureLineInfo.push_back(static_cast<size_t>(fi) < st.drawing.featureLineInfo.size()
+                                   ? st.drawing.featureLineInfo[static_cast<size_t>(fi)]
                                    : CadFeatureLineInfo{});
-  st.featureLineAttrs.push_back(DuplicatedEntityAttrs(
-      static_cast<size_t>(fi) < st.featureLineAttrs.size()
-          ? st.featureLineAttrs[static_cast<size_t>(fi)]
+  st.drawing.featureLineAttrs.push_back(DuplicatedEntityAttrs(
+      static_cast<size_t>(fi) < st.drawing.featureLineAttrs.size()
+          ? st.drawing.featureLineAttrs[static_cast<size_t>(fi)]
           : MakeNewEntityAttrs(st)));
 }
 
@@ -10696,12 +10696,12 @@ static void TransformSelectedSolids(AppCommandState& st, const char* commandName
   brep::Problem lastWhy = brep::Problem::Ok;
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
+        static_cast<size_t>(e.index) >= st.drawing.cadSolids.size())
       continue;
     if (!seen.insert(e.index).second)
       continue;
     const size_t ix = static_cast<size_t>(e.index);
-    const CadSolidPtr sp = st.cadSolids[ix];  // a copy: a duplicate's push_back may reallocate
+    const CadSolidPtr sp = st.drawing.cadSolids[ix];  // a copy: a duplicate's push_back may reallocate
     if (!sp)
       continue;
     brep::Solid out;
@@ -10712,11 +10712,11 @@ static void TransformSelectedSolids(AppCommandState& st, const char* commandName
       continue;
     }
     if (duplicate) {
-      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(out)));
-      st.cadSolidAttrs.push_back(
-          DuplicatedEntityAttrs(ix < st.cadSolidAttrs.size() ? st.cadSolidAttrs[ix] : EntityAttributes{}));
+      st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(out)));
+      st.drawing.cadSolidAttrs.push_back(
+          DuplicatedEntityAttrs(ix < st.drawing.cadSolidAttrs.size() ? st.drawing.cadSolidAttrs[ix] : EntityAttributes{}));
     } else {
-      st.cadSolids[ix] = std::make_shared<const brep::Solid>(std::move(out));
+      st.drawing.cadSolids[ix] = std::make_shared<const brep::Solid>(std::move(out));
     }
   }
   // One line naming the LAST reason, not one line per solid. With several solids refused for
@@ -10789,12 +10789,12 @@ static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool dupl
   std::set<int> seen;
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::PipeRun || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadPipeRuns.size())
+        static_cast<size_t>(e.index) >= st.drawing.cadPipeRuns.size())
       continue;
     if (!seen.insert(e.index).second)
       continue;
     const size_t ix = static_cast<size_t>(e.index);
-    CadPipeRun run = st.cadPipeRuns[ix];
+    CadPipeRun run = st.drawing.cadPipeRuns[ix];
     for (size_t k = 0; k + 2 < run.vertsXyz.size(); k += 3) {
       const ray3d::Vec3 p = pt(ray3d::Vec3{run.vertsXyz[k], run.vertsXyz[k + 1], run.vertsXyz[k + 2]});
       run.vertsXyz[k] = p.x;
@@ -10802,11 +10802,11 @@ static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool dupl
       run.vertsXyz[k + 2] = p.z;
     }
     if (duplicate) {
-      st.cadPipeRuns.push_back(std::move(run));
-      st.cadPipeRunAttrs.push_back(DuplicatedEntityAttrs(
-          ix < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ix] : EntityAttributes{}));
+      st.drawing.cadPipeRuns.push_back(std::move(run));
+      st.drawing.cadPipeRunAttrs.push_back(DuplicatedEntityAttrs(
+          ix < st.drawing.cadPipeRunAttrs.size() ? st.drawing.cadPipeRunAttrs[ix] : EntityAttributes{}));
     } else {
-      st.cadPipeRuns[ix] = std::move(run);
+      st.drawing.cadPipeRuns[ix] = std::move(run);
     }
   }
 }
@@ -10819,22 +10819,22 @@ static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool du
   std::set<int> seen;
   bool changed = false;
   for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.alignments.size())
       continue;
     if (!seen.insert(e.index).second)
       continue;
     const size_t ix = static_cast<size_t>(e.index);
-    alignment::Alignment a = st.alignments[ix];
+    alignment::Alignment a = st.drawing.alignments[ix];
     if (!fn(a))
       continue;
     if (duplicate) {
       a.id = st.nextEntityId++;
       a.parentId = 0;
       a.name = UniqueAlignmentName(st, a.name);
-      a.equations = st.alignments[ix].equations;
-      st.alignments.push_back(std::move(a));
+      a.equations = st.drawing.alignments[ix].equations;
+      st.drawing.alignments.push_back(std::move(a));
     } else {
-      st.alignments[ix] = std::move(a);
+      st.drawing.alignments[ix] = std::move(a);
       changed = true;
     }
   }
@@ -10898,8 +10898,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   // used to leave them behind without a word.
   DuplicateSelectedSolidsTranslated(st, dx, dy, dz);
   TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/true);
-  const size_t polyVertsBefore = st.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.featureLineVerts.size();
+  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -10925,17 +10925,17 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t fk = static_cast<size_t>(e.index);
-      if (fk < st.cadFilledRegions.size()) {
-        CadFilledRegion fr = st.cadFilledRegions[fk];
+      if (fk < st.drawing.cadFilledRegions.size()) {
+        CadFilledRegion fr = st.drawing.cadFilledRegions[fk];
         hatchgeom::Translate(fr, dx, dy, dz);
         newFills.push_back(std::move(fr));
         newFillAttrs.push_back(DuplicatedEntityAttrs(
-            fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
+            fk < st.drawing.cadFilledRegionAttrs.size() ? st.drawing.cadFilledRegionAttrs[fk] : EntityAttributes{}));
       }
     } else if (e.type == SelectedEntity::Type::LineSeg) {
       size_t li = static_cast<size_t>(e.index);
-      if (li < st.lineCount()) {
-        const CadLineRecord ln = st.line(li);
+      if (li < st.drawing.lineCount()) {
+        const CadLineRecord ln = st.drawing.line(li);
         for (const double v : {ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1})
           newLines.push_back(static_cast<float>(v));
         newLines[newLines.size() - 6] += dx;
@@ -10945,30 +10945,30 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         newLines[newLines.size() - 2] += dy;
         newLines[newLines.size() - 1] += dz;
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
-          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        const CadCircleRecord c = st.circle(ci);
+      if (ci < st.drawing.circleCount()) {
+        const CadCircleRecord c = st.drawing.circle(ci);
         newCircles.push_back(static_cast<float>(c.cx + dx));
         newCircles.push_back(static_cast<float>(c.cy + dy));
         newCircles.push_back(static_cast<float>(c.cz + dz));  // z (issue #400: UCS-plane arrays)
         newCircles.push_back(static_cast<float>(c.r));  // r
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
         float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
         PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size()) {
-        CadAnnotation c = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        CadAnnotation c = st.drawing.cadAnnotations[k];
         c.surveyPointLabelForId = -1;
         c.insX += dx;
         c.insY += dy;
@@ -10986,133 +10986,133 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         }
         newAnn.push_back(std::move(c));
         EntityAttributes a{};
-        if (k < st.cadAnnotationAttrs.size())
-          a = st.cadAnnotationAttrs[k];
+        if (k < st.drawing.cadAnnotationAttrs.size())
+          a = st.drawing.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.cadTables.size()) {
-        CadTable c = st.cadTables[tk];
+      if (tk < st.drawing.cadTables.size()) {
+        CadTable c = st.drawing.cadTables[tk];
         CadTableTranslate(&c, dx, dy);
         newTables.push_back(std::move(c));
         EntityAttributes a{};
-        if (tk < st.cadTableAttrs.size())
-          a = st.cadTableAttrs[tk];
+        if (tk < st.drawing.cadTableAttrs.size())
+          a = st.drawing.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::PositionMarker) {  // REQ-359: marker + label
       const size_t mk = static_cast<size_t>(e.index);
-      if (mk < st.cadPositionMarkers.size()) {
-        CadPositionMarker c = st.cadPositionMarkers[mk];
+      if (mk < st.drawing.cadPositionMarkers.size()) {
+        CadPositionMarker c = st.drawing.cadPositionMarkers[mk];
         CadPositionMarkerTranslate(&c, dx, dy, dz);
         newMarkers.push_back(std::move(c));
         EntityAttributes a{};
-        if (mk < st.cadPositionMarkerAttrs.size())
-          a = st.cadPositionMarkerAttrs[mk];
+        if (mk < st.drawing.cadPositionMarkerAttrs.size())
+          a = st.drawing.cadPositionMarkerAttrs[mk];
         newMarkerAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Multileader) {  // REQ-367: path + label
       const size_t lk = static_cast<size_t>(e.index);
-      if (lk < st.cadMultileaders.size()) {
-        CadMultileader c = st.cadMultileaders[lk];
+      if (lk < st.drawing.cadMultileaders.size()) {
+        CadMultileader c = st.drawing.cadMultileaders[lk];
         CadMultileaderTranslate(&c, dx, dy, dz);
         newMultileaders.push_back(std::move(c));
         EntityAttributes a{};
-        if (lk < st.cadMultileaderAttrs.size())
-          a = st.cadMultileaderAttrs[lk];
+        if (lk < st.drawing.cadMultileaderAttrs.size())
+          a = st.drawing.cadMultileaderAttrs[lk];
         newMultileaderAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.cadBlockRefs.size()) {
-        CadBlockRef c = st.cadBlockRefs[bk];
+      if (bk < st.drawing.cadBlockRefs.size()) {
+        CadBlockRef c = st.drawing.cadBlockRefs[bk];
         CadBlockTranslate(&c, dx, dy, dz);  // issue #400: UCS-plane arrays
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
-        if (bk < st.cadBlockRefAttrs.size())
-          a = st.cadBlockRefAttrs[bk];
+        if (bk < st.drawing.cadBlockRefAttrs.size())
+          a = st.drawing.cadBlockRefAttrs[bk];
         newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        CadArc a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        CadArc a = st.drawing.userArcs[k];
         a.cx += dx;
         a.cy += dy;
         a.z += dz;  // issue #400: UCS-plane arrays
         newArcs.push_back(a);
         EntityAttributes at{};
-        if (k < st.userArcAttrs.size())
-          at = st.userArcAttrs[k];
+        if (k < st.drawing.userArcAttrs.size())
+          at = st.drawing.userArcAttrs[k];
         newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        CadEllipse el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        CadEllipse el = st.drawing.userEllipses[k];
         el.cx += dx;
         el.cy += dy;
         el.z += dz;  // issue #400: UCS-plane arrays
         newEll.push_back(el);
         EntityAttributes at{};
-        if (k < st.userEllAttrs.size())
-          at = st.userEllAttrs[k];
+        if (k < st.drawing.userEllAttrs.size())
+          at = st.drawing.userEllAttrs[k];
         newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
-      if (st.userPolylineOffsets.empty())
-        st.userPolylineOffsets.push_back(0);
-      const int baseVert = st.userPolylineOffsets.back();
+      if (st.drawing.userPolylineOffsets.empty())
+        st.drawing.userPolylineOffsets.push_back(0);
+      const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        st.pushVertex(CadPolyVertex{st.vertex(vi).x + dx, st.vertex(vi).y + dy, st.vertex(vi).z + dz});  // issue #400
+        st.drawing.pushVertex(CadPolyVertex{st.drawing.vertex(vi).x + dx, st.drawing.vertex(vi).y + dy, st.drawing.vertex(vi).z + dz});  // issue #400
       }
-      st.userPolylineOffsets.push_back(baseVert + nv);
+      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
-      st.userPolylineClosed.push_back(cl);
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
+      st.drawing.userPolylineClosed.push_back(cl);
       EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
-  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
                               newCircleNormals.end());
-  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
-  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.cadPositionMarkers.insert(st.cadPositionMarkers.end(), newMarkers.begin(), newMarkers.end());
-  st.cadPositionMarkerAttrs.insert(st.cadPositionMarkerAttrs.end(), newMarkerAttrs.begin(), newMarkerAttrs.end());
-  st.cadMultileaders.insert(st.cadMultileaders.end(), newMultileaders.begin(), newMultileaders.end());
-  st.cadMultileaderAttrs.insert(st.cadMultileaderAttrs.end(), newMultileaderAttrs.begin(),
+  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
+  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.drawing.cadPositionMarkers.insert(st.drawing.cadPositionMarkers.end(), newMarkers.begin(), newMarkers.end());
+  st.drawing.cadPositionMarkerAttrs.insert(st.drawing.cadPositionMarkerAttrs.end(), newMarkerAttrs.begin(), newMarkerAttrs.end());
+  st.drawing.cadMultileaders.insert(st.drawing.cadMultileaders.end(), newMultileaders.begin(), newMultileaders.end());
+  st.drawing.cadMultileaderAttrs.insert(st.drawing.cadMultileaderAttrs.end(), newMultileaderAttrs.begin(),
                                 newMultileaderAttrs.end());
-  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
-  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-  st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
-  st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
+  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
+  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
+  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.drawing.cadFilledRegions.insert(st.drawing.cadFilledRegions.end(), newFills.begin(), newFills.end());
+  st.drawing.cadFilledRegionAttrs.insert(st.drawing.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
     return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
@@ -11133,8 +11133,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newBlockRefs.empty() || !newArcs.empty() || !newEll.empty() ||
       !newFills.empty() || !newMarkers.empty() || !newMultileaders.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore ||
-      st.featureLineVerts.size() != featureVertsBefore)
+      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
+      st.drawing.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -11147,50 +11147,50 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
 
   for (size_t i = 0; i < cb.content.lineCount(); ++i) {
     const CadLineRecord ln = cb.content.line(i);
-    st.pushLine(CadLineRecord{ln.x0 + dx, ln.y0 + dy, ln.z0, ln.x1 + dx, ln.y1 + dy, ln.z1});
-    st.userLineAttrs.push_back(cb.content.userLineAttrs[i]);
-    st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
+    st.drawing.pushLine(CadLineRecord{ln.x0 + dx, ln.y0 + dy, ln.z0, ln.x1 + dx, ln.y1 + dy, ln.z1});
+    st.drawing.userLineAttrs.push_back(cb.content.userLineAttrs[i]);
+    st.selection.push_back({ST::LineSeg, static_cast<int>(st.drawing.userLineAttrs.size()) - 1});
   }
   // Clipboard → model: both are cx,cy,z,r, so Z carries through a paste unchanged (REQ-057).
   for (size_t i = 0; i < cb.content.circleCount(); ++i) {
     const CadCircleRecord c = cb.content.circle(i);
-    st.pushCircle(CadCircleRecord{c.cx + dx, c.cy + dy, c.cz, c.r});
-    st.userCircleAttrs.push_back(cb.content.userCircleAttrs[i]);
+    st.drawing.pushCircle(CadCircleRecord{c.cx + dx, c.cy + dy, c.cz, c.r});
+    st.drawing.userCircleAttrs.push_back(cb.content.userCircleAttrs[i]);
     float pnx = 0.f, pny = 0.f, pnz = 1.f;
     CircleNormalAt(cb.content.userCircleNormals, i, &pnx, &pny, &pnz);
-    PushCircleNormal(st.userCircleNormals, pnx, pny, pnz);
-    st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
+    PushCircleNormal(st.drawing.userCircleNormals, pnx, pny, pnz);
+    st.selection.push_back({ST::Circle, static_cast<int>(st.drawing.userCircleAttrs.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.userArcs.size(); ++i) {
     CadArc a = cb.content.userArcs[i];
     a.cx += dx;
     a.cy += dy;
-    st.userArcs.push_back(a);
-    st.userArcAttrs.push_back(cb.content.userArcAttrs[i]);
-    st.selection.push_back({ST::Arc, static_cast<int>(st.userArcs.size()) - 1});
+    st.drawing.userArcs.push_back(a);
+    st.drawing.userArcAttrs.push_back(cb.content.userArcAttrs[i]);
+    st.selection.push_back({ST::Arc, static_cast<int>(st.drawing.userArcs.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.userEllipses.size(); ++i) {
     CadEllipse el = cb.content.userEllipses[i];
     el.cx += dx;
     el.cy += dy;
-    st.userEllipses.push_back(el);
-    st.userEllAttrs.push_back(cb.content.userEllAttrs[i]);
-    st.selection.push_back({ST::Ellipse, static_cast<int>(st.userEllipses.size()) - 1});
+    st.drawing.userEllipses.push_back(el);
+    st.drawing.userEllAttrs.push_back(cb.content.userEllAttrs[i]);
+    st.selection.push_back({ST::Ellipse, static_cast<int>(st.drawing.userEllipses.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.cadSplines.size(); ++i) {  // REQ-443
     CadSpline sp = cb.content.cadSplines[i];
     spline::MapPoints(&sp, [&](const spline::Vec3& p) { return spline::Vec3{p.x + dx, p.y + dy, p.z}; });
-    st.cadSplines.push_back(std::move(sp));
-    st.cadSplineAttrs.push_back(i < cb.content.cadSplineAttrs.size() ? cb.content.cadSplineAttrs[i] : EntityAttributes{});
-    st.selection.push_back({ST::Spline, static_cast<int>(st.cadSplines.size()) - 1});
+    st.drawing.cadSplines.push_back(std::move(sp));
+    st.drawing.cadSplineAttrs.push_back(i < cb.content.cadSplineAttrs.size() ? cb.content.cadSplineAttrs[i] : EntityAttributes{});
+    st.selection.push_back({ST::Spline, static_cast<int>(st.drawing.cadSplines.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.cadPoints.size(); ++i) {
     CadPoint p = cb.content.cadPoints[i];
     p.x += dx;
     p.y += dy;
-    st.cadPoints.push_back(p);
-    st.cadPointAttrs.push_back(i < cb.content.cadPointAttrs.size() ? cb.content.cadPointAttrs[i] : EntityAttributes{});
-    st.selection.push_back({ST::Point, static_cast<int>(st.cadPoints.size()) - 1});
+    st.drawing.cadPoints.push_back(p);
+    st.drawing.cadPointAttrs.push_back(i < cb.content.cadPointAttrs.size() ? cb.content.cadPointAttrs[i] : EntityAttributes{});
+    st.selection.push_back({ST::Point, static_cast<int>(st.drawing.cadPoints.size()) - 1});
   }
   const int nPoly = static_cast<int>(cb.content.userPolylineOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -11199,20 +11199,20 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
-    const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
+    const int baseVert = st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.back();
     for (int vi = v0; vi < v1; ++vi) {
-      st.pushVertex(CadPolyVertex{cb.content.vertex(vi).x + dx, cb.content.vertex(vi).y + dy, cb.content.vertex(vi).z});
-      st.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.content.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
+      st.drawing.pushVertex(CadPolyVertex{cb.content.vertex(vi).x + dx, cb.content.vertex(vi).y + dy, cb.content.vertex(vi).z});
+      st.drawing.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.content.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
                                               ? cb.content.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                               : 0.0f);
     }
-    if (st.userPolylineOffsets.empty())
-      st.userPolylineOffsets.push_back(baseVert);
-    st.userPolylineOffsets.push_back(baseVert + nv);
+    if (st.drawing.userPolylineOffsets.empty())
+      st.drawing.userPolylineOffsets.push_back(baseVert);
+    st.drawing.userPolylineOffsets.push_back(baseVert + nv);
     uint8_t cl = (static_cast<size_t>(pi) < cb.content.userPolylineClosed.size()) ? cb.content.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
-    st.userPolylineClosed.push_back(cl);
-    st.userPolylineAttrs.push_back(cb.content.userPolylineAttrs[static_cast<size_t>(pi)]);
-    st.selection.push_back({ST::Polyline, static_cast<int>(st.userPolylineOffsets.size()) - 2});
+    st.drawing.userPolylineClosed.push_back(cl);
+    st.drawing.userPolylineAttrs.push_back(cb.content.userPolylineAttrs[static_cast<size_t>(pi)]);
+    st.selection.push_back({ST::Polyline, static_cast<int>(st.drawing.userPolylineOffsets.size()) - 2});
   }
   for (size_t i = 0; i < cb.content.cadAnnotations.size(); ++i) {
     CadAnnotation a = cb.content.cadAnnotations[i];
@@ -11234,26 +11234,26 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
     // Cross-space height (paper→model): paper text height is in paper inches, which transfer 1:1 to model units;
     // model text stores plotted-inches (× modelUnitsPerPlottedInch = model units), so divide by the factor.
     if (cb.fromPaper)
-      a.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
-    st.cadAnnotations.push_back(std::move(a));
-    st.cadAnnotationAttrs.push_back(cb.content.cadAnnotationAttrs[i]);
-    st.selection.push_back({ST::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
+      a.plottedHeightInches /= std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
+    st.drawing.cadAnnotations.push_back(std::move(a));
+    st.drawing.cadAnnotationAttrs.push_back(cb.content.cadAnnotationAttrs[i]);
+    st.selection.push_back({ST::Annotation, static_cast<int>(st.drawing.cadAnnotations.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.cadTables.size(); ++i) {
     CadTable t = cb.content.cadTables[i];
     CadTableTranslate(&t, dx, dy);
     if (cb.fromPaper)
-      t.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
-    st.cadTables.push_back(std::move(t));
-    st.cadTableAttrs.push_back(cb.content.cadTableAttrs[i]);
-    st.selection.push_back({ST::Table, static_cast<int>(st.cadTables.size()) - 1});
+      t.plottedHeightInches /= std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
+    st.drawing.cadTables.push_back(std::move(t));
+    st.drawing.cadTableAttrs.push_back(cb.content.cadTableAttrs[i]);
+    st.selection.push_back({ST::Table, static_cast<int>(st.drawing.cadTables.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.cadBlockRefs.size(); ++i) {
     CadBlockRef r = cb.content.cadBlockRefs[i];
     CadBlockTranslate(&r, dx, dy, 0.f);
-    st.cadBlockRefs.push_back(std::move(r));
-    st.cadBlockRefAttrs.push_back(cb.content.cadBlockRefAttrs[i]);
-    st.selection.push_back({ST::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
+    st.drawing.cadBlockRefs.push_back(std::move(r));
+    st.drawing.cadBlockRefAttrs.push_back(cb.content.cadBlockRefAttrs[i]);
+    st.selection.push_back({ST::BlockRef, static_cast<int>(st.drawing.cadBlockRefs.size()) - 1});
   }
   for (size_t i = 0; i < cb.content.cadFilledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
     CadFilledRegion fr = cb.content.cadFilledRegions[i];
@@ -11263,9 +11263,9 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
       fr.vertsXyz[v] += dx;
       fr.vertsXyz[v + 1] += dy;
     }
-    st.cadFilledRegions.push_back(std::move(fr));
-    st.cadFilledRegionAttrs.push_back(cb.content.cadFilledRegionAttrs[i]);
-    st.selection.push_back({ST::FilledRegion, static_cast<int>(st.cadFilledRegions.size()) - 1});
+    st.drawing.cadFilledRegions.push_back(std::move(fr));
+    st.drawing.cadFilledRegionAttrs.push_back(cb.content.cadFilledRegionAttrs[i]);
+    st.selection.push_back({ST::FilledRegion, static_cast<int>(st.drawing.cadFilledRegions.size()) - 1});
   }
   BumpCadGpuCache(st);
 }
@@ -11359,7 +11359,7 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
     // (model units), which transfers 1:1 to paper inches. Paper text uses plottedHeightInches AS paper inches,
     // so scale it up by the factor. (Paper→paper keeps the value.)
     if (!cb.fromPaper)
-      a.plottedHeightInches *= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+      a.plottedHeightInches *= std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
     L.paperTexts.push_back(std::move(a));
     L.paperTextAttrs.push_back(cb.content.cadAnnotationAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Text, static_cast<int>(L.paperTexts.size()) - 1});
@@ -11454,19 +11454,19 @@ static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, 
         SurveyPoint copy = source;
         copy.easting += dx;
         copy.northing += dy;
-        auto existing = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+        auto existing = std::find_if(st.drawing.surveyPoints.begin(), st.drawing.surveyPoints.end(),
                                      [&](const SurveyPoint& p) { return p.id == copy.id; });
-        if (st.clipboardPasteOverwrite && existing != st.surveyPoints.end()) {
-          const size_t index = static_cast<size_t>(existing - st.surveyPoints.begin());
+        if (st.clipboardPasteOverwrite && existing != st.drawing.surveyPoints.end()) {
+          const size_t index = static_cast<size_t>(existing - st.drawing.surveyPoints.begin());
           copy.labelMtextAnnId = existing->labelMtextAnnId;
           *existing = std::move(copy);
           EnsureSurveyPointLabelMtext(st, index, &log);
           st.selectedSurveyPointIndices.push_back(static_cast<int>(index));
         } else {
           copy.labelMtextAnnId = 0;
-          st.surveyPoints.push_back(std::move(copy));
-          EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
-          st.selectedSurveyPointIndices.push_back(static_cast<int>(st.surveyPoints.size() - 1));
+          st.drawing.surveyPoints.push_back(std::move(copy));
+          EnsureSurveyPointLabelMtext(st, st.drawing.surveyPoints.size() - 1, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(st.drawing.surveyPoints.size() - 1));
         }
       }
       if (!st.clipboard.content.surveyPoints.empty())
@@ -11482,8 +11482,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   const ray3d::Vec3 axisPoint{static_cast<double>(bx), static_cast<double>(by), 0.0};
   RotateSelectedSolids(st, axisPoint, {0.0, 0.0, 1.0}, rad, log, /*duplicate=*/true);
   RotateSelectedPipeRuns(st, axisPoint, {0.0, 0.0, 1.0}, rad, /*duplicate=*/true);
-  const size_t polyVertsBefore = st.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.featureLineVerts.size();
+  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -11503,8 +11503,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
-      if (li < st.lineCount()) {
-        const CadLineRecord ln = st.line(li);
+      if (li < st.drawing.lineCount()) {
+        const CadLineRecord ln = st.drawing.line(li);
         float x0 = static_cast<float>(ln.x0);
         float y0 = static_cast<float>(ln.y0);
         float z0 = static_cast<float>(ln.z0);
@@ -11520,14 +11520,14 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         newLines.push_back(y1);
         newLines.push_back(z1);
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
-          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        const CadCircleRecord c = st.circle(ci);
+      if (ci < st.drawing.circleCount()) {
+        const CadCircleRecord c = st.drawing.circle(ci);
         float cx = static_cast<float>(c.cx);
         float cy = static_cast<float>(c.cy);
         float r = static_cast<float>(c.r);
@@ -11537,18 +11537,18 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         newCircles.push_back(static_cast<float>(c.cz));  // z — rotation is about the Z axis
         newCircles.push_back(r);
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
         float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
         RotateNormalAboutZ(rad, &nnx, &nny);   // REQ-312: the plane turns with the circle
         PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size()) {
-        CadAnnotation c = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        CadAnnotation c = st.drawing.cadAnnotations[k];
         c.surveyPointLabelForId = -1;
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
@@ -11584,36 +11584,36 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         }
         newAnn.push_back(std::move(c));
         EntityAttributes a{};
-        if (k < st.cadAnnotationAttrs.size())
-          a = st.cadAnnotationAttrs[k];
+        if (k < st.drawing.cadAnnotationAttrs.size())
+          a = st.drawing.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.cadTables.size()) {
-        CadTable c = st.cadTables[tk];
+      if (tk < st.drawing.cadTables.size()) {
+        CadTable c = st.drawing.cadTables[tk];
         CadTableRotateAround(&c, bx, by, rad);
         newTables.push_back(std::move(c));
         EntityAttributes a{};
-        if (tk < st.cadTableAttrs.size())
-          a = st.cadTableAttrs[tk];
+        if (tk < st.drawing.cadTableAttrs.size())
+          a = st.drawing.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.cadBlockRefs.size()) {
-        CadBlockRef c = st.cadBlockRefs[bk];
+      if (bk < st.drawing.cadBlockRefs.size()) {
+        CadBlockRef c = st.drawing.cadBlockRefs[bk];
         CadBlockRotateZ(&c, bx, by, rad);
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
-        if (bk < st.cadBlockRefAttrs.size())
-          a = st.cadBlockRefAttrs[bk];
+        if (bk < st.drawing.cadBlockRefAttrs.size())
+          a = st.drawing.cadBlockRefAttrs[bk];
         newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        CadArc a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        CadArc a = st.drawing.userArcs[k];
         // The start point, through the arc's own plane, before the arc moves (REQ-312).
         ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
         float spx = static_cast<float>(startPt.x);
@@ -11627,14 +11627,14 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         CadReanchorArcStart(&a, startPt);  // REQ-312: a no-op on a flat arc, where += rad is exact
         newArcs.push_back(a);
         EntityAttributes at{};
-        if (k < st.userArcAttrs.size())
-          at = st.userArcAttrs[k];
+        if (k < st.drawing.userArcAttrs.size())
+          at = st.drawing.userArcAttrs[k];
         newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        CadEllipse el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        CadEllipse el = st.drawing.userEllipses[k];
         float mx = static_cast<float>(el.cx + el.majVx);
         float my = static_cast<float>(el.cy + el.majVy);
         RotateAroundBase(bx, by, rad, &el.cx, &el.cy);
@@ -11643,60 +11643,60 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         el.majVy = static_cast<float>(my - el.cy);
         newEll.push_back(el);
         EntityAttributes at{};
-        if (k < st.userEllAttrs.size())
-          at = st.userEllAttrs[k];
+        if (k < st.drawing.userEllAttrs.size())
+          at = st.drawing.userEllAttrs[k];
         newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
-      if (st.userPolylineOffsets.empty())
-        st.userPolylineOffsets.push_back(0);
-      const int baseVert = st.userPolylineOffsets.back();
+      if (st.drawing.userPolylineOffsets.empty())
+        st.drawing.userPolylineOffsets.push_back(0);
+      const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.vertex(vi).x);
-        float py = static_cast<float>(st.vertex(vi).y);
-        float pz = static_cast<float>(st.vertex(vi).z);
+        float px = static_cast<float>(st.drawing.vertex(vi).x);
+        float py = static_cast<float>(st.drawing.vertex(vi).y);
+        float pz = static_cast<float>(st.drawing.vertex(vi).z);
         RotateAroundBase(bx, by, rad, &px, &py);
-        st.pushVertex(CadPolyVertex{px, py, pz});
+        st.drawing.pushVertex(CadPolyVertex{px, py, pz});
       }
-      st.userPolylineOffsets.push_back(baseVert + nv);
+      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
-      st.userPolylineClosed.push_back(cl);
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
+      st.drawing.userPolylineClosed.push_back(cl);
       EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
-  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
                               newCircleNormals.end());
-  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
-  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
-  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
+  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
+  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
+  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
 
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
     double x = v.x, y = v.y;
@@ -11718,8 +11718,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
       !newBlockRefs.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore ||
-      st.featureLineVerts.size() != featureVertsBefore)
+      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
+      st.drawing.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -11764,8 +11764,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log, /*duplicate=*/true, commandLabel);
   RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/true);
 
-  const size_t polyVertsBefore = st.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.featureLineVerts.size();
+  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
   std::vector<float> newLines, newCircles, newCircleNormals;
   std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
   std::vector<CadAnnotation> newAnn;
@@ -11785,8 +11785,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
-      if (li < st.lineCount()) {
-        const CadLineRecord ln = st.line(li);
+      if (li < st.drawing.lineCount()) {
+        const CadLineRecord ln = st.drawing.line(li);
         const ray3d::Vec3 p0 = rotPt(static_cast<float>(ln.x0), static_cast<float>(ln.y0), static_cast<float>(ln.z0));
         const ray3d::Vec3 p1 = rotPt(static_cast<float>(ln.x1), static_cast<float>(ln.y1), static_cast<float>(ln.z1));
         newLines.push_back(static_cast<float>(p0.x));
@@ -11796,32 +11796,32 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         newLines.push_back(static_cast<float>(p1.y));
         newLines.push_back(static_cast<float>(p1.z));
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
-          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        const CadCircleRecord cc = st.circle(ci);
+      if (ci < st.drawing.circleCount()) {
+        const CadCircleRecord cc = st.drawing.circle(ci);
         const ray3d::Vec3 c = rotPt(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
         newCircles.push_back(static_cast<float>(c.x));
         newCircles.push_back(static_cast<float>(c.y));
         newCircles.push_back(static_cast<float>(c.z));
         newCircles.push_back(static_cast<float>(cc.r));  // r
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
         float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
         const ray3d::Vec3 n = rotDir(nnx, nny, nnz);
         PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        CadArc a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        CadArc a = st.drawing.userArcs[k];
         const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
         const ray3d::Vec3 startRot = rotPt(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y),
                                            static_cast<float>(startWorld.z));
@@ -11836,8 +11836,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         CadReanchorArcStart(&a, startRot);
         newArcs.push_back(a);
         EntityAttributes at{};
-        if (k < st.userArcAttrs.size())
-          at = st.userArcAttrs[k];
+        if (k < st.drawing.userArcAttrs.size())
+          at = st.drawing.userArcAttrs[k];
         newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
@@ -11846,8 +11846,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       // representable result, the same reason Annotation/Table/BlockRef refuse a tilted axis.
       if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        CadEllipse el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        CadEllipse el = st.drawing.userEllipses[k];
         const ray3d::Vec3 c = rotPt(static_cast<float>(el.cx), static_cast<float>(el.cy), static_cast<float>(el.z));
         const ray3d::Vec3 maj = rotDir(el.majVx, el.majVy, 0.f);
         el.cx = static_cast<float>(c.x);
@@ -11857,43 +11857,43 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         el.majVy = static_cast<float>(maj.y);
         newEll.push_back(el);
         EntityAttributes at{};
-        if (k < st.userEllAttrs.size())
-          at = st.userEllAttrs[k];
+        if (k < st.drawing.userEllAttrs.size())
+          at = st.drawing.userEllAttrs[k];
         newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
-      if (st.userPolylineOffsets.empty())
-        st.userPolylineOffsets.push_back(0);
-      const int baseVert = st.userPolylineOffsets.back();
+      if (st.drawing.userPolylineOffsets.empty())
+        st.drawing.userPolylineOffsets.push_back(0);
+      const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        const ray3d::Vec3 p = rotPt(static_cast<float>(st.vertex(vi).x),
-                                    static_cast<float>(st.vertex(vi).y),
-                                    static_cast<float>(st.vertex(vi).z));
-        st.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+        const ray3d::Vec3 p = rotPt(static_cast<float>(st.drawing.vertex(vi).x),
+                                    static_cast<float>(st.drawing.vertex(vi).y),
+                                    static_cast<float>(st.drawing.vertex(vi).z));
+        st.drawing.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
       }
-      st.userPolylineOffsets.push_back(baseVert + nv);
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
       uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
-      st.userPolylineClosed.push_back(cl);
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
+      st.drawing.userPolylineClosed.push_back(cl);
       EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     } else if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t fk = static_cast<size_t>(e.index);
-      if (fk < st.cadFilledRegions.size()) {
-        CadFilledRegion fr = st.cadFilledRegions[fk];
+      if (fk < st.drawing.cadFilledRegions.size()) {
+        CadFilledRegion fr = st.drawing.cadFilledRegions[fk];
         for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
           const ray3d::Vec3 p = rotPt(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]), static_cast<float>(fr.vertsXyz[v + 2]));
           fr.vertsXyz[v] = static_cast<float>(p.x);
@@ -11902,13 +11902,13 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         }
         newFills.push_back(std::move(fr));
         newFillAttrs.push_back(DuplicatedEntityAttrs(
-            fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
+            fk < st.drawing.cadFilledRegionAttrs.size() ? st.drawing.cadFilledRegionAttrs[fk] : EntityAttributes{}));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size()) {
-        CadAnnotation c = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        CadAnnotation c = st.drawing.cadAnnotations[k];
         c.surveyPointLabelForId = -1;
         const ray3d::Vec3 ins = rotPt(c.insX, c.insY, c.insZ);
         c.insX = static_cast<float>(ins.x);
@@ -11938,53 +11938,53 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         }
         newAnn.push_back(std::move(c));
         EntityAttributes a{};
-        if (k < st.cadAnnotationAttrs.size())
-          a = st.cadAnnotationAttrs[k];
+        if (k < st.drawing.cadAnnotationAttrs.size())
+          a = st.drawing.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Table) {
       if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
       const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.cadTables.size()) {
-        CadTable c = st.cadTables[tk];
+      if (tk < st.drawing.cadTables.size()) {
+        CadTable c = st.drawing.cadTables[tk];
         CadTableRotateAround(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
         newTables.push_back(std::move(c));
         EntityAttributes a{};
-        if (tk < st.cadTableAttrs.size())
-          a = st.cadTableAttrs[tk];
+        if (tk < st.drawing.cadTableAttrs.size())
+          a = st.drawing.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
       const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.cadBlockRefs.size()) {
-        CadBlockRef c = st.cadBlockRefs[bk];
+      if (bk < st.drawing.cadBlockRefs.size()) {
+        CadBlockRef c = st.drawing.cadBlockRefs[bk];
         CadBlockRotateZ(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
-        if (bk < st.cadBlockRefAttrs.size())
-          a = st.cadBlockRefAttrs[bk];
+        if (bk < st.drawing.cadBlockRefAttrs.size())
+          a = st.drawing.cadBlockRefAttrs[bk];
         newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     }
   }
-  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
-  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
-  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
-  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-  st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
-  st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
+  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
+  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
+  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
+  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.drawing.cadFilledRegions.insert(st.drawing.cadFilledRegions.end(), newFills.begin(), newFills.end());
+  st.drawing.cadFilledRegionAttrs.insert(st.drawing.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
   // AppendFeatureLineCopy's xform only sees (x, y) — its own Z rides through untouched (see its
   // declaration) — which is exactly right for a Z-parallel axis (the general formula's x'/y' never
@@ -12013,8 +12013,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
       !newBlockRefs.empty() || !newFills.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore ||
-      st.featureLineVerts.size() != featureVertsBefore)
+      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
+      st.drawing.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -12186,8 +12186,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
     }
   }
 
-  const size_t polyVertsBefore = st.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.featureLineVerts.size();
+  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -12207,13 +12207,13 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       size_t k = static_cast<size_t>(e.index);
-      if (k < st.lineCount()) {
-        float lx0 = static_cast<float>(st.line(k).x0);
-        float ly0 = static_cast<float>(st.line(k).y0);
-        float lz0 = static_cast<float>(st.line(k).z0);
-        float lx1 = static_cast<float>(st.line(k).x1);
-        float ly1 = static_cast<float>(st.line(k).y1);
-        float lz1 = static_cast<float>(st.line(k).z1);
+      if (k < st.drawing.lineCount()) {
+        float lx0 = static_cast<float>(st.drawing.line(k).x0);
+        float ly0 = static_cast<float>(st.drawing.line(k).y0);
+        float lz0 = static_cast<float>(st.drawing.line(k).z0);
+        float lx1 = static_cast<float>(st.drawing.line(k).x1);
+        float ly1 = static_cast<float>(st.drawing.line(k).y1);
+        float lz1 = static_cast<float>(st.drawing.line(k).z1);
         ReflectPtAcrossLine(x0, y0, x1, y1, &lx0, &ly0);
         ReflectPtAcrossLine(x0, y0, x1, y1, &lx1, &ly1);
         newLines.push_back(lx0);
@@ -12223,15 +12223,15 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         newLines.push_back(ly1);
         newLines.push_back(lz1);
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
-          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
       size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        const CadCircleRecord c = st.circle(ci);
+      if (ci < st.drawing.circleCount()) {
+        const CadCircleRecord c = st.drawing.circle(ci);
         float cx = static_cast<float>(c.cx);
         float cy = static_cast<float>(c.cy);
         float r = static_cast<float>(c.r);
@@ -12241,18 +12241,18 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         newCircles.push_back(static_cast<float>(c.cz));  // z — reflection is about a vertical plane
         newCircles.push_back(r);                            // radius is preserved (isometry)
         EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
         float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
         ReflectNormalAcrossLine(x0, y0, x1, y1, &nnx, &nny);   // REQ-312: the plane mirrors too
         PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size()) {
-        CadAnnotation c = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        CadAnnotation c = st.drawing.cadAnnotations[k];
         c.surveyPointLabelForId = -1;
         if (c.kind == CadAnnotation::Kind::Text || c.kind == CadAnnotation::Kind::Mtext) {
           // MIRRTEXT-off (design decision, D-2026-08-23-j): insertion point reflects, glyphs stay
@@ -12308,36 +12308,36 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         }
         newAnn.push_back(std::move(c));
         EntityAttributes a{};
-        if (k < st.cadAnnotationAttrs.size())
-          a = st.cadAnnotationAttrs[k];
+        if (k < st.drawing.cadAnnotationAttrs.size())
+          a = st.drawing.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.cadTables.size()) {
-        CadTable c = st.cadTables[tk];
+      if (tk < st.drawing.cadTables.size()) {
+        CadTable c = st.drawing.cadTables[tk];
         CadTableReflectAcrossLine(&c, x0, y0, x1, y1);
         newTables.push_back(std::move(c));
         EntityAttributes a{};
-        if (tk < st.cadTableAttrs.size())
-          a = st.cadTableAttrs[tk];
+        if (tk < st.drawing.cadTableAttrs.size())
+          a = st.drawing.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.cadBlockRefs.size()) {
-        CadBlockRef c = st.cadBlockRefs[bk];
+      if (bk < st.drawing.cadBlockRefs.size()) {
+        CadBlockRef c = st.drawing.cadBlockRefs[bk];
         CadBlockMirror(&c, x0, y0, x1, y1);
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
-        if (bk < st.cadBlockRefAttrs.size())
-          a = st.cadBlockRefAttrs[bk];
+        if (bk < st.drawing.cadBlockRefAttrs.size())
+          a = st.drawing.cadBlockRefAttrs[bk];
         newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        CadArc a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        CadArc a = st.drawing.userArcs[k];
         // A reflection reverses handedness (CCW becomes CW): reflecting the center alone does not
         // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
         // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
@@ -12358,14 +12358,14 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         CadReanchorArcStart(&a, farEnd);  // REQ-312: a no-op on a flat arc, so newStart stands there
         newArcs.push_back(a);
         EntityAttributes at{};
-        if (k < st.userArcAttrs.size())
-          at = st.userArcAttrs[k];
+        if (k < st.drawing.userArcAttrs.size())
+          at = st.drawing.userArcAttrs[k];
         newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        CadEllipse el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        CadEllipse el = st.drawing.userEllipses[k];
         float mx = static_cast<float>(el.cx + el.majVx);
         float my = static_cast<float>(el.cy + el.majVy);
         ReflectPtAcrossLine(x0, y0, x1, y1, &el.cx, &el.cy);
@@ -12374,60 +12374,60 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         el.majVy = static_cast<float>(my - el.cy);
         newEll.push_back(el);
         EntityAttributes at{};
-        if (k < st.userEllAttrs.size())
-          at = st.userEllAttrs[k];
+        if (k < st.drawing.userEllAttrs.size())
+          at = st.drawing.userEllAttrs[k];
         newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
-      if (st.userPolylineOffsets.empty())
-        st.userPolylineOffsets.push_back(0);
-      const int baseVert = st.userPolylineOffsets.back();
+      if (st.drawing.userPolylineOffsets.empty())
+        st.drawing.userPolylineOffsets.push_back(0);
+      const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.vertex(vi).x);
-        float py = static_cast<float>(st.vertex(vi).y);
-        float pz = static_cast<float>(st.vertex(vi).z);
+        float px = static_cast<float>(st.drawing.vertex(vi).x);
+        float py = static_cast<float>(st.drawing.vertex(vi).y);
+        float pz = static_cast<float>(st.drawing.vertex(vi).z);
         ReflectPtAcrossLine(x0, y0, x1, y1, &px, &py);
-        st.pushVertex(CadPolyVertex{px, py, pz});
+        st.drawing.pushVertex(CadPolyVertex{px, py, pz});
       }
-      st.userPolylineOffsets.push_back(baseVert + nv);
+      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
-      st.userPolylineClosed.push_back(cl);
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
+      st.drawing.userPolylineClosed.push_back(cl);
       EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
-  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
                               newCircleNormals.end());
-  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
-  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
-  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
+  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
+  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
+  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
 
   // Feature lines (REQ-087) — same append as the rotated/translated paths, differing only in the
   // point function, which is exactly why all three go through AppendFeatureLineCopy.
@@ -12438,8 +12438,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
       !newBlockRefs.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore ||
-      st.featureLineVerts.size() != featureVertsBefore)
+      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
+      st.drawing.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -12478,7 +12478,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
                        rad, log);
   RotateSelectedPipeRuns(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
                          rad, /*duplicate=*/false);  // REQ-351
-  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.drawing.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
@@ -12489,11 +12489,11 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     for (size_t i = 0; i < lineMark.size(); ++i) {
       if (!lineMark[i])
         continue;
-      if (i < st.lineCount()) {
-        CadLineRecord ln = st.line(i);
+      if (i < st.drawing.lineCount()) {
+        CadLineRecord ln = st.drawing.line(i);
         RotateAroundBase(bx, by, rad, &ln.x0, &ln.y0);
         RotateAroundBase(bx, by, rad, &ln.x1, &ln.y1);
-        st.setLine(i, ln);
+        st.drawing.setLine(i, ln);
       }
     }
   }
@@ -12501,26 +12501,26 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (e.type != SelectedEntity::Type::Circle)
       continue;
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci < st.circleCount()) {
-      CadCircleRecord rotated = st.circle(ci);
+    if (ci < st.drawing.circleCount()) {
+      CadCircleRecord rotated = st.drawing.circle(ci);
       RotateAroundBase(bx, by, rad, &rotated.cx, &rotated.cy);
-      st.setCircle(ci, rotated);
+      st.drawing.setCircle(ci, rotated);
       // REQ-312: the plane turns with the circle. This function rotates the selection IN PLACE and
       // was missed when the normal was threaded through the copying paths -- with every normal +Z
       // there was nothing here to see, and a tilted circle rotated by ROTATESEL kept the plane it
       // used to be in while its centre moved to a place that plane no longer explains.
       const size_t n = static_cast<size_t>(e.index) * 3;
-      if (n + 2 < st.userCircleNormals.size())
-        RotateNormalAboutZ(rad, &st.userCircleNormals[n], &st.userCircleNormals[n + 1]);
+      if (n + 2 < st.drawing.userCircleNormals.size())
+        RotateNormalAboutZ(rad, &st.drawing.userCircleNormals[n], &st.drawing.userCircleNormals[n + 1]);
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Arc)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
-    CadArc& a = st.userArcs[k];
+    CadArc& a = st.drawing.userArcs[k];
     ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
     float spx = static_cast<float>(startPt.x);
     float spy = static_cast<float>(startPt.y);
@@ -12536,9 +12536,9 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (e.type != SelectedEntity::Type::Ellipse)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    CadEllipse& el = st.userEllipses[k];
+    CadEllipse& el = st.drawing.userEllipses[k];
     float mx = static_cast<float>(el.cx + el.majVx);
     float my = static_cast<float>(el.cy + el.majVy);
     RotateAroundBase(bx, by, rad, &el.cx, &el.cy);
@@ -12560,22 +12560,22 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       continue;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
-      RotateAroundBase(bx, by, rad, &st.vertexComponent(vi, CadVertexComponent::X),
-                       &st.vertexComponent(vi, CadVertexComponent::Y));
+      RotateAroundBase(bx, by, rad, &st.drawing.vertexComponent(vi, CadVertexComponent::X),
+                       &st.drawing.vertexComponent(vi, CadVertexComponent::Y));
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.cadAnnotations.size())
+    if (k >= st.drawing.cadAnnotations.size())
       continue;
-    CadAnnotation& a = st.cadAnnotations[k];
+    CadAnnotation& a = st.drawing.cadAnnotations[k];
     RotateAroundBase(bx, by, rad, &a.insX, &a.insY);
     if (a.kind == CadAnnotation::Kind::Text) {
       a.rotationRad += rad;
@@ -12612,25 +12612,25 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadTables.size())
       continue;
-    CadTableRotateAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, rad);
+    CadTableRotateAround(&st.drawing.cadTables[static_cast<size_t>(e.index)], bx, by, rad);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
       continue;
-    CadBlockRotateZ(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
+    CadBlockRotateZ(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
   }
   // PDF underlays: rotate insertion point around base; accumulate rotation angle.
   constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::PdfUnderlay)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
       continue;
-    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(e.index)];
     RotateAroundBase(bx, by, rad, &att.insertX, &att.insertY);
     att.rotationDeg += rad * kPdfRadToDeg;
   }
@@ -12686,41 +12686,41 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.lineCount())
+      if (k >= st.drawing.lineCount())
         break;
-      const ray3d::Vec3 p0 = rotPt(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0));
-      const ray3d::Vec3 p1 = rotPt(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1));
-      st.lineComponent(k, CadLineComponent::X0) = static_cast<float>(p0.x);
-      st.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(p0.y);
-      st.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(p0.z);
-      st.lineComponent(k, CadLineComponent::X1) = static_cast<float>(p1.x);
-      st.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(p1.y);
-      st.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(p1.z);
+      const ray3d::Vec3 p0 = rotPt(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).z0));
+      const ray3d::Vec3 p1 = rotPt(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1), static_cast<float>(st.drawing.line(k).z1));
+      st.drawing.lineComponent(k, CadLineComponent::X0) = static_cast<float>(p0.x);
+      st.drawing.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(p0.y);
+      st.drawing.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(p0.z);
+      st.drawing.lineComponent(k, CadLineComponent::X1) = static_cast<float>(p1.x);
+      st.drawing.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(p1.y);
+      st.drawing.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(p1.z);
       break;
     }
     case SelectedEntity::Type::Circle: {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.circleCount())
+      if (ci >= st.drawing.circleCount())
         break;
-      const CadCircleRecord cc = st.circle(ci);
+      const CadCircleRecord cc = st.drawing.circle(ci);
       const ray3d::Vec3 c = rotPt(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
-      st.setCircle(ci, CadCircleRecord{c.x, c.y, c.z, cc.r});
+      st.drawing.setCircle(ci, CadCircleRecord{c.x, c.y, c.z, cc.r});
       float nx = 0.f, ny = 0.f, nz = 1.f;
-      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
+      CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
       const ray3d::Vec3 n = rotDir(nx, ny, nz);
       const size_t nk = static_cast<size_t>(e.index) * 3;
-      if (nk + 2 < st.userCircleNormals.size()) {
-        st.userCircleNormals[nk] = static_cast<float>(n.x);
-        st.userCircleNormals[nk + 1] = static_cast<float>(n.y);
-        st.userCircleNormals[nk + 2] = static_cast<float>(n.z);
+      if (nk + 2 < st.drawing.userCircleNormals.size()) {
+        st.drawing.userCircleNormals[nk] = static_cast<float>(n.x);
+        st.drawing.userCircleNormals[nk + 1] = static_cast<float>(n.y);
+        st.drawing.userCircleNormals[nk + 2] = static_cast<float>(n.z);
       }
       break;
     }
     case SelectedEntity::Type::Arc: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.userArcs.size())
+      if (k >= st.drawing.userArcs.size())
         break;
-      CadArc& a = st.userArcs[k];
+      CadArc& a = st.drawing.userArcs[k];
       const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
       const ray3d::Vec3 startRot = rotPt(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y),
                                          static_cast<float>(startWorld.z));
@@ -12737,26 +12737,26 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
     }
     case SelectedEntity::Type::Polyline: {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         break;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
         const size_t b = static_cast<size_t>(vi);
-        if (b >= st.vertexCount())
+        if (b >= st.drawing.vertexCount())
           break;
-        const ray3d::Vec3 p = rotPt(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z));
-        st.vertexComponent(b, CadVertexComponent::X) = static_cast<float>(p.x);
-        st.vertexComponent(b, CadVertexComponent::Y) = static_cast<float>(p.y);
-        st.vertexComponent(b, CadVertexComponent::Z) = static_cast<float>(p.z);
+        const ray3d::Vec3 p = rotPt(static_cast<float>(st.drawing.vertex(b).x), static_cast<float>(st.drawing.vertex(b).y), static_cast<float>(st.drawing.vertex(b).z));
+        st.drawing.vertexComponent(b, CadVertexComponent::X) = static_cast<float>(p.x);
+        st.drawing.vertexComponent(b, CadVertexComponent::Y) = static_cast<float>(p.y);
+        st.drawing.vertexComponent(b, CadVertexComponent::Z) = static_cast<float>(p.z);
       }
       break;
     }
     case SelectedEntity::Type::FilledRegion: {
       const size_t fk = static_cast<size_t>(e.index);
-      if (fk >= st.cadFilledRegions.size())
+      if (fk >= st.drawing.cadFilledRegions.size())
         break;
-      CadFilledRegion& fr = st.cadFilledRegions[fk];
+      CadFilledRegion& fr = st.drawing.cadFilledRegions[fk];
       for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
         const ray3d::Vec3 p = rotPt(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]), static_cast<float>(fr.vertsXyz[v + 2]));
         fr.vertsXyz[v] = static_cast<float>(p.x);
@@ -12805,14 +12805,14 @@ static void TranslateSelectedSolids(AppCommandState& st, float dx, float dy, flo
   std::set<int> seen;
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
+        static_cast<size_t>(e.index) >= st.drawing.cadSolids.size())
       continue;
     if (!seen.insert(e.index).second)
       continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    const CadSolidPtr& sp = st.drawing.cadSolids[static_cast<size_t>(e.index)];
     if (!sp)
       continue;
-    st.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(
+    st.drawing.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(
         brep::Translate(*sp, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
                                          static_cast<double>(dz)}));
   }
@@ -12853,7 +12853,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   TranslateSelectedSolids(st, dx, dy, dz);
   if (dx != 0.f || dy != 0.f || dz != 0.f)
     TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/false);
-  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.drawing.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
         static_cast<size_t>(e.index) < lineMark.size())
@@ -12863,68 +12863,68 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     if (!lineMark[i])
       continue;
     size_t k = i;
-    if (k < st.lineCount()) {
-      st.lineComponent(k, CadLineComponent::X0) += dx;
-      st.lineComponent(k, CadLineComponent::Y0) += dy;
-      st.lineComponent(k, CadLineComponent::Z0) += dz;
-      st.lineComponent(k, CadLineComponent::X1) += dx;
-      st.lineComponent(k, CadLineComponent::Y1) += dy;
-      st.lineComponent(k, CadLineComponent::Z1) += dz;
+    if (k < st.drawing.lineCount()) {
+      st.drawing.lineComponent(k, CadLineComponent::X0) += dx;
+      st.drawing.lineComponent(k, CadLineComponent::Y0) += dy;
+      st.drawing.lineComponent(k, CadLineComponent::Z0) += dz;
+      st.drawing.lineComponent(k, CadLineComponent::X1) += dx;
+      st.drawing.lineComponent(k, CadLineComponent::Y1) += dy;
+      st.drawing.lineComponent(k, CadLineComponent::Z1) += dz;
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci < st.circleCount()) {
-      CadCircleRecord moved = st.circle(ci);
+    if (ci < st.drawing.circleCount()) {
+      CadCircleRecord moved = st.drawing.circle(ci);
       moved.cx += dx;
       moved.cy += dy;
       moved.cz += dz;  // cx, cy, Z, r - the plane the circle sits in
-      st.setCircle(ci, moved);
+      st.drawing.setCircle(ci, moved);
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Arc)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
-    st.userArcs[k].cx += dx;
-    st.userArcs[k].cy += dy;
-    st.userArcs[k].z += dz;
+    st.drawing.userArcs[k].cx += dx;
+    st.drawing.userArcs[k].cy += dy;
+    st.drawing.userArcs[k].z += dz;
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    st.userEllipses[k].cx += dx;
-    st.userEllipses[k].cy += dy;
-    st.userEllipses[k].z += dz;
+    st.drawing.userEllipses[k].cx += dx;
+    st.drawing.userEllipses[k].cy += dy;
+    st.drawing.userEllipses[k].z += dz;
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       continue;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
-      st.vertexComponent(vi, CadVertexComponent::X) += dx;
-      st.vertexComponent(vi, CadVertexComponent::Y) += dy;
-      st.vertexComponent(vi, CadVertexComponent::Z) += dz;
+      st.drawing.vertexComponent(vi, CadVertexComponent::X) += dx;
+      st.drawing.vertexComponent(vi, CadVertexComponent::Y) += dy;
+      st.drawing.vertexComponent(vi, CadVertexComponent::Z) += dz;
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.cadAnnotations.size())
+    if (k >= st.drawing.cadAnnotations.size())
       continue;
-    CadAnnotation& a = st.cadAnnotations[k];
+    CadAnnotation& a = st.drawing.cadAnnotations[k];
     a.insX += dx;
     a.insY += dy;
     a.insZ += dz;  // REQ-322: text and dimensions carry an elevation like everything else
@@ -12944,39 +12944,39 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::PdfUnderlay)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
       continue;
-    st.pdfAttachments[static_cast<size_t>(e.index)].insertX += dx;
-    st.pdfAttachments[static_cast<size_t>(e.index)].insertY += dy;
+    st.drawing.pdfAttachments[static_cast<size_t>(e.index)].insertX += dx;
+    st.drawing.pdfAttachments[static_cast<size_t>(e.index)].insertY += dy;
   }
   // Filled regions (REQ-042): translate every loop vertex.
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::FilledRegion)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadFilledRegions.size())
       continue;
-    hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy, dz);
+    hatchgeom::Translate(st.drawing.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadTables.size())
       continue;
-    CadTableTranslate(&st.cadTables[static_cast<size_t>(e.index)], dx, dy);
+    CadTableTranslate(&st.drawing.cadTables[static_cast<size_t>(e.index)], dx, dy);
   }
   for (const auto& e : st.selection) {  // REQ-359: marker and label move together
     if (e.type != SelectedEntity::Type::PositionMarker)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPositionMarkers.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadPositionMarkers.size())
       continue;
-    CadPositionMarkerTranslate(&st.cadPositionMarkers[static_cast<size_t>(e.index)], dx, dy, dz);
+    CadPositionMarkerTranslate(&st.drawing.cadPositionMarkers[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   for (const auto& e : st.selection) {  // REQ-367: leader path and label move together
     if (e.type != SelectedEntity::Type::Multileader)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMultileaders.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadMultileaders.size())
       continue;
-    CadMultileaderTranslate(&st.cadMultileaders[static_cast<size_t>(e.index)], dx, dy, dz);
+    CadMultileaderTranslate(&st.drawing.cadMultileaders[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443: a spline moves by moving its points
     return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
@@ -12987,11 +12987,11 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
       continue;
     // REQ-320 item 1 names "a block reference's insertion" explicitly; dz must ride along with
     // dx/dy exactly as it does for every other entity type in this function.
-    CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, dz);
+    CadBlockTranslate(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
   TransformSelectedFeatureLinesInPlace(
@@ -13006,7 +13006,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   if (dz != 0.f) {
     ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
       for (int vi = v0; vi < v1; ++vi)
-        st.featureLineVerts[static_cast<size_t>(vi) * 3 + 2] += dz;
+        st.drawing.featureLineVerts[static_cast<size_t>(vi) * 3 + 2] += dz;
     });
   }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
@@ -13057,43 +13057,43 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.lineCount()) {
-        accx += 0.5 * static_cast<double>(st.line(k).x0 + st.line(k).x1);
-        accy += 0.5 * static_cast<double>(st.line(k).y0 + st.line(k).y1);
+      if (k < st.drawing.lineCount()) {
+        accx += 0.5 * static_cast<double>(st.drawing.line(k).x0 + st.drawing.line(k).x1);
+        accy += 0.5 * static_cast<double>(st.drawing.line(k).y0 + st.drawing.line(k).y1);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        accx += st.circle(ci).cx;
-        accy += st.circle(ci).cy;
+      if (ci < st.drawing.circleCount()) {
+        accx += st.drawing.circle(ci).cx;
+        accy += st.drawing.circle(ci).cy;
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        accx += static_cast<double>(st.userArcs[k].cx);
-        accy += static_cast<double>(st.userArcs[k].cy);
+      if (k < st.drawing.userArcs.size()) {
+        accx += static_cast<double>(st.drawing.userArcs[k].cx);
+        accy += static_cast<double>(st.drawing.userArcs[k].cy);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        accx += static_cast<double>(st.userEllipses[k].cx);
-        accy += static_cast<double>(st.userEllipses[k].cy);
+      if (k < st.drawing.userEllipses.size()) {
+        accx += static_cast<double>(st.drawing.userEllipses[k].cx);
+        accy += static_cast<double>(st.drawing.userEllipses[k].cy);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       double sx = 0.0, sy = 0.0;
       int nv = 0;
       for (int vi = v0; vi < v1; ++vi) {
-        sx += static_cast<double>(st.vertex(vi).x);
-        sy += static_cast<double>(st.vertex(vi).y);
+        sx += static_cast<double>(st.drawing.vertex(vi).x);
+        sy += static_cast<double>(st.drawing.vertex(vi).y);
         ++nv;
       }
       if (nv > 0) {
@@ -13103,24 +13103,24 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size()) {
-        const CadAnnotation& a = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        const CadAnnotation& a = st.drawing.cadAnnotations[k];
         accx += static_cast<double>(a.insX);
         accy += static_cast<double>(a.insY);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadTables.size()) {
-        const CadTable& t = st.cadTables[k];
+      if (k < st.drawing.cadTables.size()) {
+        const CadTable& t = st.drawing.cadTables[k];
         accx += static_cast<double>(t.insX);
         accy += static_cast<double>(t.insY);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.pdfAttachments.size()) {
-        const PdfAttachment& patt = st.pdfAttachments[k];
+      if (k < st.drawing.pdfAttachments.size()) {
+        const PdfAttachment& patt = st.drawing.pdfAttachments[k];
         constexpr float kPi = 3.14159265f;
         const float cosR = std::cos(patt.rotationDeg * kPi / 180.f);
         const float sinR = std::sin(patt.rotationDeg * kPi / 180.f);
@@ -13138,8 +13138,8 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
   ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
     double sx = 0.0, sy = 0.0;
     for (int vi = v0; vi < v1; ++vi) {
-      sx += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3]);
-      sy += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
+      sx += static_cast<double>(st.drawing.featureLineVerts[static_cast<size_t>(vi) * 3]);
+      sy += static_cast<double>(st.drawing.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
     }
     const double nv = static_cast<double>(v1 - v0);
     accx += sx / nv;
@@ -13147,9 +13147,9 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
     ++n;
   });
   for (int si : st.selectedSurveyPointIndices) {
-    if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
-      accx += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].easting);
-      accy += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].northing);
+    if (si >= 0 && static_cast<size_t>(si) < st.drawing.surveyPoints.size()) {
+      accx += static_cast<double>(st.drawing.surveyPoints[static_cast<size_t>(si)].easting);
+      accy += static_cast<double>(st.drawing.surveyPoints[static_cast<size_t>(si)].northing);
       ++n;
     }
   }
@@ -13167,16 +13167,16 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.lineCount()) {
-        const CadLineRecord ln = st.line(k);
+      if (k < st.drawing.lineCount()) {
+        const CadLineRecord ln = st.drawing.line(k);
         for (const auto [x, y] : {std::pair<double, double>{ln.x0, ln.y0}, std::pair<double, double>{ln.x1, ln.y1}}) {
           m = static_cast<float>(std::max<double>(m, std::hypot(static_cast<float>(x) - bx, static_cast<float>(y) - by)));
         }
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount()) {
-        const CadCircleRecord c = st.circle(ci);
+      if (ci < st.drawing.circleCount()) {
+        const CadCircleRecord c = st.drawing.circle(ci);
         const float cx = static_cast<float>(c.cx);
         const float cy = static_cast<float>(c.cy);
         const float r = static_cast<float>(c.r);
@@ -13184,34 +13184,34 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size()) {
-        const CadArc& a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        const CadArc& a = st.drawing.userArcs[k];
         m = static_cast<float>(std::max<double>(m, std::hypot(a.cx - bx, a.cy - by) + a.r));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size()) {
-        const CadEllipse& el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        const CadEllipse& el = st.drawing.userEllipses[k];
         const float ma = std::hypot(el.majVx, el.majVy);
         const float mb = ma * el.ratio;
         m = static_cast<float>(std::max<double>(m, std::hypot(el.cx - bx, el.cy - by) + std::max(ma, mb)));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
-        const float x = static_cast<float>(st.vertex(vi).x);
-        const float y = static_cast<float>(st.vertex(vi).y);
+        const float x = static_cast<float>(st.drawing.vertex(vi).x);
+        const float y = static_cast<float>(st.drawing.vertex(vi).y);
         m = static_cast<float>(std::max<double>(m, std::hypot(x - bx, y - by)));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadAnnotations.size())
+      if (k >= st.drawing.cadAnnotations.size())
         continue;
-      const CadAnnotation& a = st.cadAnnotations[k];
+      const CadAnnotation& a = st.drawing.cadAnnotations[k];
       if (a.kind == CadAnnotation::Kind::Mtext) {
         float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
         float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -13230,9 +13230,9 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         m = static_cast<float>(std::max<double>(m, std::hypot(a.insX - bx, a.insY - by)));
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadTables.size())
+      if (k >= st.drawing.cadTables.size())
         continue;
-      const CadTable& t = st.cadTables[k];
+      const CadTable& t = st.drawing.cadTables[k];
       for (int i = 0; i < 4; ++i) {
         float cx = 0.f, cy = 0.f;
         CadTableWorldCorner(t, i, &cx, &cy);
@@ -13240,8 +13240,8 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       }
     } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.pdfAttachments.size()) {
-        const PdfAttachment& patt = st.pdfAttachments[k];
+      if (k < st.drawing.pdfAttachments.size()) {
+        const PdfAttachment& patt = st.drawing.pdfAttachments[k];
         if (patt.pageWidthPts > 0.f && patt.pageHeightPts > 0.f) {
           constexpr float kPi = 3.14159265f;
           const float cosR = std::cos(patt.rotationDeg * kPi / 180.f);
@@ -13262,14 +13262,14 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
   // Feature lines (REQ-087) — farthest vertex, as for a polyline.
   ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
     for (int vi = v0; vi < v1; ++vi) {
-      const float x = static_cast<float>(st.featureLineVerts[static_cast<size_t>(vi) * 3]);
-      const float y = static_cast<float>(st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
+      const float x = static_cast<float>(st.drawing.featureLineVerts[static_cast<size_t>(vi) * 3]);
+      const float y = static_cast<float>(st.drawing.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
       m = static_cast<float>(std::max<double>(m, std::hypot(x - bx, y - by)));
     }
   });
   for (int si : st.selectedSurveyPointIndices) {
-    if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
-      const SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(si)];
+    if (si >= 0 && static_cast<size_t>(si) < st.drawing.surveyPoints.size()) {
+      const SurveyPoint& sp = st.drawing.surveyPoints[static_cast<size_t>(si)];
       m = static_cast<float>(std::max<double>(m, std::hypot(sp.easting - bx, sp.northing - by)));
     }
   }
@@ -13291,16 +13291,16 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
   for (int i : ix) {
-    if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+    if (i < 0 || static_cast<size_t>(i) >= st.drawing.surveyPoints.size())
       continue;
-    double x = st.surveyPoints[static_cast<size_t>(i)].easting;
-    double y = st.surveyPoints[static_cast<size_t>(i)].northing;
+    double x = st.drawing.surveyPoints[static_cast<size_t>(i)].easting;
+    double y = st.drawing.surveyPoints[static_cast<size_t>(i)].northing;
     ScalePtAroundBase(bx, by, sc, &x, &y);
-    st.surveyPoints[static_cast<size_t>(i)].easting = x;
-    st.surveyPoints[static_cast<size_t>(i)].northing = y;
+    st.drawing.surveyPoints[static_cast<size_t>(i)].easting = x;
+    st.drawing.surveyPoints[static_cast<size_t>(i)].northing = y;
   }
   for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
       RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
   }
 }
@@ -13342,8 +13342,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     a.dimSignedOffset *= sc;
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+    CadDimAngularSyncTextPlacement(&a, st.drawing.modelUnitsPerPlottedInch);
+    CadDimRefreshMeasurementText(&a, st.drawing.activeDimensionStyle, CadAngleDisplaySettings(st));
   }
 }
 
@@ -13376,7 +13376,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     TransformSelectedAlignments(  // REQ-487.1: the plan scale; an alignment has no elevation to scale
         st, [&](alignment::Alignment& a) { return a.Scale(static_cast<double>(bx), static_cast<double>(by), k); }, /*duplicate=*/false);
   }
-  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.drawing.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
@@ -13388,9 +13388,9 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
       if (!lineMark[i])
         continue;
       size_t k = i;
-      if (k < st.lineCount()) {
-        ScalePtAroundBase(bx, by, sc, &st.lineComponent(k, CadLineComponent::X0), &st.lineComponent(k, CadLineComponent::Y0));
-        ScalePtAroundBase(bx, by, sc, &st.lineComponent(k, CadLineComponent::X1), &st.lineComponent(k, CadLineComponent::Y1));
+      if (k < st.drawing.lineCount()) {
+        ScalePtAroundBase(bx, by, sc, &st.drawing.lineComponent(k, CadLineComponent::X0), &st.drawing.lineComponent(k, CadLineComponent::Y0));
+        ScalePtAroundBase(bx, by, sc, &st.drawing.lineComponent(k, CadLineComponent::X1), &st.drawing.lineComponent(k, CadLineComponent::Y1));
       }
     }
   }
@@ -13398,20 +13398,20 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     if (e.type != SelectedEntity::Type::Circle)
       continue;
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci < st.circleCount()) {
-      CadCircleRecord scaled = st.circle(ci);
+    if (ci < st.drawing.circleCount()) {
+      CadCircleRecord scaled = st.drawing.circle(ci);
       ScalePtAroundBase(bx, by, sc, &scaled.cx, &scaled.cy);
       scaled.r *= sc;
-      st.setCircle(ci, scaled);
+      st.drawing.setCircle(ci, scaled);
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Arc)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
-    CadArc& a = st.userArcs[k];
+    CadArc& a = st.drawing.userArcs[k];
     ScalePtAroundBase(bx, by, sc, &a.cx, &a.cy);
     a.r *= sc;
   }
@@ -13419,9 +13419,9 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     if (e.type != SelectedEntity::Type::Ellipse)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    CadEllipse& el = st.userEllipses[k];
+    CadEllipse& el = st.drawing.userEllipses[k];
     float mx = static_cast<float>(el.cx + el.majVx);
     float my = static_cast<float>(el.cy + el.majVy);
     ScalePtAroundBase(bx, by, sc, &el.cx, &el.cy);
@@ -13443,43 +13443,43 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       continue;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi)
-      ScalePtAroundBase(bx, by, sc, &st.vertexComponent(vi, CadVertexComponent::X),
-                        &st.vertexComponent(vi, CadVertexComponent::Y));
+      ScalePtAroundBase(bx, by, sc, &st.drawing.vertexComponent(vi, CadVertexComponent::X),
+                        &st.drawing.vertexComponent(vi, CadVertexComponent::Y));
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.cadAnnotations.size())
+    if (k >= st.drawing.cadAnnotations.size())
       continue;
-    ScaleAnnotationAroundBase(st, st.cadAnnotations[k], bx, by, sc);
+    ScaleAnnotationAroundBase(st, st.drawing.cadAnnotations[k], bx, by, sc);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadTables.size())
       continue;
-    CadTableScaleAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, sc);
+    CadTableScaleAround(&st.drawing.cadTables[static_cast<size_t>(e.index)], bx, by, sc);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
       continue;
-    CadBlockScaleAbout(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
+    CadBlockScaleAbout(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
   }
   // PDF underlays: scale insertion point around base; multiply uniform scale factor.
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::PdfUnderlay)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
       continue;
-    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(e.index)];
     ScalePtAroundBase(bx, by, sc, &att.insertX, &att.insertY);
     att.scale = std::max(att.scale * sc, 1e-9f);
   }
@@ -13503,82 +13503,82 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.lineCount()) {
-        sz(&st.lineComponent(k, CadLineComponent::Z0));
-        sz(&st.lineComponent(k, CadLineComponent::Z1));
+      if (k < st.drawing.lineCount()) {
+        sz(&st.drawing.lineComponent(k, CadLineComponent::Z0));
+        sz(&st.drawing.lineComponent(k, CadLineComponent::Z1));
       }
       break;
     }
     case SelectedEntity::Type::Circle: {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.circleCount())
-        sz(&st.circleComponent(ci, CadCircleComponent::Z));
+      if (ci < st.drawing.circleCount())
+        sz(&st.drawing.circleComponent(ci, CadCircleComponent::Z));
       break;
     }
     case SelectedEntity::Type::Arc: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userArcs.size())
-        sz(&st.userArcs[k].z);
+      if (k < st.drawing.userArcs.size())
+        sz(&st.drawing.userArcs[k].z);
       break;
     }
     case SelectedEntity::Type::Ellipse: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.userEllipses.size())
-        sz(&st.userEllipses[k].z);
+      if (k < st.drawing.userEllipses.size())
+        sz(&st.drawing.userEllipses[k].z);
       break;
     }
     case SelectedEntity::Type::Spline: {  // REQ-443: elevations scale about the base elevation too
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadSplines.size())
-        spline::MapPoints(&st.cadSplines[k], [&](const spline::Vec3& v) {
+      if (k < st.drawing.cadSplines.size())
+        spline::MapPoints(&st.drawing.cadSplines[k], [&](const spline::Vec3& v) {
           return spline::Vec3{v.x, v.y, bz + static_cast<double>(sc) * (v.z - bz)};
         });
       break;
     }
     case SelectedEntity::Type::Point: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadPoints.size())
-        st.cadPoints[k].z = bz + static_cast<double>(sc) * (st.cadPoints[k].z - bz);
+      if (k < st.drawing.cadPoints.size())
+        st.drawing.cadPoints[k].z = bz + static_cast<double>(sc) * (st.drawing.cadPoints[k].z - bz);
       break;
     }
     case SelectedEntity::Type::Polyline: {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         break;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
         const size_t vIdx = static_cast<size_t>(vi);
-        if (vIdx < st.vertexCount())
-          sz(&st.vertexComponent(vIdx, CadVertexComponent::Z));
+        if (vIdx < st.drawing.vertexCount())
+          sz(&st.drawing.vertexComponent(vIdx, CadVertexComponent::Z));
       }
       break;
     }
     case SelectedEntity::Type::FilledRegion: {
       const size_t fk = static_cast<size_t>(e.index);
-      if (fk >= st.cadFilledRegions.size())
+      if (fk >= st.drawing.cadFilledRegions.size())
         break;
-      auto& v = st.cadFilledRegions[fk].vertsXyz;
+      auto& v = st.drawing.cadFilledRegions[fk].vertsXyz;
       for (size_t i = 2; i < v.size(); i += 3)
         sz(&v[i]);
       break;
     }
     case SelectedEntity::Type::Annotation: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadAnnotations.size())
-        sz(&st.cadAnnotations[k].insZ);
+      if (k < st.drawing.cadAnnotations.size())
+        sz(&st.drawing.cadAnnotations[k].insZ);
       break;
     }
     case SelectedEntity::Type::Table: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadTables.size())
-        sz(&st.cadTables[k].insZ);
+      if (k < st.drawing.cadTables.size())
+        sz(&st.drawing.cadTables[k].insZ);
       break;
     }
     case SelectedEntity::Type::BlockRef: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k < st.cadBlockRefs.size())
-        sz(&st.cadBlockRefs[k].xf.z);
+      if (k < st.drawing.cadBlockRefs.size())
+        sz(&st.drawing.cadBlockRefs[k].xf.z);
       break;
     }
     default:
@@ -13589,16 +13589,16 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
   ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
     for (int vi = v0; vi < v1; ++vi) {
       const size_t b = static_cast<size_t>(vi) * 3 + 2;
-      if (b < st.featureLineVerts.size())
-        sz(&st.featureLineVerts[b]);
+      if (b < st.drawing.featureLineVerts.size())
+        sz(&st.drawing.featureLineVerts[b]);
     }
   });
   std::vector<int> spix = st.selectedSurveyPointIndices;
   std::sort(spix.begin(), spix.end());
   spix.erase(std::unique(spix.begin(), spix.end()), spix.end());
   for (int idx : spix) {
-    if (idx >= 0 && static_cast<size_t>(idx) < st.surveyPoints.size())
-      sz(&st.surveyPoints[static_cast<size_t>(idx)].elevation);
+    if (idx >= 0 && static_cast<size_t>(idx) < st.drawing.surveyPoints.size())
+      sz(&st.drawing.surveyPoints[static_cast<size_t>(idx)].elevation);
   }
   BumpCadGpuCache(st);
 }
@@ -14800,8 +14800,8 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
     L->paperArcs.push_back(arc);
     L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    st.userArcs.push_back(arc);  // arc.z already carries the work plane (set by the solver)
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userArcs.push_back(arc);  // arc.z already carries the work plane (set by the solver)
+    st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
@@ -14844,7 +14844,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
-  ann.dimensionStyleName = st.activeDimensionStyle.name;
+  ann.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -14852,21 +14852,21 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
-  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  DimensionStyles::BakeTextOntoDimension(ann, st.drawing.activeDimensionStyle);
   CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
-  const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+  const float hWorld = CadAnnotationHeightWorld(ann, st.drawing.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
   const std::string preferredLayer = at.layer;
   at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
   if (at.layer != preferredLayer)
     log.push_back("DIMALIGNED — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
-  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
+  at.color = DimStyleEntityColor(st.drawing.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMALIGNED");
-  st.cadAnnotations.push_back(std::move(ann));
-  st.cadAnnotationAttrs.push_back(at);
+  st.drawing.cadAnnotations.push_back(std::move(ann));
+  st.drawing.cadAnnotationAttrs.push_back(at);
   ClearCadSelection(st);
-  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.drawing.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMALIGNED complete.");
@@ -14902,7 +14902,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   }
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
-  ann.dimensionStyleName = st.activeDimensionStyle.name;
+  ann.dimensionStyleName = st.drawing.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -14919,21 +14919,21 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  DimensionStyles::BakeTextOntoDimension(ann, st.drawing.activeDimensionStyle);
   CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
-  const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+  const float hWorld = CadAnnotationHeightWorld(ann, st.drawing.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
   const std::string preferredLayer = at.layer;
   at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
   if (at.layer != preferredLayer)
     log.push_back("DIMLINEAR — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
-  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
+  at.color = DimStyleEntityColor(st.drawing.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMLINEAR");
-  st.cadAnnotations.push_back(std::move(ann));
-  st.cadAnnotationAttrs.push_back(at);
+  st.drawing.cadAnnotations.push_back(std::move(ann));
+  st.drawing.cadAnnotationAttrs.push_back(at);
   ClearCadSelection(st);
-  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.drawing.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMLINEAR complete.");
@@ -15095,15 +15095,15 @@ struct SurfaceCoverage {
 /// happen, so the rollover was given the index it needs rather than a walk of its own.
 static std::vector<SurfaceCoverage> SurfacesCovering(const AppCommandState& st, double x, double y) {
   std::vector<SurfaceCoverage> out;
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;
-    const CadSurface& s = st.cadSurfaces[si];
+    const CadSurface& s = st.drawing.cadSurfaces[si];
     if (!s.tin)
       continue;
     double z = 0.0;
     const std::uint64_t id =
-        si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+        si < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[si].id : 0;
     const TinSpatialIndex* index = nullptr;
     for (AppCommandState::SurfaceQueryCacheEntry& e : st.surfaceQueryCache) {
       if (e.surfaceId == id && e.builtFrom.lock() == s.tin) {
@@ -15133,7 +15133,7 @@ static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const App
                                                                        double y) {
   std::vector<std::pair<std::string, double>> out;
   for (const SurfaceCoverage& c : SurfacesCovering(st, x, y))
-    out.emplace_back(st.cadSurfaces[c.surfaceIndex].name, c.z);
+    out.emplace_back(st.drawing.cadSurfaces[c.surfaceIndex].name, c.z);
   return out;
 }
 
@@ -15147,7 +15147,7 @@ static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, st
   st.surfaceElevFromY = y;
   st.surfaceElevFromZ = SurfaceElevationsAt(st, x, y);
 
-  if (st.cadSurfaces.empty()) {
+  if (st.drawing.cadSurfaces.empty()) {
     log.push_back("SURFELEV — there are no surfaces in the drawing. Build one from a point group first.");
     return;
   }
@@ -15158,13 +15158,13 @@ static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, st
   }
   const int p = st.displayLinearPrecision;
   for (const SurfaceCoverage& c : SurfacesCovering(st, x, y)) {
-    const CadSurface& surf = st.cadSurfaces[c.surfaceIndex];
+    const CadSurface& surf = st.drawing.cadSurfaces[c.surfaceIndex];
     std::string line = "SURFELEV — " + surf.name + ": elevation " + FormatLinear(c.z, p);
     std::unique_ptr<ISurfaceQuery> q;
     if ((surf.kind == SurfaceKind::Grid || surf.kind == SurfaceKind::GridVolume) &&
         GridIndexValid(surf.gridCols, surf.gridRows, surf.gridZ)) {
       q = std::make_unique<GridSurfaceQuery>(
-          surf.gridOriginX - st.worldDocumentOriginX, surf.gridOriginY - st.worldDocumentOriginY,
+          surf.gridOriginX - st.drawing.worldDocumentOriginX, surf.gridOriginY - st.drawing.worldDocumentOriginY,
           surf.gridSpacingX, surf.gridSpacingY, surf.gridCols, surf.gridRows, surf.gridZ);
     } else if (surf.tin) {
       q = std::make_unique<TinSurfaceQuery>(surf.tin->vertsXyz, surf.tin->indices);
@@ -15365,15 +15365,15 @@ static void PushOffsetCopyAttrs(AppCommandState& st, std::vector<EntityAttribute
 
 static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std::vector<std::string>& log) {
   const size_t k = static_cast<size_t>(lineIx);
-  if (k >= st.lineCount())
+  if (k >= st.drawing.lineCount())
     return false;
   PushUndoSnapshot(st, "Offset line");
-  const double x0 = st.line(k).x0;
-  const double y0 = st.line(k).y0;
-  const double z0 = st.line(k).z0;  // read before push_back may reallocate
-  const double x1 = st.line(k).x1;
-  const double y1 = st.line(k).y1;
-  const double z1 = st.line(k).z1;
+  const double x0 = st.drawing.line(k).x0;
+  const double y0 = st.drawing.line(k).y0;
+  const double z0 = st.drawing.line(k).z0;  // read before push_back may reallocate
+  const double x1 = st.drawing.line(k).x1;
+  const double y1 = st.drawing.line(k).y1;
+  const double z1 = st.drawing.line(k).z1;
   const double dx = x1 - x0;
   const double dy = y1 - y0;
   const double dz = z1 - z0;
@@ -15417,17 +15417,17 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   // The offset copy stays on the source line's plane — under the World UCS the offset is horizontal
   // so each end keeps its own Z; under a tilted UCS the perpendicular carries a Z component so the
   // copy stays in the work plane (REQ-057 / REQ-329 increment 7).
-  st.pushLine(CadLineRecord{ox0, oy0, oz0, ox1, oy1, oz1});
-  PushOffsetCopyAttrs(st, st.userLineAttrs, lineIx);
+  st.drawing.pushLine(CadLineRecord{ox0, oy0, oz0, ox1, oy1, oz1});
+  PushOffsetCopyAttrs(st, st.drawing.userLineAttrs, lineIx);
   BumpCadGpuCache(st);
   return true;
 }
 
 static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::vector<std::string>& log) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
+  if (ci < 0 || static_cast<size_t>(ci) >= st.drawing.circleCount())
     return false;
   PushUndoSnapshot(st, "Offset circle");
-  const CadCircleRecord src = st.circle(static_cast<size_t>(ci));  // copied before any push_back reallocates
+  const CadCircleRecord src = st.drawing.circle(static_cast<size_t>(ci));  // copied before any push_back reallocates
   const double cx = src.cx;
   const double cy = src.cy;
   const double cz = src.cz;
@@ -15437,20 +15437,20 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
     log.push_back("OFFSET — resulting circle radius too small.");
     return false;
   }
-  st.pushCircle(CadCircleRecord{cx, cy, cz, nr});  // the offset copy stays on the source circle's plane
-  PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
+  st.drawing.pushCircle(CadCircleRecord{cx, cy, cz, nr});  // the offset copy stays on the source circle's plane
+  PushOffsetCopyAttrs(st, st.drawing.userCircleAttrs, ci);
   float onx = 0.f, ony = 0.f, onz = 1.f;
-  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(ci), &onx, &ony, &onz);
-  PushCircleNormal(st.userCircleNormals, onx, ony, onz);   // concentric: same plane (REQ-312)
+  CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(ci), &onx, &ony, &onz);
+  PushCircleNormal(st.drawing.userCircleNormals, onx, ony, onz);   // concentric: same plane (REQ-312)
   BumpCadGpuCache(st);
   return true;
 }
 
 static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vector<std::string>& log) {
-  if (ai < 0 || static_cast<size_t>(ai) >= st.userArcs.size())
+  if (ai < 0 || static_cast<size_t>(ai) >= st.drawing.userArcs.size())
     return false;
   PushUndoSnapshot(st, "Offset arc");
-  const CadArc& a = st.userArcs[static_cast<size_t>(ai)];
+  const CadArc& a = st.drawing.userArcs[static_cast<size_t>(ai)];
   const double nr = a.r + signedD;
   if (nr <= 1e-6) {
     log.push_back("OFFSET — resulting arc radius too small.");
@@ -15458,17 +15458,17 @@ static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vec
   }
   CadArc o = a;
   o.r = nr;
-  st.userArcs.push_back(o);
-  PushOffsetCopyAttrs(st, st.userArcAttrs, ai);
+  st.drawing.userArcs.push_back(o);
+  PushOffsetCopyAttrs(st, st.drawing.userArcAttrs, ai);
   BumpCadGpuCache(st);
   return true;
 }
 
 static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std::vector<std::string>& log) {
-  if (ei < 0 || static_cast<size_t>(ei) >= st.userEllipses.size())
+  if (ei < 0 || static_cast<size_t>(ei) >= st.drawing.userEllipses.size())
     return false;
   PushUndoSnapshot(st, "Offset ellipse");
-  const CadEllipse& e = st.userEllipses[static_cast<size_t>(ei)];
+  const CadEllipse& e = st.drawing.userEllipses[static_cast<size_t>(ei)];
   const float ma = std::hypot(e.majVx, e.majVy);
   if (ma < 1e-8f) {
     log.push_back("OFFSET — degenerate ellipse.");
@@ -15482,29 +15482,29 @@ static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std:
   CadEllipse o = e;
   o.majVx *= f;
   o.majVy *= f;
-  st.userEllipses.push_back(o);
-  PushOffsetCopyAttrs(st, st.userEllAttrs, ei);
+  st.drawing.userEllipses.push_back(o);
+  PushOffsetCopyAttrs(st, st.drawing.userEllAttrs, ei);
   BumpCadGpuCache(st);
   return true;
 }
 
 static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std::vector<std::string>& log) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int nv = v1 - v0;
   if (nv < 2) {
     log.push_back("OFFSET — polyline needs at least two vertices.");
     return false;
   }
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
 
   std::vector<std::pair<double, double>> v;
   v.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i) {
-    v.push_back({st.vertex(i).x, st.vertex(i).y});
+    v.push_back({st.drawing.vertex(i).x, st.drawing.vertex(i).y});
   }
 
   const int n = static_cast<int>(v.size());
@@ -15575,9 +15575,9 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   }
 
   PushUndoSnapshot(st, "Offset polyline");
-  if (st.userPolylineOffsets.empty())
-    st.userPolylineOffsets.push_back(0);
-  const int baseVert = st.userPolylineOffsets.back();
+  if (st.drawing.userPolylineOffsets.empty())
+    st.drawing.userPolylineOffsets.push_back(0);
+  const int baseVert = st.drawing.userPolylineOffsets.back();
   // Carry the source's elevations rather than flattening (REQ-057). The offset is rebuilt from
   // edge intersections, so its vertex count only usually matches the source; when it does, Z maps
   // 1:1, and when it does not the first vertex's Z is used for the whole run — never 0, which
@@ -15585,15 +15585,15 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   std::vector<float> srcZ;  // captured before appending, so the reads never alias the writes
   srcZ.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i)
-    srcZ.push_back(static_cast<float>(st.vertex(i).z));
+    srcZ.push_back(static_cast<float>(st.drawing.vertex(i).z));
   const bool zMaps1to1 = out.size() == srcZ.size();
   const float fallbackZ = srcZ.empty() ? 0.f : srcZ.front();
   for (size_t oi = 0; oi < out.size(); ++oi) {
-    st.pushVertex(CadPolyVertex{out[oi].first, out[oi].second, zMaps1to1 ? srcZ[oi] : fallbackZ});
+    st.drawing.pushVertex(CadPolyVertex{out[oi].first, out[oi].second, zMaps1to1 ? srcZ[oi] : fallbackZ});
   }
-  st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
-  st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  PushOffsetCopyAttrs(st, st.userPolylineAttrs, pi);
+  st.drawing.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
+  st.drawing.userPolylineClosed.push_back(closed ? 1u : 0u);
+  PushOffsetCopyAttrs(st, st.drawing.userPolylineAttrs, pi);
   BumpCadGpuCache(st);
   return true;
 }
@@ -15657,13 +15657,13 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return;
-    double x0 = st.line(k).x0, y0 = st.line(k).y0;
-    double x1 = st.line(k).x1, y1 = st.line(k).y1;
+    double x0 = st.drawing.line(k).x0, y0 = st.drawing.line(k).y0;
+    double x1 = st.drawing.line(k).x1, y1 = st.drawing.line(k).y1;
     if (tilted) {
-      const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.line(k).z0);
-      const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.line(k).z1);
+      const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.drawing.line(k).z0);
+      const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.drawing.line(k).z1);
       x0 = a.x; y0 = a.y;
       x1 = b.x; y1 = b.y;
     }
@@ -15671,9 +15671,9 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.circleCount())
       return;
-    const CadCircleRecord circle = st.circle(static_cast<size_t>(e.index));
+    const CadCircleRecord circle = st.drawing.circle(static_cast<size_t>(e.index));
     double cx = circle.cx, cy = circle.cy;
     const double r = circle.r;
     if (tilted) {
@@ -15684,9 +15684,9 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
     break;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     double cx = a.cx, cy = a.cy;
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
@@ -15726,13 +15726,13 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return;
-    double ax = st.line(k).x0, ay = st.line(k).y0;
-    double bx = st.line(k).x1, by = st.line(k).y1;
+    double ax = st.drawing.line(k).x0, ay = st.drawing.line(k).y0;
+    double bx = st.drawing.line(k).x1, by = st.drawing.line(k).y1;
     if (tilted) {
-      const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.line(k).z0);
-      const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.line(k).z1);
+      const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.drawing.line(k).z0);
+      const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.drawing.line(k).z1);
       ax = a.x; ay = a.y;
       bx = b.x; by = b.y;
     }
@@ -15741,9 +15741,9 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.circleCount())
       return;
-    const CadCircleRecord circle = st.circle(static_cast<size_t>(e.index));
+    const CadCircleRecord circle = st.drawing.circle(static_cast<size_t>(e.index));
     double cx = circle.cx, cy = circle.cy;
     const double r = circle.r;
     if (tilted) {
@@ -15755,9 +15755,9 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     break;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     double cx = a.cx, cy = a.cy;
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
@@ -15778,16 +15778,16 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     }
     if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi >= 0 && (static_cast<size_t>(pi)+ 1) < st.userPolylineOffsets.size()) {
-        const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      if (pi >= 0 && (static_cast<size_t>(pi)+ 1) < st.drawing.userPolylineOffsets.size()) {
+        const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
         double best = 1e30;
         float bestS = 1.f;
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          const double ax = st.vertex(vi).x;
-          const double ay = st.vertex(vi).y;
-          const double bx = st.vertex(static_cast<size_t>(vi + 1)).x;
-          const double by = st.vertex(static_cast<size_t>(vi + 1)).y;
+          const double ax = st.drawing.vertex(vi).x;
+          const double ay = st.drawing.vertex(vi).y;
+          const double bx = st.drawing.vertex(static_cast<size_t>(vi + 1)).x;
+          const double by = st.drawing.vertex(static_cast<size_t>(vi + 1)).y;
           const double sd = SignedSideLine(ax, ay, bx, by, px, py);
           // Closest point on the SEGMENT (clamped), only to pick which edge is nearest the click —
           // this only decides which edge's sign wins, never a stored coordinate, so the shared
@@ -15805,8 +15805,8 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
         }
         sgn = bestS;
       }
-    } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.userEllipses.size()) {
-      const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userEllipses.size()) {
+      const CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(e.index)];
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma >= 1e-8f) {
         const float ux = el.majVx / ma;
@@ -15854,17 +15854,17 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
 /// the real document gets exactly one undo snapshot and no model-space mutation.
 static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
   const int li = st.offsetPaperLayoutIndex;
-  if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size() || !st.offsetEntityValid)
+  if (li < 0 || static_cast<size_t>(li) >= st.drawing.paperLayouts.size() || !st.offsetEntityValid)
     return false;
-  const PaperLayout& sourceLayout = st.paperLayouts[static_cast<size_t>(li)];
+  const PaperLayout& sourceLayout = st.drawing.paperLayouts[static_cast<size_t>(li)];
   AppCommandState staged;
   staged.activeSpaceIndex = kModelSpaceIndex;
-  staged.userLinesFlat.clear(); staged.userLineAttrs.clear();
-  staged.userCirclesCxCyZR.clear(); staged.userCircleAttrs.clear(); staged.userCircleNormals.clear();
-  staged.userArcs.clear(); staged.userArcAttrs.clear();
-  staged.userEllipses.clear(); staged.userEllAttrs.clear();
-  staged.userPolylineOffsets.clear(); staged.userPolylineVerts.clear(); staged.userPolylineVertsBulge.clear();
-  staged.userPolylineVertsNormal.clear(); staged.userPolylineClosed.clear(); staged.userPolylineAttrs.clear();
+  staged.drawing.userLinesFlat.clear(); staged.drawing.userLineAttrs.clear();
+  staged.drawing.userCirclesCxCyZR.clear(); staged.drawing.userCircleAttrs.clear(); staged.drawing.userCircleNormals.clear();
+  staged.drawing.userArcs.clear(); staged.drawing.userArcAttrs.clear();
+  staged.drawing.userEllipses.clear(); staged.drawing.userEllAttrs.clear();
+  staged.drawing.userPolylineOffsets.clear(); staged.drawing.userPolylineVerts.clear(); staged.drawing.userPolylineVertsBulge.clear();
+  staged.drawing.userPolylineVertsNormal.clear(); staged.drawing.userPolylineClosed.clear(); staged.drawing.userPolylineAttrs.clear();
   staged.offsetEntity = {st.offsetEntity.type, 0};
   staged.offsetEntityValid = true;
   staged.offsetTypedDistance = st.offsetTypedDistance;
@@ -15878,47 +15878,47 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(index) * 6;
     if (index < 0 || k + 5 >= sourceLayout.paperLines.size()) return false;
-    for (size_t i = 0; i < 6; ++i) staged.userLinesFlat.push_back(sourceLayout.paperLines[k + i]);
+    for (size_t i = 0; i < 6; ++i) staged.drawing.userLinesFlat.push_back(sourceLayout.paperLines[k + i]);
     if (static_cast<size_t>(index) < sourceLayout.paperLineAttrs.size()) inherited = sourceLayout.paperLineAttrs[index];
-    staged.userLineAttrs.push_back(inherited);
+    staged.drawing.userLineAttrs.push_back(inherited);
     break;
   }
   case SelectedEntity::Type::Circle: {
     const size_t k = static_cast<size_t>(index) * 3;
     if (index < 0 || k + 2 >= sourceLayout.paperCircles.size()) return false;
-    staged.userCirclesCxCyZR.clear();
-    staged.pushCircle(CadCircleRecord{sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
+    staged.drawing.userCirclesCxCyZR.clear();
+    staged.drawing.pushCircle(CadCircleRecord{sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
                                       sourceLayout.paperCircles[k + 2]});
-    staged.userCircleNormals = {0.f, 0.f, 1.f};
+    staged.drawing.userCircleNormals = {0.f, 0.f, 1.f};
     if (static_cast<size_t>(index) < sourceLayout.paperCircleAttrs.size()) inherited = sourceLayout.paperCircleAttrs[index];
-    staged.userCircleAttrs.push_back(inherited);
+    staged.drawing.userCircleAttrs.push_back(inherited);
     break;
   }
   case SelectedEntity::Type::Arc:
     if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperArcs.size()) return false;
-    staged.userArcs.push_back(sourceLayout.paperArcs[index]);
+    staged.drawing.userArcs.push_back(sourceLayout.paperArcs[index]);
     if (static_cast<size_t>(index) < sourceLayout.paperArcAttrs.size()) inherited = sourceLayout.paperArcAttrs[index];
-    staged.userArcAttrs.push_back(inherited);
+    staged.drawing.userArcAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Ellipse:
     if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperEllipses.size()) return false;
-    staged.userEllipses.push_back(sourceLayout.paperEllipses[index]);
+    staged.drawing.userEllipses.push_back(sourceLayout.paperEllipses[index]);
     if (static_cast<size_t>(index) < sourceLayout.paperEllAttrs.size()) inherited = sourceLayout.paperEllAttrs[index];
-    staged.userEllAttrs.push_back(inherited);
+    staged.drawing.userEllAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Polyline: {
     if (index < 0 || static_cast<size_t>(index) + 1 >= sourceLayout.paperPolyOffsets.size()) return false;
     const int v0 = sourceLayout.paperPolyOffsets[index], v1 = sourceLayout.paperPolyOffsets[index + 1];
     if (v0 < 0 || v1 < v0 || static_cast<size_t>(v1) * 3 > sourceLayout.paperPolyVerts.size()) return false;
-    staged.userPolylineOffsets = {0, v1 - v0};
+    staged.drawing.userPolylineOffsets = {0, v1 - v0};
     for (int v = v0; v < v1; ++v) {
-      staged.pushVertex(CadPolyVertex{sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3], sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1], 0.0});
-      staged.userPolylineVertsBulge.push_back(0.f);
-      staged.userPolylineVertsNormal.insert(staged.userPolylineVertsNormal.end(), {0.f, 0.f, 1.f});
+      staged.drawing.pushVertex(CadPolyVertex{sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3], sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1], 0.0});
+      staged.drawing.userPolylineVertsBulge.push_back(0.f);
+      staged.drawing.userPolylineVertsNormal.insert(staged.drawing.userPolylineVertsNormal.end(), {0.f, 0.f, 1.f});
     }
-    staged.userPolylineClosed.push_back(static_cast<size_t>(index) < sourceLayout.paperPolyClosed.size() ? sourceLayout.paperPolyClosed[index] : 0);
+    staged.drawing.userPolylineClosed.push_back(static_cast<size_t>(index) < sourceLayout.paperPolyClosed.size() ? sourceLayout.paperPolyClosed[index] : 0);
     if (static_cast<size_t>(index) < sourceLayout.paperPolyAttrs.size()) inherited = sourceLayout.paperPolyAttrs[index];
-    staged.userPolylineAttrs.push_back(inherited);
+    staged.drawing.userPolylineAttrs.push_back(inherited);
     break;
   }
   default: return false;
@@ -15929,9 +15929,9 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     HandleOffsetThroughPick(staged, px, py, stagedLog, false);
   else
     HandleOffsetSidePick(staged, px, py, stagedLog, false);
-  const bool produced = staged.userLinesFlat.size() > 6 || staged.circleCount() > 1 ||
-                        staged.userArcs.size() > 1 || staged.userEllipses.size() > 1 ||
-                        staged.userPolylineOffsets.size() > 2;
+  const bool produced = staged.drawing.userLinesFlat.size() > 6 || staged.drawing.circleCount() > 1 ||
+                        staged.drawing.userArcs.size() > 1 || staged.drawing.userEllipses.size() > 1 ||
+                        staged.drawing.userPolylineOffsets.size() > 2;
   if (!produced) {
     log.insert(log.end(), stagedLog.begin(), stagedLog.end());
     return false;
@@ -15940,37 +15940,37 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   PaperLayout updated = sourceLayout;
   switch (st.offsetEntity.type) {
   case SelectedEntity::Type::LineSeg:
-    for (size_t i = 6; i < staged.userLinesFlat.size(); ++i) updated.paperLines.push_back(static_cast<float>(staged.userLinesFlat[i]));
+    for (size_t i = 6; i < staged.drawing.userLinesFlat.size(); ++i) updated.paperLines.push_back(static_cast<float>(staged.drawing.userLinesFlat[i]));
     updated.paperLineAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Circle:
-    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.circle(1).cx),
-        static_cast<float>(staged.circle(1).cy), static_cast<float>(staged.circle(1).r)});
+    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.drawing.circle(1).cx),
+        static_cast<float>(staged.drawing.circle(1).cy), static_cast<float>(staged.drawing.circle(1).r)});
     updated.paperCircleAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Arc:
-    updated.paperArcs.push_back(staged.userArcs.back()); updated.paperArcAttrs.push_back(inherited); break;
+    updated.paperArcs.push_back(staged.drawing.userArcs.back()); updated.paperArcAttrs.push_back(inherited); break;
   case SelectedEntity::Type::Ellipse:
-    updated.paperEllipses.push_back(staged.userEllipses.back()); updated.paperEllAttrs.push_back(inherited); break;
+    updated.paperEllipses.push_back(staged.drawing.userEllipses.back()); updated.paperEllAttrs.push_back(inherited); break;
   case SelectedEntity::Type::Polyline: {
     const int oldEnd = updated.paperPolyOffsets.empty() ? 0 : updated.paperPolyOffsets.back();
-    const int start = staged.userPolylineOffsets[1];
-    const int end = staged.userPolylineOffsets[2];
+    const int start = staged.drawing.userPolylineOffsets[1];
+    const int end = staged.drawing.userPolylineOffsets[2];
     for (int v = start; v < end; ++v) {
-      updated.paperPolyVerts.push_back(static_cast<float>(staged.vertex(v).x));
-      updated.paperPolyVerts.push_back(static_cast<float>(staged.vertex(v).y));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.drawing.vertex(v).x));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.drawing.vertex(v).y));
       updated.paperPolyVerts.push_back(0.f);
     }
     if (updated.paperPolyOffsets.empty()) updated.paperPolyOffsets.push_back(oldEnd);
     updated.paperPolyOffsets.push_back(oldEnd + end - start);
-    updated.paperPolyClosed.push_back(staged.userPolylineClosed.back());
+    updated.paperPolyClosed.push_back(staged.drawing.userPolylineClosed.back());
     updated.paperPolyAttrs.push_back(inherited);
     break;
   }
   default: return false;
   }
   PushUndoSnapshot(st, "Offset paper geometry");
-  st.paperLayouts[static_cast<size_t>(li)] = std::move(updated);
+  st.drawing.paperLayouts[static_cast<size_t>(li)] = std::move(updated);
   BumpCadGpuCache(st);
   log.insert(log.end(), stagedLog.begin(), stagedLog.end());
   LoopOffsetBackToSelect(st, log);
@@ -15988,12 +15988,12 @@ static void HandlePaperOffsetViewportPick(AppCommandState& st, double wx, double
     return;
   }
   if (st.offsetPhase == OP::WaitSelectEntity) {
-    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size()) {
       log.push_back("OFFSET — no active paper layout.");
       return;
     }
     PaperRef hit{};
-    const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+    const PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
     float tolerance = 0.05f;
     if (st.viewportLastSurveyLayoutHeightPx > 1.f && st.viewportLastSurveyLayoutOrthoHalfH > 0.f)
       tolerance = std::clamp(CadSnap::WorldToleranceFromPixels(
@@ -16174,16 +16174,16 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   using MirP = AppCommandState::MirrorPhase;
 
   if (st.active == K::PaperRectViewport) {
-    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size()) {
       log.push_back("MVIEW — switch to a paper layout first.");
       st.active = K::None;
       return;
     }
     if (st.paperVpMode == 1) {
       PaperRef hit{};
-      const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+      const PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
       if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy),
-                             std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit, &st.blockDefs) ||
+                             std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit, &st.drawing.blockDefs) ||
           hit.type != PaperRef::Type::Polyline) {
         log.push_back("MVIEW Object — pick a closed paper-space polyline.");
         return;
@@ -16274,7 +16274,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       const float mnY = std::min(st.selBoxAnchorY, static_cast<float>(wy));
       const float mxY = std::max(st.selBoxAnchorY, static_cast<float>(wy));
       std::vector<PaperEntityRef> hits;
-      SelectPaperEntitiesInBox(*paper, mnX, mnY, mxX, mxY, fenceLeftToRightWindowMode, hits, &st.blockDefs);
+      SelectPaperEntitiesInBox(*paper, mnX, mnY, mxX, mxY, fenceLeftToRightWindowMode, hits, &st.drawing.blockDefs);
       if (windowSelectionSubtract) {
         st.selectedPaperEntities.erase(
             std::remove_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
@@ -16694,7 +16694,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       st.active = K::None;
       return;
     }
-    CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+    CommitSurfSwapEdgeLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                             static_cast<double>(wy), log);
     st.active = K::None;
     return;
@@ -16706,7 +16706,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       st.active = K::None;
       return;
     }
-    CommitSurfAddPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+    CommitSurfAddPointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                             static_cast<double>(wy), CadCommitElevation(st), log);
     st.active = K::None;
     return;
@@ -16718,7 +16718,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       st.active = K::None;
       return;
     }
-    CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+    CommitSurfDelPointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                             static_cast<double>(wy), log);
     st.active = K::None;
     return;
@@ -16738,7 +16738,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       log.push_back("SURFACEMOVEPOINT — pick the new position (Z = work plane).");
       return;
     }
-    CommitSurfMovePointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
+    CommitSurfMovePointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
                              static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st), log);
     st.active = K::None;
     return;
@@ -16750,7 +16750,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       st.active = K::None;
       return;
     }
-    CommitSurfDelLineLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+    CommitSurfDelLineLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                            static_cast<double>(wy), log);
     st.active = K::None;
     return;
@@ -16770,7 +16770,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       log.push_back("QUICKPROFILE — second point of the sample line.");
       return;
     }
-    CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
+    CommitQuickProfileLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
                             static_cast<double>(wx), static_cast<double>(wy), log);
     st.active = K::None;
     return;
@@ -17077,7 +17077,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
         PaperRef hit{};
         if (!layout || !PickPaperEntityAt(*layout, static_cast<float>(wx), static_cast<float>(wy),
                                           std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit,
-                                          &st.blockDefs))
+                                          &st.drawing.blockDefs))
           return;
         const auto selected = std::find_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
                                            [&](const PaperEntityRef& item) {
@@ -17589,15 +17589,15 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
     switch (e.type) {
     case T::LineSeg: {
       const size_t b = k;
-      if (b < st.lineCount()) {
-        grow(st.line(b).x0, st.line(b).y0, st.line(b).z0);
-        grow(st.line(b).x1, st.line(b).y1, st.line(b).z1);
+      if (b < st.drawing.lineCount()) {
+        grow(st.drawing.line(b).x0, st.drawing.line(b).y0, st.drawing.line(b).z0);
+        grow(st.drawing.line(b).x1, st.drawing.line(b).y1, st.drawing.line(b).z1);
       }
       break;
     }
     case T::Circle: {
-      if (k < st.circleCount()) {
-        const CadCircleRecord c = st.circle(k);
+      if (k < st.drawing.circleCount()) {
+        const CadCircleRecord c = st.drawing.circle(k);
         const double cx = c.cx, cy = c.cy, cz = c.cz, r = c.r;
         grow(cx - r, cy - r, cz);
         grow(cx + r, cy + r, cz);
@@ -17605,26 +17605,26 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       break;
     }
     case T::Spline:  // REQ-443: its control points bound it (convex-hull property); a handle position only
-      if (k < st.cadSplines.size())
-        for (const ray3d::Vec3& v : st.cadSplines[k].ctrl)
+      if (k < st.drawing.cadSplines.size())
+        for (const ray3d::Vec3& v : st.drawing.cadSplines[k].ctrl)
           grow(v.x, v.y, v.z);
       break;
     case T::Point:
-      if (k < st.cadPoints.size())
-        grow(st.cadPoints[k].x, st.cadPoints[k].y, st.cadPoints[k].z);
+      if (k < st.drawing.cadPoints.size())
+        grow(st.drawing.cadPoints[k].x, st.drawing.cadPoints[k].y, st.drawing.cadPoints[k].z);
       break;
     case T::Arc:
       // The full circle the arc lies on, not the arc's own extent. Conservative by up to a radius,
       // and the anchor is a handle position rather than an input to any move — see the header note.
-      if (k < st.userArcs.size()) {
-        const auto& a = st.userArcs[k];
+      if (k < st.drawing.userArcs.size()) {
+        const auto& a = st.drawing.userArcs[k];
         grow(a.cx - a.r, a.cy - a.r, a.z);
         grow(a.cx + a.r, a.cy + a.r, a.z);
       }
       break;
     case T::Ellipse:
-      if (k < st.userEllipses.size()) {
-        const auto& el = st.userEllipses[k];
+      if (k < st.drawing.userEllipses.size()) {
+        const auto& el = st.drawing.userEllipses[k];
         // The major-axis vector bounds it either way round; the minor is `ratio` times it and smaller.
         const double rr = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
         grow(el.cx - rr, el.cy - rr, el.z);
@@ -17632,58 +17632,58 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       }
       break;
     case T::Polyline: {
-      if (k + 1 < st.userPolylineOffsets.size()) {
-        const int v0 = st.userPolylineOffsets[k];
-        const int v1 = st.userPolylineOffsets[k + 1];
+      if (k + 1 < st.drawing.userPolylineOffsets.size()) {
+        const int v0 = st.drawing.userPolylineOffsets[k];
+        const int v1 = st.drawing.userPolylineOffsets[k + 1];
         for (int vi = v0; vi < v1; ++vi) {
           const size_t b = static_cast<size_t>(vi);
-          if (b < st.vertexCount())
-            grow(st.vertex(b).x, st.vertex(b).y, st.vertex(b).z);
+          if (b < st.drawing.vertexCount())
+            grow(st.drawing.vertex(b).x, st.drawing.vertex(b).y, st.drawing.vertex(b).z);
         }
       }
       break;
     }
     case T::FeatureLine: {
-      if (k + 1 < st.featureLineOffsets.size()) {
-        const int v0 = st.featureLineOffsets[k];
-        const int v1 = st.featureLineOffsets[k + 1];
+      if (k + 1 < st.drawing.featureLineOffsets.size()) {
+        const int v0 = st.drawing.featureLineOffsets[k];
+        const int v1 = st.drawing.featureLineOffsets[k + 1];
         for (int vi = v0; vi < v1; ++vi) {
           const size_t b = static_cast<size_t>(vi) * 3;
-          if (b + 2 < st.featureLineVerts.size())
-            grow(st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2]);
+          if (b + 2 < st.drawing.featureLineVerts.size())
+            grow(st.drawing.featureLineVerts[b], st.drawing.featureLineVerts[b + 1], st.drawing.featureLineVerts[b + 2]);
         }
       }
       break;
     }
     case T::Annotation:
-      if (k < st.cadAnnotations.size()) {
-        const CadAnnotation& a = st.cadAnnotations[k];
+      if (k < st.drawing.cadAnnotations.size()) {
+        const CadAnnotation& a = st.drawing.cadAnnotations[k];
         float mnx = 0.f, mny = 0.f, mxx = 0.f, mxy = 0.f;
-        CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &mnx, &mny, &mxx, &mxy);
+        CadAnnotationRoughBounds(a, st.drawing.modelUnitsPerPlottedInch, &mnx, &mny, &mxx, &mxy);
         grow(mnx, mny, a.insZ);
         grow(mxx, mxy, a.insZ);
       }
       break;
     case T::Table:
-      if (k < st.cadTables.size())
-        grow(st.cadTables[k].insX, st.cadTables[k].insY, st.cadTables[k].insZ);
+      if (k < st.drawing.cadTables.size())
+        grow(st.drawing.cadTables[k].insX, st.drawing.cadTables[k].insY, st.drawing.cadTables[k].insZ);
       break;
     case T::PdfUnderlay:
-      if (k < st.pdfAttachments.size())
-        grow(st.pdfAttachments[k].insertX, st.pdfAttachments[k].insertY, 0.0);
+      if (k < st.drawing.pdfAttachments.size())
+        grow(st.drawing.pdfAttachments[k].insertX, st.drawing.pdfAttachments[k].insertY, 0.0);
       break;
     case T::FilledRegion:
-      if (k < st.cadFilledRegions.size()) {
-        const CadFilledRegion& fr = st.cadFilledRegions[k];
+      if (k < st.drawing.cadFilledRegions.size()) {
+        const CadFilledRegion& fr = st.drawing.cadFilledRegions[k];
         for (size_t vi = 0; vi + 2 < fr.vertsXyz.size(); vi += 3)
           grow(fr.vertsXyz[vi], fr.vertsXyz[vi + 1], fr.vertsXyz[vi + 2]);
       }
       break;
     case T::BlockRef:
-      if (k < st.cadBlockRefs.size()) {
-        const CadBlockRef& br = st.cadBlockRefs[k];
+      if (k < st.drawing.cadBlockRefs.size()) {
+        const CadBlockRef& br = st.drawing.cadBlockRefs[k];
         float mnx = 0.f, mny = 0.f, mxx = 0.f, mxy = 0.f;
-        CadBlockWorldAabb(st.blockDefs, br, &mnx, &mny, &mxx, &mxy);
+        CadBlockWorldAabb(st.drawing.blockDefs, br, &mnx, &mny, &mxx, &mxy);
         grow(mnx, mny, br.xf.z);
         grow(mxx, mxy, br.xf.z);
       }
@@ -17691,8 +17691,8 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
     case T::Solid:
       // The one type Phase 5 exists for, and the only one whose bounds are exact here: the kernel
       // already owns the walk (`brep::ComputeBounds`), so there is nothing to re-derive.
-      if (k < st.cadSolids.size() && st.cadSolids[k]) {
-        const brep::Bounds b = brep::ComputeBounds(*st.cadSolids[k]);
+      if (k < st.drawing.cadSolids.size() && st.drawing.cadSolids[k]) {
+        const brep::Bounds b = brep::ComputeBounds(*st.drawing.cadSolids[k]);
         if (b.valid) {
           grow(b.mn.x, b.mn.y, b.mn.z);
           grow(b.mx.x, b.mx.y, b.mx.z);
@@ -18611,21 +18611,21 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
     return;
   out->clear();
   for (const SurfaceCoverage& c : SurfacesCovering(st, x, y)) {
-    const CadSurface& s = st.cadSurfaces[c.surfaceIndex];
+    const CadSurface& s = st.drawing.cadSurfaces[c.surfaceIndex];
     SurfaceHoverRow row;
     row.name = s.name;
 
     // The EFFECTIVE style, resolved on read (REQ-070 / ADR-036 (d)) — so a surface whose style was
     // deleted, and one saved before the field existed, both read "Standard" here rather than blank.
     // The empty-table case is the only one that has no name to give.
-    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, s.styleName);
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.drawing.surfaceStyles, s.styleName);
     row.style = style ? style->name : std::string("\xE2\x80\x94");
 
     // `cadSurfaceAttrs` is length-locked to `cadSurfaces`; a short array means defaults, exactly as
     // SurfaceVisible reads it, and the default layer is "0".
-    row.layer = (c.surfaceIndex < st.cadSurfaceAttrs.size() &&
-                 !st.cadSurfaceAttrs[c.surfaceIndex].layer.empty())
-                    ? st.cadSurfaceAttrs[c.surfaceIndex].layer
+    row.layer = (c.surfaceIndex < st.drawing.cadSurfaceAttrs.size() &&
+                 !st.drawing.cadSurfaceAttrs[c.surfaceIndex].layer.empty())
+                    ? st.drawing.cadSurfaceAttrs[c.surfaceIndex].layer
                     : std::string("0");
 
     // Defensive, and expected never to fire: a row exists only where a triangle covered the point,
@@ -18659,7 +18659,7 @@ void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector
   if (!st.clipboardPasteResolving && !st.clipboard.content.surveyPoints.empty() &&
       !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
     std::unordered_set<int> destinationIds;
-    for (const SurveyPoint& point : st.surveyPoints)
+    for (const SurveyPoint& point : st.drawing.surveyPoints)
       destinationIds.insert(point.id);
     const int tab = st.activeDrawingIdx;
     if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
@@ -18720,7 +18720,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
   std::vector<SurveyPoint> originalPoints = st.clipboard.content.surveyPoints;
   if (answer == AppCommandState::PointEditPrompt::Answer::Renumber) {
     std::unordered_set<int> used;
-    for (const SurveyPoint& point : st.surveyPoints) used.insert(point.id);
+    for (const SurveyPoint& point : st.drawing.surveyPoints) used.insert(point.id);
     const int tab = st.activeDrawingIdx;
     if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
       const uint32_t uid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
@@ -18730,7 +18730,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
           if (project.uid == uid && project.points)
             for (const auto& entry : project.points->points) used.insert(entry.point.id);
     }
-    int next = st.createPointsNextId - 1;
+    int next = st.drawing.createPointsNextId - 1;
     for (const int id : used) next = std::max(next, id);
     ++next;
     for (SurveyPoint& point : st.clipboard.content.surveyPoints) {
@@ -18739,7 +18739,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
       used.insert(next++);
       point.labelMtextAnnId = 0;
     }
-    st.createPointsNextId = std::max(st.createPointsNextId, next);
+    st.drawing.createPointsNextId = std::max(st.drawing.createPointsNextId, next);
   } else if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
     st.clipboardPasteOverwrite = true;
   }
@@ -18957,58 +18957,58 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.lineCount())
+      if (k >= st.drawing.lineCount())
         continue;
-      cb.content.pushLine(st.line(k));
-      cb.content.userLineAttrs.push_back(static_cast<size_t>(e.index) < st.userLineAttrs.size()
-                                 ? st.userLineAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
-      expandBbox(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0));
-      expandBbox(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1));
+      cb.content.pushLine(st.drawing.line(k));
+      cb.content.userLineAttrs.push_back(static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size()
+                                 ? st.drawing.userLineAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      expandBbox(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0));
+      expandBbox(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1));
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.circleCount())
+      if (ci >= st.drawing.circleCount())
         continue;
-      cb.content.pushCircle(st.circle(ci));  // z survives a model copy
-      cb.content.userCircleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
-                                   ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      cb.content.pushCircle(st.drawing.circle(ci));  // z survives a model copy
+      cb.content.userCircleAttrs.push_back(static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size()
+                                   ? st.drawing.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
       float ccx = 0.f, ccy = 0.f, ccz = 1.f;
-      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
+      CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
       PushCircleNormal(cb.content.userCircleNormals, ccx, ccy, ccz);
-      expandBbox(static_cast<float>(st.circle(ci).cx), static_cast<float>(st.circle(ci).cy));
+      expandBbox(static_cast<float>(st.drawing.circle(ci).cx), static_cast<float>(st.drawing.circle(ci).cy));
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.userArcs.size())
+      if (k >= st.drawing.userArcs.size())
         continue;
-      cb.content.userArcs.push_back(st.userArcs[k]);
-      cb.content.userArcAttrs.push_back(k < st.userArcAttrs.size() ? st.userArcAttrs[k] : EntityAttributes{});
-      expandBbox(static_cast<float>(st.userArcs[k].cx), static_cast<float>(st.userArcs[k].cy));
+      cb.content.userArcs.push_back(st.drawing.userArcs[k]);
+      cb.content.userArcAttrs.push_back(k < st.drawing.userArcAttrs.size() ? st.drawing.userArcAttrs[k] : EntityAttributes{});
+      expandBbox(static_cast<float>(st.drawing.userArcs[k].cx), static_cast<float>(st.drawing.userArcs[k].cy));
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.userEllipses.size())
+      if (k >= st.drawing.userEllipses.size())
         continue;
-      cb.content.userEllipses.push_back(st.userEllipses[k]);
-      cb.content.userEllAttrs.push_back(k < st.userEllAttrs.size() ? st.userEllAttrs[k] : EntityAttributes{});
-      expandBbox(static_cast<float>(st.userEllipses[k].cx), static_cast<float>(st.userEllipses[k].cy));
+      cb.content.userEllipses.push_back(st.drawing.userEllipses[k]);
+      cb.content.userEllAttrs.push_back(k < st.drawing.userEllAttrs.size() ? st.drawing.userEllAttrs[k] : EntityAttributes{});
+      expandBbox(static_cast<float>(st.drawing.userEllipses[k].cx), static_cast<float>(st.drawing.userEllipses[k].cy));
     } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadSplines.size()) continue;
-      cb.content.cadSplines.push_back(st.cadSplines[k]);
-      cb.content.cadSplineAttrs.push_back(k < st.cadSplineAttrs.size() ? st.cadSplineAttrs[k] : EntityAttributes{});
+      if (k >= st.drawing.cadSplines.size()) continue;
+      cb.content.cadSplines.push_back(st.drawing.cadSplines[k]);
+      cb.content.cadSplineAttrs.push_back(k < st.drawing.cadSplineAttrs.size() ? st.drawing.cadSplineAttrs[k] : EntityAttributes{});
       std::vector<spline::Vec3> points;
-      spline::Tessellate(st.cadSplines[k], kSplineSampleTolerance, &points);
+      spline::Tessellate(st.drawing.cadSplines[k], kSplineSampleTolerance, &points);
       for (const auto& p : points) expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
     } else if (e.type == SelectedEntity::Type::Point) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadPoints.size()) continue;
-      cb.content.cadPoints.push_back(st.cadPoints[k]);
-      cb.content.cadPointAttrs.push_back(k < st.cadPointAttrs.size() ? st.cadPointAttrs[k] : EntityAttributes{});
-      expandBbox(static_cast<float>(st.cadPoints[k].x), static_cast<float>(st.cadPoints[k].y));
+      if (k >= st.drawing.cadPoints.size()) continue;
+      cb.content.cadPoints.push_back(st.drawing.cadPoints[k]);
+      cb.content.cadPointAttrs.push_back(k < st.drawing.cadPointAttrs.size() ? st.drawing.cadPointAttrs[k] : EntityAttributes{});
+      expandBbox(static_cast<float>(st.drawing.cadPoints[k].x), static_cast<float>(st.drawing.cadPoints[k].y));
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
@@ -19016,65 +19016,65 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         cb.content.userPolylineOffsets.push_back(0);
       const int baseVert = cb.content.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        cb.content.pushVertex(CadPolyVertex{st.vertex(vi).x, st.vertex(vi).y, st.vertex(vi).z});
-        cb.content.userPolylineVertsBulge.push_back(vi < static_cast<int>(st.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
-                                        ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+        cb.content.pushVertex(CadPolyVertex{st.drawing.vertex(vi).x, st.drawing.vertex(vi).y, st.drawing.vertex(vi).z});
+        cb.content.userPolylineVertsBulge.push_back(vi < static_cast<int>(st.drawing.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
+                                        ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                         : 0.0f);
-        expandBbox(static_cast<float>(st.vertex(vi).x),
-                   static_cast<float>(st.vertex(vi).y));
+        expandBbox(static_cast<float>(st.drawing.vertex(vi).x),
+                   static_cast<float>(st.drawing.vertex(vi).y));
       }
       cb.content.userPolylineOffsets.push_back(baseVert + nv);
-      uint8_t cl = static_cast<size_t>(pi) < st.userPolylineClosed.size()
-                       ? st.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
+      uint8_t cl = static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size()
+                       ? st.drawing.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
       cb.content.userPolylineClosed.push_back(cl);
-      cb.content.userPolylineAttrs.push_back(static_cast<size_t>(pi) < st.userPolylineAttrs.size()
-                                 ? st.userPolylineAttrs[static_cast<size_t>(pi)] : EntityAttributes{});
+      cb.content.userPolylineAttrs.push_back(static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size()
+                                 ? st.drawing.userPolylineAttrs[static_cast<size_t>(pi)] : EntityAttributes{});
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadAnnotations.size())
+      if (k >= st.drawing.cadAnnotations.size())
         continue;
-      cb.content.cadAnnotations.push_back(st.cadAnnotations[k]);
-      cb.content.cadAnnotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
-                                       ? st.cadAnnotationAttrs[k] : EntityAttributes{});
-      expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
+      cb.content.cadAnnotations.push_back(st.drawing.cadAnnotations[k]);
+      cb.content.cadAnnotationAttrs.push_back(k < st.drawing.cadAnnotationAttrs.size()
+                                       ? st.drawing.cadAnnotationAttrs[k] : EntityAttributes{});
+      expandBbox(st.drawing.cadAnnotations[k].insX, st.drawing.cadAnnotations[k].insY);
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadTables.size())
+      if (k >= st.drawing.cadTables.size())
         continue;
-      cb.content.cadTables.push_back(st.cadTables[k]);
-      cb.content.cadTableAttrs.push_back(k < st.cadTableAttrs.size() ? st.cadTableAttrs[k] : EntityAttributes{});
-      expandBbox(st.cadTables[k].insX, st.cadTables[k].insY);
+      cb.content.cadTables.push_back(st.drawing.cadTables[k]);
+      cb.content.cadTableAttrs.push_back(k < st.drawing.cadTableAttrs.size() ? st.drawing.cadTableAttrs[k] : EntityAttributes{});
+      expandBbox(st.drawing.cadTables[k].insX, st.drawing.cadTables[k].insY);
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadBlockRefs.size())
+      if (k >= st.drawing.cadBlockRefs.size())
         continue;
-      cb.content.cadBlockRefs.push_back(st.cadBlockRefs[k]);
-      cb.content.cadBlockRefAttrs.push_back(k < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[k] : EntityAttributes{});
-      expandBbox(st.cadBlockRefs[k].xf.x, st.cadBlockRefs[k].xf.y);
+      cb.content.cadBlockRefs.push_back(st.drawing.cadBlockRefs[k]);
+      cb.content.cadBlockRefAttrs.push_back(k < st.drawing.cadBlockRefAttrs.size() ? st.drawing.cadBlockRefAttrs[k] : EntityAttributes{});
+      expandBbox(st.drawing.cadBlockRefs[k].xf.x, st.drawing.cadBlockRefs[k].xf.y);
     } else if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.cadFilledRegions.size())
+      if (k >= st.drawing.cadFilledRegions.size())
         continue;
       directFills.insert(static_cast<int>(k));
-      const CadFilledRegion& fr = st.cadFilledRegions[k];
+      const CadFilledRegion& fr = st.drawing.cadFilledRegions[k];
       cb.content.cadFilledRegions.push_back(fr);
-      cb.content.cadFilledRegionAttrs.push_back(k < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[k]
+      cb.content.cadFilledRegionAttrs.push_back(k < st.drawing.cadFilledRegionAttrs.size() ? st.drawing.cadFilledRegionAttrs[k]
                                                                         : EntityAttributes{});
       for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3)
         expandBbox(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]));
     }
   }
   for (const int index : st.selectedSurveyPointIndices) {
-    if (index < 0 || static_cast<size_t>(index) >= st.surveyPoints.size())
+    if (index < 0 || static_cast<size_t>(index) >= st.drawing.surveyPoints.size())
       continue;
-    const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
+    const SurveyPoint& point = st.drawing.surveyPoints[static_cast<size_t>(index)];
     cb.content.surveyPoints.push_back(point);
     expandBbox(point.easting, point.northing);
   }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
   // the ones already taken so they aren't duplicated.
-  CopyEnclosedFilledRegions(cb, st.cadFilledRegions, st.cadFilledRegionAttrs, mnX, mnY, mxX, mxY, &directFills);
+  CopyEnclosedFilledRegions(cb, st.drawing.cadFilledRegions, st.drawing.cadFilledRegionAttrs, mnX, mnY, mxX, mxY, &directFills);
 
   if (mnX > mxX) {
     cb.basePtX = 0.f;
@@ -19312,22 +19312,22 @@ static float ArcLengthOf(float r, float sweepRad) { return std::fabs(r * sweepRa
 /// polyline (refused before this runs), so this always walks an open path — same shape as
 /// QSELECT's ad hoc length filter (CadUi.cpp), written here as a reusable function instead.
 static float PolylineOpenLengthOf(const AppCommandState& st, int pi) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return 0.f;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   float total = 0.f;
   for (int vi = v0; vi + 1 < v1; ++vi) {
     const size_t a = static_cast<size_t>(vi);
     const size_t b = (static_cast<size_t>(vi)+ 1);
-    if (b >= st.vertexCount())
+    if (b >= st.drawing.vertexCount())
       break;
     // REQ-316 / ADR-047: a curved segment contributes its arc length, not its chord length.
-    const float bulge = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-                            ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+    const float bulge = static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size()
+                            ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
     total += static_cast<float>(BulgeSegmentLength(
-        st.vertex(a).x, st.vertex(a).y, st.vertex(b).x,
-        st.vertex(b).y, static_cast<double>(bulge)));
+        st.drawing.vertex(a).x, st.drawing.vertex(a).y, st.drawing.vertex(b).x,
+        st.drawing.vertex(b).y, static_cast<double>(bulge)));
   }
   return total;
 }
@@ -19351,10 +19351,10 @@ static bool NearerToFirstPoint(float px, float py, float x0, float y0, float x1,
 static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, float newLength,
                                 std::vector<std::string>& log, bool pushUndo = true) {
   const size_t k = static_cast<size_t>(index);
-  if (k >= st.lineCount())
+  if (k >= st.drawing.lineCount())
     return false;
-  const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-  const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+  const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+  const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
   const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
   const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
   const float dx = movingX - fixedX, dy = movingY - fixedY;
@@ -19376,11 +19376,11 @@ static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, 
   if (pushUndo)
     PushUndoSnapshot(st, "Lengthen");
   if (nearFirst) {
-    st.lineComponent(k, CadLineComponent::X0) = newX;
-    st.lineComponent(k, CadLineComponent::Y0) = newY;
+    st.drawing.lineComponent(k, CadLineComponent::X0) = newX;
+    st.drawing.lineComponent(k, CadLineComponent::Y0) = newY;
   } else {
-    st.lineComponent(k, CadLineComponent::X1) = newX;
-    st.lineComponent(k, CadLineComponent::Y1) = newY;
+    st.drawing.lineComponent(k, CadLineComponent::X1) = newX;
+    st.drawing.lineComponent(k, CadLineComponent::Y1) = newY;
   }
   return true;
 }
@@ -19392,9 +19392,9 @@ static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, 
 /// (true) or the end endpoint (false) as the one that moves; the other stays exactly fixed.
 static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, float newLength,
                                std::vector<std::string>& log, bool pushUndo = true) {
-  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+  if (index < 0 || static_cast<size_t>(index) >= st.drawing.userArcs.size())
     return false;
-  CadArc& a = st.userArcs[static_cast<size_t>(index)];
+  CadArc& a = st.drawing.userArcs[static_cast<size_t>(index)];
   if (a.r < 1e-6f) {
     log.push_back("LENGTHEN — the arc's radius is degenerate; there is no length to change.");
     return false;
@@ -19432,10 +19432,10 @@ static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, f
 /// thing), and it is also the only definition that keeps every OTHER vertex's position meaningful.
 static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFirst, float newLength,
                                        std::vector<std::string>& log, bool pushUndo = true) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   if (v1 - v0 < 2)
     return false;
   if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
@@ -19447,10 +19447,10 @@ static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFir
   const int movingVi = nearFirst ? v0 : (v1 - 1);
   const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
   const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
-  if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
+  if (mIdx >= st.drawing.vertexCount() || fIdx >= st.drawing.vertexCount())
     return false;
-  const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
-  const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
+  const float fx = static_cast<float>(st.drawing.vertex(fIdx).x), fy = static_cast<float>(st.drawing.vertex(fIdx).y);
+  const float mx = static_cast<float>(st.drawing.vertex(mIdx).x), my = static_cast<float>(st.drawing.vertex(mIdx).y);
   const float segLen = std::hypot(mx - fx, my - fy);
   if (segLen < 1e-9f) {
     log.push_back("LENGTHEN — the polyline's end segment is degenerate; there is no direction to extend along.");
@@ -19464,8 +19464,8 @@ static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFir
   const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
   if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
     PushUndoSnapshot(st, "Lengthen");
-  st.vertexComponent(mIdx, CadVertexComponent::X) = fx + ux * newSegLen;
-  st.vertexComponent(mIdx, CadVertexComponent::Y) = fy + uy * newSegLen;
+  st.drawing.vertexComponent(mIdx, CadVertexComponent::X) = fx + ux * newSegLen;
+  st.drawing.vertexComponent(mIdx, CadVertexComponent::Y) = fy + uy * newSegLen;
   return true;
 }
 
@@ -19499,18 +19499,18 @@ static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity&
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     *outNearFirst = NearerToFirstPoint(pickX, pickY, x0, y0, x1, y1);
     *outCurLen = std::hypot(x1 - x0, y1 - y0);
     return true;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
       log.push_back(std::string(cmdName) + " — 1 full-circle arc ignored: a full circle has no end to lengthen from.");
       return false;
@@ -19525,21 +19525,21 @@ static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity&
   }
   case SelectedEntity::Type::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return false;
-    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)]) {
+    if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)]) {
       log.push_back(std::string(cmdName) + " — 1 closed polyline ignored: a closed polyline has no end to lengthen from.");
       return false;
     }
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     if (v1 - v0 < 2)
       return false;
     const size_t a0 = static_cast<size_t>(v0), a1 = (static_cast<size_t>(v1)- 1);
-    if (a1 >= st.vertexCount())
+    if (a1 >= st.drawing.vertexCount())
       return false;
-    *outNearFirst = NearerToFirstPoint(pickX, pickY, static_cast<float>(st.vertex(a0).x), static_cast<float>(st.vertex(a0).y),
-                                       static_cast<float>(st.vertex(a1).x), static_cast<float>(st.vertex(a1).y));
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, static_cast<float>(st.drawing.vertex(a0).x), static_cast<float>(st.drawing.vertex(a0).y),
+                                       static_cast<float>(st.drawing.vertex(a1).x), static_cast<float>(st.drawing.vertex(a1).y));
     *outCurLen = PolylineOpenLengthOf(st, pi);
     return true;
   }
@@ -19581,43 +19581,43 @@ static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedE
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return;
-    segs->push_back({{st.line(k).x0, st.line(k).y0},
-                     {st.line(k).x1, st.line(k).y1}});
+    segs->push_back({{st.drawing.line(k).x0, st.drawing.line(k).y0},
+                     {st.drawing.line(k).x1, st.drawing.line(k).y1}});
   } else if (e.type == T::Circle) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.circleCount())
       return;
-    const CadCircleRecord c = st.circle(static_cast<size_t>(e.index));
+    const CadCircleRecord c = st.drawing.circle(static_cast<size_t>(e.index));
     conics->push_back(curveisect::MakeCircle(c.cx, c.cy, c.r));
   } else if (e.type == T::Arc) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     conics->push_back(curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad));
   } else if (e.type == T::Ellipse) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userEllipses.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userEllipses.size())
       return;
-    const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    const CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(e.index)];
     conics->push_back(curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio));
   } else if (e.type == T::Polyline) {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi + 1 < v1; ++vi) {
       const size_t a = static_cast<size_t>(vi), b = (static_cast<size_t>(vi)+ 1);
-      if (b >= st.vertexCount())
+      if (b >= st.drawing.vertexCount())
         break;
-      segs->push_back({{st.vertex(a).x, st.vertex(a).y},
-                       {st.vertex(b).x, st.vertex(b).y}});
+      segs->push_back({{st.drawing.vertex(a).x, st.drawing.vertex(a).y},
+                       {st.drawing.vertex(b).x, st.drawing.vertex(b).y}});
     }
-    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)] &&
+    if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)] &&
         v1 - v0 >= 2) {
       const size_t a = (static_cast<size_t>(v1)- 1), b = static_cast<size_t>(v0);
-      segs->push_back({{st.vertex(a).x, st.vertex(a).y},
-                       {st.vertex(b).x, st.vertex(b).y}});
+      segs->push_back({{st.drawing.vertex(a).x, st.drawing.vertex(a).y},
+                       {st.drawing.vertex(b).x, st.drawing.vertex(b).y}});
     }
   }
   // Annotation/FeatureLine/Surface/Mesh/PdfUnderlay/FilledRegion are refused before this is
@@ -19956,10 +19956,10 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
     const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
     const float dx = movingX - fixedX, dy = movingY - fixedY;
@@ -19972,19 +19972,19 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
   }
   case SelectedEntity::Type::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     if (v1 - v0 < 2)
       return false;
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
     const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
-    if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
+    if (mIdx >= st.drawing.vertexCount() || fIdx >= st.drawing.vertexCount())
       return false;
-    const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
-    const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
+    const float fx = static_cast<float>(st.drawing.vertex(fIdx).x), fy = static_cast<float>(st.drawing.vertex(fIdx).y);
+    const float mx = static_cast<float>(st.drawing.vertex(mIdx).x), my = static_cast<float>(st.drawing.vertex(mIdx).y);
     const float segLen = std::hypot(mx - fx, my - fy);
     if (segLen < 1e-9f)
       return false;
@@ -19995,9 +19995,9 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
     return true;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     if (a.r < 1e-6f)
       return false;
     const float pickAngle = static_cast<float>(std::atan2(wy - a.cy, wx - a.cx));
@@ -20135,12 +20135,12 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
   float newLen = 0.f;
   bool found = false;
   if (hit.type == SelectedEntity::Type::Arc) {
-    const CadArc& a = st.userArcs[static_cast<size_t>(hit.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(hit.index)];
     found = FindExtendArcTarget(segs, conics, static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.r), a.startRad, a.sweepRad, nearFirst, &newLen);
   } else if (hit.type == SelectedEntity::Type::LineSeg) {
     const size_t k = static_cast<size_t>(hit.index);
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
     const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
     found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
@@ -20149,13 +20149,13 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
             // first-to-last chord: for a bent (3+ vertex) polyline those directions differ, and the
             // chord would find a boundary hit that the actual per-segment mutation then misses.
     const int pi = hit.index;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
     const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
-    const float fixedX = static_cast<float>(st.vertex(fIdx).x), fixedY = static_cast<float>(st.vertex(fIdx).y);
-    const float movingX = static_cast<float>(st.vertex(mIdx).x), movingY = static_cast<float>(st.vertex(mIdx).y);
+    const float fixedX = static_cast<float>(st.drawing.vertex(fIdx).x), fixedY = static_cast<float>(st.drawing.vertex(fIdx).y);
+    const float movingX = static_cast<float>(st.drawing.vertex(mIdx).x), movingY = static_cast<float>(st.drawing.vertex(mIdx).y);
     const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
     float newSegLen = 0.f;
     found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
@@ -20503,10 +20503,10 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     ClosestPointOnSegment(x0, y0, x1, y1, px, py, &out->x, &out->y);
     out->param = std::hypot(out->x - x0, out->y - y0);
     // The cut's elevation, interpolated along the line (issue 01). ApplyBreakToLine already carried
@@ -20515,14 +20515,14 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     {
       const float len = std::hypot(x1 - x0, y1 - y0);
       const float t = (len > 1e-9f) ? (out->param / len) : 0.f;
-      out->z = static_cast<float>(st.line(k).z0 + (st.line(k).z1 - st.line(k).z0) * t);
+      out->z = static_cast<float>(st.drawing.line(k).z0 + (st.drawing.line(k).z1 - st.drawing.line(k).z0) * t);
     }
     return true;
   }
   case SelectedEntity::Type::Circle: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.circleCount())
       return false;
-    const CadCircleRecord c = st.circle(static_cast<size_t>(e.index));
+    const CadCircleRecord c = st.drawing.circle(static_cast<size_t>(e.index));
     const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
     out->z = static_cast<float>(c.cz);  // the circle's plane (REQ-057 / ADR-025)
     out->theta = std::atan2(py - cy, px - cx);
@@ -20531,9 +20531,9 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     return true;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     out->theta = static_cast<float>(std::atan2(py - a.cy, px - a.cx));
     out->z = static_cast<float>(a.z);  // the arc's plane (REQ-057 / ADR-025)
     out->x = static_cast<float>(a.cx + a.r * std::cos(out->theta));
@@ -20543,20 +20543,20 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
   }
   case SelectedEntity::Type::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     bool any = false;
     float bestD2 = std::numeric_limits<float>::max();
     float cum = 0.f;
     for (int vi = v0; vi + 1 < v1; ++vi) {
       const size_t A = static_cast<size_t>(vi), B = (static_cast<size_t>(vi)+ 1);
-      const float ax = static_cast<float>(st.vertex(A).x), ay = static_cast<float>(st.vertex(A).y);
-      const float bx = static_cast<float>(st.vertex(B).x), by = static_cast<float>(st.vertex(B).y);
-      const float az = static_cast<float>(st.vertex(A).z), bz = static_cast<float>(st.vertex(B).z);
+      const float ax = static_cast<float>(st.drawing.vertex(A).x), ay = static_cast<float>(st.drawing.vertex(A).y);
+      const float bx = static_cast<float>(st.drawing.vertex(B).x), by = static_cast<float>(st.drawing.vertex(B).y);
+      const float az = static_cast<float>(st.drawing.vertex(A).z), bz = static_cast<float>(st.drawing.vertex(B).z);
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -20577,9 +20577,9 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     }
     if (closed && v1 - v0 >= 2) {
       const size_t A = (static_cast<size_t>(v1)- 1), B = static_cast<size_t>(v0);
-      const float ax = static_cast<float>(st.vertex(A).x), ay = static_cast<float>(st.vertex(A).y);
-      const float bx = static_cast<float>(st.vertex(B).x), by = static_cast<float>(st.vertex(B).y);
-      const float az = static_cast<float>(st.vertex(A).z), bz = static_cast<float>(st.vertex(B).z);
+      const float ax = static_cast<float>(st.drawing.vertex(A).x), ay = static_cast<float>(st.drawing.vertex(A).y);
+      const float bx = static_cast<float>(st.drawing.vertex(B).x), by = static_cast<float>(st.drawing.vertex(B).y);
+      const float az = static_cast<float>(st.drawing.vertex(A).z), bz = static_cast<float>(st.drawing.vertex(B).z);
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -20607,10 +20607,10 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
 static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
                              std::vector<std::string>& log) {
   const size_t k = static_cast<size_t>(index);
-  if (k >= st.lineCount())
+  if (k >= st.drawing.lineCount())
     return;
-  const double x0 = st.line(k).x0, y0 = st.line(k).y0, z0 = st.line(k).z0;
-  const double x1 = st.line(k).x1, y1 = st.line(k).y1, z1 = st.line(k).z1;
+  const double x0 = st.drawing.line(k).x0, y0 = st.drawing.line(k).y0, z0 = st.drawing.line(k).z0;
+  const double x1 = st.drawing.line(k).x1, y1 = st.drawing.line(k).y1, z1 = st.drawing.line(k).z1;
   const double totalLen = std::hypot(x1 - x0, y1 - y0);
   constexpr double kTol = 0.002;  // REQ-101 endpoint-coincidence tolerance
   const double nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
@@ -20623,21 +20623,21 @@ static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p
   const double ux = (x1 - x0) / std::max(totalLen, 1e-9), uy = (y1 - y0) / std::max(totalLen, 1e-9);
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
-    st.lineComponent(k, CadLineComponent::X0) = x0 + ux * farP;
-    st.lineComponent(k, CadLineComponent::Y0) = y0 + uy * farP;
+    st.drawing.lineComponent(k, CadLineComponent::X0) = x0 + ux * farP;
+    st.drawing.lineComponent(k, CadLineComponent::Y0) = y0 + uy * farP;
   } else if (farIsEnd) {
-    st.lineComponent(k, CadLineComponent::X1) = x0 + ux * nearP;
-    st.lineComponent(k, CadLineComponent::Y1) = y0 + uy * nearP;
+    st.drawing.lineComponent(k, CadLineComponent::X1) = x0 + ux * nearP;
+    st.drawing.lineComponent(k, CadLineComponent::Y1) = y0 + uy * nearP;
   } else {
     const EntityAttributes srcAttrs =
-        (static_cast<size_t>(index) < st.userLineAttrs.size()) ? st.userLineAttrs[static_cast<size_t>(index)]
+        (static_cast<size_t>(index) < st.drawing.userLineAttrs.size()) ? st.drawing.userLineAttrs[static_cast<size_t>(index)]
                                                                 : EntityAttributes{};
     const float nx = static_cast<float>(x0 + ux * nearP), ny = static_cast<float>(y0 + uy * nearP);
     const float fx = static_cast<float>(x0 + ux * farP), fy = static_cast<float>(y0 + uy * farP);
-    st.lineComponent(k, CadLineComponent::X1) = nx;
-    st.lineComponent(k, CadLineComponent::Y1) = ny;
-    st.pushLine(CadLineRecord{fx, fy, z0, x1, y1, z1});
-    st.userLineAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+    st.drawing.lineComponent(k, CadLineComponent::X1) = nx;
+    st.drawing.lineComponent(k, CadLineComponent::Y1) = ny;
+    st.drawing.pushLine(CadLineRecord{fx, fy, z0, x1, y1, z1});
+    st.drawing.userLineAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
   }
   BumpCadGpuCache(st);
   log.push_back("BREAK — line broken.");
@@ -20645,24 +20645,24 @@ static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p
 
 static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
                                std::vector<std::string>& log) {
-  if (index < 0 || static_cast<size_t>(index) >= st.circleCount())
+  if (index < 0 || static_cast<size_t>(index) >= st.drawing.circleCount())
     return;
-  const CadCircleRecord c = st.circle(static_cast<size_t>(index));
+  const CadCircleRecord c = st.drawing.circle(static_cast<size_t>(index));
   const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy);
   const float z = static_cast<float>(c.cz), r = static_cast<float>(c.r);
   float bnx = 0.f, bny = 0.f, bnz = 1.f;   // read before the erase below drops the side-car entry
-  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(index), &bnx, &bny, &bnz);
+  CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(index), &bnx, &bny, &bnz);
   float startRad = 0.f, sweepRad = 0.f;
   CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
   const EntityAttributes srcAttrs =
-      (static_cast<size_t>(index) < st.userCircleAttrs.size()) ? st.userCircleAttrs[static_cast<size_t>(index)]
+      (static_cast<size_t>(index) < st.drawing.userCircleAttrs.size()) ? st.drawing.userCircleAttrs[static_cast<size_t>(index)]
                                                                 : EntityAttributes{};
   const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
   PushUndoSnapshot(st, "Break");
-  st.eraseCircle(static_cast<size_t>(index));
-  if (static_cast<size_t>(index) < st.userCircleAttrs.size())
-    st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
-  EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(index));
+  st.drawing.eraseCircle(static_cast<size_t>(index));
+  if (static_cast<size_t>(index) < st.drawing.userCircleAttrs.size())
+    st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + index);
+  EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(index));
   CadArc a{};
   a.cx = cx;
   a.cy = cy;
@@ -20673,8 +20673,8 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
   a.nz = bnz;
   a.startRad = startRad;
   a.sweepRad = sweepRad;
-  st.userArcs.push_back(a);
-  st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  st.drawing.userArcs.push_back(a);
+  st.drawing.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
   // TASK-099 F5. The erase above is the only COMPACTING erase in BREAK: every circle after `index`
   // just moved down one slot, so any SelectedEntity still holding a higher circle index now names a
   // different circle. ExecuteDeleteSelection clears the selection after exactly this compaction for
@@ -20688,9 +20688,9 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
 
 static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
                             std::vector<std::string>& log) {
-  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+  if (index < 0 || static_cast<size_t>(index) >= st.drawing.userArcs.size())
     return;
-  const CadArc src = st.userArcs[static_cast<size_t>(index)];  // a copy — the push_back below may
+  const CadArc src = st.drawing.userArcs[static_cast<size_t>(index)];  // a copy — the push_back below may
                                                                 // reallocate the vector
   constexpr float kTwoPi = 6.28318530717958647692f;
   const bool full = std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f;
@@ -20699,8 +20699,8 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
     CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
     const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
     PushUndoSnapshot(st, "Break");
-    st.userArcs[static_cast<size_t>(index)].startRad = startRad;
-    st.userArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
+    st.drawing.userArcs[static_cast<size_t>(index)].startRad = startRad;
+    st.drawing.userArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
     BumpCadGpuCache(st);
     log.push_back(samePoint ? "BREAK — full-circle arc re-opened at the pick point."
                            : "BREAK — full-circle arc broken.");
@@ -20721,20 +20721,20 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
   const float endRad0 = src.startRad + src.sweepRad;
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
-    st.userArcs[static_cast<size_t>(index)].startRad = farTheta;
-    st.userArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
+    st.drawing.userArcs[static_cast<size_t>(index)].startRad = farTheta;
+    st.drawing.userArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
   } else if (farIsEnd) {
-    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+    st.drawing.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
   } else {
     const EntityAttributes srcAttrs =
-        (static_cast<size_t>(index) < st.userArcAttrs.size()) ? st.userArcAttrs[static_cast<size_t>(index)]
+        (static_cast<size_t>(index) < st.drawing.userArcAttrs.size()) ? st.drawing.userArcAttrs[static_cast<size_t>(index)]
                                                               : EntityAttributes{};
     CadArc newA = src;
     newA.startRad = farTheta;
     newA.sweepRad = endRad0 - farTheta;
-    st.userArcs.push_back(newA);  // may reallocate — index-based access only below
-    st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
-    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+    st.drawing.userArcs.push_back(newA);  // may reallocate — index-based access only below
+    st.drawing.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+    st.drawing.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
   }
   BumpCadGpuCache(st);
   log.push_back("BREAK — arc broken.");
@@ -20771,11 +20771,11 @@ struct PolyVert {
 /// place and leave its Z untouched, so the analogy did not hold and the effect was that BREAK,
 /// FILLET and CHAMFER silently flattened any polyline they edited (issue 01).
 static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<PolyVert>& newVerts) {
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int nNew = static_cast<int>(newVerts.size());
   const int delta = nNew - (v1 - v0);
-  st.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
+  st.drawing.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
   std::vector<float> flat;
   flat.reserve(static_cast<size_t>(nNew) * 3);
   for (const auto& p : newVerts) {
@@ -20783,26 +20783,26 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
     flat.push_back(p.y);
     flat.push_back(p.z);
   }
-  st.userPolylineVerts.insert(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
+  st.drawing.userPolylineVerts.insert(st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
                               flat.end());
-  for (size_t oi = (static_cast<size_t>(pi)+ 1); oi < st.userPolylineOffsets.size(); ++oi)
-    st.userPolylineOffsets[oi] += delta;
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
-  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+  for (size_t oi = (static_cast<size_t>(pi)+ 1); oi < st.drawing.userPolylineOffsets.size(); ++oi)
+    st.drawing.userPolylineOffsets[oi] += delta;
+  SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 
 /// Reads polyline \p pi's vertices back out, elevation included — the collector every caller of
 /// \ref ReplacePolylineVerts needs, so none of them re-derives the `* 3 + c` indexing.
 static std::vector<PolyVert> PolylineVertsOf(const AppCommandState& st, int pi) {
   std::vector<PolyVert> out;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   out.reserve((static_cast<size_t>(v1)- v0));
   for (int vi = v0; vi < v1; ++vi) {
     const size_t o = static_cast<size_t>(vi);
-    out.push_back({static_cast<float>(st.vertex(o).x),
-                   static_cast<float>(st.vertex(o).y),
-                   static_cast<float>(st.vertex(o).z)});
+    out.push_back({static_cast<float>(st.drawing.vertex(o).x),
+                   static_cast<float>(st.drawing.vertex(o).y),
+                   static_cast<float>(st.drawing.vertex(o).z)});
   }
   return out;
 }
@@ -20812,15 +20812,15 @@ static std::vector<PolyVert> PolylineVertsOf(const AppCommandState& st, int pi) 
 /// `userPolylineOffsets` is never empty here.
 static void AppendNewPolyline(AppCommandState& st, const std::vector<PolyVert>& verts, bool closed,
                               EntityAttributes attrs) {
-  const int base = st.userPolylineOffsets.back();
+  const int base = st.drawing.userPolylineOffsets.back();
   for (const auto& p : verts) {
-    st.pushVertex(CadPolyVertex{p.x, p.y, p.z});
+    st.drawing.pushVertex(CadPolyVertex{p.x, p.y, p.z});
   }
-  st.userPolylineOffsets.push_back(base + static_cast<int>(verts.size()));
-  st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  st.userPolylineAttrs.push_back(std::move(attrs));
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
-  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+  st.drawing.userPolylineOffsets.push_back(base + static_cast<int>(verts.size()));
+  st.drawing.userPolylineClosed.push_back(closed ? 1u : 0u);
+  st.drawing.userPolylineAttrs.push_back(std::move(attrs));
+  SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
                                      std::vector<std::string>& log) {
@@ -20856,7 +20856,7 @@ static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoi
   };
 
   const EntityAttributes srcAttrs =
-      (static_cast<size_t>(pi) < st.userPolylineAttrs.size()) ? st.userPolylineAttrs[static_cast<size_t>(pi)]
+      (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size()) ? st.drawing.userPolylineAttrs[static_cast<size_t>(pi)]
                                                                : EntityAttributes{};
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
@@ -20875,17 +20875,17 @@ static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoi
 
 static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
                                        std::vector<std::string>& log) {
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int n = v1 - v0;  // vertex count == edge count for a closed ring
   std::vector<float> vparam(static_cast<size_t>(n));
   float ringLen = 0.f;
   for (int i = 0; i < n; ++i) {
     vparam[static_cast<size_t>(i)] = ringLen;
     const int a = v0 + i, b = v0 + (i + 1) % n;
-    ringLen += static_cast<float>(std::hypot(st.vertex(b).x - st.vertex(a).x,
-                              st.vertex(b).y -
-                              st.vertex(a).y));
+    ringLen += static_cast<float>(std::hypot(st.drawing.vertex(b).x - st.drawing.vertex(a).x,
+                              st.drawing.vertex(b).y -
+                              st.drawing.vertex(a).y));
   }
   if (ringLen < 1e-9f)
     return;
@@ -20908,9 +20908,9 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
     const float r = rot(vparam[static_cast<size_t>(i)]);
     if (r > 1e-6f && r < p1Rot - 1e-6f) {
       const size_t o = (static_cast<size_t>(v0)+ i);
-      outVerts.push_back({static_cast<float>(st.vertex(o).x),
-                          static_cast<float>(st.vertex(o).y),
-                          static_cast<float>(st.vertex(o).z)});
+      outVerts.push_back({static_cast<float>(st.drawing.vertex(o).x),
+                          static_cast<float>(st.drawing.vertex(o).y),
+                          static_cast<float>(st.drawing.vertex(o).z)});
     }
   }
   outVerts.push_back({p1.x, p1.y, p1.z});
@@ -20923,8 +20923,8 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
     outVerts.pop_back();
   PushUndoSnapshot(st, "Break");
   ReplacePolylineVerts(st, pi, outVerts);
-  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-    st.userPolylineClosed[static_cast<size_t>(pi)] = 0u;
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+    st.drawing.userPolylineClosed[static_cast<size_t>(pi)] = 0u;
   BumpCadGpuCache(st);
   log.push_back(samePoint ? "BREAK — closed polyline opened at the pick point."
                          : "BREAK — closed polyline broken open.");
@@ -20933,7 +20933,7 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
 static void ApplyBreakToPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
                                  std::vector<std::string>& log) {
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
   if (closed)
     ApplyBreakToClosedPolyline(st, pi, p1, p2, log);
   else
@@ -21473,78 +21473,78 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       continue;
-    if (inBox(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0))) {
-      st.lineComponent(k, CadLineComponent::X0) += dx;
-      st.lineComponent(k, CadLineComponent::Y0) += dy;
-      st.lineComponent(k, CadLineComponent::Z0) += dz;
+    if (inBox(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).z0))) {
+      st.drawing.lineComponent(k, CadLineComponent::X0) += dx;
+      st.drawing.lineComponent(k, CadLineComponent::Y0) += dy;
+      st.drawing.lineComponent(k, CadLineComponent::Z0) += dz;
     }
-    if (inBox(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1))) {
-      st.lineComponent(k, CadLineComponent::X1) += dx;
-      st.lineComponent(k, CadLineComponent::Y1) += dy;
-      st.lineComponent(k, CadLineComponent::Z1) += dz;
+    if (inBox(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1), static_cast<float>(st.drawing.line(k).z1))) {
+      st.drawing.lineComponent(k, CadLineComponent::X1) += dx;
+      st.drawing.lineComponent(k, CadLineComponent::Y1) += dy;
+      st.drawing.lineComponent(k, CadLineComponent::Z1) += dz;
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       continue;
-    CadCircleRecord cr = st.circle(ci);
+    CadCircleRecord cr = st.drawing.circle(ci);
     if (inBox(static_cast<float>(cr.cx), static_cast<float>(cr.cy), static_cast<float>(cr.cz))) {
       cr.cx += dx;
       cr.cy += dy;
       cr.cz += dz;
-      st.setCircle(ci, cr);
+      st.drawing.setCircle(ci, cr);
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Arc)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
     if (rectInUcsPlane) {
       // A tilted arc's endpoint math (`cx + r*cos`) is planar; degrade to a whole-arc move when the
       // centre is in the box, matching the FilledRegion simplification just below.
-      CadArc& a = st.userArcs[k];
+      CadArc& a = st.drawing.userArcs[k];
       if (inBox(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z))) {
         a.cx += dx;
         a.cy += dy;
         a.z += dz;
       }
     } else {
-      StretchOneArc(st.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+      StretchOneArc(st.drawing.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    if (inBox(static_cast<float>(st.userEllipses[k].cx), static_cast<float>(st.userEllipses[k].cy), static_cast<float>(st.userEllipses[k].z))) {
-      st.userEllipses[k].cx += dx;
-      st.userEllipses[k].cy += dy;
-      st.userEllipses[k].z += dz;
+    if (inBox(static_cast<float>(st.drawing.userEllipses[k].cx), static_cast<float>(st.drawing.userEllipses[k].cy), static_cast<float>(st.drawing.userEllipses[k].z))) {
+      st.drawing.userEllipses[k].cx += dx;
+      st.drawing.userEllipses[k].cy += dy;
+      st.drawing.userEllipses[k].z += dz;
     }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       continue;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
       const size_t b = static_cast<size_t>(vi);
-      if (inBox(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z))) {
-        st.vertexComponent(b, CadVertexComponent::X) += dx;
-        st.vertexComponent(b, CadVertexComponent::Y) += dy;
-        st.vertexComponent(b, CadVertexComponent::Z) += dz;
+      if (inBox(static_cast<float>(st.drawing.vertex(b).x), static_cast<float>(st.drawing.vertex(b).y), static_cast<float>(st.drawing.vertex(b).z))) {
+        st.drawing.vertexComponent(b, CadVertexComponent::X) += dx;
+        st.drawing.vertexComponent(b, CadVertexComponent::Y) += dy;
+        st.drawing.vertexComponent(b, CadVertexComponent::Z) += dz;
       }
     }
   }
@@ -21552,9 +21552,9 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.cadAnnotations.size())
+    if (k >= st.drawing.cadAnnotations.size())
       continue;
-    CadAnnotation& a = st.cadAnnotations[k];
+    CadAnnotation& a = st.drawing.cadAnnotations[k];
     if (!inBox(a.insX, a.insY, a.insZ))
       continue;
     a.insX += dx;
@@ -21575,9 +21575,9 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::PdfUnderlay)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
       continue;
-    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(e.index)];
     if (inBox(att.insertX, att.insertY)) {  // PDF underlay carries no elevation
       att.insertX += dx;
       att.insertY += dy;
@@ -21586,9 +21586,9 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadTables.size())
       continue;
-    CadTable& t = st.cadTables[static_cast<size_t>(e.index)];
+    CadTable& t = st.drawing.cadTables[static_cast<size_t>(e.index)];
     if (inBox(t.insX, t.insY, t.insZ)) {
       CadTableTranslate(&t, dx, dy);
       t.insZ += dz;
@@ -21599,9 +21599,9 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::FilledRegion)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadFilledRegions.size())
       continue;
-    CadFilledRegion& fr = st.cadFilledRegions[static_cast<size_t>(e.index)];
+    CadFilledRegion& fr = st.drawing.cadFilledRegions[static_cast<size_t>(e.index)];
     if (fr.vertsXyz.size() >= 3 && inBox(static_cast<float>(fr.vertsXyz[0]), static_cast<float>(fr.vertsXyz[1]), static_cast<float>(fr.vertsXyz[2]))) {
       hatchgeom::Translate(fr, dx, dy);
       if (dz != 0.f)
@@ -21614,10 +21614,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
     for (int vi = v0; vi < v1; ++vi) {
       const size_t b = static_cast<size_t>(vi) * 3;
-      if (inBox(static_cast<float>(st.featureLineVerts[b]), static_cast<float>(st.featureLineVerts[b + 1]), static_cast<float>(st.featureLineVerts[b + 2]))) {
-        st.featureLineVerts[b] += dx;
-        st.featureLineVerts[b + 1] += dy;
-        st.featureLineVerts[b + 2] += dz;
+      if (inBox(static_cast<float>(st.drawing.featureLineVerts[b]), static_cast<float>(st.drawing.featureLineVerts[b + 1]), static_cast<float>(st.drawing.featureLineVerts[b + 2]))) {
+        st.drawing.featureLineVerts[b] += dx;
+        st.drawing.featureLineVerts[b + 1] += dy;
+        st.drawing.featureLineVerts[b + 2] += dz;
       }
     }
   });
@@ -21626,9 +21626,9 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     std::sort(ix.begin(), ix.end());
     ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
     for (int i : ix) {
-      if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+      if (i < 0 || static_cast<size_t>(i) >= st.drawing.surveyPoints.size())
         continue;
-      SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(i)];
+      SurveyPoint& sp = st.drawing.surveyPoints[static_cast<size_t>(i)];
       if (inBox(static_cast<float>(sp.easting), static_cast<float>(sp.northing), static_cast<float>(sp.elevation))) {
         sp.easting += dx;
         sp.northing += dy;
@@ -21636,7 +21636,7 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
       }
     }
     for (int i : ix) {
-      if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
         RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
     }
   }
@@ -21800,9 +21800,9 @@ static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e
   case T::LineSeg:
     return true;
   case T::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
       log.push_back("FILLET — 1 full-circle arc ignored: fillet needs a curve with a definite tangent "
                     "side. Pick a line, non-full arc, or polyline segment.");
@@ -21812,15 +21812,15 @@ static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e
   }
   case T::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     if (numVerts < 2)
       return false;
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     const int numEdges = closed ? numVerts : (numVerts - 1);
     int bestSeg = 0;
     float bestD = -1.f;
@@ -21828,8 +21828,8 @@ static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e
       const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
       const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
       float qx = 0.f, qy = 0.f;
-      ClosestPointOnSegment(static_cast<float>(st.vertex(a3).x), static_cast<float>(st.vertex(a3).y), static_cast<float>(st.vertex(b3).x),
-                            static_cast<float>(st.vertex(b3).y), pickX, pickY, &qx, &qy);
+      ClosestPointOnSegment(static_cast<float>(st.drawing.vertex(a3).x), static_cast<float>(st.drawing.vertex(a3).y), static_cast<float>(st.drawing.vertex(b3).x),
+                            static_cast<float>(st.drawing.vertex(b3).y), pickX, pickY, &qx, &qy);
       const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
       if (bestD < 0.f || d < bestD) {
         bestD = d;
@@ -21859,21 +21859,21 @@ static bool BuildFilletCurveFromEntity(const AppCommandState& st, const Selected
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
     out->isLine = true;
-    out->ax = static_cast<float>(st.line(k).x0);
-    out->ay = static_cast<float>(st.line(k).y0);
-    out->az0 = static_cast<float>(st.line(k).z0);
-    out->bx = static_cast<float>(st.line(k).x1);
-    out->by = static_cast<float>(st.line(k).y1);
-    out->az1 = static_cast<float>(st.line(k).z1);
+    out->ax = static_cast<float>(st.drawing.line(k).x0);
+    out->ay = static_cast<float>(st.drawing.line(k).y0);
+    out->az0 = static_cast<float>(st.drawing.line(k).z0);
+    out->bx = static_cast<float>(st.drawing.line(k).x1);
+    out->by = static_cast<float>(st.drawing.line(k).y1);
+    out->az1 = static_cast<float>(st.drawing.line(k).z1);
     return true;
   }
   if (e.type == T::Arc) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     out->isLine = false;
     out->cx = static_cast<float>(a.cx);
     out->cy = static_cast<float>(a.cy);
@@ -21882,20 +21882,20 @@ static bool BuildFilletCurveFromEntity(const AppCommandState& st, const Selected
   }
   if (e.type == T::Polyline) {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size() || polySeg < 0)
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
     const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
-    if (b3 >= st.vertexCount())
+    if (b3 >= st.drawing.vertexCount())
       return false;
     out->isLine = true;
-    out->ax = static_cast<float>(st.vertex(a3).x);
-    out->ay = static_cast<float>(st.vertex(a3).y);
-    out->bx = static_cast<float>(st.vertex(b3).x);
-    out->by = static_cast<float>(st.vertex(b3).y);
+    out->ax = static_cast<float>(st.drawing.vertex(a3).x);
+    out->ay = static_cast<float>(st.drawing.vertex(a3).y);
+    out->bx = static_cast<float>(st.drawing.vertex(b3).x);
+    out->by = static_cast<float>(st.drawing.vertex(b3).y);
     return true;
   }
   return false;
@@ -21922,10 +21922,10 @@ static bool FilletRadiusFitsCurve(const AppCommandState& st, const SelectedEntit
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return true;  // let the mutation itself refuse for real on a bad index
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
     const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
     const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
@@ -21946,10 +21946,10 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
-    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
+    const float x0 = static_cast<float>(st.drawing.line(k).x0), y0 = static_cast<float>(st.drawing.line(k).y0);
+    const float x1 = static_cast<float>(st.drawing.line(k).x1), y1 = static_cast<float>(st.drawing.line(k).y1);
     // Which end moves is decided by nearness to the TANGENT POINT, not the pick — unlike LENGTHEN,
     // where the pick directly names the end to change, FILLET's pick only disambiguates which
     // corner/candidate solution to build (SolveFilletCenter); a pick anywhere along the KEPT
@@ -21967,9 +21967,9 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
     return ApplyLengthenToLine(st, e.index, nearFirst, newLength, log, false);
   }
   if (e.type == T::Arc) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     const float sx = static_cast<float>(a.cx + a.r * std::cos(a.startRad));
     const float sy = static_cast<float>(a.cy + a.r * std::sin(a.startRad));
     const float ex = static_cast<float>(a.cx + a.r * std::cos(a.startRad + a.sweepRad));
@@ -21981,10 +21981,10 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
   }
   if (e.type == T::Polyline) {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size() || polySeg < 0)
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     const int numEdges = numVerts - 1;  // Case B never reaches a closed polyline — no free end
     const bool nearFirst = (polySeg == 0);
@@ -21993,10 +21993,10 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
     const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
-    if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
+    if (mIdx >= st.drawing.vertexCount() || fIdx >= st.drawing.vertexCount())
       return false;
-    const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
-    const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
+    const float fx = static_cast<float>(st.drawing.vertex(fIdx).x), fy = static_cast<float>(st.drawing.vertex(fIdx).y);
+    const float mx = static_cast<float>(st.drawing.vertex(mIdx).x), my = static_cast<float>(st.drawing.vertex(mIdx).y);
     const float oldSegLen = std::hypot(mx - fx, my - fy);
     const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
     const float curTotal = PolylineOpenLengthOf(st, pi);
@@ -22014,15 +22014,15 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
 static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float radius,
                                       float pick1X, float pick1Y, float pick2X, float pick2Y,
                                       std::vector<std::string>& log) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int numVerts = v1 - v0;
   if (numVerts < 2)
     return false;
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
   const int numEdges = closed ? numVerts : (numVerts - 1);
   if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
     return false;
@@ -22049,10 +22049,10 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
 
   auto readVert = [&](int vi, float* x, float* y) {
-    *x = static_cast<float>(st.vertex(vi).x);
-    *y = static_cast<float>(st.vertex(vi).y);
+    *x = static_cast<float>(st.drawing.vertex(vi).x);
+    *y = static_cast<float>(st.drawing.vertex(vi).y);
   };
-  auto vertZ = [&](int vi) { return st.vertex(vi).z; };
+  auto vertZ = [&](int vi) { return st.drawing.vertex(vi).z; };
   // A tangent point lies ON one of the two segments meeting at the corner, so its elevation is the
   // interpolation between that segment's ends (issue 01). Flat polylines - the ordinary case - get
   // the shared elevation from this either way; a sloped one now gets the right answer instead of 0.
@@ -22140,8 +22140,8 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
     // on a level polyline, which is the ordinary case and is then exact; where they differ the
     // midpoint is the closest a single-elevation arc can come. Before this it was 0 regardless.
     arc.z = 0.5f * (inTz + outTz);
-    st.userArcs.push_back(arc);
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userArcs.push_back(arc);
+    st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   log.push_back(radiusIsZero ? "FILLET — polyline corner trimmed to a point (radius 0)."
@@ -22166,26 +22166,26 @@ static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    out->p0 = {st.line(k).x0, st.line(k).y0, st.line(k).z0};
-    out->p1 = {st.line(k).x1, st.line(k).y1, st.line(k).z1};
+    out->p0 = {st.drawing.line(k).x0, st.drawing.line(k).y0, st.drawing.line(k).z0};
+    out->p1 = {st.drawing.line(k).x1, st.drawing.line(k).y1, st.drawing.line(k).z1};
     out->isPolyline = false;
     return true;
   }
   if (e.type == T::Polyline) {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size() || polySeg < 0)
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
     const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
-    if (b3 >= st.vertexCount())
+    if (b3 >= st.drawing.vertexCount())
       return false;
-    out->p0 = {st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
-    out->p1 = {st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
+    out->p0 = {st.drawing.vertex(a3).x, st.drawing.vertex(a3).y, st.drawing.vertex(a3).z};
+    out->p1 = {st.drawing.vertex(b3).x, st.drawing.vertex(b3).y, st.drawing.vertex(b3).z};
     out->isPolyline = true;
     out->viA = viA;
     out->viB = viB;
@@ -22304,7 +22304,7 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
       const bool nearFirst = d0 <= d1;
       const int movingVi = nearFirst ? curve.viA : curve.viB;
       const size_t k = static_cast<size_t>(movingVi);
-      if (k >= st.vertexCount())
+      if (k >= st.drawing.vertexCount())
         return false;
       const ray3d::Vec3 fixed = nearFirst ? curve.p1 : curve.p0;
       const float newLen = static_cast<float>(ray3d::Length(ray3d::Sub(t3d, fixed)));
@@ -22312,13 +22312,13 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
         log.push_back("FILLET — that would collapse a polyline segment to zero length; refused.");
         return false;
       }
-      st.vertexComponent(k, CadVertexComponent::X) = static_cast<float>(t3d.x);
-      st.vertexComponent(k, CadVertexComponent::Y) = static_cast<float>(t3d.y);
-      st.vertexComponent(k, CadVertexComponent::Z) = static_cast<float>(t3d.z);
+      st.drawing.vertexComponent(k, CadVertexComponent::X) = static_cast<float>(t3d.x);
+      st.drawing.vertexComponent(k, CadVertexComponent::Y) = static_cast<float>(t3d.y);
+      st.drawing.vertexComponent(k, CadVertexComponent::Z) = static_cast<float>(t3d.z);
       return true;
     }
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
     const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
     const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
@@ -22334,13 +22334,13 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
       return false;
     }
     if (nearFirst) {
-      st.lineComponent(k, CadLineComponent::X0) = static_cast<float>(t3d.x);
-      st.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(t3d.y);
-      st.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(t3d.z);
+      st.drawing.lineComponent(k, CadLineComponent::X0) = static_cast<float>(t3d.x);
+      st.drawing.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(t3d.y);
+      st.drawing.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(t3d.z);
     } else {
-      st.lineComponent(k, CadLineComponent::X1) = static_cast<float>(t3d.x);
-      st.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(t3d.y);
-      st.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(t3d.z);
+      st.drawing.lineComponent(k, CadLineComponent::X1) = static_cast<float>(t3d.x);
+      st.drawing.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(t3d.y);
+      st.drawing.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(t3d.z);
     }
     return true;
   };
@@ -22379,8 +22379,8 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
     arc.nx = static_cast<float>(frame.zAxis.x);
     arc.ny = static_cast<float>(frame.zAxis.y);
     arc.nz = static_cast<float>(frame.zAxis.z);
-    st.userArcs.push_back(arc);
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userArcs.push_back(arc);
+    st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
     return true;
   };
 
@@ -22561,12 +22561,12 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
       if (e.type != SelectedEntity::Type::Polyline)
         return true;
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         return false;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const bool closed =
-          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       if (closed) {
         log.push_back("FILLET — a closed polyline has no free end; only an adjacent segment of the SAME "
                       "polyline can be filleted against it.");
@@ -22650,8 +22650,8 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
             const float zb = ClosestPointOnEntity(st, hit, projX, projY, &bb) ? bb.z : 0.f;
             arc.z = 0.5f * (za + zb);
           }
-          st.userArcs.push_back(arc);
-          st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+          st.drawing.userArcs.push_back(arc);
+          st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
           BumpCadGpuCache(st);
           log.push_back("FILLET — parallel lines connected by a semicircle (radius set by the gap "
                         "between them, not the current FILLET radius).");
@@ -22719,8 +22719,8 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
                 const float zb = ClosestPointOnEntity(st, hit, t2x, t2y, &bt2) ? bt2.z : 0.f;
                 arc.z = 0.5f * (za + zb);
               }
-              st.userArcs.push_back(arc);
-              st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+              st.drawing.userArcs.push_back(arc);
+              st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
             }
             BumpCadGpuCache(st);
             log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
@@ -23328,15 +23328,15 @@ static bool ChamferEligibility(const AppCommandState& st, const SelectedEntity& 
     return true;
   case T::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     if (numVerts < 2)
       return false;
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     const int numEdges = closed ? numVerts : (numVerts - 1);
     int bestSeg = 0;
     float bestD = -1.f;
@@ -23344,8 +23344,8 @@ static bool ChamferEligibility(const AppCommandState& st, const SelectedEntity& 
       const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
       const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
       float qx = 0.f, qy = 0.f;
-      ClosestPointOnSegment(static_cast<float>(st.vertex(a3).x), static_cast<float>(st.vertex(a3).y), static_cast<float>(st.vertex(b3).x),
-                            static_cast<float>(st.vertex(b3).y), pickX, pickY, &qx, &qy);
+      ClosestPointOnSegment(static_cast<float>(st.drawing.vertex(a3).x), static_cast<float>(st.drawing.vertex(a3).y), static_cast<float>(st.drawing.vertex(b3).x),
+                            static_cast<float>(st.drawing.vertex(b3).y), pickX, pickY, &qx, &qy);
       const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
       if (bestD < 0.f || d < bestD) {
         bestD = d;
@@ -23394,15 +23394,15 @@ static bool ChamferResolvePoints(const AppCommandState& st, const FilletCurve& c
 /// (radius-0-equivalent case: none).
 static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float pick1X,
                                        float pick1Y, float pick2X, float pick2Y, std::vector<std::string>& log) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int numVerts = v1 - v0;
   if (numVerts < 2)
     return false;
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
   const int numEdges = closed ? numVerts : (numVerts - 1);
   if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
     return false;
@@ -23429,10 +23429,10 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
 
   auto readVert = [&](int vi, float* x, float* y) {
-    *x = static_cast<float>(st.vertex(vi).x);
-    *y = static_cast<float>(st.vertex(vi).y);
+    *x = static_cast<float>(st.drawing.vertex(vi).x);
+    *y = static_cast<float>(st.drawing.vertex(vi).y);
   };
-  auto vertZ = [&](int vi) { return st.vertex(vi).z; };
+  auto vertZ = [&](int vi) { return st.drawing.vertex(vi).z; };
   // Same rule as FILLET's corner (issue 01): a chamfer endpoint sits on one of the two segments
   // meeting at the corner, so its elevation interpolates along that segment.
   auto zOnSegTo = [&](int fromVi, int toVi, float qx, float qy) {
@@ -23504,12 +23504,12 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   PushUndoSnapshot(st, "Chamfer");
   ReplacePolylineVerts(st, pi, newXY);
   if (!bothZero) {
-    const size_t li = st.lineCount();
+    const size_t li = st.drawing.lineCount();
     // The chamfer segment joins two points that have real elevations, so it is built at them.
     // It used to be born at datum while the polyline it connects kept its height - a corner whose
     // two ends were at grade and whose connector was hundreds of feet below (issue 01).
-    st.pushLine(CadLineRecord{inX, inY, inZ, outX, outY, outZ});
-    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.pushLine(CadLineRecord{inX, inY, inZ, outX, outY, outZ});
+    st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     (void)li;
   }
   BumpCadGpuCache(st);
@@ -23601,12 +23601,12 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
       if (e.type != SelectedEntity::Type::Polyline)
         return true;
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         return false;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const bool closed =
-          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       if (closed) {
         log.push_back("CHAMFER — a closed polyline has no free end; only an adjacent segment of the "
                       "SAME polyline can be chamfered against it.");
@@ -23663,8 +23663,8 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
             BreakPoint bz1{}, bz2{};
             const float z1 = ClosestPointOnEntity(st, st.chamferFirstEntity, d1x, d1y, &bz1) ? bz1.z : 0.f;
             const float z2 = ClosestPointOnEntity(st, hit, d2x, d2y, &bz2) ? bz2.z : 0.f;
-            st.pushLine(CadLineRecord{d1x, d1y, z1, d2x, d2y, z2});
-            st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+            st.drawing.pushLine(CadLineRecord{d1x, d1y, z1, d2x, d2y, z2});
+            st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
           }
           BumpCadGpuCache(st);
           log.push_back(bothZero ? "CHAMFER — corner trimmed to a point (distance 0)."
@@ -24318,10 +24318,10 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadAnnotations.size())
+      if (k >= cmd.drawing.cadAnnotations.size())
         continue;
       CadAnnotation p{};
-      CadAnnotationPreviewTranslated(cmd.cadAnnotations[k], dx, dy, &p);
+      CadAnnotationPreviewTranslated(cmd.drawing.cadAnnotations[k], dx, dy, &p);
       out->push_back(p);
     }
     return;
@@ -24346,10 +24346,10 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadAnnotations.size())
+      if (k >= cmd.drawing.cadAnnotations.size())
         continue;
       CadAnnotation p{};
-      CadAnnotationPreviewScaled(cmd.cadAnnotations[k], bx, by, sc, &p);
+      CadAnnotationPreviewScaled(cmd.drawing.cadAnnotations[k], bx, by, sc, &p);
       out->push_back(p);
     }
     return;
@@ -24362,10 +24362,10 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadAnnotations.size())
+      if (k >= cmd.drawing.cadAnnotations.size())
         continue;
       CadAnnotation p{};
-      CadAnnotationPreviewReflected(cmd.cadAnnotations[k], mx0, my0, mx1, my1, &p);
+      CadAnnotationPreviewReflected(cmd.drawing.cadAnnotations[k], mx0, my0, mx1, my1, &p);
       out->push_back(p);
     }
     return;
@@ -24381,10 +24381,10 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.cadAnnotations.size())
+    if (k >= cmd.drawing.cadAnnotations.size())
       continue;
     CadAnnotation p{};
-    CadAnnotationPreviewRotated(cmd.cadAnnotations[k], bx, by, theta, &p);
+    CadAnnotationPreviewRotated(cmd.drawing.cadAnnotations[k], bx, by, theta, &p);
     out->push_back(p);
   }
 }
@@ -24409,9 +24409,9 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
       if (e.type != SelectedEntity::Type::Table)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadTables.size())
+      if (k >= cmd.drawing.cadTables.size())
         continue;
-      take(cmd.cadTables[k], [&](CadTable* t) { CadTableTranslate(t, dx, dy); });
+      take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableTranslate(t, dx, dy); });
     }
     return;
   }
@@ -24430,9 +24430,9 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
       if (e.type != SelectedEntity::Type::Table)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadTables.size())
+      if (k >= cmd.drawing.cadTables.size())
         continue;
-      take(cmd.cadTables[k], [&](CadTable* t) { CadTableScaleAround(t, cmd.modifyBaseX, cmd.modifyBaseY, sc); });
+      take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableScaleAround(t, cmd.modifyBaseX, cmd.modifyBaseY, sc); });
     }
     return;
   }
@@ -24444,9 +24444,9 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
       if (e.type != SelectedEntity::Type::Table)
         continue;
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.cadTables.size())
+      if (k >= cmd.drawing.cadTables.size())
         continue;
-      take(cmd.cadTables[k], [&](CadTable* t) { CadTableReflectAcrossLine(t, mx0, my0, mx1, my1); });
+      take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableReflectAcrossLine(t, mx0, my0, mx1, my1); });
     }
     return;
   }
@@ -24459,9 +24459,9 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
     if (e.type != SelectedEntity::Type::Table)
       continue;
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.cadTables.size())
+    if (k >= cmd.drawing.cadTables.size())
       continue;
-    take(cmd.cadTables[k], [&](CadTable* t) { CadTableRotateAround(t, cmd.rotateBaseX, cmd.rotateBaseY, theta); });
+    take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableRotateAround(t, cmd.rotateBaseX, cmd.rotateBaseY, theta); });
   }
 }
 
@@ -24522,20 +24522,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   double mxY = 0.;
   auto consider = [&](double x, double y) { ExpandExtents(x, y, &mnX, &mxX, &mnY, &mxY, &any); };
 
-  if (st.lineStoreWellFormed()) {
-    for (size_t i = 0; i < st.lineCount(); ++i) {
-      const CadLineRecord ln = st.line(i);
-      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i))
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = st.drawing.line(i);
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userLineAttrs, i))
         continue;
       consider(static_cast<double>(ln.x0), static_cast<double>(ln.y0));
       consider(static_cast<double>(ln.x1), static_cast<double>(ln.y1));
     }
   }
-  if (st.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
-      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci))
+  if (st.drawing.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userCircleAttrs, ci))
         continue;
-      const CadCircleRecord c = st.circle(ci);
+      const CadCircleRecord c = st.drawing.circle(ci);
       const double cx = c.cx;
       const double cy = c.cy;
       const double r = std::fabs(c.r);
@@ -24547,63 +24547,63 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       consider(cx + r, cy + r);
     }
   }
-  for (const SurveyPoint& p : st.surveyPoints) {
+  for (const SurveyPoint& p : st.drawing.surveyPoints) {
     if (LayerHiddenInViewport(vpFilter, p.layer))
       continue;
     consider(static_cast<double>(p.easting), static_cast<double>(p.northing));
   }
-  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
-    if (EntityHiddenInViewport(vpFilter, st.cadPositionMarkerAttrs, mi))
+  for (size_t mi = 0; mi < st.drawing.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPositionMarkerAttrs, mi))
       continue;
     float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
     CadPositionMarkerLocalBox(st, mi, &mnX, &mnY, &mxX, &mxY);
     consider(mnX, mnY);
     consider(mxX, mxY);
   }
-  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
-    if (EntityHiddenInViewport(vpFilter, st.cadMultileaderAttrs, li))
+  for (size_t li = 0; li < st.drawing.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMultileaderAttrs, li))
       continue;
     float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
-    CadMultileaderLocalBox(st.cadMultileaders[li], &mnX, &mnY, &mxX, &mxY);
+    CadMultileaderLocalBox(st.drawing.cadMultileaders[li], &mnX, &mnY, &mxX, &mxY);
     consider(mnX, mnY);
     consider(mxX, mxY);
   }
 
-  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+  for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadAnnotationAttrs, ai))
       continue;
-    const CadAnnotation& a = st.cadAnnotations[ai];
+    const CadAnnotation& a = st.drawing.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
     float amxY = 0.f;
-    CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    CadAnnotationRoughBounds(a, st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     consider(static_cast<double>(amnX), static_cast<double>(amnY));
     consider(static_cast<double>(amxX), static_cast<double>(amxY));
   }
 
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
-    if (EntityHiddenInViewport(vpFilter, st.cadTableAttrs, ti))
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadTableAttrs, ti))
       continue;
     float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
-    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    CadTableWorldAabb(st.drawing.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
     consider(static_cast<double>(tmnX), static_cast<double>(tmnY));
     consider(static_cast<double>(tmxX), static_cast<double>(tmxY));
   }
 
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadBlockRefAttrs, bi))
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadBlockRefAttrs, bi))
       continue;
     float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
-    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    CadBlockWorldAabb(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
     consider(static_cast<double>(bmnX), static_cast<double>(bmnY));
     consider(static_cast<double>(bmxX), static_cast<double>(bmxY));
   }
 
-  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
-    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+  for (size_t arcIx = 0; arcIx < st.drawing.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.userArcAttrs, arcIx))
       continue;
-    const CadArc& a = st.userArcs[arcIx];
+    const CadArc& a = st.drawing.userArcs[arcIx];
     const double dcx = static_cast<double>(a.cx);
     const double dcy = static_cast<double>(a.cy);
     const double dr = std::fabs(static_cast<double>(a.r));
@@ -24629,10 +24629,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
-    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+  for (size_t elIx = 0; elIx < st.drawing.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.userEllAttrs, elIx))
       continue;
-    const CadEllipse& el = st.userEllipses[elIx];
+    const CadEllipse& el = st.drawing.userEllipses[elIx];
     // Quantize through the DXF text grid so this sweep agrees with the header sweep in
     // DxfIo.cpp (issue #113). Without it a `ratio` like 0.3333333 loses ~3e-7 on write and
     // moves the extents by ~1e-5; the header then describes a different drawing than the
@@ -24666,38 +24666,38 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // REQ-443: the curve itself, not its control polygon - a control point can sit well outside it.
   {
     std::vector<ray3d::Vec3> sp;
-    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
-      if (EntityHiddenInViewport(vpFilter, st.cadSplineAttrs, si))
+    for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
+      if (EntityHiddenInViewport(vpFilter, st.drawing.cadSplineAttrs, si))
         continue;
-      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+      spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &sp);
       for (const ray3d::Vec3& v : sp)
         consider(v.x, v.y);
     }
   }
   // REQ-480 alignments: the exact geometry's bounds (arcs bounded by their extreme points), so ZOOM EXTENTS
   // frames a drawing that holds only an alignment, grown to take in its labels (D-2026-11-04-c).
-  for (const alignment::Alignment& al : st.alignments) {
+  for (const alignment::Alignment& al : st.drawing.alignments) {
     alignment::Point2 mn{}, mx{};
     if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
       continue;
     consider(mn.x, mn.y);
     consider(mx.x, mx.y);
   }
-  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
+  for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointAttrs, pi))
       continue;
-    consider(st.cadPoints[pi].x, st.cadPoints[pi].y);
+    consider(st.drawing.cadPoints[pi].x, st.drawing.cadPoints[pi].y);
   }
 
-  const auto& PO = st.userPolylineOffsets;
+  const auto& PO = st.drawing.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
-      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userPolylineAttrs, pi))
         continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       for (int vi = v0; vi < v1; ++vi) {
-        consider(st.vertex(static_cast<size_t>(vi)).x, st.vertex(static_cast<size_t>(vi)).y);
+        consider(st.drawing.vertex(static_cast<size_t>(vi)).x, st.drawing.vertex(static_cast<size_t>(vi)).y);
       }
     }
   }
@@ -24706,10 +24706,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // holding only feature lines lands here, so missing it would mean ZOOM EXTENTS reporting
   // "nothing to frame" on a drawing that plainly has content.
   {
-    const auto& FV = st.featureLineVerts;
-    const auto& FO = st.featureLineOffsets;
+    const auto& FV = st.drawing.featureLineVerts;
+    const auto& FO = st.drawing.featureLineOffsets;
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
-      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+      if (EntityHiddenInViewport(vpFilter, st.drawing.featureLineAttrs, fi))
         continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
@@ -24722,20 +24722,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
-    if (EntityHiddenInViewport(vpFilter, st.cadFilledRegionAttrs, fri))
+  for (size_t fri = 0; fri < st.drawing.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadFilledRegionAttrs, fri))
       continue;
-    const CadFilledRegion& fr = st.cadFilledRegions[fri];
+    const CadFilledRegion& fr = st.drawing.cadFilledRegions[fri];
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
   }
 
   // Meshes (REQ-063). Their precomputed bounds, not their vertices: this path runs for small
   // drawings, and "small" counts entities — one mesh can still hold two million triangles.
-  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+  for (size_t mi = 0; mi < st.drawing.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMeshAttrs, mi))
       continue;
-    const auto& mp = st.cadMeshes[mi];
+    const auto& mp = st.drawing.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -24748,10 +24748,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // Point clouds (REQ-171). Only the points currently resident are known here (ADR-060 — the
   // out-of-core cache may hold more than is loaded), so extents reflect what is actually resident,
   // same as any other geometry store.
-  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
-    if (EntityHiddenInViewport(vpFilter, st.cadPointCloudAttrs, pci))
+  for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointCloudAttrs, pci))
       continue;
-    const auto& pc = st.cadPointClouds[pci];
+    const auto& pc = st.drawing.cadPointClouds[pci];
     if (!pc)
       continue;
     for (size_t i = 0; i + 2 < pc->pointsXyz.size(); i += 3)
@@ -24761,10 +24761,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // B-rep solids (REQ-313). Their ANALYTIC bounds, not their tessellation: a sphere has two
   // vertices and a torus four, so a bounds walk over stored points would miss almost the whole
   // solid, and the tessellation may not have been generated yet at all.
-  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadSolidAttrs, soi))
+  for (size_t soi = 0; soi < st.drawing.cadSolids.size(); ++soi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadSolidAttrs, soi))
       continue;
-    const CadSolidPtr& sp = st.cadSolids[soi];
+    const CadSolidPtr& sp = st.drawing.cadSolids[soi];
     if (!sp)
       continue;
     const brep::Bounds sb = brep::ComputeBounds(*sp);
@@ -24774,12 +24774,12 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(sb.mx.x, sb.mx.y);
   }
 
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadBlockRefAttrs, bi))
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadBlockRefAttrs, bi))
       continue;
     std::vector<CadBlockWorldSolid> ws;
-    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi],
-                               bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{},
+    CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi],
+                               bi < st.drawing.cadBlockRefAttrs.size() ? st.drawing.cadBlockRefAttrs[bi] : EntityAttributes{},
                                &ws);
     for (const CadBlockWorldSolid& w : ws) {
       if (!w.solid)
@@ -24795,10 +24795,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadSurfaceAttrs, si))
       continue;
-    const CadSurface& s = st.cadSurfaces[si];
+    const CadSurface& s = st.drawing.cadSurfaces[si];
     if (!s.tin)
       continue;
     const TinPlanBounds sb = ComputeTinPlanBounds(s.tin->vertsXyz);
@@ -24828,7 +24828,7 @@ bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* o
   // rectangle (`SectionClipIndicatorQuad` pads a zero span).
   bool haveZ = false;
   double mnZ = 0.0, mxZ = 0.0;
-  for (const CadSolidPtr& sp : st.cadSolids) {
+  for (const CadSolidPtr& sp : st.drawing.cadSolids) {
     if (!sp)
       continue;
     const brep::Bounds b = brep::ComputeBounds(*sp);
@@ -24883,10 +24883,10 @@ inline void EntityBoxGrowZ(EntityBox& b, double z, bool first) {
 // \p vpFilter as on ComputeWorldExtents (REQ-123): both sweeps must agree, or the robust path and
 // the small-drawing path would answer differently for the same viewport.
 void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, const Viewport* vpFilter) {
-  if (st.lineStoreWellFormed()) {
-    for (size_t i = 0; i < st.lineCount(); ++i) {
-      const CadLineRecord ln = st.line(i);
-      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i))
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = st.drawing.line(i);
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userLineAttrs, i))
         continue;
       EntityBox b{};
       b.mnX = std::min(static_cast<double>(ln.x0), static_cast<double>(ln.x1));
@@ -24900,11 +24900,11 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       out.push_back(b);
     }
   }
-  if (st.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
-      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci))
+  if (st.drawing.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userCircleAttrs, ci))
         continue;
-      const CadCircleRecord c = st.circle(ci);
+      const CadCircleRecord c = st.drawing.circle(ci);
       const double cx = c.cx;
       const double cy = c.cy;
       const double r = std::fabs(c.r);
@@ -24919,16 +24919,16 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.cy = cy;
       // A tilted circle (REQ-312) rises and falls by up to its radius; a flat one sits at its Z.
       const size_t ni = ci * 3;
-      const bool flat = ni + 2 >= st.userCircleNormals.size() ||
-                        IsFlatNormal(st.userCircleNormals[ni], st.userCircleNormals[ni + 1],
-                                     st.userCircleNormals[ni + 2]);
+      const bool flat = ni + 2 >= st.drawing.userCircleNormals.size() ||
+                        IsFlatNormal(st.drawing.userCircleNormals[ni], st.drawing.userCircleNormals[ni + 1],
+                                     st.drawing.userCircleNormals[ni + 2]);
       const double cz = c.cz;
       EntityBoxGrowZ(b, flat ? cz : cz - r, true);
       EntityBoxGrowZ(b, flat ? cz : cz + r, false);
       out.push_back(b);
     }
   }
-  for (const SurveyPoint& p : st.surveyPoints) {
+  for (const SurveyPoint& p : st.drawing.surveyPoints) {
     if (LayerHiddenInViewport(vpFilter, p.layer))
       continue;
     EntityBox b{};
@@ -24937,8 +24937,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBoxGrowZ(b, p.elevation, true);
     out.push_back(b);
   }
-  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
-    if (EntityHiddenInViewport(vpFilter, st.cadPositionMarkerAttrs, mi))
+  for (size_t mi = 0; mi < st.drawing.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPositionMarkerAttrs, mi))
       continue;
     float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
     CadPositionMarkerLocalBox(st, mi, &mnX, &mnY, &mxX, &mxY);
@@ -24947,15 +24947,15 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mnY = mnY;
     b.mxX = mxX;
     b.mxY = mxY;
-    b.cx = st.cadPositionMarkers[mi].x;
-    b.cy = st.cadPositionMarkers[mi].y;
-    EntityBoxGrowZ(b, st.cadPositionMarkers[mi].z, true);
+    b.cx = st.drawing.cadPositionMarkers[mi].x;
+    b.cy = st.drawing.cadPositionMarkers[mi].y;
+    EntityBoxGrowZ(b, st.drawing.cadPositionMarkers[mi].z, true);
     out.push_back(b);
   }
-  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
-    if (EntityHiddenInViewport(vpFilter, st.cadMultileaderAttrs, li))
+  for (size_t li = 0; li < st.drawing.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMultileaderAttrs, li))
       continue;
-    const CadMultileader& ml = st.cadMultileaders[li];
+    const CadMultileader& ml = st.drawing.cadMultileaders[li];
     float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
     CadMultileaderLocalBox(ml, &mnX, &mnY, &mxX, &mxY);
     EntityBox b{};
@@ -24970,15 +24970,15 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     }
     out.push_back(b);
   }
-  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+  for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadAnnotationAttrs, ai))
       continue;
-    const CadAnnotation& a = st.cadAnnotations[ai];
+    const CadAnnotation& a = st.drawing.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
     float amxY = 0.f;
-    CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    CadAnnotationRoughBounds(a, st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     EntityBox b{};
     b.mnX = static_cast<double>(amnX);
     b.mxX = static_cast<double>(amxX);
@@ -24989,11 +24989,11 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
-    if (EntityHiddenInViewport(vpFilter, st.cadTableAttrs, ti))
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadTableAttrs, ti))
       continue;
     float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
-    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    CadTableWorldAabb(st.drawing.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
     EntityBox b{};
     b.mnX = static_cast<double>(tmnX);
     b.mxX = static_cast<double>(tmxX);
@@ -25003,10 +25003,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
-    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+  for (size_t arcIx = 0; arcIx < st.drawing.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.userArcAttrs, arcIx))
       continue;
-    const CadArc& a = st.userArcs[arcIx];
+    const CadArc& a = st.drawing.userArcs[arcIx];
     const double dr = std::fabs(static_cast<double>(a.r));
     if (dr <= 1e-12)
       continue;
@@ -25022,10 +25022,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBoxGrowZ(b, arcFlat ? a.z : a.z + dr, false);
     out.push_back(b);
   }
-  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
-    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+  for (size_t elIx = 0; elIx < st.drawing.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.userEllAttrs, elIx))
       continue;
-    const CadEllipse& el = st.userEllipses[elIx];
+    const CadEllipse& el = st.drawing.userEllipses[elIx];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       continue;
@@ -25045,10 +25045,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
   }
   {  // REQ-443: a spline's box is its curve's, with its elevation range
     std::vector<ray3d::Vec3> sp;
-    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
-      if (EntityHiddenInViewport(vpFilter, st.cadSplineAttrs, si))
+    for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
+      if (EntityHiddenInViewport(vpFilter, st.drawing.cadSplineAttrs, si))
         continue;
-      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+      spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &sp);
       if (sp.empty())
         continue;
       EntityBox b{};
@@ -25069,7 +25069,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       out.push_back(b);
     }
   }
-  for (const alignment::Alignment& al : st.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
+  for (const alignment::Alignment& al : st.drawing.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
     alignment::Point2 mn{}, mx{};
     if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
       continue;
@@ -25083,10 +25083,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
+  for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointAttrs, pi))
       continue;
-    const CadPoint& p = st.cadPoints[pi];
+    const CadPoint& p = st.drawing.cadPoints[pi];
     EntityBox b{};
     b.mnX = b.mxX = p.x;
     b.mnY = b.mxY = p.y;
@@ -25095,10 +25095,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBoxGrowZ(b, p.z, true);
     out.push_back(b);
   }
-  const auto& PO = st.userPolylineOffsets;
+  const auto& PO = st.drawing.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
-      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+      if (EntityHiddenInViewport(vpFilter, st.drawing.userPolylineAttrs, pi))
         continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
@@ -25107,7 +25107,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       EntityBox b{};
       bool any = false;
       for (int vi = v0; vi < v1; ++vi) {
-        const CadPolyVertex pv = st.vertex(static_cast<size_t>(vi));
+        const CadPolyVertex pv = st.drawing.vertex(static_cast<size_t>(vi));
         const double vx = pv.x;
         const double vy = pv.y;
         EntityBoxGrowZ(b, pv.z, !any);
@@ -25132,11 +25132,11 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
 
   // Feature lines (REQ-087) — same CSR walk. Without this, ZOOM EXTENTS frames a drawing as though
   // its feature lines were not there, which is the quiet kind of miss ADR-035 (g) warns about.
-  const auto& FO = st.featureLineOffsets;
-  const auto& FV = st.featureLineVerts;
+  const auto& FO = st.drawing.featureLineOffsets;
+  const auto& FV = st.drawing.featureLineVerts;
   if (FO.size() >= 2) {
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
-      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+      if (EntityHiddenInViewport(vpFilter, st.drawing.featureLineAttrs, fi))
         continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
@@ -25174,10 +25174,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
   // box"). One box per mesh rather than per triangle — the extents pass is an outlier-trimmed
   // statistic over ENTITIES, and feeding it two million triangles would both swamp that statistic
   // and make ZE cost a full mesh walk per invocation.
-  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+  for (size_t mi = 0; mi < st.drawing.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMeshAttrs, mi))
       continue;
-    const auto& mp = st.cadMeshes[mi];
+    const auto& mp = st.drawing.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -25197,10 +25197,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
 
   // Point clouds (REQ-171), one box per cloud — over the resident points (ADR-060: the full cloud
   // may not be loaded), for the same "one box per entity, not per vertex" reason meshes get above.
-  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
-    if (EntityHiddenInViewport(vpFilter, st.cadPointCloudAttrs, pci))
+  for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointCloudAttrs, pci))
       continue;
-    const auto& pc = st.cadPointClouds[pci];
+    const auto& pc = st.drawing.cadPointClouds[pci];
     if (!pc || pc->pointsXyz.size() < 3)
       continue;
     EntityBox b{};
@@ -25221,10 +25221,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
 
   // B-rep solids (REQ-313), one box per solid — from the analytic bounds, for the reason the
   // zoom-extents walk gives: a sphere's two stored vertices describe almost none of it.
-  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
-    if (EntityHiddenInViewport(vpFilter, st.cadSolidAttrs, soi))
+  for (size_t soi = 0; soi < st.drawing.cadSolids.size(); ++soi) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadSolidAttrs, soi))
       continue;
-    const CadSolidPtr& sp = st.cadSolids[soi];
+    const CadSolidPtr& sp = st.drawing.cadSolids[soi];
     if (!sp)
       continue;
     const brep::Bounds bb = brep::ComputeBounds(*sp);
@@ -25243,10 +25243,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
   }
 
   // TIN surfaces (REQ-068), one box per surface — same reasoning as the meshes above.
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadSurfaceAttrs, si))
       continue;
-    const CadSurface& s = st.cadSurfaces[si];
+    const CadSurface& s = st.drawing.cadSurfaces[si];
     if (!s.tin)
       continue;
     const TinPlanBounds sb = ComputeTinPlanBounds(s.tin->vertsXyz);
@@ -25272,10 +25272,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
 /// \ref CollectEntityBoxes so the plan-view extents — which never counted these in their robust
 /// pass — are unchanged by adding them here.
 void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox>& out) {
-  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
-    if (EntityHiddenInViewport(nullptr, st.cadFilledRegionAttrs, fri))
+  for (size_t fri = 0; fri < st.drawing.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(nullptr, st.drawing.cadFilledRegionAttrs, fri))
       continue;
-    const CadFilledRegion& fr = st.cadFilledRegions[fri];
+    const CadFilledRegion& fr = st.drawing.cadFilledRegions[fri];
     if (fr.vertsXyz.size() < 3)
       continue;
     EntityBox b{};
@@ -25292,20 +25292,20 @@ void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
-    if (EntityHiddenInViewport(nullptr, st.cadBlockRefAttrs, bi))
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(nullptr, st.drawing.cadBlockRefAttrs, bi))
       continue;
     float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
-    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    CadBlockWorldAabb(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
     EntityBox b{};
     b.mnX = bmnX;
     b.mxX = bmxX;
     b.mnY = bmnY;
     b.mxY = bmxY;
-    EntityBoxGrowZ(b, st.cadBlockRefs[bi].xf.z, true);
+    EntityBoxGrowZ(b, st.drawing.cadBlockRefs[bi].xf.z, true);
     std::vector<CadBlockWorldSolid> ws;
-    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi],
-                               bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{},
+    CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi],
+                               bi < st.drawing.cadBlockRefAttrs.size() ? st.drawing.cadBlockRefAttrs[bi] : EntityAttributes{},
                                &ws);
     for (const CadBlockWorldSolid& w : ws) {
       if (!w.solid)
@@ -25324,7 +25324,7 @@ void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (const CadPipeRun& r : st.cadPipeRuns) {
+  for (const CadPipeRun& r : st.drawing.cadPipeRuns) {
     if (r.vertsXyz.size() < 3)
       continue;
     double odFeet = 0.0;
@@ -25353,10 +25353,10 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
-  ents.reserve(st.lineCount() + st.circleCount() + st.userArcs.size() +
-               st.userEllipses.size() + st.cadSplines.size() + st.cadPoints.size() + st.cadAnnotations.size() +
-               st.surveyPoints.size() +
-               (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
+  ents.reserve(st.drawing.lineCount() + st.drawing.circleCount() + st.drawing.userArcs.size() +
+               st.drawing.userEllipses.size() + st.drawing.cadSplines.size() + st.drawing.cadPoints.size() + st.drawing.cadAnnotations.size() +
+               st.drawing.surveyPoints.size() +
+               (st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.size() - 1));
   CollectEntityBoxes(st, ents, vpFilter);
 
   if (ents.size() < 16)
@@ -26203,20 +26203,20 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
     return;
   }
   PushUndoSnapshot(st, closed ? "Feature line (closed)" : "Feature line");
-  if (st.featureLineOffsets.empty())
-    st.featureLineOffsets.push_back(0);
-  const int baseVert = st.featureLineOffsets.back();
-  st.featureLineVerts.insert(st.featureLineVerts.end(), st.featureLineDraftVerts.begin(),
+  if (st.drawing.featureLineOffsets.empty())
+    st.drawing.featureLineOffsets.push_back(0);
+  const int baseVert = st.drawing.featureLineOffsets.back();
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), st.featureLineDraftVerts.begin(),
                              st.featureLineDraftVerts.end());
-  st.featureLineElevPt.insert(st.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
+  st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
                               st.featureLineDraftElevPt.end());
-  st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
-  st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+  st.drawing.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+  st.drawing.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
   CadFeatureLineInfo info;
   info.name = st.featureLineDraftName;
-  st.featureLineInfo.push_back(std::move(info));
-  st.featureLineAttrs.push_back(
-      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
+  st.drawing.featureLineInfo.push_back(std::move(info));
+  st.drawing.featureLineAttrs.push_back(
+      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.drawing.featureLineInfo.back().name));  // REQ-361
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   st.featureLineDraftVerts.clear();
@@ -26299,8 +26299,8 @@ std::string GradingDefaultSurface(const AppCommandState& st) {
   // quietly regraded to whatever surface happens to be left.
   if (st.gradingEditId != 0)
     return std::string();
-  if (st.cadSurfaces.size() == 1)
-    return st.cadSurfaces[0].name;
+  if (st.drawing.cadSurfaces.size() == 1)
+    return st.drawing.cadSurfaces[0].name;
   return std::string();
 }
 
@@ -26309,8 +26309,8 @@ std::string GradingDefaultSurface(const AppCommandState& st) {
 int GradingBaselineIndex(const AppCommandState& st) {
   if (st.gradingBaselineId == 0)
     return -1;
-  const int ix = FindEntityIndexById(st.featureLineAttrs, st.gradingBaselineId);
-  if (ix < 0 || static_cast<size_t>(ix) + 1 >= st.featureLineOffsets.size())
+  const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, st.gradingBaselineId);
+  if (ix < 0 || static_cast<size_t>(ix) + 1 >= st.drawing.featureLineOffsets.size())
     return -1;
   return ix;
 }
@@ -26318,9 +26318,9 @@ int GradingBaselineIndex(const AppCommandState& st) {
 /// True when the chosen baseline is an open line, which is the only case that needs a side.
 bool GradingBaselineIsOpen(const AppCommandState& st) {
   const int i = GradingBaselineIndex(st);
-  if (i < 0 || static_cast<size_t>(i) >= st.featureLineClosed.size())
+  if (i < 0 || static_cast<size_t>(i) >= st.drawing.featureLineClosed.size())
     return false;
-  return st.featureLineClosed[static_cast<size_t>(i)] == 0;
+  return st.drawing.featureLineClosed[static_cast<size_t>(i)] == 0;
 }
 
 /// The options prompt, naming everything it already has — the shape every other command with
@@ -26370,10 +26370,10 @@ std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0)
       continue;
-    if (static_cast<size_t>(e.index) >= st.featureLineAttrs.size())
+    if (static_cast<size_t>(e.index) >= st.drawing.featureLineAttrs.size())
       continue;
     ++n;
-    id = st.featureLineAttrs[static_cast<size_t>(e.index)].id;
+    id = st.drawing.featureLineAttrs[static_cast<size_t>(e.index)].id;
   }
   if (outCount)
     *outCount = n;
@@ -26386,17 +26386,17 @@ std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
 /// result's baseline is gone - rebuilding it from nothing would be inventing a design.
 bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<std::string>& log) {
   st.gradingEditId = 0;
-  const int ix = FindEntityIndexById(st.featureLineAttrs, id);
+  const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, id);
   const CadFeatureLineInfo* info =
-      (ix >= 0 && static_cast<size_t>(ix) < st.featureLineInfo.size())
-          ? &st.featureLineInfo[static_cast<size_t>(ix)]
+      (ix >= 0 && static_cast<size_t>(ix) < st.drawing.featureLineInfo.size())
+          ? &st.drawing.featureLineInfo[static_cast<size_t>(ix)]
           : nullptr;
   if (info == nullptr || !info->grading) {
     st.gradingBaselineId = id;
     return true;
   }
   const CadGradingDefinition& def = *info->grading;
-  if (FindEntityIndexById(st.featureLineAttrs, def.baselineId) < 0) {
+  if (FindEntityIndexById(st.drawing.featureLineAttrs, def.baselineId) < 0) {
     log.push_back("GRADING - the baseline of \"" + info->name +
                   "\" is gone, so it cannot be rebuilt. It is left as it is.");
     return false;
@@ -26411,7 +26411,7 @@ bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<s
   st.gradingDistanceGradePercent = def.distanceGradePercent;
   st.gradingSideChosen = true;
   const int si = FindSurfaceIndexById(st, def.surfaceId);
-  st.gradingSurface = si >= 0 ? st.cadSurfaces[static_cast<size_t>(si)].name : std::string();
+  st.gradingSurface = si >= 0 ? st.drawing.cadSurfaces[static_cast<size_t>(si)].name : std::string();
   log.push_back("GRADING - editing \"" + info->name + "\". Enter rebuilds it in place.");
   if (si < 0 && def.target == CadGradingDefinition::Target::Surface)
     log.push_back("GRADING - its target surface is gone. Type S to choose another.");
@@ -26423,20 +26423,20 @@ bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<s
 /// line's offset moves by the change in count.
 void ReplaceFeatureLineVertices(AppCommandState& st, size_t li, const std::vector<double>& xyz,
                                 const std::vector<uint8_t>& elevPt, bool closed) {
-  const int a = st.featureLineOffsets[li];
-  const int b = st.featureLineOffsets[li + 1];
+  const int a = st.drawing.featureLineOffsets[li];
+  const int b = st.drawing.featureLineOffsets[li + 1];
   const int n = static_cast<int>(xyz.size() / 3);
-  st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
-                            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
-  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+  st.drawing.featureLineVerts.erase(st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                            st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
                              xyz.begin(), xyz.end());
-  if (st.featureLineElevPt.size() < static_cast<size_t>(b))
-    st.featureLineElevPt.resize(static_cast<size_t>(b), 0);
-  st.featureLineElevPt.erase(st.featureLineElevPt.begin() + a, st.featureLineElevPt.begin() + b);
-  st.featureLineElevPt.insert(st.featureLineElevPt.begin() + a, elevPt.begin(), elevPt.end());
-  for (size_t k = li + 1; k < st.featureLineOffsets.size(); ++k)
-    st.featureLineOffsets[k] += n - (b - a);
-  st.featureLineClosed[li] = static_cast<uint8_t>(closed ? 1 : 0);
+  if (st.drawing.featureLineElevPt.size() < static_cast<size_t>(b))
+    st.drawing.featureLineElevPt.resize(static_cast<size_t>(b), 0);
+  st.drawing.featureLineElevPt.erase(st.drawing.featureLineElevPt.begin() + a, st.drawing.featureLineElevPt.begin() + b);
+  st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.begin() + a, elevPt.begin(), elevPt.end());
+  for (size_t k = li + 1; k < st.drawing.featureLineOffsets.size(); ++k)
+    st.drawing.featureLineOffsets[k] += n - (b - a);
+  st.drawing.featureLineClosed[li] = static_cast<uint8_t>(closed ? 1 : 0);
 }
 
 /// Snapshot the strips between corresponding baseline and daylight stations.
@@ -26455,8 +26455,8 @@ CadGradingGroupMember BakeGradingMember(const AppCommandState &st,
     strip.reserve(12);
     for (const auto &v : {baseline.verts[i], baseline.verts[j],
                           daylight.verts[j], daylight.verts[i]}) {
-      strip.push_back(v[0] - st.worldDocumentOriginX);
-      strip.push_back(v[1] - st.worldDocumentOriginY);
+      strip.push_back(v[0] - st.drawing.worldDocumentOriginX);
+      strip.push_back(v[1] - st.drawing.worldDocumentOriginY);
       strip.push_back(v[2]);
     }
     strips.push_back(std::move(strip));
@@ -26476,7 +26476,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   const std::string surfName = GradingDefaultSurface(st);
   const int si = st.gradingTarget == CadGradingDefinition::Target::Surface
                      ? FindSurfaceIndex(st, surfName) : -1;
-  const CadSurface* surf = si >= 0 ? &st.cadSurfaces[static_cast<size_t>(si)] : nullptr;
+  const CadSurface* surf = si >= 0 ? &st.drawing.cadSurfaces[static_cast<size_t>(si)] : nullptr;
   std::unique_ptr<ISurfaceQuery> ground;
   if (st.gradingTarget == CadGradingDefinition::Target::Surface) {
     if (!surf) {
@@ -26490,7 +26490,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     }
   }
 
-  const bool closed = st.featureLineClosed[static_cast<size_t>(bi)] != 0;
+  const bool closed = st.drawing.featureLineClosed[static_cast<size_t>(bi)] != 0;
   if (!closed && !st.gradingSideChosen) {
     // REQ-398: an open baseline has no intrinsic outward, so it must be told rather than guessed.
     log.push_back("GRADING - this baseline is open, so it has no outward side. Type D to choose "
@@ -26498,8 +26498,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
 
-  const int v0 = st.featureLineOffsets[static_cast<size_t>(bi)];
-  const int v1 = st.featureLineOffsets[static_cast<size_t>(bi) + 1];
+  const int v0 = st.drawing.featureLineOffsets[static_cast<size_t>(bi)];
+  const int v1 = st.drawing.featureLineOffsets[static_cast<size_t>(bi) + 1];
   const int nv = v1 - v0;
   if (nv < 2) {
     log.push_back("GRADING - the baseline has too few vertices to have a direction.");
@@ -26509,8 +26509,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<double> xy;
   xy.reserve(static_cast<size_t>(nv) * 2);
   for (int k = 0; k < nv; ++k) {
-    xy.push_back(st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 0]);
-    xy.push_back(st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 1]);
+    xy.push_back(st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 0]);
+    xy.push_back(st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 1]);
   }
   std::vector<double> nxy;
   if (!BaselineOutwardNormals(xy, closed, st.gradingSideLeft, &nxy)) {
@@ -26552,9 +26552,9 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   int offSurface = 0, neverMet = 0, degenerate = 0;
 
   for (int k = 0; k < nv; ++k) {
-    const double bx = st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 0];
-    const double by = st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 1];
-    const double bz = st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 2];
+    const double bx = st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 0];
+    const double by = st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 1];
+    const double bz = st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 2];
     const double dx = nxy[static_cast<size_t>(k) * 2 + 0];
     const double dy = nxy[static_cast<size_t>(k) * 2 + 1];
     if (dx == 0.0 && dy == 0.0) {
@@ -26646,8 +26646,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   EnsureEntityIds(st);
   CadGradingDefinition def;
   def.baselineId = st.gradingBaselineId;
-  def.surfaceId = static_cast<size_t>(si) < st.cadSurfaceAttrs.size()
-                      ? st.cadSurfaceAttrs[static_cast<size_t>(si)].id
+  def.surfaceId = static_cast<size_t>(si) < st.drawing.cadSurfaceAttrs.size()
+                      ? st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id
                       : 0;
   def.cutRun = slopes.cutRun;
   def.fillRun = slopes.fillRun;
@@ -26661,8 +26661,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
 
   std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
   if (st.gradingEditId != 0) {
-    for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
-      const auto &group = st.cadSurfaces[i];
+    for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i) {
+      const auto &group = st.drawing.cadSurfaces[i];
       if (!group.gradingGroup)
         continue;
       const auto it = std::find_if(
@@ -26682,8 +26682,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
       }
       daylight.closed = emitClosed;
       for (size_t v = 0; v < out.size(); v += 3)
-        daylight.verts.push_back({out[v] + st.worldDocumentOriginX,
-                                  out[v + 1] + st.worldDocumentOriginY,
+        daylight.verts.push_back({out[v] + st.drawing.worldDocumentOriginX,
+                                  out[v + 1] + st.drawing.worldDocumentOriginY,
                                   out[v + 2]});
       if (baseline.verts.size() != daylight.verts.size() || baseline.closed != daylight.closed) {
         log.push_back("GRADING - incomplete group station correspondence; nothing changed.");
@@ -26696,8 +26696,8 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
         std::vector<double> ring;
         ring.reserve(daylight.verts.size() * 3);
         for (const auto& point : daylight.verts)
-          ring.insert(ring.end(), {point[0] - st.worldDocumentOriginX,
-                                   point[1] - st.worldDocumentOriginY, point[2]});
+          ring.insert(ring.end(), {point[0] - st.drawing.worldDocumentOriginX,
+                                   point[1] - st.drawing.worldDocumentOriginY, point[2]});
         rebuilt.infill = true;
         rebuilt.strips = std::make_shared<const std::vector<std::vector<double>>>(
             std::vector<std::vector<double>>{std::move(ring)});
@@ -26716,49 +26716,49 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   size_t resultIx = 0;
   const bool editing = st.gradingEditId != 0;
   if (editing) {
-    const int ti = FindEntityIndexById(st.featureLineAttrs, st.gradingEditId);
-    if (ti < 0 || static_cast<size_t>(ti) + 1 >= st.featureLineOffsets.size() ||
-        static_cast<size_t>(ti) >= st.featureLineInfo.size()) {
+    const int ti = FindEntityIndexById(st.drawing.featureLineAttrs, st.gradingEditId);
+    if (ti < 0 || static_cast<size_t>(ti) + 1 >= st.drawing.featureLineOffsets.size() ||
+        static_cast<size_t>(ti) >= st.drawing.featureLineInfo.size()) {
       log.push_back("GRADING - the grading being edited is gone; nothing was changed.");
       return;
     }
     resultIx = static_cast<size_t>(ti);
     PushUndoSnapshot(st, "Edit grading");
     ReplaceFeatureLineVertices(st, resultIx, out, outElev, emitClosed);
-    st.featureLineInfo[resultIx].description = description;
-    st.featureLineInfo[resultIx].grading = def;
+    st.drawing.featureLineInfo[resultIx].description = description;
+    st.drawing.featureLineInfo[resultIx].grading = def;
   } else {
     PushUndoSnapshot(st, "Grading daylight line");
-    if (st.featureLineOffsets.empty())
-      st.featureLineOffsets.push_back(0);
-    const int baseVert = st.featureLineOffsets.back();
-    st.featureLineVerts.insert(st.featureLineVerts.end(), out.begin(), out.end());
-    st.featureLineElevPt.insert(st.featureLineElevPt.end(), outElev.begin(), outElev.end());
-    st.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
-    st.featureLineClosed.push_back(static_cast<uint8_t>(emitClosed ? 1 : 0));
+    if (st.drawing.featureLineOffsets.empty())
+      st.drawing.featureLineOffsets.push_back(0);
+    const int baseVert = st.drawing.featureLineOffsets.back();
+    st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), out.begin(), out.end());
+    st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), outElev.begin(), outElev.end());
+    st.drawing.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
+    st.drawing.featureLineClosed.push_back(static_cast<uint8_t>(emitClosed ? 1 : 0));
 
     CadFeatureLineInfo info;
-    const std::string baseName = (static_cast<size_t>(bi) < st.featureLineInfo.size() &&
-                                  !st.featureLineInfo[static_cast<size_t>(bi)].name.empty())
-                                     ? st.featureLineInfo[static_cast<size_t>(bi)].name
+    const std::string baseName = (static_cast<size_t>(bi) < st.drawing.featureLineInfo.size() &&
+                                  !st.drawing.featureLineInfo[static_cast<size_t>(bi)].name.empty())
+                                     ? st.drawing.featureLineInfo[static_cast<size_t>(bi)].name
                                      : std::string("Baseline");
     info.name = baseName + " Daylight";
     info.description = description;
     info.grading = def;
-    st.featureLineInfo.push_back(std::move(info));
-    st.featureLineAttrs.push_back(
-        MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
-    resultIx = st.featureLineInfo.size() - 1;
+    st.drawing.featureLineInfo.push_back(std::move(info));
+    st.drawing.featureLineAttrs.push_back(
+        MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.drawing.featureLineInfo.back().name));  // REQ-361
+    resultIx = st.drawing.featureLineInfo.size() - 1;
   }
   BumpCadGpuCache(st);
 
   for (auto &entry : rebuiltGroups) {
-    st.cadSurfaces[entry.first] = std::move(entry.second);
-    st.cadSurfaces[entry.first].builtAtRevision = st.cadGpuRevision;
-    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[entry.first].name);
+    st.drawing.cadSurfaces[entry.first] = std::move(entry.second);
+    st.drawing.cadSurfaces[entry.first].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.drawing.cadSurfaces[entry.first].name);
   }
 
-  log.push_back("GRADING - daylight line \"" + st.featureLineInfo[resultIx].name + "\" " +
+  log.push_back("GRADING - daylight line \"" + st.drawing.featureLineInfo[resultIx].name + "\" " +
                 (editing ? "rebuilt" : "created") + ", " + std::to_string(got) + " of " +
                 std::to_string(nv) + " stations daylighted.");
   log.push_back("GRADING - cut " + FormatSlope(slopes.cutRun) + " at " + std::to_string(cut) +
@@ -26785,14 +26785,14 @@ namespace {
 bool SnapshotGradingMember(const AppCommandState &st, std::uint64_t id,
                            CadGradingGroupMember &member,
                            std::vector<std::string> &log) {
-  const int ix = FindEntityIndexById(st.featureLineAttrs, id);
-  if (ix < 0 || static_cast<size_t>(ix) >= st.featureLineInfo.size() ||
-      !st.featureLineInfo[static_cast<size_t>(ix)].grading) {
+  const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, id);
+  if (ix < 0 || static_cast<size_t>(ix) >= st.drawing.featureLineInfo.size() ||
+      !st.drawing.featureLineInfo[static_cast<size_t>(ix)].grading) {
     log.push_back(
         "GRADINGGROUP - select grading results, not ordinary feature lines.");
     return false;
   }
-  const auto &def = *st.featureLineInfo[static_cast<size_t>(ix)].grading;
+  const auto &def = *st.drawing.featureLineInfo[static_cast<size_t>(ix)].grading;
   ResolvedChain baseline, daylight;
   if (!ResolveDefinitionChain(st, def.baselineId, false, baseline) ||
       !ResolveDefinitionChain(st, id, false, daylight) ||
@@ -26826,7 +26826,7 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
   }
   const int existing = FindSurfaceIndex(st, name);
   if (existing >= 0 &&
-      !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+      !st.drawing.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
     log.push_back("GRADINGGROUP - that name belongs to an ordinary surface. "
                   "Choose another name.");
     return;
@@ -26836,16 +26836,16 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
       log.push_back("GRADINGGROUP - no group named \"" + name + "\".");
       return;
     }
-    const auto &group = st.cadSurfaces[static_cast<size_t>(existing)];
+    const auto &group = st.drawing.cadSurfaces[static_cast<size_t>(existing)];
     log.push_back("GRADINGGROUP - \"" + name +
                   "\": " + std::to_string(group.gradingMembers.size()) +
                   " member(s). Use VOLUMES <ground surface>, " + name +
                   " for cut/fill/net.");
     for (const auto &member : group.gradingMembers) {
-      const int ix = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
+      const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, member.gradingId);
       const std::string label =
-          ix >= 0 && static_cast<size_t>(ix) < st.featureLineInfo.size()
-              ? st.featureLineInfo[static_cast<size_t>(ix)].name
+          ix >= 0 && static_cast<size_t>(ix) < st.drawing.featureLineInfo.size()
+              ? st.drawing.featureLineInfo[static_cast<size_t>(ix)].name
               : "missing grading";
       log.push_back("  " + label + " (id " + std::to_string(member.gradingId) +
                     ")");
@@ -26860,11 +26860,11 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
   std::vector<std::uint64_t> ids;
   for (const auto &e : st.selection) {
     if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.featureLineAttrs.size()) {
+        static_cast<size_t>(e.index) >= st.drawing.featureLineAttrs.size()) {
       log.push_back("GRADINGGROUP - select only grading results.");
       return;
     }
-    const auto id = st.featureLineAttrs[static_cast<size_t>(e.index)].id;
+    const auto id = st.drawing.featureLineAttrs[static_cast<size_t>(e.index)].id;
     if (std::find(ids.begin(), ids.end(), id) == ids.end())
       ids.push_back(id);
   }
@@ -26873,7 +26873,7 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
                   "List to inspect the group.");
     return;
   }
-  auto candidates = st.cadSurfaces;
+  auto candidates = st.drawing.cadSurfaces;
   const size_t target =
       existing < 0 ? candidates.size() : static_cast<size_t>(existing);
   if (existing < 0) {
@@ -26923,17 +26923,17 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
     }
   }
   PushUndoSnapshot(st, "Grading group membership");
-  st.cadSurfaces = std::move(candidates);
+  st.drawing.cadSurfaces = std::move(candidates);
   if (existing < 0)
-    st.cadSurfaceAttrs.push_back(
+    st.drawing.cadSurfaceAttrs.push_back(
         MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
   BumpCadGpuCache(st);
   for (const auto i : changed) {
-    st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision;
-    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name);
+    st.drawing.cadSurfaces[i].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.drawing.cadSurfaces[i].name);
   }
   log.push_back("GRADINGGROUP - \"" + name + "\": " +
-                std::to_string(st.cadSurfaces[target].gradingMembers.size()) +
+                std::to_string(st.drawing.cadSurfaces[target].gradingMembers.size()) +
                 " member(s). Use VOLUMES <ground surface>, " + name +
                 " for cut/fill/net.");
 }
@@ -26945,7 +26945,7 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
     return;
   }
   int existing = FindSurfaceIndex(st, name);
-  if (existing >= 0 && !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+  if (existing >= 0 && !st.drawing.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
     log.push_back("GRADINGINFILL - that name belongs to an ordinary surface.");
     return;
   }
@@ -26953,25 +26953,25 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
   std::vector<CadGradingGroupMember> infills;
   for (const auto& selected : st.selection) {
     if (selected.type != SelectedEntity::Type::FeatureLine || selected.index < 0 ||
-        static_cast<size_t>(selected.index) >= st.featureLineAttrs.size() ||
-        static_cast<size_t>(selected.index) >= st.featureLineClosed.size() ||
-        !st.featureLineClosed[static_cast<size_t>(selected.index)]) {
+        static_cast<size_t>(selected.index) >= st.drawing.featureLineAttrs.size() ||
+        static_cast<size_t>(selected.index) >= st.drawing.featureLineClosed.size() ||
+        !st.drawing.featureLineClosed[static_cast<size_t>(selected.index)]) {
       log.push_back("GRADINGINFILL - select only closed feature lines.");
       return;
     }
     const size_t ix = static_cast<size_t>(selected.index);
-    const int first = st.featureLineOffsets[ix], last = st.featureLineOffsets[ix + 1];
+    const int first = st.drawing.featureLineOffsets[ix], last = st.drawing.featureLineOffsets[ix + 1];
     if (last - first < 3) {
       log.push_back("GRADINGINFILL - a boundary needs at least three vertices.");
       return;
     }
     CadGradingGroupMember member;
-    member.gradingId = st.featureLineAttrs[ix].id;
+    member.gradingId = st.drawing.featureLineAttrs[ix].id;
     member.infill = true;
     std::vector<double> ring;
     for (int v = first; v < last; ++v) {
       const size_t p = static_cast<size_t>(v) * 3;
-      const double x = st.featureLineVerts[p], y = st.featureLineVerts[p + 1], z = st.featureLineVerts[p + 2];
+      const double x = st.drawing.featureLineVerts[p], y = st.drawing.featureLineVerts[p + 1], z = st.drawing.featureLineVerts[p + 2];
       if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
         log.push_back("GRADINGINFILL - boundary contains a nonfinite coordinate."); return;
       }
@@ -26988,7 +26988,7 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
   if (infills.empty()) {
     log.push_back("GRADINGINFILL - select closed feature lines first."); return;
   }
-  auto candidates = st.cadSurfaces;
+  auto candidates = st.drawing.cadSurfaces;
   const size_t target = existing < 0 ? candidates.size() : static_cast<size_t>(existing);
   if (existing < 0) { CadSurface group; group.name = name; group.gradingGroup = true; candidates.push_back(std::move(group)); }
   std::vector<size_t> changed;
@@ -27009,10 +27009,10 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
     }
   }
   PushUndoSnapshot(st, "Grading group infill");
-  st.cadSurfaces = std::move(candidates);
-  if (existing < 0) st.cadSurfaceAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
+  st.drawing.cadSurfaces = std::move(candidates);
+  if (existing < 0) st.drawing.cadSurfaceAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
   BumpCadGpuCache(st);
-  for (size_t i : changed) { st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision; MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name); }
+  for (size_t i : changed) { st.drawing.cadSurfaces[i].builtAtRevision = st.cadGpuRevision; MarkVolumeSurfacesDirtyForParent(st, st.drawing.cadSurfaces[i].name); }
   log.push_back("GRADINGINFILL - added/refreshed " + std::to_string(infills.size()) + " boundary member(s) in \"" + name + "\".");
 }
 
@@ -27032,13 +27032,13 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
                 "selected grading results. Type T for Surface, Distance, Absolute, or Relative targets; "
                 "use GRADINGINFILL <group> on a selected closed feature line to fill its interior.");
 
-  if (st.featureLineOffsets.size() < 2) {
+  if (st.drawing.featureLineOffsets.size() < 2) {
     log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
                   "is the design edge the slopes come off.");
     st.active = AppCommandState::Kind::None;
     return;
   }
-  if (st.cadSurfaces.empty())
+  if (st.drawing.cadSurfaces.empty())
     log.push_back("GRADING - the drawing has no surfaces. Type T to choose Distance, Absolute, or Relative elevation, or build a surface for Surface grading.");
   int n = 0;
   const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
@@ -27152,7 +27152,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       }
       if (FindSurfaceIndex(st, tr) < 0) {
         std::string names;
-        for (const CadSurface& s : st.cadSurfaces)
+        for (const CadSurface& s : st.drawing.cadSurfaces)
           names += (names.empty() ? "" : ", ") + s.name;
         log.push_back("GRADING - no surface named \"" + tr + "\"." +
                       (names.empty() ? "" : " Surfaces: " + names + "."));
@@ -27196,7 +27196,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       }
       if (low == "s" || low == "surface") {
         std::string names;
-        for (const CadSurface& s : st.cadSurfaces)
+        for (const CadSurface& s : st.drawing.cadSurfaces)
           names += (names.empty() ? "" : ", ") + s.name;
         st.gradingPhase = P::WaitSurfaceName;
         log.push_back(names.empty() ? "GRADING - the drawing has no surfaces to grade to."
@@ -27263,13 +27263,13 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
     log.push_back("GRADING - that is not a feature line. Pick the design edge to grade from.");
     return;
   }
-  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.featureLineAttrs.size())
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.drawing.featureLineAttrs.size())
     return;
   EnsureEntityIds(st);
   ClearCadSelection(st);
   st.selection.push_back(hit);
   // REQ-076 stable id. A grading result whose baseline is gone ends the command, left as it is.
-  if (!GradingTakeFeatureLine(st, st.featureLineAttrs[static_cast<size_t>(hit.index)].id, log)) {
+  if (!GradingTakeFeatureLine(st, st.drawing.featureLineAttrs[static_cast<size_t>(hit.index)].id, log)) {
     st.active = AppCommandState::Kind::None;
     return;
   }
@@ -27293,11 +27293,11 @@ constexpr double kFeatureLinePlanEps = 1e-4;
 /// Vertex range [*v0, *v1) of feature line \p fi, with the vertex array proven long enough to
 /// address all of it — so every caller below can index without re-checking.
 bool FeatureLineRange(const AppCommandState& st, int fi, int* v0, int* v1) {
-  if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.featureLineOffsets.size())
+  if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.drawing.featureLineOffsets.size())
     return false;
-  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
-  const int b = st.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
-  if (b - a < 2 || a < 0 || static_cast<size_t>(b) * 3 > st.featureLineVerts.size())
+  const int a = st.drawing.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.drawing.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
+  if (b - a < 2 || a < 0 || static_cast<size_t>(b) * 3 > st.drawing.featureLineVerts.size())
     return false;
   *v0 = a;
   *v1 = b;
@@ -27314,12 +27314,12 @@ bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<Fe
   if (!FeatureLineRange(st, fi, &v0, &v1))
     return false;
   const int n = v1 - v0;
-  const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
-                      st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+  const bool closed = static_cast<size_t>(fi) < st.drawing.featureLineClosed.size() &&
+                      st.drawing.featureLineClosed[static_cast<size_t>(fi)] != 0;
 
-  const auto px = [&](int i) { return static_cast<double>(st.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3]); };
-  const auto py = [&](int i) { return static_cast<double>(st.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 1]); };
-  const auto pz = [&](int i) { return st.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 2]; };
+  const auto px = [&](int i) { return static_cast<double>(st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3]); };
+  const auto py = [&](int i) { return static_cast<double>(st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 1]); };
+  const auto pz = [&](int i) { return st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 2]; };
   // PLAN length, not slope length — REQ-088 says stations and lengths agree with the feature line's
   // plan geometry, and grade is rise over the horizontal run (as SURFELEV computes it).
   const auto planLen = [&](int a, int b) { return std::hypot(px(b) - px(a), py(b) - py(a)); };
@@ -27334,8 +27334,8 @@ bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<Fe
 
     FeatureLineElevRow r;
     r.vertexIndex = i;
-    r.isElevationPoint = (static_cast<size_t>(v0)+ i) < st.featureLineElevPt.size() &&
-                         st.featureLineElevPt[(static_cast<size_t>(v0)+ i)] != 0;
+    r.isElevationPoint = (static_cast<size_t>(v0)+ i) < st.drawing.featureLineElevPt.size() &&
+                         st.drawing.featureLineElevPt[(static_cast<size_t>(v0)+ i)] != 0;
     r.station = station;
     r.elevation = static_cast<float>(pz(i));
     r.lengthAhead = next >= 0 ? planLen(i, next) : 0.0;
@@ -27356,7 +27356,7 @@ namespace {
 
 /// Writable Z of point \p i of feature line \p fi. Callers have already validated the range.
 double& FeatureLineZ(AppCommandState& st, int v0, int i) {
-  return st.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 2];
+  return st.drawing.featureLineVerts[(static_cast<size_t>(v0)+ i) * 3 + 2];
 }
 
 /// Everything every elevation edit has to do around the mutation itself, in one place: validate the
@@ -27433,8 +27433,8 @@ bool SetFeatureLineGradeAhead(AppCommandState& st, int flNumber, int pointNumber
         if (!BuildFeatureLineElevTable(st, fi, &rows))
           return false;
         const int i = pointNumber - 1;
-        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
-                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const bool closed = static_cast<size_t>(fi) < st.drawing.featureLineClosed.size() &&
+                            st.drawing.featureLineClosed[static_cast<size_t>(fi)] != 0;
         const int next = (i + 1 < n) ? i + 1 : (closed ? 0 : -1);
         if (next < 0) {
           log.push_back("FLELEV — point " + std::to_string(pointNumber) +
@@ -27471,8 +27471,8 @@ bool SetFeatureLineGradeBack(AppCommandState& st, int flNumber, int pointNumber,
         if (!BuildFeatureLineElevTable(st, fi, &rows))
           return false;
         const int i = pointNumber - 1;
-        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
-                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const bool closed = static_cast<size_t>(fi) < st.drawing.featureLineClosed.size() &&
+                            st.drawing.featureLineClosed[static_cast<size_t>(fi)] != 0;
         const int prev = (i > 0) ? i - 1 : (closed ? n - 1 : -1);
         if (prev < 0) {
           log.push_back("FLELEV — point " + std::to_string(pointNumber) +
@@ -27559,10 +27559,10 @@ bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double s
         const size_t a = (static_cast<size_t>(v0)+ seg) * 3;
         const size_t b = (static_cast<size_t>(v0)+ seg + 1) * 3;
         const double t = along / rows[static_cast<size_t>(seg)].lengthAhead;
-        const float nx = static_cast<float>(st.featureLineVerts[a] +
-                                            t * (st.featureLineVerts[b] - st.featureLineVerts[a]));
-        const float ny = static_cast<float>(st.featureLineVerts[a + 1] +
-                                            t * (st.featureLineVerts[b + 1] - st.featureLineVerts[a + 1]));
+        const float nx = static_cast<float>(st.drawing.featureLineVerts[a] +
+                                            t * (st.drawing.featureLineVerts[b] - st.drawing.featureLineVerts[a]));
+        const float ny = static_cast<float>(st.drawing.featureLineVerts[a + 1] +
+                                            t * (st.drawing.featureLineVerts[b + 1] - st.drawing.featureLineVerts[a + 1]));
 
         // Insert AFTER point `seg`, i.e. at vertex slot v0+seg+1. The three arrays are cut on
         // different strides — verts by 3, flags by 1 — which EraseFeatureLineByIndex already showed
@@ -27570,15 +27570,15 @@ bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double s
         const int at = v0 + seg + 1;
         commit();
         const float v[3] = {nx, ny, elevation};
-        st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+        st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
                                    v, v + 3);
-        if (st.featureLineElevPt.size() < static_cast<size_t>(at))
-          st.featureLineElevPt.resize(static_cast<size_t>(at), 0);
-        st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at),
+        if (st.drawing.featureLineElevPt.size() < static_cast<size_t>(at))
+          st.drawing.featureLineElevPt.resize(static_cast<size_t>(at), 0);
+        st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at),
                                     static_cast<uint8_t>(1));
         // Every feature line after this one starts a vertex later.
-        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
-          st.featureLineOffsets[k] += 1;
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.drawing.featureLineOffsets.size(); ++k)
+          st.drawing.featureLineOffsets[k] += 1;
 
         char buf[200];
         std::snprintf(buf, sizeof(buf),
@@ -27599,8 +27599,8 @@ bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int poin
       st, flNumber, pointNumber, true, "Delete elevation point", log,
       [&](int fi, int v0, int /*n*/, const auto& commit) {
         const int at = v0 + pointNumber - 1;
-        const bool isElevPt = static_cast<size_t>(at) < st.featureLineElevPt.size() &&
-                              st.featureLineElevPt[static_cast<size_t>(at)] != 0;
+        const bool isElevPt = static_cast<size_t>(at) < st.drawing.featureLineElevPt.size() &&
+                              st.drawing.featureLineElevPt[static_cast<size_t>(at)] != 0;
         if (!isElevPt) {
           log.push_back("FLELEV — point " + std::to_string(pointNumber) +
                         " is a PI, not an elevation point. Deleting a PI changes the plan shape and "
@@ -27608,12 +27608,12 @@ bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int poin
           return false;
         }
         commit();
-        st.featureLineVerts.erase(
-            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
-            st.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(at)+ 1) * 3);
-        st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
-        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
-          st.featureLineOffsets[k] -= 1;
+        st.drawing.featureLineVerts.erase(
+            st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+            st.drawing.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(at)+ 1) * 3);
+        st.drawing.featureLineElevPt.erase(st.drawing.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.drawing.featureLineOffsets.size(); ++k)
+          st.drawing.featureLineOffsets[k] -= 1;
         log.push_back("FLELEV — feature line " + std::to_string(flNumber) + ": elevation point " +
                       std::to_string(pointNumber) + " deleted.");
         return true;
@@ -27684,8 +27684,8 @@ static bool FinishSplineDraft(AppCommandState& st, bool closed, std::vector<std:
     L->paperSplines.push_back(std::move(splineEntity));
     L->paperSplineAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    st.cadSplines.push_back(std::move(splineEntity));
-    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.cadSplines.push_back(std::move(splineEntity));
+    st.drawing.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   st.splineDraftPoints.clear();
@@ -27794,18 +27794,18 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
     L->paperPolyClosed.push_back(1u);
     L->paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    if (st.userPolylineOffsets.empty())
-      st.userPolylineOffsets.push_back(0);
-    const int baseVert = st.userPolylineOffsets.back();
+    if (st.drawing.userPolylineOffsets.empty())
+      st.drawing.userPolylineOffsets.push_back(0);
+    const int baseVert = st.drawing.userPolylineOffsets.back();
     for (int i = 0; i < 4; ++i) {
       // Lands on the active work plane (REQ-058) — see SubmitLineVertex.
-      st.pushVertex(CadPolyVertex{xs[i], ys[i], CadCommitElevation(st)});
+      st.drawing.pushVertex(CadPolyVertex{xs[i], ys[i], CadCommitElevation(st)});
     }
-    st.userPolylineOffsets.push_back(baseVert + 4);
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316: RECT is straight
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
-    st.userPolylineClosed.push_back(1u);
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userPolylineOffsets.push_back(baseVert + 4);
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // REQ-316: RECT is straight
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
+    st.drawing.userPolylineClosed.push_back(1u);
+    st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   }
 
   char msg[128];
@@ -27853,9 +27853,9 @@ void OpenMtextRichEditorForPlacement(AppCommandState& st, std::vector<std::strin
 }
 
 void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::vector<std::string>* log) {
-  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
+  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.drawing.cadAnnotations.size())
     return;
-  CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
+  CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(annIndex)];
   // REQ-039 phase 2: double-click edits MTEXT (rich) or single-line TEXT (plain). Other kinds are not text.
   if (a.kind != CadAnnotation::Kind::Mtext && a.kind != CadAnnotation::Kind::Text)
     return;
@@ -27877,9 +27877,9 @@ void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::ve
 // In-place editor for a native paper-space text (REQ-039 phase 2): the SAME editor as model text, retargeted
 // to the active layout's paperTexts store. Plain box for Kind::Text, rich box for Kind::Mtext.
 void OpenPaperTextEditor(AppCommandState& st, int layoutIndex, int textIndex, std::vector<std::string>* log) {
-  if (layoutIndex < 0 || static_cast<size_t>(layoutIndex) >= st.paperLayouts.size())
+  if (layoutIndex < 0 || static_cast<size_t>(layoutIndex) >= st.drawing.paperLayouts.size())
     return;
-  PaperLayout& L = st.paperLayouts[static_cast<size_t>(layoutIndex)];
+  PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(layoutIndex)];
   if (textIndex < 0 || static_cast<size_t>(textIndex) >= L.paperTexts.size())
     return;
   CadAnnotation& a = L.paperTexts[static_cast<size_t>(textIndex)];
@@ -27918,12 +27918,12 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       ann.boxMaxY = std::max(st.mtxtY1, st.mtxtY2);
       ann.insX = ann.boxMinX;
       ann.insY = ann.boxMinY;
-      ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
+      ann.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
       ann.text = normalized;
       ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
       StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new MTEXT adopts the active text style
-      st.cadAnnotations.push_back(std::move(ann));
-      st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+      st.drawing.cadAnnotations.push_back(std::move(ann));
+      st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);
       log.push_back("MTEXT placed.");
     } else
@@ -28036,7 +28036,7 @@ void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) 
 }
 
 void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log) {
-  st.dimStyleDraft = st.activeDimensionStyle;
+  st.dimStyleDraft = st.drawing.activeDimensionStyle;
   st.showDimStyleDialog = true;
   log.push_back("DIMSTY — dimension style editor opened.");
 }
@@ -28064,7 +28064,7 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
   }
   // Said before the first pick rather than after it: a user who has not built a surface yet should
   // not have to click to find out there is nothing to read (REQ-201).
-  if (st.cadSurfaces.empty()) {
+  if (st.drawing.cadSurfaces.empty()) {
     log.push_back("SURFELEV — there are no surfaces in the drawing. Build one from a point group first.");
     return;
   }
@@ -28125,7 +28125,7 @@ void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceNam
     log.push_back("SURFSWAPEDGE — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!s.tin || s.tin->indices.size() < 6) {
     log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
     return;
@@ -28150,7 +28150,7 @@ void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceNam
     log.push_back("SURFACEADDPOINT — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
     return;
   ClearPendingViewportZoom(st);
@@ -28174,7 +28174,7 @@ void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceNam
     log.push_back("SURFACEDELPOINT — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
     return;
   const bool hasInputs = !s.sourcePointGroups.empty() || !s.sourcePointFiles.empty() || !s.addedPointXyz.empty();
@@ -28202,7 +28202,7 @@ void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceNa
     log.push_back("SURFACEMOVEPOINT — no surface named \"" + surfaceName + "\".");
     return;
   }
-  if (SurfaceRefusesPointEdits(st.cadSurfaces[static_cast<size_t>(si)], "SURFACEMOVEPOINT", log))
+  if (SurfaceRefusesPointEdits(st.drawing.cadSurfaces[static_cast<size_t>(si)], "SURFACEMOVEPOINT", log))
     return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -28225,7 +28225,7 @@ void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName
     log.push_back("SURFDELLINE — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (SurfaceRefusesPointEdits(s, "SURFDELLINE", log))
     return;
   if (!s.tin || s.tin->indices.size() < 6) {
@@ -28252,7 +28252,7 @@ void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceNam
     log.push_back("QUICKPROFILE — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!MakeSurfaceQuery(st, s)) {
     log.push_back("QUICKPROFILE — \"" + s.name + "\" is not a built surface.");
     return;
@@ -28275,10 +28275,10 @@ std::uint64_t EntityIdOfLineOrPolylinePick(const AppCommandState& st, const Sele
     return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)].id : 0;
   };
   switch (hit.type) {
-  case SelectedEntity::Type::LineSeg:     return idOf(st.userLineAttrs, hit.index);
-  case SelectedEntity::Type::Polyline:    return idOf(st.userPolylineAttrs, hit.index);
-  case SelectedEntity::Type::FeatureLine: return idOf(st.featureLineAttrs, hit.index);  // REQ-087
-  case SelectedEntity::Type::Arc:         return idOf(st.userArcAttrs, hit.index);
+  case SelectedEntity::Type::LineSeg:     return idOf(st.drawing.userLineAttrs, hit.index);
+  case SelectedEntity::Type::Polyline:    return idOf(st.drawing.userPolylineAttrs, hit.index);
+  case SelectedEntity::Type::FeatureLine: return idOf(st.drawing.featureLineAttrs, hit.index);  // REQ-087
+  case SelectedEntity::Type::Arc:         return idOf(st.drawing.userArcAttrs, hit.index);
   default:                                return 0;
   }
 }
@@ -28296,7 +28296,7 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
     log.push_back("DESIGNATEBREAKLINE — no surface named \"" + surfaceName + "\".");
     return;
   }
-  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+  if (st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
     log.push_back("DESIGNATEBREAKLINE — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
@@ -28321,7 +28321,7 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
     log.push_back("DESIGNATECONTOUR — no surface named \"" + surfaceName + "\".");
     return;
   }
-  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+  if (st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
     log.push_back("DESIGNATECONTOUR — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
@@ -28346,7 +28346,7 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
     log.push_back("DESIGNATEBOUNDARY — no surface named \"" + surfaceName + "\".");
     return;
   }
-  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+  if (st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
     log.push_back("DESIGNATEBOUNDARY — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
@@ -28401,8 +28401,8 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   if (isBoundary) {
     const size_t ix = static_cast<size_t>(hit.index);
     const bool closed = hit.type == SelectedEntity::Type::FeatureLine
-                            ? (ix < st.featureLineClosed.size() && st.featureLineClosed[ix] != 0)
-                            : (ix < st.userPolylineClosed.size() && st.userPolylineClosed[ix] != 0);
+                            ? (ix < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[ix] != 0)
+                            : (ix < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[ix] != 0);
     if (!closed) {
       log.push_back(cmdName + " — that " +
                     (hit.type == SelectedEntity::Type::FeatureLine ? "feature line" : "polyline") +
@@ -28416,7 +28416,7 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
     return;
   }
 
-  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (isBoundary) {
     CadSurfaceBoundary b;
     b.entityId = id;
@@ -28523,71 +28523,71 @@ void ClearCadSelection(AppCommandState& st) {
 
 void EnsureAttrCounts(AppCommandState& st) {
   bool grew = false;
-  const size_t nl = st.lineCount();
-  while (st.userLineAttrs.size() < nl) {
-    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  const size_t nl = st.drawing.lineCount();
+  while (st.drawing.userLineAttrs.size() < nl) {
+    st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  const size_t nc = st.circleCount();
-  while (st.userCircleAttrs.size() < nc) {
-    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  const size_t nc = st.drawing.circleCount();
+  while (st.drawing.userCircleAttrs.size() < nc) {
+    st.drawing.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   // The normal side-car is repaired the same way, but growing it is not a NEW attribute: a
   // missing normal is the flat default, not a fresh entity, so it does not set grew.
-  EnsureCircleNormals(st.userCircleNormals, nc);
-  while (st.userArcAttrs.size() < st.userArcs.size()) {
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  EnsureCircleNormals(st.drawing.userCircleNormals, nc);
+  while (st.drawing.userArcAttrs.size() < st.drawing.userArcs.size()) {
+    st.drawing.userArcAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.userEllAttrs.size() < st.userEllipses.size()) {
-    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.userEllAttrs.size() < st.drawing.userEllipses.size()) {
+    st.drawing.userEllAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  const size_t np = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
-  while (st.userPolylineAttrs.size() < np) {
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  const size_t np = st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0;
+  while (st.drawing.userPolylineAttrs.size() < np) {
+    st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  const size_t na = st.cadAnnotations.size();
-  while (st.cadAnnotationAttrs.size() < na) {
-    st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+  const size_t na = st.drawing.cadAnnotations.size();
+  while (st.drawing.cadAnnotationAttrs.size() < na) {
+    st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadSurfaceAttrs.size() < st.cadSurfaces.size()) {  // REQ-068
-    st.cadSurfaceAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadSurfaceAttrs.size() < st.drawing.cadSurfaces.size()) {  // REQ-068
+    st.drawing.cadSurfaceAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadSolidAttrs.size() < st.cadSolids.size()) {  // REQ-313
-    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadSolidAttrs.size() < st.drawing.cadSolids.size()) {  // REQ-313
+    st.drawing.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadPipeRunAttrs.size() < st.cadPipeRuns.size()) {  // issue #486
-    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadPipeRunAttrs.size() < st.drawing.cadPipeRuns.size()) {  // issue #486
+    st.drawing.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadTableAttrs.size() < st.cadTables.size()) {
-    st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadTableAttrs.size() < st.drawing.cadTables.size()) {
+    st.drawing.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadPositionMarkerAttrs.size() < st.cadPositionMarkers.size()) {  // REQ-359
-    st.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadPositionMarkerAttrs.size() < st.drawing.cadPositionMarkers.size()) {  // REQ-359
+    st.drawing.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadMultileaderAttrs.size() < st.cadMultileaders.size()) {  // REQ-367
-    st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadMultileaderAttrs.size() < st.drawing.cadMultileaders.size()) {  // REQ-367
+    st.drawing.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadSplineAttrs.size() < st.cadSplines.size()) {  // REQ-443
-    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadSplineAttrs.size() < st.drawing.cadSplines.size()) {  // REQ-443
+    st.drawing.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadPointAttrs.size() < st.cadPoints.size()) {  // REQ-456
-    st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadPointAttrs.size() < st.drawing.cadPoints.size()) {  // REQ-456
+    st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
-    st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
+  while (st.drawing.cadBlockRefAttrs.size() < st.drawing.cadBlockRefs.size()) {
+    st.drawing.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   if (grew)
@@ -28600,50 +28600,50 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
     if (!s.empty())
       out->insert(s);
   };
-  for (const auto& a : st.userLineAttrs)
+  for (const auto& a : st.drawing.userLineAttrs)
     add(a.layer);
-  for (const auto& a : st.userCircleAttrs)
+  for (const auto& a : st.drawing.userCircleAttrs)
     add(a.layer);
-  for (const auto& a : st.userArcAttrs)
+  for (const auto& a : st.drawing.userArcAttrs)
     add(a.layer);
-  for (const auto& a : st.userEllAttrs)
+  for (const auto& a : st.drawing.userEllAttrs)
     add(a.layer);
-  for (const auto& a : st.userPolylineAttrs)
+  for (const auto& a : st.drawing.userPolylineAttrs)
     add(a.layer);
-  for (const auto& a : st.cadAnnotationAttrs)
+  for (const auto& a : st.drawing.cadAnnotationAttrs)
     add(a.layer);
-  for (const auto& a : st.cadTableAttrs)
+  for (const auto& a : st.drawing.cadTableAttrs)
     add(a.layer);
-  for (const auto& a : st.cadPositionMarkerAttrs)  // REQ-359
+  for (const auto& a : st.drawing.cadPositionMarkerAttrs)  // REQ-359
     add(a.layer);
-  for (const auto& a : st.cadMultileaderAttrs)  // REQ-367
+  for (const auto& a : st.drawing.cadMultileaderAttrs)  // REQ-367
     add(a.layer);
-  for (const auto& a : st.cadSplineAttrs)  // REQ-443
+  for (const auto& a : st.drawing.cadSplineAttrs)  // REQ-443
     add(a.layer);
-  for (const auto& a : st.cadPointAttrs)  // REQ-456
+  for (const auto& a : st.drawing.cadPointAttrs)  // REQ-456
     add(a.layer);
-  for (const auto& a : st.cadBlockRefAttrs)
+  for (const auto& a : st.drawing.cadBlockRefAttrs)
     add(a.layer);
   // REQ-352: every store a layer edit can write to, so a name typed for a solid alone still
   // becomes a row the Layer Manager can turn off.
   for (const std::vector<EntityAttributes>* v :
-       {&st.cadSolidAttrs, &st.cadPipeRunAttrs, &st.cadFilledRegionAttrs, &st.cadMeshAttrs,
-        &st.featureLineAttrs, &st.cadSurfaceAttrs, &st.cadPointCloudAttrs})
+       {&st.drawing.cadSolidAttrs, &st.drawing.cadPipeRunAttrs, &st.drawing.cadFilledRegionAttrs, &st.drawing.cadMeshAttrs,
+        &st.drawing.featureLineAttrs, &st.drawing.cadSurfaceAttrs, &st.drawing.cadPointCloudAttrs})
     for (const auto& a : *v)
       add(a.layer);
-  for (const auto& p : st.surveyPoints)
+  for (const auto& p : st.drawing.surveyPoints)
     add(p.layer);
-  add(st.currentLayer);
+  add(st.drawing.currentLayer);
 }
 
 void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
-  if (st.drawingLayerTable.empty()) {
+  if (st.drawing.drawingLayerTable.empty()) {
     CadLayerRow z;
     z.name = "0";
-    st.drawingLayerTable.push_back(z);
+    st.drawing.drawingLayerTable.push_back(z);
   }
   std::set<std::string> have;
-  for (const auto& r : st.drawingLayerTable)
+  for (const auto& r : st.drawing.drawingLayerTable)
     have.insert(r.name);
   std::set<std::string> used;
   CollectLayersUsedInDrawing(st, &used);
@@ -28651,37 +28651,37 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
     if (!have.count(name)) {
       CadLayerRow row;
       row.name = name;
-      st.drawingLayerTable.push_back(row);
+      st.drawing.drawingLayerTable.push_back(row);
       have.insert(name);
     }
   }
-  if (st.currentLayer.empty())
-    st.currentLayer = "0";
-  if (!have.count(st.currentLayer))
-    st.currentLayer = "0";
+  if (st.drawing.currentLayer.empty())
+    st.drawing.currentLayer = "0";
+  if (!have.count(st.drawing.currentLayer))
+    st.drawing.currentLayer = "0";
   // Text styles (REQ-044): guarantee the baseline "Standard" style and a valid active style.
-  TextStyles::EnsureStandard(st.textStyles);
-  if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
-    st.activeTextStyleName = TextStyles::kStandardName;
+  TextStyles::EnsureStandard(st.drawing.textStyles);
+  if (st.drawing.activeTextStyleName.empty() || !TextStyles::Find(st.drawing.textStyles, st.drawing.activeTextStyleName))
+    st.drawing.activeTextStyleName = TextStyles::kStandardName;
   // Surface styles (REQ-070): the same guarantee, and it is what a legacy `internal document payload` relies on — a file
   // written before this table existed has no styles section at all, and every surface in it carries
   // an empty styleName that must resolve to something drawable (ADR-036 (d)). Left to the loader
   // alone it would hold for `internal document payload` and not for DXF import or a fresh document, so it lives in the one
   // normalisation pass every route to a drawing already goes through.
-  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
 }
 
 const TextStyle* ActiveTextStyle(const AppCommandState& st) {
-  const std::string name = st.activeTextStyleName.empty() ? std::string(TextStyles::kStandardName)
-                                                          : st.activeTextStyleName;
-  if (const TextStyle* s = TextStyles::Find(st.textStyles, name)) return s;
-  return TextStyles::Find(st.textStyles, TextStyles::kStandardName);
+  const std::string name = st.drawing.activeTextStyleName.empty() ? std::string(TextStyles::kStandardName)
+                                                          : st.drawing.activeTextStyleName;
+  if (const TextStyle* s = TextStyles::Find(st.drawing.textStyles, name)) return s;
+  return TextStyles::Find(st.drawing.textStyles, TextStyles::kStandardName);
 }
 
 void SetActiveTextStyle(AppCommandState& st, const std::string& name) {
-  st.activeTextStyleName = name;
+  st.drawing.activeTextStyleName = name;
   if (const TextStyle* s = ActiveTextStyle(st))
-    st.defaultPlottedTextHeightInches = std::max(s->heightInches, 1.e-6f);
+    st.drawing.defaultPlottedTextHeightInches = std::max(s->heightInches, 1.e-6f);
 }
 
 // Stamp the active text style onto a freshly built user TEXT/MTEXT (REQ-044 create path). Font/oblique/
@@ -28717,7 +28717,7 @@ static bool ValidNewLayerNameChars(const std::string& n) {
 
 static bool LayerNameExistsCi(const AppCommandState& st, const std::string& name) {
   const std::string nl = StringUtil::toLowerAsciiCopy(name);
-  for (const auto& r : st.drawingLayerTable) {
+  for (const auto& r : st.drawing.drawingLayerTable) {
     if (StringUtil::toLowerAsciiCopy(r.name) == nl)
       return true;
   }
@@ -28740,7 +28740,7 @@ bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string
   PushUndoSnapshot(st, "Add layer");
   CadLayerRow row;
   row.name = name;
-  st.drawingLayerTable.push_back(row);
+  st.drawing.drawingLayerTable.push_back(row);
   return true;
 }
 
@@ -28763,10 +28763,10 @@ std::string ResolveObjectLayer(const DrawingSettings& settings, ObjectLayerKind 
 }
 
 std::string EnsureObjectLayer(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName) {
-  std::string name = StringUtil::trimCopy(ResolveObjectLayer(st.drawingSettings, kind, objectName));
+  std::string name = StringUtil::trimCopy(ResolveObjectLayer(st.drawing.drawingSettings, kind, objectName));
   // A name that cannot be a layer (an object name holding '/', say) falls back to the row's own layer.
   if (!ValidNewLayerNameChars(name))
-    name = StringUtil::trimCopy(st.drawingSettings.ObjectLayer(kind).layer);
+    name = StringUtil::trimCopy(st.drawing.drawingSettings.ObjectLayer(kind).layer);
   if (!ValidNewLayerNameChars(name))
     name = "0";
   return EnsureDrawingLayer(st, name);
@@ -28774,12 +28774,12 @@ std::string EnsureObjectLayer(AppCommandState& st, ObjectLayerKind kind, std::st
 
 std::string EnsureDrawingLayer(AppCommandState& st, const std::string& name) {
   const std::string lower = StringUtil::toLowerAsciiCopy(name);
-  for (const CadLayerRow& r : st.drawingLayerTable)
+  for (const CadLayerRow& r : st.drawing.drawingLayerTable)
     if (StringUtil::toLowerAsciiCopy(r.name) == lower)
       return r.name;  // the table's own spelling
   CadLayerRow row;  // created with default properties, inside the caller's undo step
   row.name = name;
-  st.drawingLayerTable.push_back(row);
+  st.drawing.drawingLayerTable.push_back(row);
   return name;
 }
 
@@ -28831,18 +28831,18 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
     const int end = r.offsets[static_cast<size_t>(c) + 1];
     if (end - begin < 2)
       continue;  // a one-vertex contour is a point, not a polyline — see contourgen on the peak case
-    if (st.userPolylineOffsets.empty())
-      st.userPolylineOffsets.push_back(0);
-    const int baseVert = st.userPolylineOffsets.back();
+    if (st.drawing.userPolylineOffsets.empty())
+      st.drawing.userPolylineOffsets.push_back(0);
+    const int baseVert = st.drawing.userPolylineOffsets.back();
     for (int v = begin; v < end; ++v) {
-      st.pushVertex(CadPolyVertex{r.vertsXyz[static_cast<size_t>(v) * 3 + 0], r.vertsXyz[static_cast<size_t>(v) * 3 + 1], r.vertsXyz[static_cast<size_t>(v) * 3 + 2]});
+      st.drawing.pushVertex(CadPolyVertex{r.vertsXyz[static_cast<size_t>(v) * 3 + 0], r.vertsXyz[static_cast<size_t>(v) * 3 + 1], r.vertsXyz[static_cast<size_t>(v) * 3 + 2]});
     }
-    st.userPolylineOffsets.push_back(baseVert + (end - begin));
+    st.drawing.userPolylineOffsets.push_back(baseVert + (end - begin));
     // Straight through from the generator: a contour that closed in the surface's interior becomes a
     // closed polyline, and one that ran off the border stays open. Re-deriving it from the vertices
     // would mean comparing floats for the seam, which is what contourgen avoids in the first place.
-    st.userPolylineClosed.push_back(r.closed[static_cast<size_t>(c)] ? 1u : 0u);
-    st.userPolylineAttrs.push_back(attrs);
+    st.drawing.userPolylineClosed.push_back(r.closed[static_cast<size_t>(c)] ? 1u : 0u);
+    st.drawing.userPolylineAttrs.push_back(attrs);
     ++made;
   }
   return made;
@@ -28852,9 +28852,9 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
 /// The attribute store that owns this type's entities, or null for a type that carries none.
 [[nodiscard]] std::vector<EntityAttributes>* DrapeAttrStoreFor(AppCommandState& st, SelectedEntity::Type type) {
   switch (type) {
-    case SelectedEntity::Type::LineSeg: return &st.userLineAttrs;
-    case SelectedEntity::Type::Polyline: return &st.userPolylineAttrs;
-    case SelectedEntity::Type::FeatureLine: return &st.featureLineAttrs;
+    case SelectedEntity::Type::LineSeg: return &st.drawing.userLineAttrs;
+    case SelectedEntity::Type::Polyline: return &st.drawing.userPolylineAttrs;
+    case SelectedEntity::Type::FeatureLine: return &st.drawing.featureLineAttrs;
     default: return nullptr;
   }
 }
@@ -28902,21 +28902,21 @@ void GatherDrapeRun(DrapeTarget& t, const std::vector<int>& offsets, std::vector
   switch (sel.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(sel.index);
-    if (sel.index < 0 || k >= st.lineCount())
+    if (sel.index < 0 || k >= st.drawing.lineCount())
       return t;
-    t.x.push_back(st.line(k).x0);
-    t.y.push_back(st.line(k).y0);
-    t.z.push_back(&st.lineComponent(k, CadLineComponent::Z0));
-    t.x.push_back(st.line(k).x1);
-    t.y.push_back(st.line(k).y1);
-    t.z.push_back(&st.lineComponent(k, CadLineComponent::Z1));
+    t.x.push_back(st.drawing.line(k).x0);
+    t.y.push_back(st.drawing.line(k).y0);
+    t.z.push_back(&st.drawing.lineComponent(k, CadLineComponent::Z0));
+    t.x.push_back(st.drawing.line(k).x1);
+    t.y.push_back(st.drawing.line(k).y1);
+    t.z.push_back(&st.drawing.lineComponent(k, CadLineComponent::Z1));
     return t;
   }
   case SelectedEntity::Type::Polyline:
-    GatherDrapeRun(t, st.userPolylineOffsets, st.userPolylineVerts, sel.index);
+    GatherDrapeRun(t, st.drawing.userPolylineOffsets, st.drawing.userPolylineVerts, sel.index);
     return t;
   case SelectedEntity::Type::FeatureLine:
-    GatherDrapeRun(t, st.featureLineOffsets, st.featureLineVerts, sel.index);
+    GatherDrapeRun(t, st.drawing.featureLineOffsets, st.drawing.featureLineVerts, sel.index);
     return t;
   default:
     return t;
@@ -28927,8 +28927,8 @@ void GatherDrapeRun(DrapeTarget& t, const std::vector<int>& offsets, std::vector
 /// keyed by stable id and TIN pointer (REQ-126 / ADR-039 (c)). A drape of a long feature line would
 /// otherwise rescan every triangle once per vertex.
 [[nodiscard]] const TinSpatialIndex* DrapeSurfaceIndex(AppCommandState& st, size_t si) {
-  const CadSurface& surf = st.cadSurfaces[si];
-  const std::uint64_t surfId = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+  const CadSurface& surf = st.drawing.cadSurfaces[si];
+  const std::uint64_t surfId = si < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[si].id : 0;
   for (AppCommandState::SurfaceQueryCacheEntry& e : st.surfaceQueryCache) {
     if (e.surfaceId == surfId && e.builtFrom.lock() == surf.tin)
       return &e.index;
@@ -28962,7 +28962,7 @@ struct DrapeResolved {
                                                           int* outRefusedKind,
                                                           std::string* outFirstKindRefused) {
   std::vector<DrapeResolved> ready;
-  const CadSurface& surf = st.cadSurfaces[si];
+  const CadSurface& surf = st.drawing.cadSurfaces[si];
   const TinSpatialIndex* index = DrapeSurfaceIndex(st, si);
   auto groundAt = [&](double x, double y, double* outZ) {
     return (index && !index->empty())
@@ -29027,7 +29027,7 @@ int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& re
 /// Every entity currently linked to this surface, in store order.
 [[nodiscard]] std::vector<SelectedEntity> EntitiesLinkedToSurface(const AppCommandState& st, size_t si) {
   std::vector<SelectedEntity> out;
-  const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+  const std::uint64_t id = si < st.drawing.cadSurfaceAttrs.size() ? st.drawing.cadSurfaceAttrs[si].id : 0;
   if (id == 0)
     return out;  // an unswept surface has no id to have been linked by (REQ-076)
   auto sweep = [&](const std::vector<EntityAttributes>& attrs, SelectedEntity::Type type) {
@@ -29035,9 +29035,9 @@ int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& re
       if (attrs[i].drapedOnSurfaceId == id)
         out.push_back({type, static_cast<int>(i)});
   };
-  sweep(st.userLineAttrs, SelectedEntity::Type::LineSeg);
-  sweep(st.userPolylineAttrs, SelectedEntity::Type::Polyline);
-  sweep(st.featureLineAttrs, SelectedEntity::Type::FeatureLine);
+  sweep(st.drawing.userLineAttrs, SelectedEntity::Type::LineSeg);
+  sweep(st.drawing.userPolylineAttrs, SelectedEntity::Type::Polyline);
+  sweep(st.drawing.featureLineAttrs, SelectedEntity::Type::FeatureLine);
   return out;
 }
 
@@ -29045,15 +29045,15 @@ int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& re
 
 void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log,
                             bool invalidateCache) {
-  if (si >= st.cadSurfaces.size())
+  if (si >= st.drawing.cadSurfaces.size())
     return;
-  const CadSurface& surf = st.cadSurfaces[si];
+  const CadSurface& surf = st.drawing.cadSurfaces[si];
   if (!surf.tin || surf.tin->indices.empty())
     return;
   const std::vector<SelectedEntity> linked = EntitiesLinkedToSurface(st, si);
   if (linked.empty())
     return;
-  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[si].id;
   const std::vector<DrapeResolved> ready =
       ResolveDrapeOnto(st, si, linked, /*reportRefusals=*/false, log, nullptr, nullptr);
   const int moved = ApplyResolvedDrape(st, ready, id);
@@ -29081,9 +29081,9 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
 std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e) {
   const std::vector<EntityAttributes>* attrs = nullptr;
   switch (e.type) {
-    case SelectedEntity::Type::LineSeg: attrs = &st.userLineAttrs; break;
-    case SelectedEntity::Type::Polyline: attrs = &st.userPolylineAttrs; break;
-    case SelectedEntity::Type::FeatureLine: attrs = &st.featureLineAttrs; break;
+    case SelectedEntity::Type::LineSeg: attrs = &st.drawing.userLineAttrs; break;
+    case SelectedEntity::Type::Polyline: attrs = &st.drawing.userPolylineAttrs; break;
+    case SelectedEntity::Type::FeatureLine: attrs = &st.drawing.featureLineAttrs; break;
     default: return std::string();
   }
   if (e.index < 0 || static_cast<size_t>(e.index) >= attrs->size())
@@ -29094,7 +29094,7 @@ std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity&
   const int si = FindSurfaceIndexById(st, id);
   if (si < 0)
     return std::string();  // erased: it follows nothing now (ADR-065 (e))
-  return st.cadSurfaces[static_cast<size_t>(si)].name;
+  return st.drawing.cadSurfaces[static_cast<size_t>(si)].name;
 }
 
 namespace {
@@ -29129,9 +29129,9 @@ void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log
       rows.push_back({label, static_cast<int>(i), name});
     }
   };
-  sweep(st.userLineAttrs, SelectedEntity::Type::LineSeg, "line");
-  sweep(st.userPolylineAttrs, SelectedEntity::Type::Polyline, "polyline");
-  sweep(st.featureLineAttrs, SelectedEntity::Type::FeatureLine, "feature line");
+  sweep(st.drawing.userLineAttrs, SelectedEntity::Type::LineSeg, "line");
+  sweep(st.drawing.userPolylineAttrs, SelectedEntity::Type::Polyline, "polyline");
+  sweep(st.drawing.featureLineAttrs, SelectedEntity::Type::FeatureLine, "feature line");
 
   if (rows.empty() && dangling == 0) {
     log.push_back("DRAPELINKS - nothing in the drawing follows a surface.");
@@ -29185,14 +29185,14 @@ void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vect
   // Same disambiguation as EXTRACT: one surface needs no naming, several are listed rather than
   // guessed, because picking silently is how the wrong surface gets used.
   if (surfaceName.empty()) {
-    if (st.cadSurfaces.size() == 1) {
-      surfaceName = st.cadSurfaces[0].name;
-    } else if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.size() == 1) {
+      surfaceName = st.drawing.cadSurfaces[0].name;
+    } else if (st.drawing.cadSurfaces.empty()) {
       log.push_back("DRAPE - the drawing has no surfaces.");
       return;
     } else {
       std::string names;
-      for (const CadSurface& s : st.cadSurfaces)
+      for (const CadSurface& s : st.drawing.cadSurfaces)
         names += (names.empty() ? "" : ", ") + s.name;
       log.push_back("DRAPE - usage: DRAPE <surface>[, LINK]. Surfaces: " + names + ".");
       return;
@@ -29203,7 +29203,7 @@ void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vect
     log.push_back("DRAPE - no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& surf = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!surf.tin || surf.tin->indices.empty()) {
     log.push_back("DRAPE - \"" + surf.name + "\" has never been built; nothing to drape onto.");
     return;
@@ -29218,8 +29218,8 @@ void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vect
     // `EnsureEntityIds` is what assigns a surface its id; one created in this same batch still has
     // 0, and a link to 0 would resolve to nothing forever (REQ-076).
     EnsureEntityIds(st);
-    linkTo = static_cast<size_t>(si) < st.cadSurfaceAttrs.size()
-                 ? st.cadSurfaceAttrs[static_cast<size_t>(si)].id
+    linkTo = static_cast<size_t>(si) < st.drawing.cadSurfaceAttrs.size()
+                 ? st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id
                  : 0;
     if (linkTo == 0) {
       log.push_back("DRAPE - \"" + surf.name + "\" has no stable id yet; cannot link to it.");
@@ -29275,7 +29275,7 @@ void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::ui
     log.push_back("PADSOLID - no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& surf = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!surf.tin || surf.tin->indices.empty()) {
     log.push_back("PADSOLID - \"" + surf.name + "\" has never been built; nothing to cut into.");
     return;
@@ -29412,8 +29412,8 @@ void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::ui
 
   PushUndoSnapshot(st, "Pad solid");
   for (brep::Solid& s : solids) {
-    st.cadSolids.push_back(std::make_shared<brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+    st.drawing.cadSolids.push_back(std::make_shared<brep::Solid>(std::move(s)));
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   }
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
@@ -29433,8 +29433,8 @@ void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::ui
 std::string PadSolidDefaultSurface(const AppCommandState& st) {
   if (!st.padSolidSurface.empty() && FindSurfaceIndex(st, st.padSolidSurface) >= 0)
     return st.padSolidSurface;
-  if (st.cadSurfaces.size() == 1)
-    return st.cadSurfaces[0].name;
+  if (st.drawing.cadSurfaces.size() == 1)
+    return st.drawing.cadSurfaces[0].name;
   return std::string();
 }
 
@@ -29455,10 +29455,10 @@ std::uint64_t PadSolidSelectedBoundary(AppCommandState& st, int* outCount) {
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline || e.index < 0)
       continue;
-    if (static_cast<size_t>(e.index) >= st.userPolylineAttrs.size())
+    if (static_cast<size_t>(e.index) >= st.drawing.userPolylineAttrs.size())
       continue;
     ++n;
-    id = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
+    id = st.drawing.userPolylineAttrs[static_cast<size_t>(e.index)].id;
   }
   if (outCount)
     *outCount = n;
@@ -29501,7 +29501,7 @@ void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vecto
     }
     if (FindSurfaceIndex(st, tr) < 0) {
       std::string names;
-      for (const CadSurface& s : st.cadSurfaces)
+      for (const CadSurface& s : st.drawing.cadSurfaces)
         names += (names.empty() ? "" : ", ") + s.name;
       log.push_back("PADSOLID - no surface named \"" + tr + "\"." +
                     (names.empty() ? "" : " Surfaces: " + names + "."));
@@ -29517,7 +29517,7 @@ void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vecto
 
   if (low == "s" || low == "surface") {
     std::string names;
-    for (const CadSurface& s : st.cadSurfaces)
+    for (const CadSurface& s : st.drawing.cadSurfaces)
       names += (names.empty() ? "" : ", ") + s.name;
     st.padSolidPhase = P::WaitSurfaceName;
     log.push_back(names.empty() ? "PADSOLID - the drawing has no surfaces."
@@ -29555,10 +29555,10 @@ void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<s
     log.push_back("PADSOLID - that is not a closed polyline. Pick the ring that bounds the pad.");
     return;
   }
-  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.userPolylineAttrs.size())
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.drawing.userPolylineAttrs.size())
     return;
   EnsureEntityIds(st);
-  const std::uint64_t id = st.userPolylineAttrs[static_cast<size_t>(hit.index)].id;
+  const std::uint64_t id = st.drawing.userPolylineAttrs[static_cast<size_t>(hit.index)].id;
   std::vector<std::pair<double, double>> ring;
   std::string err;
   if (!VolumeClipRingLocalXy(st, id, &ring, &err) || ring.size() < 3) {
@@ -29604,7 +29604,7 @@ void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::v
 
 
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
 
   const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
   std::string surfaceName = f.empty() ? std::string() : f[0];
@@ -29618,14 +29618,14 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
   // A drawing with exactly one surface does not need to be told which one. With more than one, the
   // command names them rather than guessing — picking silently is how the wrong surface gets baked.
   if (surfaceName.empty()) {
-    if (st.cadSurfaces.size() == 1) {
-      surfaceName = st.cadSurfaces[0].name;
-    } else if (st.cadSurfaces.empty()) {
+    if (st.drawing.cadSurfaces.size() == 1) {
+      surfaceName = st.drawing.cadSurfaces[0].name;
+    } else if (st.drawing.cadSurfaces.empty()) {
       log.push_back("EXTRACT — the drawing has no surfaces.");
       return;
     } else {
       std::string names;
-      for (const CadSurface& s : st.cadSurfaces)
+      for (const CadSurface& s : st.drawing.cadSurfaces)
         names += (names.empty() ? "" : ", ") + s.name;
       log.push_back("EXTRACT — usage: EXTRACT <surface>[, <layer>]. Surfaces: " + names + ".");
       return;
@@ -29637,15 +29637,15 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
     log.push_back("EXTRACT — no surface named \"" + surfaceName + "\".");
     return;
   }
-  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& surf = st.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (!surf.tin || surf.tin->indices.empty()) {
     log.push_back("EXTRACT — \"" + surf.name + "\" has never been built; nothing to extract.");
     return;
   }
 
-  const SurfaceStyle* stylePtr = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+  const SurfaceStyle* stylePtr = SurfaceStyles::Resolve(st.drawing.surfaceStyles, surf.styleName);
   const SurfaceStyle style = stylePtr ? *stylePtr : SurfaceStyles::StandardSurfaceStyle();
-  const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawingInsUnits);  // issue #832
+  const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawing.drawingInsUnits);  // issue #832
 
   // REQ-071's last acceptance condition. Refused BEFORE anything is created, and the message says
   // which style switched them off — "nothing happened" with no reason is the exact silence REQ-201
@@ -29676,7 +29676,7 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
 
   // Resolve the target layer BEFORE the snapshot, so an invalid name refuses without leaving an undo
   // step that did nothing.
-  std::string layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  std::string layer = st.drawing.currentLayer.empty() ? std::string("0") : st.drawing.currentLayer;
   bool layerCreated = false;
   if (!layerArg.empty()) {
     if (const CadLayerRow* row = FindDrawingLayerRowCi(st, layerArg)) {
@@ -29699,7 +29699,7 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
   if (layerCreated) {
     CadLayerRow row;
     row.name = layer;
-    st.drawingLayerTable.push_back(row);
+    st.drawing.drawingLayerTable.push_back(row);
   }
 
   const auto attrsFor = [&](const SurfaceComponentStyle& comp) {
@@ -29786,9 +29786,9 @@ bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, c
       *err = "A layer with that name already exists.";
     return false;
   }
-  auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+  auto it = std::find_if(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                          [&](const CadLayerRow& r) { return r.name == oldN; });
-  if (it == st.drawingLayerTable.end()) {
+  if (it == st.drawing.drawingLayerTable.end()) {
     if (err)
       *err = "Layer not found in table.";
     return false;
@@ -29798,22 +29798,22 @@ bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, c
     if (L == oldN)
       L = newN;
   };
-  for (auto& a : st.userLineAttrs)
+  for (auto& a : st.drawing.userLineAttrs)
     reassign(a.layer);
-  for (auto& a : st.userCircleAttrs)
+  for (auto& a : st.drawing.userCircleAttrs)
     reassign(a.layer);
-  for (auto& a : st.userArcAttrs)
+  for (auto& a : st.drawing.userArcAttrs)
     reassign(a.layer);
-  for (auto& a : st.userEllAttrs)
+  for (auto& a : st.drawing.userEllAttrs)
     reassign(a.layer);
-  for (auto& a : st.userPolylineAttrs)
+  for (auto& a : st.drawing.userPolylineAttrs)
     reassign(a.layer);
-  for (auto& a : st.cadAnnotationAttrs)
+  for (auto& a : st.drawing.cadAnnotationAttrs)
     reassign(a.layer);
-  for (auto& p : st.surveyPoints)
+  for (auto& p : st.drawing.surveyPoints)
     reassign(p.layer);
-  if (st.currentLayer == oldN)
-    st.currentLayer = newN;
+  if (st.drawing.currentLayer == oldN)
+    st.drawing.currentLayer = newN;
   it->name = newN;
   BumpCadGpuCache(st);
   return true;
@@ -29826,9 +29826,9 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
       *err = "Layer 0 cannot be deleted.";
     return false;
   }
-  const auto itRow = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+  const auto itRow = std::find_if(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                                   [&](const CadLayerRow& r) { return r.name == name; });
-  if (itRow == st.drawingLayerTable.end()) {
+  if (itRow == st.drawing.drawingLayerTable.end()) {
     if (err)
       *err = "Layer not found.";
     return false;
@@ -29838,23 +29838,23 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
     if (L == name)
       L = "0";
   };
-  for (auto& a : st.userLineAttrs)
+  for (auto& a : st.drawing.userLineAttrs)
     reassign(a.layer);
-  for (auto& a : st.userCircleAttrs)
+  for (auto& a : st.drawing.userCircleAttrs)
     reassign(a.layer);
-  for (auto& a : st.userArcAttrs)
+  for (auto& a : st.drawing.userArcAttrs)
     reassign(a.layer);
-  for (auto& a : st.userEllAttrs)
+  for (auto& a : st.drawing.userEllAttrs)
     reassign(a.layer);
-  for (auto& a : st.userPolylineAttrs)
+  for (auto& a : st.drawing.userPolylineAttrs)
     reassign(a.layer);
-  for (auto& a : st.cadAnnotationAttrs)
+  for (auto& a : st.drawing.cadAnnotationAttrs)
     reassign(a.layer);
-  for (auto& p : st.surveyPoints)
+  for (auto& p : st.drawing.surveyPoints)
     reassign(p.layer);
-  if (st.currentLayer == name)
-    st.currentLayer = "0";
-  st.drawingLayerTable.erase(itRow);
+  if (st.drawing.currentLayer == name)
+    st.drawing.currentLayer = "0";
+  st.drawing.drawingLayerTable.erase(itRow);
   BumpCadGpuCache(st);
   return true;
 }
@@ -29867,14 +29867,14 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   switch (st.entityGripType) {
   case SelectedEntity::Type::LineSeg: {
-    if (static_cast<size_t>(idx) >= st.lineCount())
+    if (static_cast<size_t>(idx) >= st.drawing.lineCount())
       return;
     const size_t k = static_cast<size_t>(idx);
     if (st.entityGripLengthenMode) {
-      const float x0 = static_cast<float>(st.line(k).x0);
-      const float y0 = static_cast<float>(st.line(k).y0);
-      const float x1 = static_cast<float>(st.line(k).x1);
-      const float y1 = static_cast<float>(st.line(k).y1);
+      const float x0 = static_cast<float>(st.drawing.line(k).x0);
+      const float y0 = static_cast<float>(st.drawing.line(k).y0);
+      const float x1 = static_cast<float>(st.drawing.line(k).x1);
+      const float y1 = static_cast<float>(st.drawing.line(k).y1);
       const float fixedX = st.entityGripWhich == 0 ? x1 : x0;
       const float fixedY = st.entityGripWhich == 0 ? y1 : y0;
       float along = (x - fixedX) * st.entityGripLengthenDirX + (y - fixedY) * st.entityGripLengthenDirY;
@@ -29884,31 +29884,31 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
       y = fixedY + st.entityGripLengthenDirY * along;
     }
     if (st.entityGripWhich == 0) {
-      st.lineComponent(k, CadLineComponent::X0) = x;
-      st.lineComponent(k, CadLineComponent::Y0) = y;
+      st.drawing.lineComponent(k, CadLineComponent::X0) = x;
+      st.drawing.lineComponent(k, CadLineComponent::Y0) = y;
     } else if (st.entityGripWhich == 1) {
-      st.lineComponent(k, CadLineComponent::X1) = x;
-      st.lineComponent(k, CadLineComponent::Y1) = y;
+      st.drawing.lineComponent(k, CadLineComponent::X1) = x;
+      st.drawing.lineComponent(k, CadLineComponent::Y1) = y;
     }
     return;
   }
   case SelectedEntity::Type::Alignment: {  // REQ-487.1: re-derive from the grabbed shape every move, through the solver
-    if (static_cast<size_t>(idx) >= st.alignments.size())
+    if (static_cast<size_t>(idx) >= st.drawing.alignments.size())
       return;
     alignment::Alignment moved;
     (void)alignment::DragGrip(st.entityGripOrigAlignment, st.entityGripWhich, {static_cast<double>(x), static_cast<double>(y)}, &moved);
-    st.alignments[static_cast<size_t>(idx)] = std::move(moved);
+    st.drawing.alignments[static_cast<size_t>(idx)] = std::move(moved);
     std::vector<std::string> quiet;
     RefreshAlignmentOffsets(st, quiet);
     return;
   }
   case SelectedEntity::Type::Circle: {
-    if (static_cast<size_t>(idx) >= st.circleCount())
+    if (static_cast<size_t>(idx) >= st.drawing.circleCount())
       return;
     const size_t ci = static_cast<size_t>(idx);
-    double& cx = st.circleComponent(ci, CadCircleComponent::X);
-    double& cy = st.circleComponent(ci, CadCircleComponent::Y);
-    double& r = st.circleComponent(ci, CadCircleComponent::Radius);
+    double& cx = st.drawing.circleComponent(ci, CadCircleComponent::X);
+    double& cy = st.drawing.circleComponent(ci, CadCircleComponent::Y);
+    double& r = st.drawing.circleComponent(ci, CadCircleComponent::Radius);
     if (st.entityGripWhich == 0) {
       cx = x;
       cy = y;
@@ -29918,43 +29918,43 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   }
   case SelectedEntity::Type::Polyline: {
-    const int np = st.userPolylineOffsets.size() > 0 ? static_cast<int>(st.userPolylineOffsets.size() - 1) : 0;
+    const int np = st.drawing.userPolylineOffsets.size() > 0 ? static_cast<int>(st.drawing.userPolylineOffsets.size() - 1) : 0;
     if (idx >= np)
       return;
-    const int startV = st.userPolylineOffsets[static_cast<size_t>(idx)];
-    const int endV = st.userPolylineOffsets[(static_cast<size_t>(idx)+ 1)];
+    const int startV = st.drawing.userPolylineOffsets[static_cast<size_t>(idx)];
+    const int endV = st.drawing.userPolylineOffsets[(static_cast<size_t>(idx)+ 1)];
     // REQ-316 / ADR-047: an arc-segment midpoint grip drags the bulge so the arc passes through
     // the cursor. `which` is kPolyBulgeGripBase + segmentIndex.
     if (st.entityGripWhich >= kPolyBulgeGripBase) {
       const int seg = st.entityGripWhich - kPolyBulgeGripBase;
       const int va = startV + seg;
-      const bool closed = static_cast<size_t>(idx) < st.userPolylineClosed.size() &&
-                          st.userPolylineClosed[static_cast<size_t>(idx)];
+      const bool closed = static_cast<size_t>(idx) < st.drawing.userPolylineClosed.size() &&
+                          st.drawing.userPolylineClosed[static_cast<size_t>(idx)];
       const int vb = (seg == (endV - startV) - 1 && closed) ? startV : va + 1;
-      if (static_cast<size_t>(vb) >= st.vertexCount())
+      if (static_cast<size_t>(vb) >= st.drawing.vertexCount())
         return;
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
-      const double b = ArcBulgeThrough(st.vertex(va).x,
-                                       st.vertex(va).y,
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
+      const double b = ArcBulgeThrough(st.drawing.vertex(va).x,
+                                       st.drawing.vertex(va).y,
                                        static_cast<double>(x), static_cast<double>(y),
-                                       st.vertex(vb).x,
-                                       st.vertex(vb).y);
-      st.userPolylineVertsBulge[static_cast<size_t>(va)] = static_cast<float>(b);
+                                       st.drawing.vertex(vb).x,
+                                       st.drawing.vertex(vb).y);
+      st.drawing.userPolylineVertsBulge[static_cast<size_t>(va)] = static_cast<float>(b);
       return;
     }
     const int globalV = startV + st.entityGripWhich;
     const size_t xIdx = static_cast<size_t>(globalV);
-    if (xIdx >= st.vertexCount())
+    if (xIdx >= st.drawing.vertexCount())
       return;
-    st.vertexComponent(xIdx, CadVertexComponent::X) = x;
-    st.vertexComponent(xIdx, CadVertexComponent::Y) = y;
+    st.drawing.vertexComponent(xIdx, CadVertexComponent::X) = x;
+    st.drawing.vertexComponent(xIdx, CadVertexComponent::Y) = y;
     return;
   }
   case SelectedEntity::Type::Spline: {  // REQ-443: drag one fit point / control vertex; its Z is kept
-    if (static_cast<size_t>(idx) >= st.cadSplines.size() || st.entityGripWhich < 0)
+    if (static_cast<size_t>(idx) >= st.drawing.cadSplines.size() || st.entityGripWhich < 0)
       return;
-    CadSpline& sp = st.cadSplines[static_cast<size_t>(idx)];
+    CadSpline& sp = st.drawing.cadSplines[static_cast<size_t>(idx)];
     const size_t which = static_cast<size_t>(st.entityGripWhich);
     if (which >= spline::EditablePointCount(sp))
       return;
@@ -29966,16 +29966,16 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   }
   case SelectedEntity::Type::Point: {
-    if (static_cast<size_t>(idx) >= st.cadPoints.size())
+    if (static_cast<size_t>(idx) >= st.drawing.cadPoints.size())
       return;
-    st.cadPoints[static_cast<size_t>(idx)].x = x;
-    st.cadPoints[static_cast<size_t>(idx)].y = y;
+    st.drawing.cadPoints[static_cast<size_t>(idx)].x = x;
+    st.drawing.cadPoints[static_cast<size_t>(idx)].y = y;
     return;
   }
   case SelectedEntity::Type::Arc: {
-    if (static_cast<size_t>(idx) >= st.userArcs.size())
+    if (static_cast<size_t>(idx) >= st.drawing.userArcs.size())
       return;
-    CadArc& a = st.userArcs[static_cast<size_t>(idx)];
+    CadArc& a = st.drawing.userArcs[static_cast<size_t>(idx)];
     if (st.entityGripWhich == 0) {
       a.cx = x;
       a.cy = y;
@@ -29989,9 +29989,9 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   }
   case SelectedEntity::Type::Ellipse: {
-    if (static_cast<size_t>(idx) >= st.userEllipses.size())
+    if (static_cast<size_t>(idx) >= st.drawing.userEllipses.size())
       return;
-    CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
+    CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(idx)];
     if (EllipseIsFlat(el)) {
       if (st.entityGripWhich == 0) {
         el.cx = x;
@@ -30036,13 +30036,13 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   }
   case SelectedEntity::Type::BlockRef: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.cadBlockRefs.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadBlockRefs.size())
       return;
-    CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(idx)];
-    const int di = CadBlockFindDef(st.blockDefs, r.defName);
+    CadBlockRef& r = st.drawing.cadBlockRefs[static_cast<size_t>(idx)];
+    const int di = CadBlockFindDef(st.drawing.blockDefs, r.defName);
     if (di < 0)
       return;
-    CadBlockApplyDynGripDrag(&r, st.blockDefs[static_cast<size_t>(di)], st.entityGripWhich, x, y);
+    CadBlockApplyDynGripDrag(&r, st.drawing.blockDefs[static_cast<size_t>(di)], st.entityGripWhich, x, y);
     return;
   }
   default:
@@ -30075,16 +30075,16 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
     return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
   };
   switch (e.type) {
-  case SelectedEntity::Type::LineSeg:    return pick(st.userLineAttrs, e.index);
-  case SelectedEntity::Type::Circle:     return pick(st.userCircleAttrs, e.index);
-  case SelectedEntity::Type::Polyline:   return pick(st.userPolylineAttrs, e.index);
-  case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
-  case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
-  case SelectedEntity::Type::Spline:     return pick(st.cadSplineAttrs, e.index);  // REQ-443
-  case SelectedEntity::Type::Point:      return pick(st.cadPointAttrs, e.index);   // REQ-456
-  case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
-  case SelectedEntity::Type::Table:      return pick(st.cadTableAttrs, e.index);
-  case SelectedEntity::Type::BlockRef:   return pick(st.cadBlockRefAttrs, e.index);
+  case SelectedEntity::Type::LineSeg:    return pick(st.drawing.userLineAttrs, e.index);
+  case SelectedEntity::Type::Circle:     return pick(st.drawing.userCircleAttrs, e.index);
+  case SelectedEntity::Type::Polyline:   return pick(st.drawing.userPolylineAttrs, e.index);
+  case SelectedEntity::Type::Arc:        return pick(st.drawing.userArcAttrs, e.index);
+  case SelectedEntity::Type::Ellipse:    return pick(st.drawing.userEllAttrs, e.index);
+  case SelectedEntity::Type::Spline:     return pick(st.drawing.cadSplineAttrs, e.index);  // REQ-443
+  case SelectedEntity::Type::Point:      return pick(st.drawing.cadPointAttrs, e.index);   // REQ-456
+  case SelectedEntity::Type::Annotation: return pick(st.drawing.cadAnnotationAttrs, e.index);
+  case SelectedEntity::Type::Table:      return pick(st.drawing.cadTableAttrs, e.index);
+  case SelectedEntity::Type::BlockRef:   return pick(st.drawing.cadBlockRefAttrs, e.index);
   default:                               return EntityAttributes{};
   }
 }
@@ -30113,41 +30113,41 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 
     switch (lead.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t n = st.lineCount();
+      const size_t n = st.drawing.lineCount();
       for (size_t i = 0; i < n; ++i)
         consider(SelectedEntity::Type::LineSeg, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t n = st.circleCount();
+      const size_t n = st.drawing.circleCount();
       for (size_t i = 0; i < n; ++i)
         consider(SelectedEntity::Type::Circle, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Polyline: {
       const int np =
-          st.userPolylineOffsets.size() > 1 ? static_cast<int>(st.userPolylineOffsets.size()) - 1 : 0;
+          st.drawing.userPolylineOffsets.size() > 1 ? static_cast<int>(st.drawing.userPolylineOffsets.size()) - 1 : 0;
       for (int i = 0; i < np; ++i)
         consider(SelectedEntity::Type::Polyline, i);
       break;
     }
     case SelectedEntity::Type::Arc: {
-      for (size_t i = 0; i < st.userArcs.size(); ++i)
+      for (size_t i = 0; i < st.drawing.userArcs.size(); ++i)
         consider(SelectedEntity::Type::Arc, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Ellipse: {
-      for (size_t i = 0; i < st.userEllipses.size(); ++i)
+      for (size_t i = 0; i < st.drawing.userEllipses.size(); ++i)
         consider(SelectedEntity::Type::Ellipse, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Spline: {  // REQ-443
-      for (size_t i = 0; i < st.cadSplines.size(); ++i)
+      for (size_t i = 0; i < st.drawing.cadSplines.size(); ++i)
         consider(SelectedEntity::Type::Spline, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Point: {
-      for (size_t i = 0; i < st.cadPoints.size(); ++i)
+      for (size_t i = 0; i < st.drawing.cadPoints.size(); ++i)
         consider(SelectedEntity::Type::Point, static_cast<int>(i));
       break;
     }
@@ -30155,11 +30155,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
       // Annotations narrow further by annotation kind: TEXT is not similar to a dimension even on
       // one layer in one colour.
       const int lix = lead.index;
-      if (lix < 0 || static_cast<size_t>(lix) >= st.cadAnnotations.size())
+      if (lix < 0 || static_cast<size_t>(lix) >= st.drawing.cadAnnotations.size())
         break;
-      const CadAnnotation::Kind wantKind = st.cadAnnotations[static_cast<size_t>(lix)].kind;
-      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-        if (st.cadAnnotations[ai].kind == wantKind)
+      const CadAnnotation::Kind wantKind = st.drawing.cadAnnotations[static_cast<size_t>(lix)].kind;
+      for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+        if (st.drawing.cadAnnotations[ai].kind == wantKind)
           consider(SelectedEntity::Type::Annotation, static_cast<int>(ai));
       }
       break;
@@ -30167,18 +30167,18 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
     case SelectedEntity::Type::Surface: {
       // REQ-068 / ADR-036 (b). Skips invisible surfaces, so SELECTSIMILAR cannot select something
       // the user cannot see — the same rule the pick funnel applies (REQ-084 (d)).
-      for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+      for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i)
         if (SurfaceVisible(st, i))
           consider(SelectedEntity::Type::Surface, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Table: {
-      for (size_t i = 0; i < st.cadTables.size(); ++i)
+      for (size_t i = 0; i < st.drawing.cadTables.size(); ++i)
         consider(SelectedEntity::Type::Table, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::BlockRef: {
-      for (size_t i = 0; i < st.cadBlockRefs.size(); ++i)
+      for (size_t i = 0; i < st.drawing.cadBlockRefs.size(); ++i)
         consider(SelectedEntity::Type::BlockRef, static_cast<int>(i));
       break;
     }
@@ -30200,22 +30200,22 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
   if (!st.selectedSurveyPointIndices.empty()) {
     ClearCadSelection(st);
     st.selectedSurveyPointIndices.clear();
-    for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i)
       st.selectedSurveyPointIndices.push_back(static_cast<int>(i));
     for (int svi : st.selectedSurveyPointIndices) {
-      if (svi >= 0 && static_cast<size_t>(svi) < st.surveyPoints.size())
+      if (svi >= 0 && static_cast<size_t>(svi) < st.drawing.surveyPoints.size())
         SyncSurveyPointLinkedMtextSelection(st, svi);
     }
     BumpCadGpuCache(st);
     if (log)
-      log->push_back("Select similar — all " + std::to_string(st.surveyPoints.size()) + " survey point(s).");
+      log->push_back("Select similar — all " + std::to_string(st.drawing.surveyPoints.size()) + " survey point(s).");
   } else if (log)
     log->push_back("Select similar — nothing selected.");
 }
 
 void ClearCadGeometry(AppCommandState& st) {
-  st.worldDocumentOriginX = 0.0;
-  st.worldDocumentOriginY = 0.0;
+  st.drawing.worldDocumentOriginX = 0.0;
+  st.drawing.worldDocumentOriginY = 0.0;
   // A cleared drawing starts in the WCS with no saved frames (REQ-154), for the same reason the id
   // space restarts below: the UCS belongs to the drawing, and carrying the previous drawing's
   // coordinate frame into a new one would read every coordinate typed next in a frame that has
@@ -30223,49 +30223,49 @@ void ClearCadGeometry(AppCommandState& st) {
   // after clearing.
   st.activeUcs = ucs::Ucs{};
   st.ucsPrevious.clear();
-  st.ucsNamed.clear();
+  st.drawing.ucsNamed.clear();
   st.ucsFollow = false;
-  st.namedViews.clear();
+  st.drawing.namedViews.clear();
   st.activeViewName.clear();
   // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
   // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
   // `internal document payload` load overwrites this from the file immediately after clearing.
   st.nextEntityId = 1;
   st.entityIdSweepRevision = kEntityIdSweepNever;  // whatever is loaded next must be swept
-  st.userLinesFlat.clear();
-  st.userLineAttrs.clear();
-  st.userCirclesCxCyZR.clear();
-  st.userCircleAttrs.clear();
-  st.userCircleNormals.clear();
-  st.userArcs.clear();
-  st.userArcAttrs.clear();
-  st.userEllipses.clear();
-  st.userEllAttrs.clear();
-  st.userPolylineVerts.clear();
-  st.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
-  st.userPolylineVertsNormal.clear();  // REQ-325 / ADR-053
-  st.userPolylineOffsets.clear();
-  st.userPolylineClosed.clear();
-  st.userPolylineAttrs.clear();
-  st.cadAnnotations.clear();
-  st.cadAnnotationAttrs.clear();
-  st.cadFilledRegions.clear();
-  st.cadFilledRegionAttrs.clear();
-  st.annotationScales.clear();
+  st.drawing.userLinesFlat.clear();
+  st.drawing.userLineAttrs.clear();
+  st.drawing.userCirclesCxCyZR.clear();
+  st.drawing.userCircleAttrs.clear();
+  st.drawing.userCircleNormals.clear();
+  st.drawing.userArcs.clear();
+  st.drawing.userArcAttrs.clear();
+  st.drawing.userEllipses.clear();
+  st.drawing.userEllAttrs.clear();
+  st.drawing.userPolylineVerts.clear();
+  st.drawing.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
+  st.drawing.userPolylineVertsNormal.clear();  // REQ-325 / ADR-053
+  st.drawing.userPolylineOffsets.clear();
+  st.drawing.userPolylineClosed.clear();
+  st.drawing.userPolylineAttrs.clear();
+  st.drawing.cadAnnotations.clear();
+  st.drawing.cadAnnotationAttrs.clear();
+  st.drawing.cadFilledRegions.clear();
+  st.drawing.cadFilledRegionAttrs.clear();
+  st.drawing.annotationScales.clear();
   st.currentAnnotationScaleIndex = -1;
-  st.viewportZoomScales.clear();
+  st.drawing.viewportZoomScales.clear();
   st.currentViewportZoomScaleIndex = -1;
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
   st.dwgImportedLightList = {};
   st.dwgImportedLightListPresent = false;
   st.dwgImportedLightListDictKey.clear();
-  st.cadMeshes.clear();
-  st.cadMeshAttrs.clear();
-  st.cadPointClouds.clear();
-  st.cadPointCloudAttrs.clear();
-  st.cadSolids.clear();
-  st.cadSolidAttrs.clear();
+  st.drawing.cadMeshes.clear();
+  st.drawing.cadMeshAttrs.clear();
+  st.drawing.cadPointClouds.clear();
+  st.drawing.cadPointCloudAttrs.clear();
+  st.drawing.cadSolids.clear();
+  st.drawing.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
   // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
@@ -30273,8 +30273,8 @@ void ClearCadGeometry(AppCommandState& st) {
   // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
   // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
   // renderer buffers built for the previous document (issue #663).
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
+  st.drawing.cadSurfaces.clear();
+  st.drawing.cadSurfaceAttrs.clear();
   st.surfaceDisplayCache.clear();
   st.surfaceWatershedCache.clear();
   st.surfaceDisplayGeometry.lines.clear();
@@ -30284,35 +30284,35 @@ void ClearCadGeometry(AppCommandState& st) {
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
-  st.cadTables.clear();
-  st.cadTableAttrs.clear();
-  st.cadPositionMarkers.clear();  // REQ-359
-  st.cadPositionMarkerAttrs.clear();
-  st.cadMultileaders.clear();  // REQ-367
-  st.cadMultileaderAttrs.clear();
-  st.cadSplines.clear();  // REQ-443
-  st.cadSplineAttrs.clear();
-  st.cadPoints.clear();  // REQ-456
-  st.cadPointAttrs.clear();
-  st.alignments.clear();  // REQ-480
-  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
-  st.pdMode = 0;
-  st.pdSize = 0.0;
+  st.drawing.cadTables.clear();
+  st.drawing.cadTableAttrs.clear();
+  st.drawing.cadPositionMarkers.clear();  // REQ-359
+  st.drawing.cadPositionMarkerAttrs.clear();
+  st.drawing.cadMultileaders.clear();  // REQ-367
+  st.drawing.cadMultileaderAttrs.clear();
+  st.drawing.cadSplines.clear();  // REQ-443
+  st.drawing.cadSplineAttrs.clear();
+  st.drawing.cadPoints.clear();  // REQ-456
+  st.drawing.cadPointAttrs.clear();
+  st.drawing.alignments.clear();  // REQ-480
+  st.drawing.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.drawing.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
+  st.drawing.pdMode = 0;
+  st.drawing.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
   // blockRefWorldSolids does just above.
-  st.cadPipeRuns.clear();
-  st.cadPipeRunAttrs.clear();
-  st.cadPipingSystems.clear();
+  st.drawing.cadPipeRuns.clear();
+  st.drawing.cadPipeRunAttrs.clear();
+  st.drawing.cadPipingSystems.clear();
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
   st.pipeRunWorldSolidsSig = 0;
-  st.blockDefs.clear();
-  st.cadBlockRefs.clear();
-  st.cadBlockRefAttrs.clear();
+  st.drawing.blockDefs.clear();
+  st.drawing.cadBlockRefs.clear();
+  st.drawing.cadBlockRefAttrs.clear();
   st.blockEditorName.clear();
   st.importedDxfAttrDefs.clear();
   ClearPendingOneShotObjectSnap(st);
@@ -30355,7 +30355,7 @@ void ClearSelection(AppCommandState& st) {
 
 void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log) {
-  if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.surveyPoints.size())
+  if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.drawing.surveyPoints.size())
     return;
   auto& v = st.selectedSurveyPointIndices;
   const auto it = std::find(v.begin(), v.end(), surveyPointIndex);
@@ -30378,24 +30378,24 @@ void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, b
 }
 
 static void ErasePolylineByIndex(AppCommandState& st, int pi) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return;
-  const int np = static_cast<int>(st.userPolylineOffsets.size()) - 1;
+  const int np = static_cast<int>(st.drawing.userPolylineOffsets.size()) - 1;
   std::vector<int> nvPer(static_cast<size_t>(np));
   for (int i = 0; i < np; ++i)
-    nvPer[static_cast<size_t>(i)] = st.userPolylineOffsets[(static_cast<size_t>(i)+ 1)] - st.userPolylineOffsets[static_cast<size_t>(i)];
-  const int a = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int b = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-  st.eraseVertexRange(static_cast<size_t>(a), static_cast<size_t>(b));
+    nvPer[static_cast<size_t>(i)] = st.drawing.userPolylineOffsets[(static_cast<size_t>(i)+ 1)] - st.drawing.userPolylineOffsets[static_cast<size_t>(i)];
+  const int a = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int b = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  st.drawing.eraseVertexRange(static_cast<size_t>(a), static_cast<size_t>(b));
   // REQ-316 / ADR-047: the parallel bulge array is per-VERTEX, so its cut span is [a, b) — not the
   // triplet range the vertex array uses. Same reasoning as EraseFeatureLineByIndex's flag array.
-  if (!st.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.userPolylineVertsBulge.size())
-    st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
-                                    st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
+  if (!st.drawing.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.drawing.userPolylineVertsBulge.size())
+    st.drawing.userPolylineVertsBulge.erase(st.drawing.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
+                                    st.drawing.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
   // REQ-325 / ADR-053: same per-vertex cut span, 3 floats wide instead of 1.
-  if (!st.userPolylineVertsNormal.empty() && static_cast<size_t>(b) * 3 <= st.userPolylineVertsNormal.size())
-    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(a) * 3,
-                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(b) * 3);
+  if (!st.drawing.userPolylineVertsNormal.empty() && static_cast<size_t>(b) * 3 <= st.drawing.userPolylineVertsNormal.size())
+    st.drawing.userPolylineVertsNormal.erase(st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                                     st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(b) * 3);
   std::vector<int> newOff;
   newOff.reserve((static_cast<size_t>(std::max(0, np - 1))+ 1));
   newOff.push_back(0);
@@ -30413,11 +30413,11 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   // The paper-space sibling ErasePaperPolyline has always done this; this store was the outlier.
   if (newOff.size() == 1)
     newOff.clear();
-  st.userPolylineOffsets = std::move(newOff);
-  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-    st.userPolylineClosed.erase(st.userPolylineClosed.begin() + static_cast<std::ptrdiff_t>(pi));
-  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-    st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
+  st.drawing.userPolylineOffsets = std::move(newOff);
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+    st.drawing.userPolylineClosed.erase(st.drawing.userPolylineClosed.begin() + static_cast<std::ptrdiff_t>(pi));
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+    st.drawing.userPolylineAttrs.erase(st.drawing.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
 }
 
 /// REQ-103 step 8 (EXPLODE) / GitHub issue #390. Replace every Polyline in the current selection with
@@ -30491,25 +30491,25 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
   std::vector<OutLine> outLines;
   std::vector<OutArc> outArcs;
 
-  const int np = static_cast<int>(st.userPolylineOffsets.size()) - 1;
+  const int np = static_cast<int>(st.drawing.userPolylineOffsets.size()) - 1;
 
   auto vertAt = [&](int vi) -> ray3d::Vec3 {
     const size_t k = static_cast<size_t>(vi);
-    return ray3d::Vec3{static_cast<double>(st.vertex(k).x),
-                       static_cast<double>(st.vertex(k).y),
-                       static_cast<double>(st.vertex(k).z)};
+    return ray3d::Vec3{static_cast<double>(st.drawing.vertex(k).x),
+                       static_cast<double>(st.drawing.vertex(k).y),
+                       static_cast<double>(st.drawing.vertex(k).z)};
   };
   auto bulgeAt = [&](int vi) -> float {
-    return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-               ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+    return static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size()
+               ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]
                : 0.f;
   };
   auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
     const size_t k = static_cast<size_t>(vi) * 3;
-    if (k + 2 < st.userPolylineVertsNormal.size()) {
-      *nx = st.userPolylineVertsNormal[k];
-      *ny = st.userPolylineVertsNormal[k + 1];
-      *nz = st.userPolylineVertsNormal[k + 2];
+    if (k + 2 < st.drawing.userPolylineVertsNormal.size()) {
+      *nx = st.drawing.userPolylineVertsNormal[k];
+      *ny = st.drawing.userPolylineVertsNormal[k + 1];
+      *nz = st.drawing.userPolylineVertsNormal[k + 2];
     } else {
       *nx = 0.f; *ny = 0.f; *nz = 1.f;
     }
@@ -30597,20 +30597,20 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
   for (int pi : polyIdx) {
     if (pi < 0 || pi >= np)
       continue;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     if (v1 - v0 < 2)
       continue;  // a degenerate 1-vertex polyline has no segment to make
-    const EntityAttributes at = static_cast<size_t>(pi) < st.userPolylineAttrs.size()
-                                    ? st.userPolylineAttrs[static_cast<size_t>(pi)]
+    const EntityAttributes at = static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size()
+                                    ? st.drawing.userPolylineAttrs[static_cast<size_t>(pi)]
                                     : MakeNewEntityAttrs(st);
     for (int vi = v0; vi + 1 < v1; ++vi) {
       float nx, ny, nz;
       normalAt(vi, &nx, &ny, &nz);
       emitSegment(vertAt(vi), vertAt(vi + 1), bulgeAt(vi), nx, ny, nz, at);
     }
-    const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
-                        st.userPolylineClosed[static_cast<size_t>(pi)];
+    const bool closed = static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() &&
+                        st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     if (closed && v1 - v0 >= 3) {
       // A closed polyline may or may not already repeat its first vertex at the end; only add the
       // implied closing segment when the last vertex is genuinely distinct from the first.
@@ -30629,12 +30629,12 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
     ErasePolylineByIndex(st, polyIdx[static_cast<size_t>(i)]);
 
   for (const OutLine& L : outLines) {
-    st.pushLine(CadLineRecord{L.x0, L.y0, L.z0, L.x1, L.y1, L.z1});
-    st.userLineAttrs.push_back(L.at);
+    st.drawing.pushLine(CadLineRecord{L.x0, L.y0, L.z0, L.x1, L.y1, L.z1});
+    st.drawing.userLineAttrs.push_back(L.at);
   }
   for (const OutArc& A : outArcs) {
-    st.userArcs.push_back(A.a);
-    st.userArcAttrs.push_back(A.at);
+    st.drawing.userArcs.push_back(A.a);
+    st.drawing.userArcAttrs.push_back(A.at);
   }
   return static_cast<int>(polyIdx.size());
 }
@@ -30644,21 +30644,21 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
 /// range. Getting that wrong would leave the flag array the right length overall while shifting every
 /// flag after the erased line by a vertex or three, which is silent (ADR-035 (a)).
 static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
-  if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.featureLineOffsets.size())
+  if (fi < 0 || (static_cast<size_t>(fi)+ 1) >= st.drawing.featureLineOffsets.size())
     return;
-  const int nfl = static_cast<int>(st.featureLineOffsets.size()) - 1;
+  const int nfl = static_cast<int>(st.drawing.featureLineOffsets.size()) - 1;
   std::vector<int> nvPer(static_cast<size_t>(nfl));
   for (int i = 0; i < nfl; ++i)
     nvPer[static_cast<size_t>(i)] =
-        st.featureLineOffsets[(static_cast<size_t>(i)+ 1)] - st.featureLineOffsets[static_cast<size_t>(i)];
-  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
-  const int b = st.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
-  if ((static_cast<size_t>(3)* b) <= st.featureLineVerts.size())
-    st.featureLineVerts.erase(st.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* a),
-                              st.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* b));
-  if (static_cast<size_t>(b) <= st.featureLineElevPt.size())
-    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(a),
-                               st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(b));
+        st.drawing.featureLineOffsets[(static_cast<size_t>(i)+ 1)] - st.drawing.featureLineOffsets[static_cast<size_t>(i)];
+  const int a = st.drawing.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.drawing.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
+  if ((static_cast<size_t>(3)* b) <= st.drawing.featureLineVerts.size())
+    st.drawing.featureLineVerts.erase(st.drawing.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* a),
+                              st.drawing.featureLineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* b));
+  if (static_cast<size_t>(b) <= st.drawing.featureLineElevPt.size())
+    st.drawing.featureLineElevPt.erase(st.drawing.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(a),
+                               st.drawing.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(b));
   std::vector<int> newOff;
   newOff.reserve((static_cast<size_t>(std::max(0, nfl - 1))+ 1));
   newOff.push_back(0);
@@ -30673,28 +30673,28 @@ static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
   // EMPTY table, never `{0}`. The invariant added for this store checks it too.
   if (newOff.size() == 1)
     newOff.clear();
-  st.featureLineOffsets = std::move(newOff);
-  if (static_cast<size_t>(fi) < st.featureLineClosed.size())
-    st.featureLineClosed.erase(st.featureLineClosed.begin() + static_cast<std::ptrdiff_t>(fi));
-  if (static_cast<size_t>(fi) < st.featureLineInfo.size())
-    st.featureLineInfo.erase(st.featureLineInfo.begin() + static_cast<std::ptrdiff_t>(fi));
-  if (static_cast<size_t>(fi) < st.featureLineAttrs.size())
-    st.featureLineAttrs.erase(st.featureLineAttrs.begin() + static_cast<std::ptrdiff_t>(fi));
+  st.drawing.featureLineOffsets = std::move(newOff);
+  if (static_cast<size_t>(fi) < st.drawing.featureLineClosed.size())
+    st.drawing.featureLineClosed.erase(st.drawing.featureLineClosed.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.drawing.featureLineInfo.size())
+    st.drawing.featureLineInfo.erase(st.drawing.featureLineInfo.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.drawing.featureLineAttrs.size())
+    st.drawing.featureLineAttrs.erase(st.drawing.featureLineAttrs.begin() + static_cast<std::ptrdiff_t>(fi));
 }
 
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
-  if (annIndex >= st.cadAnnotations.size())
+  if (annIndex >= st.drawing.cadAnnotations.size())
     return;
   // Clear the owning point's link. There is deliberately **no renumbering pass** here any more:
   // survey points reference their label by stable id (REQ-076 / architecture §11.9), so erasing an
   // annotation cannot change what any other point's link means. The loop this replaces walked every
   // survey point decrementing indices, and it was the evidence that index references do not scale —
   // one reference pair, ~46 maintenance sites (ADR-027 Context).
-  const std::uint64_t doomedId = annIndex < st.cadAnnotationAttrs.size()
-                                     ? st.cadAnnotationAttrs[annIndex].id
+  const std::uint64_t doomedId = annIndex < st.drawing.cadAnnotationAttrs.size()
+                                     ? st.drawing.cadAnnotationAttrs[annIndex].id
                                      : 0;
   if (doomedId != 0)
-    for (SurveyPoint& q : st.surveyPoints)
+    for (SurveyPoint& q : st.drawing.surveyPoints)
       if (q.labelMtextAnnId == doomedId)
         q.labelMtextAnnId = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
@@ -30707,13 +30707,13 @@ void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
     if (e.type == SelectedEntity::Type::Annotation && e.index > static_cast<int>(annIndex))
       --e.index;
   }
-  st.cadAnnotations.erase(st.cadAnnotations.begin() + static_cast<std::ptrdiff_t>(annIndex));
-  if (annIndex < st.cadAnnotationAttrs.size())
-    st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(annIndex));
+  st.drawing.cadAnnotations.erase(st.drawing.cadAnnotations.begin() + static_cast<std::ptrdiff_t>(annIndex));
+  if (annIndex < st.drawing.cadAnnotationAttrs.size())
+    st.drawing.cadAnnotationAttrs.erase(st.drawing.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(annIndex));
 }
 
 void EraseCadTableAtIndex(AppCommandState& st, size_t tableIndex) {
-  if (tableIndex >= st.cadTables.size())
+  if (tableIndex >= st.drawing.cadTables.size())
     return;
   if (st.tableCellEditorOpen && st.tableCellEditorIndex == static_cast<int>(tableIndex))
     CancelTableCellEditor(st);
@@ -30729,9 +30729,9 @@ void EraseCadTableAtIndex(AppCommandState& st, size_t tableIndex) {
     if (e.type == SelectedEntity::Type::Table && e.index > static_cast<int>(tableIndex))
       --e.index;
   }
-  st.cadTables.erase(st.cadTables.begin() + static_cast<std::ptrdiff_t>(tableIndex));
-  if (tableIndex < st.cadTableAttrs.size())
-    st.cadTableAttrs.erase(st.cadTableAttrs.begin() + static_cast<std::ptrdiff_t>(tableIndex));
+  st.drawing.cadTables.erase(st.drawing.cadTables.begin() + static_cast<std::ptrdiff_t>(tableIndex));
+  if (tableIndex < st.drawing.cadTableAttrs.size())
+    st.drawing.cadTableAttrs.erase(st.drawing.cadTableAttrs.begin() + static_cast<std::ptrdiff_t>(tableIndex));
 }
 
 void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log) {
@@ -30743,7 +30743,7 @@ void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& l
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
   size_t n = 0;
   for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size()) {
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size()) {
       RemoveSurveyPointAt(st, static_cast<size_t>(i));
       ++n;
     }
@@ -30756,12 +30756,12 @@ void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& l
 }
 
 void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointIndex) {
-  if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.surveyPoints.size())
+  if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.drawing.surveyPoints.size())
     return;
   const bool selected =
       std::find(st.selectedSurveyPointIndices.begin(), st.selectedSurveyPointIndices.end(), surveyPointIndex) !=
       st.selectedSurveyPointIndices.end();
-  const int annIx = FindSurveyLabelAnnIndex(st, st.surveyPoints[static_cast<size_t>(surveyPointIndex)]);
+  const int annIx = FindSurveyLabelAnnIndex(st, st.drawing.surveyPoints[static_cast<size_t>(surveyPointIndex)]);
   if (annIx < 0)
     return;
   const auto hasAnnSel = [&]() {
@@ -30786,9 +30786,9 @@ void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointInd
 }
 
 void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool keyShift) {
-  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
+  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.drawing.cadAnnotations.size())
     return;
-  const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
+  const CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(annIndex)];
   if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelForId < 0)
     return;
   const int spi = SurveyPointIndexForId(st, a.surveyPointLabelForId);
@@ -30816,7 +30816,7 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
   // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
   // simply expires and is reaped by the next refresh.
   std::set<int> solidIx;
-  const size_t nSolid = st.cadSolids.size();
+  const size_t nSolid = st.drawing.cadSolids.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
       solidIx.insert(e.index);
@@ -30824,15 +30824,15 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
   std::vector<int> sov(solidIx.begin(), solidIx.end());
   std::sort(sov.begin(), sov.end(), std::greater<int>());
   for (int idx : sov) {
-    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadSolids.erase(st.drawing.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadSolidAttrs.size())
+      st.drawing.cadSolidAttrs.erase(st.drawing.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
   // the caller's one undo snapshot already covers this removal.
   std::set<int> pipeRunIx;
-  const size_t nPipeRun = st.cadPipeRuns.size();
+  const size_t nPipeRun = st.drawing.cadPipeRuns.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
       pipeRunIx.insert(e.index);
@@ -30840,13 +30840,13 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
   std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
   std::sort(prv.begin(), prv.end(), std::greater<int>());
   for (int idx : prv) {
-    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
-      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadPipeRuns.erase(st.drawing.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadPipeRunAttrs.size())
+      st.drawing.cadPipeRunAttrs.erase(st.drawing.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
     // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
     // deleted run drops out of whichever network held it, and every index above it shifts down by
     // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
-    for (CadPipingSystem& sys : st.cadPipingSystems) {
+    for (CadPipingSystem& sys : st.drawing.cadPipingSystems) {
       auto& runs = sys.pipeRunIndices;
       runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
       for (int& ri : runs) {
@@ -30861,11 +30861,11 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
     std::set<int> alignIx;
     for (const auto& e : st.selection) {
       if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
-          static_cast<size_t>(e.index) < st.alignments.size())
+          static_cast<size_t>(e.index) < st.drawing.alignments.size())
         alignIx.insert(e.index);
     }
     for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
-      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+      st.drawing.alignments.erase(st.drawing.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
     if (!alignIx.empty()) {
       std::vector<std::string> quiet;
       RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
@@ -30881,12 +30881,12 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<std::uint64_t> erasedFeatureIds;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.featureLineAttrs.size())
-      erasedFeatureIds.push_back(st.featureLineAttrs[static_cast<size_t>(e.index)].id);
+        static_cast<size_t>(e.index) < st.drawing.featureLineAttrs.size())
+      erasedFeatureIds.push_back(st.drawing.featureLineAttrs[static_cast<size_t>(e.index)].id);
   std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
   std::vector<std::string> rebuiltGroupNames;
-  for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
-    const auto& source = st.cadSurfaces[i];
+  for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i) {
+    const auto& source = st.drawing.cadSurfaces[i];
     if (!source.gradingGroup) continue;
     CadSurface candidate = source;
     const auto end = std::remove_if(candidate.gradingMembers.begin(), candidate.gradingMembers.end(),
@@ -30901,7 +30901,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     rebuiltGroupNames.push_back(source.name);
   }
   PushUndoSnapshot(st, "Delete");
-  for (auto& [index, candidate] : rebuiltGroups) st.cadSurfaces[index] = std::move(candidate);
+  for (auto& [index, candidate] : rebuiltGroups) st.drawing.cadSurfaces[index] = std::move(candidate);
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
@@ -30913,13 +30913,13 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> flIx;  // REQ-087
   std::set<int> markerIx;  // REQ-359
   std::set<int> multileaderIx;  // REQ-367
-  const size_t nLines = st.lineCount();
-  const size_t nCirc = st.circleCount();
-  const size_t nAnn = st.cadAnnotations.size();
-  const size_t nArc = st.userArcs.size();
-  const size_t nEll = st.userEllipses.size();
-  const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
-  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
+  const size_t nLines = st.drawing.lineCount();
+  const size_t nCirc = st.drawing.circleCount();
+  const size_t nAnn = st.drawing.cadAnnotations.size();
+  const size_t nArc = st.drawing.userArcs.size();
+  const size_t nEll = st.drawing.userEllipses.size();
+  const size_t nPoly = st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
       lineIx.insert(e.index);
@@ -30928,10 +30928,10 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
       annIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadTables.size())
+             static_cast<size_t>(e.index) < st.drawing.cadTables.size())
       tableIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadBlockRefs.size())
+             static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
       blockIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
       arcIx.insert(e.index);
@@ -30943,10 +30943,10 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
              static_cast<size_t>(e.index) < nFl)
       flIx.insert(e.index);  // REQ-087
     else if (e.type == SelectedEntity::Type::PositionMarker && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadPositionMarkers.size())
+             static_cast<size_t>(e.index) < st.drawing.cadPositionMarkers.size())
       markerIx.insert(e.index);  // REQ-359: the marker and its label are one object
     else if (e.type == SelectedEntity::Type::Multileader && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadMultileaders.size())
+             static_cast<size_t>(e.index) < st.drawing.cadMultileaders.size())
       multileaderIx.insert(e.index);  // REQ-367: path + label are one object
   }
 
@@ -30966,24 +30966,24 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::sort(lv.begin(), lv.end(), std::greater<int>());
   for (int idx : lv) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       continue;
-    st.eraseLine(k);
-    if (static_cast<size_t>(idx) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.eraseLine(k);
+    if (static_cast<size_t>(idx) < st.drawing.userLineAttrs.size())
+      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> cv(circIx.begin(), circIx.end());
   std::sort(cv.begin(), cv.end(), std::greater<int>());
   for (int idx : cv) {
-    if (static_cast<size_t>(idx) >= st.circleCount())
+    if (static_cast<size_t>(idx) >= st.drawing.circleCount())
       continue;
     // One whole record (stride 4) comes out. Removing three floats left the array a non-multiple of
     // the stride and shifted every later circle by one slot (issue #62); eraseCircle removes all four.
-    st.eraseCircle(static_cast<size_t>(idx));
-    if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
-      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
+    st.drawing.eraseCircle(static_cast<size_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.userCircleAttrs.size())
+      st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -31000,40 +31000,40 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::sort(bv.begin(), bv.end(), std::greater<int>());
   for (int idx : bv) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.cadBlockRefs.size())
+    if (k >= st.drawing.cadBlockRefs.size())
       continue;
-    st.cadBlockRefs.erase(st.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.cadBlockRefAttrs.size())
-      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.drawing.cadBlockRefAttrs.size())
+      st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> arv(arcIx.begin(), arcIx.end());
   std::sort(arv.begin(), arv.end(), std::greater<int>());
   for (int idx : arv) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
-    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> ev(ellIx.begin(), ellIx.end());
   std::sort(ev.begin(), ev.end(), std::greater<int>());
   for (int idx : ev) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    st.userEllipses.erase(st.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.userEllAttrs.size())
-      st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.userEllipses.erase(st.drawing.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.drawing.userEllAttrs.size())
+      st.drawing.userEllAttrs.erase(st.drawing.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
   EraseSelectedSplines(st);  // REQ-443
   EraseSelectedCadPoints(st);
 
   // Filled regions (REQ-042): erase from cadFilledRegions + parallel attrs, highest index first.
   std::set<int> fillIx;
-  const size_t nFill = st.cadFilledRegions.size();
+  const size_t nFill = st.drawing.cadFilledRegions.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::FilledRegion && e.index >= 0 && static_cast<size_t>(e.index) < nFill)
       fillIx.insert(e.index);
@@ -31041,15 +31041,15 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> fv(fillIx.begin(), fillIx.end());
   std::sort(fv.begin(), fv.end(), std::greater<int>());
   for (int idx : fv) {
-    st.cadFilledRegions.erase(st.cadFilledRegions.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadFilledRegionAttrs.size())
-      st.cadFilledRegionAttrs.erase(st.cadFilledRegionAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadFilledRegions.erase(st.drawing.cadFilledRegions.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadFilledRegionAttrs.size())
+      st.drawing.cadFilledRegionAttrs.erase(st.drawing.cadFilledRegionAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // Imported meshes (REQ-063: "erasing a mesh is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing the pointer here is that one step).
   std::set<int> meshIx;
-  const size_t nMesh = st.cadMeshes.size();
+  const size_t nMesh = st.drawing.cadMeshes.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::Mesh && e.index >= 0 && static_cast<size_t>(e.index) < nMesh)
       meshIx.insert(e.index);
@@ -31057,14 +31057,14 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> mv(meshIx.begin(), meshIx.end());
   std::sort(mv.begin(), mv.end(), std::greater<int>());
   for (int idx : mv) {
-    st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
-      st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadMeshes.erase(st.drawing.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadMeshAttrs.size())
+      st.drawing.cadMeshAttrs.erase(st.drawing.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // Point clouds (REQ-171: "erase + undo is one step" — same shape as the mesh erase above).
   std::set<int> pointCloudIx;
-  const size_t nPointCloud = st.cadPointClouds.size();
+  const size_t nPointCloud = st.drawing.cadPointClouds.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
         static_cast<size_t>(e.index) < nPointCloud)
@@ -31073,9 +31073,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> pcv(pointCloudIx.begin(), pointCloudIx.end());
   std::sort(pcv.begin(), pcv.end(), std::greater<int>());
   for (int idx : pcv) {
-    st.cadPointClouds.erase(st.cadPointClouds.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadPointCloudAttrs.size())
-      st.cadPointCloudAttrs.erase(st.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadPointClouds.erase(st.drawing.cadPointClouds.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadPointCloudAttrs.size())
+      st.drawing.cadPointCloudAttrs.erase(st.drawing.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
@@ -31092,7 +31092,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   // discarded — REQ-069's own rule, reached without a second mechanism.
   {
     std::set<int> surfIx;
-    const size_t nSurf = st.cadSurfaces.size();
+    const size_t nSurf = st.drawing.cadSurfaces.size();
     for (const auto& e : st.selection) {
       if (e.type == SelectedEntity::Type::Surface && e.index >= 0 && static_cast<size_t>(e.index) < nSurf)
         surfIx.insert(e.index);
@@ -31105,7 +31105,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 
   // PDF underlays: release GL texture and erase from highest index downward.
   std::set<int> pdfIx;
-  const size_t nPdf = st.pdfAttachments.size();
+  const size_t nPdf = st.drawing.pdfAttachments.size();
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::PdfUnderlay && e.index >= 0 &&
         static_cast<size_t>(e.index) < nPdf)
@@ -31114,25 +31114,25 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> pdfv(pdfIx.begin(), pdfIx.end());
   std::sort(pdfv.begin(), pdfv.end(), std::greater<int>());
   for (int idx : pdfv) {
-    PdfAttach_ReleaseTexture(st.pdfAttachments[static_cast<size_t>(idx)]);
-    st.pdfAttachments.erase(st.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
+    PdfAttach_ReleaseTexture(st.drawing.pdfAttachments[static_cast<size_t>(idx)]);
+    st.drawing.pdfAttachments.erase(st.drawing.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // Position Markers (REQ-359), highest index first so an earlier erase never shifts a later one.
   for (auto it = markerIx.rbegin(); it != markerIx.rend(); ++it) {
     const auto at = static_cast<std::ptrdiff_t>(*it);
-    st.cadPositionMarkers.erase(st.cadPositionMarkers.begin() + at);
-    if (static_cast<size_t>(*it) < st.cadPositionMarkerAttrs.size())
-      st.cadPositionMarkerAttrs.erase(st.cadPositionMarkerAttrs.begin() + at);
+    st.drawing.cadPositionMarkers.erase(st.drawing.cadPositionMarkers.begin() + at);
+    if (static_cast<size_t>(*it) < st.drawing.cadPositionMarkerAttrs.size())
+      st.drawing.cadPositionMarkerAttrs.erase(st.drawing.cadPositionMarkerAttrs.begin() + at);
   }
   if (!markerIx.empty() && st.mtextRichEditorMarkerIndex >= 0)
     CloseMtextRichEditorUi(st);  // its target may be gone or renumbered
 
   for (auto it = multileaderIx.rbegin(); it != multileaderIx.rend(); ++it) {
     const auto at = static_cast<std::ptrdiff_t>(*it);
-    st.cadMultileaders.erase(st.cadMultileaders.begin() + at);
-    if (static_cast<size_t>(*it) < st.cadMultileaderAttrs.size())
-      st.cadMultileaderAttrs.erase(st.cadMultileaderAttrs.begin() + at);
+    st.drawing.cadMultileaders.erase(st.drawing.cadMultileaders.begin() + at);
+    if (static_cast<size_t>(*it) < st.drawing.cadMultileaderAttrs.size())
+      st.drawing.cadMultileaderAttrs.erase(st.drawing.cadMultileaderAttrs.begin() + at);
   }
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
@@ -31146,7 +31146,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     for (const auto& name : rebuiltGroupNames) {
       const int index = FindSurfaceIndex(st, name);
       if (index >= 0) {
-        st.cadSurfaces[static_cast<size_t>(index)].builtAtRevision = st.cadGpuRevision;
+        st.drawing.cadSurfaces[static_cast<size_t>(index)].builtAtRevision = st.cadGpuRevision;
         MarkVolumeSurfacesDirtyForParent(st, name);
       }
     }
@@ -31162,13 +31162,13 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 /// four kinds already stripped, with a logged reason).
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
-  const size_t nLines = st.lineCount();
-  const size_t nCirc = st.circleCount();
-  const size_t nAnn = st.cadAnnotations.size();
-  const size_t nArc = st.userArcs.size();
-  const size_t nEll = st.userEllipses.size();
-  const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
-  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
+  const size_t nLines = st.drawing.lineCount();
+  const size_t nCirc = st.drawing.circleCount();
+  const size_t nAnn = st.drawing.cadAnnotations.size();
+  const size_t nArc = st.drawing.userArcs.size();
+  const size_t nEll = st.drawing.userEllipses.size();
+  const size_t nPoly = st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
       lineIx.insert(e.index);
@@ -31187,10 +31187,10 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
     // Tables and block references (a pipe fitting is one) are mirrored by the flat path, so
     // erase-source must remove their originals too (REQ-351).
     else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadTables.size())
+             static_cast<size_t>(e.index) < st.drawing.cadTables.size())
       tableIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.cadBlockRefs.size())
+             static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
       blockIx.insert(e.index);
   }
 
@@ -31215,31 +31215,31 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::vector<int> bv(blockIx.begin(), blockIx.end());
   std::sort(bv.begin(), bv.end(), std::greater<int>());
   for (int idx : bv) {
-    st.cadBlockRefs.erase(st.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadBlockRefAttrs.size())
-      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.cadBlockRefAttrs.size())
+      st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
   for (int idx : lv) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       continue;
-    st.eraseLine(k);
-    if (static_cast<size_t>(idx) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.eraseLine(k);
+    if (static_cast<size_t>(idx) < st.drawing.userLineAttrs.size())
+      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> cv(circIx.begin(), circIx.end());
   std::sort(cv.begin(), cv.end(), std::greater<int>());
   for (int idx : cv) {
-    if (static_cast<size_t>(idx) >= st.circleCount())
+    if (static_cast<size_t>(idx) >= st.drawing.circleCount())
       continue;
-    st.eraseCircle(static_cast<size_t>(idx));
-    if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
-      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
+    st.drawing.eraseCircle(static_cast<size_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.userCircleAttrs.size())
+      st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -31251,22 +31251,22 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::sort(arv.begin(), arv.end(), std::greater<int>());
   for (int idx : arv) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       continue;
-    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   std::vector<int> ev(ellIx.begin(), ellIx.end());
   std::sort(ev.begin(), ev.end(), std::greater<int>());
   for (int idx : ev) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       continue;
-    st.userEllipses.erase(st.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.userEllAttrs.size())
-      st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.userEllipses.erase(st.drawing.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.drawing.userEllAttrs.size())
+      st.drawing.userEllAttrs.erase(st.drawing.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
   EraseSelectedSplines(st);  // REQ-443
   EraseSelectedCadPoints(st);
@@ -31284,7 +31284,7 @@ static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
   std::sort(ix.begin(), ix.end(), std::greater<int>());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
   for (int i : ix)
-    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
       RemoveSurveyPointAt(st, static_cast<size_t>(i));
   st.selectedSurveyPointIndices.clear();
 }
@@ -31323,7 +31323,7 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
   DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
     return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
   });
-  const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
   std::vector<float> newLines, newCircles, newCircleNormals;
   std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
   size_t refused = 0;
@@ -31332,37 +31332,37 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.lineCount())
+      if (k >= st.drawing.lineCount())
         break;
-      const ray3d::Vec3 p0 = rp(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0));
-      const ray3d::Vec3 p1 = rp(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1));
+      const ray3d::Vec3 p0 = rp(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).z0));
+      const ray3d::Vec3 p1 = rp(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1), static_cast<float>(st.drawing.line(k).z1));
       for (const ray3d::Vec3& p : {p0, p1}) {
         newLines.push_back(static_cast<float>(p.x));
         newLines.push_back(static_cast<float>(p.y));
         newLines.push_back(static_cast<float>(p.z));
       }
       EntityAttributes a{};
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
-        a = st.userLineAttrs[static_cast<size_t>(e.index)];
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+        a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
       newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       break;
     }
     case SelectedEntity::Type::Circle: {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.circleCount())
+      if (ci >= st.drawing.circleCount())
         break;
-      const CadCircleRecord cc = st.circle(ci);
+      const CadCircleRecord cc = st.drawing.circle(ci);
       const ray3d::Vec3 c = rp(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
       newCircles.push_back(static_cast<float>(c.x));
       newCircles.push_back(static_cast<float>(c.y));
       newCircles.push_back(static_cast<float>(c.z));
       newCircles.push_back(static_cast<float>(cc.r));  // radius preserved (an isometry)
       EntityAttributes a{};
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-        a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+        a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
       newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
       float nx = 0.f, ny = 0.f, nz = 1.f;
-      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
+      CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
       const ray3d::Vec3 n = rv(nx, ny, nz);
       PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y),
                        static_cast<float>(n.z));
@@ -31370,30 +31370,30 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
     }
     case SelectedEntity::Type::Polyline: {
       const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         break;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       if (v1 - v0 < 2)
         break;
-      if (st.userPolylineOffsets.empty())
-        st.userPolylineOffsets.push_back(0);
-      const int baseVert = st.userPolylineOffsets.back();
+      if (st.drawing.userPolylineOffsets.empty())
+        st.drawing.userPolylineOffsets.push_back(0);
+      const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
         const size_t b = static_cast<size_t>(vi);
-        const ray3d::Vec3 p = rp(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z));
-        st.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+        const ray3d::Vec3 p = rp(static_cast<float>(st.drawing.vertex(b).x), static_cast<float>(st.drawing.vertex(b).y), static_cast<float>(st.drawing.vertex(b).z));
+        st.drawing.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
       }
-      st.userPolylineOffsets.push_back(baseVert + (v1 - v0));
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-      st.userPolylineClosed.push_back(static_cast<size_t>(pi) < st.userPolylineClosed.size()
-                                          ? st.userPolylineClosed[static_cast<size_t>(pi)]
+      st.drawing.userPolylineOffsets.push_back(baseVert + (v1 - v0));
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+      st.drawing.userPolylineClosed.push_back(static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size()
+                                          ? st.drawing.userPolylineClosed[static_cast<size_t>(pi)]
                                           : static_cast<uint8_t>(0));
       EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
       break;
     }
     default:
@@ -31417,18 +31417,18 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
   refused += beforeErase - st.selection.size();
   refused += st.selectedSurveyPointIndices.size();
 
-  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
 
   if (refused > 0)
     log.push_back("MIRROR — " + std::to_string(refused) +
                   " entity(ies) excluded: arc/ellipse/text/table/block/feature-line/survey-point"
                   " reflection across a tilted mirror plane is not supported yet (REQ-328) — reflect"
                   " across a mirror line on a work plane with an upright Z axis.");
-  if (!newLines.empty() || !newCircles.empty() || st.userPolylineVerts.size() != polyVertsBefore)
+  if (!newLines.empty() || !newCircles.empty() || st.drawing.userPolylineVerts.size() != polyVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -31559,16 +31559,16 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   using ST = SelectedEntity::Type;
   if (cut.type == ST::LineSeg) {
     const size_t k = static_cast<size_t>(cut.index);
-    if (k < st.lineCount())
-      out->push_back({st.line(k).x0, st.line(k).y0, st.line(k).x1,
-                      st.line(k).y1});
+    if (k < st.drawing.lineCount())
+      out->push_back({st.drawing.line(k).x0, st.drawing.line(k).y0, st.drawing.line(k).x1,
+                      st.drawing.line(k).y1});
     return;
   }
   if (cut.type == ST::Circle) {
     const size_t ci = static_cast<size_t>(cut.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return;
-    const CadCircleRecord cc = st.circle(ci);
+    const CadCircleRecord cc = st.drawing.circle(ci);
     const float cx = static_cast<float>(cc.cx);
     const float cy = static_cast<float>(cc.cy);
     const float r = static_cast<float>(cc.r);
@@ -31593,9 +31593,9 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   }
   if (cut.type == ST::Arc) {
     const size_t k = static_cast<size_t>(cut.index);
-    if (k >= st.userArcs.size())
+    if (k >= st.drawing.userArcs.size())
       return;
-    const CadArc& a = st.userArcs[k];
+    const CadArc& a = st.drawing.userArcs[k];
     constexpr int n = 40;
     const double dcx = static_cast<double>(a.cx);
     const double dcy = static_cast<double>(a.cy);
@@ -31617,9 +31617,9 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   }
   if (cut.type == ST::Ellipse) {
     const size_t k = static_cast<size_t>(cut.index);
-    if (k >= st.userEllipses.size())
+    if (k >= st.drawing.userEllipses.size())
       return;
-    const CadEllipse& el = st.userEllipses[k];
+    const CadEllipse& el = st.drawing.userEllipses[k];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       return;
@@ -31648,24 +31648,24 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   }
   if (cut.type == ST::Polyline) {
     const int pi = cut.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
       return;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const float ax = static_cast<float>(st.vertex(vi).x);
-      const float ay = static_cast<float>(st.vertex(vi).y);
-      const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
-      const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
+      const float ax = static_cast<float>(st.drawing.vertex(vi).x);
+      const float ay = static_cast<float>(st.drawing.vertex(vi).y);
+      const float bx = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).x);
+      const float by = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).y);
       out->push_back({ax, ay, bx, by});
     }
     if (closed && v1 - v0 >= 2) {
-      const float ax = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).x);
-      const float ay = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).y);
-      const float bx = static_cast<float>(st.vertex(v0).x);
-      const float by = static_cast<float>(st.vertex(v0).y);
+      const float ax = static_cast<float>(st.drawing.vertex(static_cast<size_t>(v1 - 1)).x);
+      const float ay = static_cast<float>(st.drawing.vertex(static_cast<size_t>(v1 - 1)).y);
+      const float bx = static_cast<float>(st.drawing.vertex(v0).x);
+      const float by = static_cast<float>(st.drawing.vertex(v0).y);
       out->push_back({ax, ay, bx, by});
     }
   }
@@ -31673,19 +31673,19 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
 
 static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int skipEdgeVi,
                                          std::vector<std::array<double, 4>>* out) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
   auto pushEdge = [&](int vi) {
     if (vi == skipEdgeVi)
       return;
-    const float ax = static_cast<float>(st.vertex(vi).x);
-    const float ay = static_cast<float>(st.vertex(vi).y);
-    const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
-    const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
+    const float ax = static_cast<float>(st.drawing.vertex(vi).x);
+    const float ay = static_cast<float>(st.drawing.vertex(vi).y);
+    const float bx = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).x);
+    const float by = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).y);
     out->push_back({ax, ay, bx, by});
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
@@ -31693,10 +31693,10 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
   if (closed && v1 - v0 >= 2) {
     const int closingVi = v1 - 1;
     if (closingVi != skipEdgeVi) {
-      const float ax = static_cast<float>(st.vertex(closingVi).x);
-      const float ay = static_cast<float>(st.vertex(closingVi).y);
-      const float bx = static_cast<float>(st.vertex(v0).x);
-      const float by = static_cast<float>(st.vertex(v0).y);
+      const float ax = static_cast<float>(st.drawing.vertex(closingVi).x);
+      const float ay = static_cast<float>(st.drawing.vertex(closingVi).y);
+      const float bx = static_cast<float>(st.drawing.vertex(v0).x);
+      const float by = static_cast<float>(st.drawing.vertex(v0).y);
       out->push_back({ax, ay, bx, by});
     }
   }
@@ -31705,9 +31705,9 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
 static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, const TrimTargetEdge* excludeEdge,
                                                      std::vector<std::array<double, 4>>* out) {
   out->clear();
-  if (st.lineStoreWellFormed()) {
-    for (size_t li = 0; li < st.lineCount(); ++li) {
-      const CadLineRecord ln = st.line(li);
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+      const CadLineRecord ln = st.drawing.line(li);
       const int idx = static_cast<int>(li);
       if (excludeEdge && excludeEdge->kind == TrimTargetEdge::Line && excludeEdge->lineIx == idx)
         continue;
@@ -31717,28 +31717,28 @@ static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, 
       CollectCutSegments(st, cut, out);
     }
   }
-  if (st.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+  if (st.drawing.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
       SelectedEntity cut{};
       cut.type = SelectedEntity::Type::Circle;
       cut.index = static_cast<int>(ci);
       CollectCutSegments(st, cut, out);
     }
   }
-  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+  for (size_t ai = 0; ai < st.drawing.userArcs.size(); ++ai) {
     SelectedEntity cut{};
     cut.type = SelectedEntity::Type::Arc;
     cut.index = static_cast<int>(ai);
     CollectCutSegments(st, cut, out);
   }
-  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
+  for (size_t ei = 0; ei < st.drawing.userEllipses.size(); ++ei) {
     SelectedEntity cut{};
     cut.type = SelectedEntity::Type::Ellipse;
     cut.index = static_cast<int>(ei);
     CollectCutSegments(st, cut, out);
   }
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
     if (excludeEdge && excludeEdge->kind == TrimTargetEdge::Poly && excludeEdge->polyIx == pi)
       AppendPolylineCutEdgesExcept(st, pi, excludeEdge->vLo, out);
@@ -31778,9 +31778,9 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
   TrimTargetEdge bestR{};
   double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
-  if (st.lineStoreWellFormed()) {
-    for (size_t li = 0; li < st.lineCount(); ++li) {
-      const CadLineRecord ln = st.line(li);
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+      const CadLineRecord ln = st.drawing.line(li);
       const double x0 = ln.x0, y0 = ln.y0, x1 = ln.x1, y1 = ln.y1;
       const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
@@ -31799,17 +31799,17 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
   }
 
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const double x0 = st.vertex(vi).x;
-      const double y0 = st.vertex(vi).y;
-      const double x1 = st.vertex(static_cast<size_t>(vi + 1)).x;
-      const double y1 = st.vertex(static_cast<size_t>(vi + 1)).y;
+      const double x0 = st.drawing.vertex(vi).x;
+      const double y0 = st.drawing.vertex(vi).y;
+      const double x1 = st.drawing.vertex(static_cast<size_t>(vi + 1)).x;
+      const double y1 = st.drawing.vertex(static_cast<size_t>(vi + 1)).y;
       const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         return;
@@ -31854,9 +31854,9 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
   TrimTargetEdge bestR{};
   double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
-  if (st.lineStoreWellFormed()) {
-    for (size_t li = 0; li < st.lineCount(); ++li) {
-      const CadLineRecord ln = st.line(li);
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+      const CadLineRecord ln = st.drawing.line(li);
       const double x0 = ln.x0, y0 = ln.y0, x1 = ln.x1, y1 = ln.y1;
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
@@ -31875,17 +31875,17 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
   }
 
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const double x0 = st.vertex(vi).x;
-      const double y0 = st.vertex(vi).y;
-      const double x1 = st.vertex(static_cast<size_t>(vi + 1)).x;
-      const double y1 = st.vertex(static_cast<size_t>(vi + 1)).y;
+      const double x0 = st.drawing.vertex(vi).x;
+      const double y0 = st.drawing.vertex(vi).y;
+      const double x1 = st.drawing.vertex(static_cast<size_t>(vi + 1)).x;
+      const double y1 = st.drawing.vertex(static_cast<size_t>(vi + 1)).y;
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         return;
@@ -32034,29 +32034,29 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
 
   if (tgt.kind == TrimTargetEdge::Line) {
     const size_t k = static_cast<size_t>(tgt.lineIx);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
     if (trimA) {
-      st.lineComponent(k, CadLineComponent::X0) = rx;
-      st.lineComponent(k, CadLineComponent::Y0) = ry;
+      st.drawing.lineComponent(k, CadLineComponent::X0) = rx;
+      st.drawing.lineComponent(k, CadLineComponent::Y0) = ry;
     } else {
-      st.lineComponent(k, CadLineComponent::X1) = rx;
-      st.lineComponent(k, CadLineComponent::Y1) = ry;
+      st.drawing.lineComponent(k, CadLineComponent::X1) = rx;
+      st.drawing.lineComponent(k, CadLineComponent::Y1) = ry;
     }
-    const double exx = st.line(k).x1 - st.line(k).x0;
-    const double eyy = st.line(k).y1 - st.line(k).y0;
+    const double exx = st.drawing.line(k).x1 - st.drawing.line(k).x0;
+    const double eyy = st.drawing.line(k).y1 - st.drawing.line(k).y0;
     if (exx * exx + eyy * eyy < 1e-24) {
-      st.eraseLine(k);
-      if (static_cast<size_t>(tgt.lineIx) < st.userLineAttrs.size())
-        st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(tgt.lineIx));
+      st.drawing.eraseLine(k);
+      if (static_cast<size_t>(tgt.lineIx) < st.drawing.userLineAttrs.size())
+        st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(tgt.lineIx));
     }
   } else {
     const int vi = trimA ? tgt.vLo : tgt.vLo + 1;
     const size_t vk = static_cast<size_t>(vi);
-    if (vk >= st.vertexCount())
+    if (vk >= st.drawing.vertexCount())
       return false;
-    st.vertexComponent(vk, CadVertexComponent::X) = rx;
-    st.vertexComponent(vk, CadVertexComponent::Y) = ry;
+    st.drawing.vertexComponent(vk, CadVertexComponent::X) = rx;
+    st.drawing.vertexComponent(vk, CadVertexComponent::Y) = ry;
   }
 
   log.push_back("TRIM — segment shortened.");
@@ -32094,9 +32094,9 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   switch (e.type) {
   case T::LineSeg: {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= st.lineCount())
+    if (li >= st.drawing.lineCount())
       return 0.0;
-    const CadLineRecord seg = st.line(li);
+    const CadLineRecord seg = st.drawing.line(li);
     if (useRay) {
       double t = 0.0;
       (void)ray3d::RaySegmentDistance(*pickRay, ray3d::Vec3{seg.x0, seg.y0, seg.z0},
@@ -32114,9 +32114,9 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   }
   case T::Circle: {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return 0.0;
-    const CadCircleRecord cc = st.circle(ci);
+    const CadCircleRecord cc = st.drawing.circle(ci);
     if (useRay) {
       double bestT = 1e300;
       constexpr int n = 24;
@@ -32134,9 +32134,9 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
     return cc.cz;
   }
   case T::Arc: {
-    if (static_cast<size_t>(e.index) >= st.userArcs.size())
+    if (static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
       return 0.0;
-    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
     if (useRay) {
       double bestT = 1e300;
       constexpr int n = 24;
@@ -32154,79 +32154,79 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
     return static_cast<double>(a.z);
   }
   case T::Spline: {  // REQ-443: nearest point of its control polygon by elevation
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSplines.size() ||
-        st.cadSplines[static_cast<size_t>(e.index)].ctrl.empty())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadSplines.size() ||
+        st.drawing.cadSplines[static_cast<size_t>(e.index)].ctrl.empty())
       return 0.0;
-    return st.cadSplines[static_cast<size_t>(e.index)].ctrl.front().z;
+    return st.drawing.cadSplines[static_cast<size_t>(e.index)].ctrl.front().z;
   }
   case T::Point: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPoints.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadPoints.size())
       return 0.0;
-    return st.cadPoints[static_cast<size_t>(e.index)].z;
+    return st.drawing.cadPoints[static_cast<size_t>(e.index)].z;
   }
   case T::Ellipse: {
-    if (static_cast<size_t>(e.index) >= st.userEllipses.size())
+    if (static_cast<size_t>(e.index) >= st.drawing.userEllipses.size())
       return 0.0;
-    const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    const CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(e.index)];
     return static_cast<double>(el.z);
   }
   case T::Polyline: {
-    if (static_cast<size_t>(e.index) + 1 >= st.userPolylineOffsets.size())
+    if (static_cast<size_t>(e.index) + 1 >= st.drawing.userPolylineOffsets.size())
       return 0.0;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(e.index)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(e.index)+ 1)];
     double bestDepth = useRay ? 1e300 : -1e300;
     for (int vi = v0; vi + 1 < v1; ++vi) {
       const size_t A = static_cast<size_t>(vi), B = (static_cast<size_t>(vi)+ 1);
-      if (B >= st.vertexCount())
+      if (B >= st.drawing.vertexCount())
         break;
       if (useRay) {
         double t = 0.0;
         (void)ray3d::RaySegmentDistance(
             *pickRay,
-            ray3d::Vec3{st.vertex(A).x, st.vertex(A).y, st.vertex(A).z},
-            ray3d::Vec3{st.vertex(B).x, st.vertex(B).y, st.vertex(B).z}, &t);
+            ray3d::Vec3{st.drawing.vertex(A).x, st.drawing.vertex(A).y, st.drawing.vertex(A).z},
+            ray3d::Vec3{st.drawing.vertex(B).x, st.drawing.vertex(B).y, st.drawing.vertex(B).z}, &t);
         bestDepth = std::min(bestDepth, t);
       } else {
-        const double az = st.vertex(A).z, bz = st.vertex(B).z;
+        const double az = st.drawing.vertex(A).z, bz = st.drawing.vertex(B).z;
         bestDepth = std::max(bestDepth, std::max(az, bz));
       }
     }
     return bestDepth;
   }
   case T::FeatureLine: {
-    if (static_cast<size_t>(e.index) + 1 >= st.featureLineOffsets.size())
+    if (static_cast<size_t>(e.index) + 1 >= st.drawing.featureLineOffsets.size())
       return 0.0;
-    const int v0 = st.featureLineOffsets[static_cast<size_t>(e.index)];
-    const int v1 = st.featureLineOffsets[(static_cast<size_t>(e.index)+ 1)];
+    const int v0 = st.drawing.featureLineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.drawing.featureLineOffsets[(static_cast<size_t>(e.index)+ 1)];
     double bestDepth = useRay ? 1e300 : -1e300;
     for (int vi = v0; vi + 1 < v1; ++vi) {
       const size_t A = static_cast<size_t>(vi) * 3, B = (static_cast<size_t>(vi)+ 1) * 3;
-      if (B + 2 >= st.featureLineVerts.size())
+      if (B + 2 >= st.drawing.featureLineVerts.size())
         break;
       if (useRay) {
         double t = 0.0;
         (void)ray3d::RaySegmentDistance(
             *pickRay,
-            ray3d::Vec3{static_cast<float>(st.featureLineVerts[A]),
-                        static_cast<float>(st.featureLineVerts[A + 1]),
-                        static_cast<float>(st.featureLineVerts[A + 2])},
-            ray3d::Vec3{static_cast<float>(st.featureLineVerts[B]),
-                        static_cast<float>(st.featureLineVerts[B + 1]),
-                        static_cast<float>(st.featureLineVerts[B + 2])},
+            ray3d::Vec3{static_cast<float>(st.drawing.featureLineVerts[A]),
+                        static_cast<float>(st.drawing.featureLineVerts[A + 1]),
+                        static_cast<float>(st.drawing.featureLineVerts[A + 2])},
+            ray3d::Vec3{static_cast<float>(st.drawing.featureLineVerts[B]),
+                        static_cast<float>(st.drawing.featureLineVerts[B + 1]),
+                        static_cast<float>(st.drawing.featureLineVerts[B + 2])},
             &t);
         bestDepth = std::min(bestDepth, t);
       } else {
-        const double az = st.featureLineVerts[A + 2], bz = st.featureLineVerts[B + 2];
+        const double az = st.drawing.featureLineVerts[A + 2], bz = st.drawing.featureLineVerts[B + 2];
         bestDepth = std::max(bestDepth, std::max(az, bz));
       }
     }
     return bestDepth;
   }
   case T::Solid: {
-    if (static_cast<size_t>(e.index) >= st.cadSolids.size())
+    if (static_cast<size_t>(e.index) >= st.drawing.cadSolids.size())
       return 0.0;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    const CadSolidPtr& sp = st.drawing.cadSolids[static_cast<size_t>(e.index)];
     double bestDepth = useRay ? 1e300 : -1e300;
     for (const brep::Edge& ed : sp->edges) {
       const int steps = ed.kind == brep::CurveKind::Arc ? 12 : 1;
@@ -32342,9 +32342,9 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     }
   };
 
-  if (st.lineStoreWellFormed()) {
-    for (size_t i = 0; i < st.lineCount(); ++i) {
-      const CadLineRecord ln = st.line(i);
+  if (st.drawing.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = st.drawing.line(i);
       SelectedEntity e{};
       e.type = SelectedEntity::Type::LineSeg;
       e.index = static_cast<int>(i);
@@ -32352,12 +32352,12 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       consider(e, d2);
     }
   }
-  if (st.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+  if (st.drawing.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Circle;
       e.index = static_cast<int>(ci);
-      const CadCircleRecord cr = st.circle(ci);
+      const CadCircleRecord cr = st.drawing.circle(ci);
       const double cx = cr.cx;
       const double cy = cr.cy;
       const double cz = cr.cz;
@@ -32377,10 +32377,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         constexpr double twopi = 6.28318530717958647692;
         const size_t nIdx = ci * 3;
         float nx = 0.f, ny = 0.f, nz = 1.f;
-        if (nIdx + 2 < st.userCircleNormals.size()) {
-          nx = st.userCircleNormals[nIdx];
-          ny = st.userCircleNormals[nIdx + 1];
-          nz = st.userCircleNormals[nIdx + 2];
+        if (nIdx + 2 < st.drawing.userCircleNormals.size()) {
+          nx = st.drawing.userCircleNormals[nIdx];
+          ny = st.drawing.userCircleNormals[nIdx + 1];
+          nz = st.drawing.userCircleNormals[nIdx + 2];
         }
         ucs::Ucs plane;
         const bool tilted = !IsFlatNormal(nx, ny, nz) &&
@@ -32399,8 +32399,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       }
     }
   }
-  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
-    const CadArc& a = st.userArcs[ai];
+  for (size_t ai = 0; ai < st.drawing.userArcs.size(); ++ai) {
+    const CadArc& a = st.drawing.userArcs[ai];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Arc;
     e.index = static_cast<int>(ai);
@@ -32439,8 +32439,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     }
     consider(e, bestD2);
   }
-  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
-    const CadEllipse& el = st.userEllipses[ei];
+  for (size_t ei = 0; ei < st.drawing.userEllipses.size(); ++ei) {
+    const CadEllipse& el = st.drawing.userEllipses[ei];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Ellipse;
     e.index = static_cast<int>(ei);
@@ -32471,8 +32471,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   // so a click that lands squarely on the curve between two samples still hits it.
   {
     std::vector<ray3d::Vec3> sp;
-    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
-      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+    for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
+      spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &sp);
       if (sp.size() < 2)
         continue;
       SelectedEntity e{};
@@ -32485,10 +32485,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     }
   }
   // REQ-480: an alignment is measured against the chords of its display sampling, the metric the spline uses.
-  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
-    if (st.alignments[ai].Empty())
+  for (size_t ai = 0; ai < st.drawing.alignments.size(); ++ai) {
+    if (st.drawing.alignments[ai].Empty())
       continue;
-    const std::vector<alignment::Point2> ap = st.alignments[ai].SampleForDisplay(0.01);
+    const std::vector<alignment::Point2> ap = st.drawing.alignments[ai].SampleForDisplay(0.01);
     if (ap.size() < 2)
       continue;
     SelectedEntity e{};
@@ -32499,20 +32499,20 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       bestD2 = std::min(bestD2, d2Segment(ap[i - 1].x, ap[i - 1].y, 0.0, ap[i].x, ap[i].y, 0.0));
     consider(e, bestD2);
   }
-  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
-    const CadPoint& p = st.cadPoints[pi];
+  for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.drawing.cadPoints[pi];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Point;
     e.index = static_cast<int>(pi);
     consider(e, d2Segment(p.x, p.y, p.z, p.x, p.y, p.z));
   }
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Polyline;
     e.index = pi;
@@ -32521,23 +32521,23 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     // so a click or hover on the bulge registers. Arc samples reuse the ARC entity's own metric.
     auto polySegD2 = [&](int va, int vb) -> double {
       const size_t A = static_cast<size_t>(va), B = static_cast<size_t>(vb);
-      const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
-                              ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
+      const float bulge = static_cast<size_t>(va) < st.drawing.userPolylineVertsBulge.size()
+                              ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
       auto chordD2 = [&]() {
-        return d2Segment(st.vertex(A).x, st.vertex(A).y, st.vertex(A).z,
-                         st.vertex(B).x, st.vertex(B).y, st.vertex(B).z);
+        return d2Segment(st.drawing.vertex(A).x, st.drawing.vertex(A).y, st.drawing.vertex(A).z,
+                         st.drawing.vertex(B).x, st.drawing.vertex(B).y, st.drawing.vertex(B).z);
       };
       if (bulge == 0.f)
         return chordD2();
       float nx = 0.f, ny = 0.f, nz = 1.f;
-      if (static_cast<size_t>(va) * 3 + 2 < st.userPolylineVertsNormal.size()) {
-        nx = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3];
-        ny = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 1];
-        nz = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 2];
+      if (static_cast<size_t>(va) * 3 + 2 < st.drawing.userPolylineVertsNormal.size()) {
+        nx = st.drawing.userPolylineVertsNormal[static_cast<size_t>(va) * 3];
+        ny = st.drawing.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 1];
+        nz = st.drawing.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 2];
       }
       if (IsFlatNormal(nx, ny, nz)) {
-        const BulgeArcSpan arc = BulgeArc(st.vertex(A).x, st.vertex(A).y,
-                                          st.vertex(B).x, st.vertex(B).y,
+        const BulgeArcSpan arc = BulgeArc(st.drawing.vertex(A).x, st.drawing.vertex(A).y,
+                                          st.drawing.vertex(B).x, st.drawing.vertex(B).y,
                                           static_cast<double>(bulge));
         if (!arc.valid)
           return chordD2();
@@ -32545,7 +32545,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
           return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
         double d2 = 1e300;
         constexpr int ns = 24;
-        const double za = static_cast<double>(st.vertex(A).z);
+        const double za = static_cast<double>(st.drawing.vertex(A).z);
         for (int s = 0; s <= ns; ++s) {
           const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
           d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
@@ -32556,8 +32556,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       // same technique as the tilted render branch above — then sampled back to world 3D, so both
       // the plan-view flattened metric (d2Point with no ray) and the true ray-to-curve metric (with
       // one) see the real tilted shape rather than a flat approximation.
-      const ray3d::Vec3 p0{st.vertex(A).x, st.vertex(A).y, st.vertex(A).z};
-      const ray3d::Vec3 p1{st.vertex(B).x, st.vertex(B).y, st.vertex(B).z};
+      const ray3d::Vec3 p0{st.drawing.vertex(A).x, st.drawing.vertex(A).y, st.drawing.vertex(A).z};
+      const ray3d::Vec3 p1{st.drawing.vertex(B).x, st.drawing.vertex(B).y, st.drawing.vertex(B).z};
       ucs::Ucs plane{};
       if (!ucs::FromNormal(p0, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                            static_cast<double>(nz)},
@@ -32589,13 +32589,13 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   // by a separate rule. ADR-034 relies on this being the single funnel; so does this.
   {
     const int nFl =
-        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
-    const auto& FV = st.featureLineVerts;
+        static_cast<int>(st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0);
+    const auto& FV = st.drawing.featureLineVerts;
     for (int fi = 0; fi < nFl; ++fi) {
-      const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
-      const int v1 = st.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
-      const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
-                          st.featureLineClosed[static_cast<size_t>(fi)];
+      const int v0 = st.drawing.featureLineOffsets[static_cast<size_t>(fi)];
+      const int v1 = st.drawing.featureLineOffsets[(static_cast<size_t>(fi)+ 1)];
+      const bool closed = static_cast<size_t>(fi) < st.drawing.featureLineClosed.size() &&
+                          st.drawing.featureLineClosed[static_cast<size_t>(fi)];
       SelectedEntity e{};
       e.type = SelectedEntity::Type::FeatureLine;
       e.index = fi;
@@ -32630,10 +32630,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   // the frame budget and one that does not. Under a ray (an orbited camera) the plan AABB does not
   // bound the ray, so the reject is skipped rather than made approximately correct — a pick that
   // silently misses is worse than a slow one.
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;
-    const CadTin& t = *st.cadSurfaces[si].tin;
+    const CadTin& t = *st.drawing.cadSurfaces[si].tin;
     const std::vector<double>& V = t.vertsXyz;
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Surface;
@@ -32671,10 +32671,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   // Layer and isolation are filtered here rather than in `consider`, for the reason the surface loop
   // above gives: `SolidVisible` carries the layer rule the renderer applies, which `consider` does
   // not know about.
-  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+  for (size_t soi = 0; soi < st.drawing.cadSolids.size(); ++soi) {
     if (!SolidVisible(st, soi))
       continue;
-    const CadSolidPtr& sp = st.cadSolids[soi];
+    const CadSolidPtr& sp = st.drawing.cadSolids[soi];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Solid;
     e.index = static_cast<int>(soi);
@@ -32702,10 +32702,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   // frame; a disk read per hover frame is exactly what the LOD renderer's reselect hysteresis
   // (TASK-270 §10h/10j) was built to avoid, so picking must not reintroduce it. Same precedent as
   // the extents/zoom-extents walks, which also only look at resident points.
-  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+  for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
     if (!PointCloudVisible(st, pci))
       continue;
-    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    const std::shared_ptr<const CadPointCloud>& pc = st.drawing.cadPointClouds[pci];
     if (!pc)
       continue;
     const std::vector<double>& P = pc->pointsXyz;
@@ -32731,8 +32731,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     consider(e, bestD2);
   }
 
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
-    const CadTable& t = st.cadTables[ti];
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
+    const CadTable& t = st.drawing.cadTables[ti];
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Table;
     e.index = static_cast<int>(ti);
@@ -32756,7 +32756,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
 
   // Position Markers (REQ-359): the circle or the label box picks the one object. Plan-view test,
   // like the table above (the marker is flat on its elevation).
-  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {
+  for (size_t mi = 0; mi < st.drawing.cadPositionMarkers.size(); ++mi) {
     double md2 = 0.0;
     if (!CadPositionMarkerHit(st, mi, wx, wy, tolWorld, &md2))
       continue;
@@ -32766,9 +32766,9 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     consider(e, md2);
   }
 
-  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {
+  for (size_t li = 0; li < st.drawing.cadMultileaders.size(); ++li) {
     double ld2 = 0.0;
-    if (!CadMultileaderHit(st.cadMultileaders[li], wx, wy, tolWorld, &ld2))
+    if (!CadMultileaderHit(st.drawing.cadMultileaders[li], wx, wy, tolWorld, &ld2))
       continue;
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Multileader;
@@ -32776,17 +32776,17 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     consider(e, ld2);
   }
 
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
     SelectedEntity e{};
     e.type = SelectedEntity::Type::BlockRef;
     e.index = static_cast<int>(bi);
     std::vector<CadBlockWorldSeg> segs;
     EntityAttributes dummy{};
-    if (static_cast<size_t>(bi) < st.cadBlockRefAttrs.size())
-      dummy = st.cadBlockRefAttrs[bi];
-    CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[bi], dummy, &segs);
-    double bd2 = d2Segment(st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z,
-                           st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z);
+    if (static_cast<size_t>(bi) < st.drawing.cadBlockRefAttrs.size())
+      dummy = st.drawing.cadBlockRefAttrs[bi];
+    CadBlockCollectWorldLines(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], dummy, &segs);
+    double bd2 = d2Segment(st.drawing.cadBlockRefs[bi].xf.x, st.drawing.cadBlockRefs[bi].xf.y, st.drawing.cadBlockRefs[bi].xf.z,
+                           st.drawing.cadBlockRefs[bi].xf.x, st.drawing.cadBlockRefs[bi].xf.y, st.drawing.cadBlockRefs[bi].xf.z);
     for (const CadBlockWorldSeg& s : segs)
       bd2 = std::min(bd2, d2Segment(s.x0, s.y0, s.z0, s.x1, s.y1, s.z1));
     // A fitting block whose content is entirely a 3D solid (a piping part, not a 2D symbol) had NO
@@ -32794,7 +32794,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     // block was effectively unclickable across its whole visible body (issue #496 follow-up). Walk
     // its solids' edges the same way the standalone-CadSolid loop above does.
     std::vector<CadBlockWorldSolid> blockSolids;
-    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi], dummy, &blockSolids);
+    CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], dummy, &blockSolids);
     for (const CadBlockWorldSolid& ws : blockSolids) {
       if (!ws.solid)
         continue;
@@ -32831,25 +32831,25 @@ bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y)
 int PickFilledRegionAt(const AppCommandState& st, double wxIn, double wyIn, const ray3d::Ray* ray) {
   int best = -1;
   double bestArea = 0.0;
-  for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
+  for (size_t i = 0; i < st.drawing.cadFilledRegions.size(); ++i) {
     // REQ-084 (d): an isolated-out fill is invisible and must not answer a click.
-    if (!st.hiddenEntityIds.empty() && i < st.cadFilledRegionAttrs.size() &&
-        CadEntityIdHidden(&st.hiddenEntityIds, st.cadFilledRegionAttrs[i].id))
+    if (!st.hiddenEntityIds.empty() && i < st.drawing.cadFilledRegionAttrs.size() &&
+        CadEntityIdHidden(&st.hiddenEntityIds, st.drawing.cadFilledRegionAttrs[i].id))
       continue;
     double wx = wxIn;
     double wy = wyIn;
     if (ray) {
       // Orbited (issue #564 §2): where the ray meets this region's own plane.
-      const auto& v = st.cadFilledRegions[i].vertsXyz;
+      const auto& v = st.drawing.cadFilledRegions[i].vertsXyz;
       float fx = 0.f, fy = 0.f;
       if (v.size() < 3 || !RayAtElevation(*ray, static_cast<double>(v[2]), &fx, &fy))
         continue;
       wx = fx;
       wy = fy;
     }
-    if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
+    if (!hatchgeom::ContainsPoint(st.drawing.cadFilledRegions[i], wx, wy))
       continue;
-    const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
+    const double area = hatchgeom::OuterAreaAbs(st.drawing.cadFilledRegions[i]);
     if (best < 0 || area < bestArea) {
       best = static_cast<int>(i);
       bestArea = area;
@@ -32870,27 +32870,27 @@ void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log) {
 // Gather every model boundary segment into \p out (local coordinates): line segments, polyline edges
 // (closing edge when closed), and tessellated arcs/circles/ellipses. Used by the HATCH boundary trace.
 static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<hatchboundary::Seg>* out) {
-  for (size_t li = 0; li < st.lineCount(); ++li) {
-    const CadLineRecord ln = st.line(li);
+  for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+    const CadLineRecord ln = st.drawing.line(li);
     out->push_back({ln.x0, ln.y0, ln.x1, ln.y1});
   }
 
-  const int nPoly = static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+  const int nPoly = static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi + 1 < v1; ++vi)
-      out->push_back({st.vertex(vi).x,
-                      st.vertex(vi).y,
-                      st.vertex(static_cast<size_t>(vi + 1)).x,
-                      st.vertex(static_cast<size_t>(vi + 1)).y});
+      out->push_back({st.drawing.vertex(vi).x,
+                      st.drawing.vertex(vi).y,
+                      st.drawing.vertex(static_cast<size_t>(vi + 1)).x,
+                      st.drawing.vertex(static_cast<size_t>(vi + 1)).y});
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     if (closed && v1 - v0 >= 2)
-      out->push_back({st.vertex(static_cast<size_t>(v1 - 1)).x,
-                      st.vertex(static_cast<size_t>(v1 - 1)).y,
-                      st.vertex(v0).x,
-                      st.vertex(v0).y});
+      out->push_back({st.drawing.vertex(static_cast<size_t>(v1 - 1)).x,
+                      st.drawing.vertex(static_cast<size_t>(v1 - 1)).y,
+                      st.drawing.vertex(v0).x,
+                      st.drawing.vertex(v0).y});
   }
 
   auto tessellate = [&](auto pointAt, int n) {
@@ -32904,8 +32904,8 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
       py = y;
     }
   };
-  for (size_t ci = 0; ci < st.circleCount(); ++ci) {
-    const CadCircleRecord cr = st.circle(ci);
+  for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+    const CadCircleRecord cr = st.drawing.circle(ci);
     const float cx = static_cast<float>(cr.cx), cy = static_cast<float>(cr.cy), r = static_cast<float>(cr.r);
     tessellate([&](int i, float* x, float* y) {
       const double a = 6.283185307179586 * i / 48.0;
@@ -32913,14 +32913,14 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
       *y = cy + r * static_cast<float>(std::sin(a));
     }, 48);
   }
-  for (const CadArc& a : st.userArcs) {
+  for (const CadArc& a : st.drawing.userArcs) {
     tessellate([&](int i, float* x, float* y) {
       const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * (i / 48.0);
       *x = static_cast<float>(a.cx + a.r * static_cast<float>(std::cos(t)));
       *y = static_cast<float>(a.cy + a.r * static_cast<float>(std::sin(t)));
     }, 48);
   }
-  for (const CadEllipse& el : st.userEllipses) {
+  for (const CadEllipse& el : st.drawing.userEllipses) {
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-8)
       continue;
@@ -32972,11 +32972,11 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
                 static_cast<int>(std::lround(st.hatchColorRgb[2] * 255.f)));
   at.color = hex;
   at.transparency = std::clamp(st.hatchTransparency01, 0.f, 1.f);
-  st.cadFilledRegions.push_back(std::move(fr));
-  st.cadFilledRegionAttrs.push_back(at);
+  st.drawing.cadFilledRegions.push_back(std::move(fr));
+  st.drawing.cadFilledRegionAttrs.push_back(at);
   ClearCadSelection(st);
   st.selection.push_back({SelectedEntity::Type::FilledRegion,
-                          static_cast<int>(st.cadFilledRegions.size()) - 1});
+                          static_cast<int>(st.drawing.cadFilledRegions.size()) - 1});
   BumpCadGpuCache(st);
   log.push_back("HATCH — solid fill placed.");
   return true;
@@ -33053,18 +33053,18 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     switch (e.type) {
     case T::LineSeg: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.lineCount())
+      if (k >= st.drawing.lineCount())
         return false;
-      const float sd = OfsSignedSideLine(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).x1),
-                                         static_cast<float>(st.line(k).y1), px, py);
+      const float sd = OfsSignedSideLine(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).x1),
+                                         static_cast<float>(st.drawing.line(k).y1), px, py);
       sgn = sd >= 0.f ? 1.f : -1.f;
       break;
     }
     case T::Circle: {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.circleCount())
+      if (ci >= st.drawing.circleCount())
         return false;
-      const CadCircleRecord cr = st.circle(ci);
+      const CadCircleRecord cr = st.drawing.circle(ci);
       const float cx = static_cast<float>(cr.cx);
       const float cy = static_cast<float>(cr.cy);
       const float r = static_cast<float>(cr.r);
@@ -33073,9 +33073,9 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
       break;
     }
     case T::Arc: {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
         return false;
-      const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+      const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
       const float side = OfsSignedSideCircle(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.r), px, py);
       sgn = side >= 0.f ? 1.f : -1.f;
       break;
@@ -33084,16 +33084,16 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     case T::Polyline: {
       if (e.type == T::Polyline) {
         const int pi = e.index;
-        if (pi >= 0 && (static_cast<size_t>(pi)+ 1) < st.userPolylineOffsets.size()) {
-          const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-          const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+        if (pi >= 0 && (static_cast<size_t>(pi)+ 1) < st.drawing.userPolylineOffsets.size()) {
+          const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
           float best = 1e30f;
           float bestS = 1.f;
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            const float ax = static_cast<float>(st.vertex(vi).x);
-            const float ay = static_cast<float>(st.vertex(vi).y);
-            const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
-            const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
+            const float ax = static_cast<float>(st.drawing.vertex(vi).x);
+            const float ay = static_cast<float>(st.drawing.vertex(vi).y);
+            const float bx = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).x);
+            const float by = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).y);
             float qx = 0.f, qy = 0.f;
             OfsClosestPtSeg(ax, ay, bx, by, px, py, &qx, &qy);
             const float sd = OfsSignedSideLine(ax, ay, bx, by, px, py);
@@ -33107,8 +33107,8 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
           }
           sgn = bestS;
         }
-      } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.userEllipses.size()) {
-        const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+      } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userEllipses.size()) {
+        const CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(e.index)];
         const float ma = std::hypot(el.majVx, el.majVy);
         if (ma >= 1e-8f) {
           const float ux = el.majVx / ma;
@@ -33154,25 +33154,25 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     switch (e.type) {
     case T::LineSeg: {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.lineCount())
+      if (k >= st.drawing.lineCount())
         return false;
-      signedD = OfsSignedSideLine(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).x1),
-                                  static_cast<float>(st.line(k).y1), px, py);
+      signedD = OfsSignedSideLine(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).x1),
+                                  static_cast<float>(st.drawing.line(k).y1), px, py);
       break;
     }
     case T::Circle: {
       const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.circleCount())
+      if (ci >= st.drawing.circleCount())
         return false;
-      const CadCircleRecord cr = st.circle(ci);
+      const CadCircleRecord cr = st.drawing.circle(ci);
       signedD = OfsSignedSideCircle(static_cast<float>(cr.cx), static_cast<float>(cr.cy), static_cast<float>(cr.r), px,
                                   py);
       break;
     }
     case T::Arc: {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
         return false;
-      const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+      const CadArc& a = st.drawing.userArcs[static_cast<size_t>(e.index)];
       signedD = OfsSignedSideCircle(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.r), px, py);
       break;
     }
@@ -33200,20 +33200,20 @@ static void AppendEllipsePreviewStrip(float z, const CadEllipse& el, std::vector
 
 static void AppendPolylineOffsetPreview(const AppCommandState& st, int pi, float signedD, float z,
                                         std::vector<float>* lines) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
     return;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int nv = v1 - v0;
   if (nv < 2)
     return;
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
 
   std::vector<std::pair<float, float>> v;
   v.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i)
-    v.push_back({st.vertex(i).x, st.vertex(i).y});
+    v.push_back({st.drawing.vertex(i).x, st.drawing.vertex(i).y});
 
   const int n = static_cast<int>(v.size());
   const int nEdges = closed ? n : n - 1;
@@ -33348,12 +33348,12 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
   switch (e.type) {
   case T::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.lineCount())
+    if (k >= cmd.drawing.lineCount())
       return;
-    const float x0 = static_cast<float>(cmd.line(k).x0);
-    const float y0 = static_cast<float>(cmd.line(k).y0);
-    const float x1 = static_cast<float>(cmd.line(k).x1);
-    const float y1 = static_cast<float>(cmd.line(k).y1);
+    const float x0 = static_cast<float>(cmd.drawing.line(k).x0);
+    const float y0 = static_cast<float>(cmd.drawing.line(k).y0);
+    const float x1 = static_cast<float>(cmd.drawing.line(k).x1);
+    const float y1 = static_cast<float>(cmd.drawing.line(k).y1);
     const float dx = x1 - x0;
     const float dy = y1 - y0;
     if (std::hypot(dx, dy) < 1e-8f)
@@ -33370,9 +33370,9 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
   }
   case T::Circle: {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= cmd.circleCount())
+    if (ci >= cmd.drawing.circleCount())
       return;
-    const CadCircleRecord cc = cmd.circle(ci);
+    const CadCircleRecord cc = cmd.drawing.circle(ci);
     const float cx = static_cast<float>(cc.cx);
     const float cy = static_cast<float>(cc.cy);
     const float r = static_cast<float>(cc.r);
@@ -33385,9 +33385,9 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     break;
   }
   case T::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.userArcs.size())
       return;
-    CadArc o = cmd.userArcs[static_cast<size_t>(e.index)];
+    CadArc o = cmd.drawing.userArcs[static_cast<size_t>(e.index)];
     o.r += signedD;
     if (o.r <= 1e-6f)
       return;
@@ -33395,9 +33395,9 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     break;
   }
   case T::Ellipse: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.userEllipses.size())
       return;
-    const CadEllipse& el0 = cmd.userEllipses[static_cast<size_t>(e.index)];
+    const CadEllipse& el0 = cmd.drawing.userEllipses[static_cast<size_t>(e.index)];
     const float ma = std::hypot(el0.majVx, el0.majVy);
     if (ma < 1e-8f || ma + signedD <= 1e-6f)
       return;
@@ -33564,22 +33564,22 @@ static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEn
   using ST = SelectedEntity::Type;
   if (c.type == ST::Circle) {
     const size_t ci = static_cast<size_t>(c.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return false;
-    const CadCircleRecord cc = st.circle(ci);
+    const CadCircleRecord cc = st.drawing.circle(ci);
     const float r = static_cast<float>(cc.r);
     if (!(r > 1e-9f))
       return false;
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    CircleNormalAt(st.userCircleNormals, ci, &nx, &ny, &nz);
+    CircleNormalAt(st.drawing.userCircleNormals, ci, &nx, &ny, &nz);
     *outPlane = CurvePlane(cc.cx, cc.cy, cc.cz, nx, ny, nz);
     *outConic = curveisect::MakeCircle(0.0, 0.0, r);
     return true;
   }
   if (c.type == ST::Arc) {
-    if (c.index < 0 || static_cast<size_t>(c.index) >= st.userArcs.size())
+    if (c.index < 0 || static_cast<size_t>(c.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<size_t>(c.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<size_t>(c.index)];
     if (!(a.r > 1e-9f))
       return false;
     *outPlane = CurvePlane(a);
@@ -33587,9 +33587,9 @@ static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEn
     return true;
   }
   if (c.type == ST::Ellipse) {
-    if (c.index < 0 || static_cast<size_t>(c.index) >= st.userEllipses.size())
+    if (c.index < 0 || static_cast<size_t>(c.index) >= st.drawing.userEllipses.size())
       return false;
-    const CadEllipse& el = st.userEllipses[static_cast<size_t>(c.index)];
+    const CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(c.index)];
     if (std::hypot(el.majVx, el.majVy) < 1e-9)
       return false;
     *outPlane = CurvePlane(el.cx, el.cy, el.z, 0.0, 0.0, 1.0);
@@ -33610,21 +33610,21 @@ static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEn
 static bool FindNearestPolylineSegment3D(const AppCommandState& st, int polyIx, double wx, double wy,
                                          const ray3d::Ray* pickRay, int* outVi, ray3d::Vec3* outA,
                                          ray3d::Vec3* outB) {
-  if (polyIx < 0 || static_cast<size_t>(polyIx) + 1 >= st.userPolylineOffsets.size())
+  if (polyIx < 0 || static_cast<size_t>(polyIx) + 1 >= st.drawing.userPolylineOffsets.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(polyIx)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(polyIx) + 1];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(polyIx)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(polyIx) + 1];
   const bool closed =
-      static_cast<size_t>(polyIx) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(polyIx)];
+      static_cast<size_t>(polyIx) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(polyIx)];
   const bool useRay = pickRay != nullptr && pickRay->valid();
   bool any = false;
   double best = 0.0;
   auto tryEdge = [&](int vi) {
     const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
-    if (b3 >= st.vertexCount())
+    if (b3 >= st.drawing.vertexCount())
       return;
-    const ray3d::Vec3 a{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
-    const ray3d::Vec3 b{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
+    const ray3d::Vec3 a{st.drawing.vertex(a3).x, st.drawing.vertex(a3).y, st.drawing.vertex(a3).z};
+    const ray3d::Vec3 b{st.drawing.vertex(b3).x, st.drawing.vertex(b3).y, st.drawing.vertex(b3).z};
     double d2;
     if (useRay) {
       const double d = ray3d::RaySegmentDistance(*pickRay, a, b);
@@ -33674,28 +33674,28 @@ static void Collect3DTrimCrossings(const AppCommandState& st, const std::vector<
       if (c.index == targetIndex && !targetIsPoly)
         continue;  // a line can't cut itself
       const size_t ck = static_cast<size_t>(c.index);
-      if (ck >= st.lineCount())
+      if (ck >= st.drawing.lineCount())
         continue;
-      const ray3d::Vec3 qa{st.line(ck).x0, st.line(ck).y0, st.line(ck).z0};
-      const ray3d::Vec3 qb{st.line(ck).x1, st.line(ck).y1, st.line(ck).z1};
+      const ray3d::Vec3 qa{st.drawing.line(ck).x0, st.drawing.line(ck).y0, st.drawing.line(ck).z0};
+      const ray3d::Vec3 qb{st.drawing.line(ck).x1, st.drawing.line(ck).y1, st.drawing.line(ck).z1};
       tryLineCutSeg(qa, qb);
       continue;
     }
     if (c.type == SelectedEntity::Type::Polyline) {
-      if (c.index < 0 || static_cast<size_t>(c.index) + 1 >= st.userPolylineOffsets.size())
+      if (c.index < 0 || static_cast<size_t>(c.index) + 1 >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(c.index)];
-      const int v1 = st.userPolylineOffsets[static_cast<size_t>(c.index) + 1];
-      const bool closed = static_cast<size_t>(c.index) < st.userPolylineClosed.size() &&
-                          st.userPolylineClosed[static_cast<size_t>(c.index)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(c.index)];
+      const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(c.index) + 1];
+      const bool closed = static_cast<size_t>(c.index) < st.drawing.userPolylineClosed.size() &&
+                          st.drawing.userPolylineClosed[static_cast<size_t>(c.index)];
       auto tryEdge = [&](int vi) {
         if (targetIsPoly && c.index == targetIndex && vi == targetVi)
           return;  // a polyline segment can't cut itself, but its siblings can
         const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
-        if (b3 >= st.vertexCount())
+        if (b3 >= st.drawing.vertexCount())
           return;
-        const ray3d::Vec3 qa{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
-        const ray3d::Vec3 qb{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
+        const ray3d::Vec3 qa{st.drawing.vertex(a3).x, st.drawing.vertex(a3).y, st.drawing.vertex(a3).z};
+        const ray3d::Vec3 qb{st.drawing.vertex(b3).x, st.drawing.vertex(b3).y, st.drawing.vertex(b3).z};
         tryLineCutSeg(qa, qb);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
@@ -33739,24 +33739,24 @@ static void Apply3DTrimCut(AppCommandState& st, const SelectedEntity& hit, bool 
   if (targetIsPoly) {
     const int vi = trimA ? targetVi : targetVi + 1;
     const size_t vk = static_cast<size_t>(vi);
-    if (vk >= st.vertexCount()) {
+    if (vk >= st.drawing.vertexCount()) {
       log.push_back("TRIM — nothing to trim at pick.");
       return;
     }
-    st.vertexComponent(vk, CadVertexComponent::X) = static_cast<float>(cut.x);
-    st.vertexComponent(vk, CadVertexComponent::Y) = static_cast<float>(cut.y);
-    st.vertexComponent(vk, CadVertexComponent::Z) = static_cast<float>(cut.z);
+    st.drawing.vertexComponent(vk, CadVertexComponent::X) = static_cast<float>(cut.x);
+    st.drawing.vertexComponent(vk, CadVertexComponent::Y) = static_cast<float>(cut.y);
+    st.drawing.vertexComponent(vk, CadVertexComponent::Z) = static_cast<float>(cut.z);
   } else {
-    st.lineComponent(tk, trimA ? CadLineComponent::X0 : CadLineComponent::X1) = static_cast<float>(cut.x);
-    st.lineComponent(tk, trimA ? CadLineComponent::Y0 : CadLineComponent::Y1) = static_cast<float>(cut.y);
-    st.lineComponent(tk, trimA ? CadLineComponent::Z0 : CadLineComponent::Z1) = static_cast<float>(cut.z);
-    const CadLineRecord cutLine = st.line(tk);
+    st.drawing.lineComponent(tk, trimA ? CadLineComponent::X0 : CadLineComponent::X1) = static_cast<float>(cut.x);
+    st.drawing.lineComponent(tk, trimA ? CadLineComponent::Y0 : CadLineComponent::Y1) = static_cast<float>(cut.y);
+    st.drawing.lineComponent(tk, trimA ? CadLineComponent::Z0 : CadLineComponent::Z1) = static_cast<float>(cut.z);
+    const CadLineRecord cutLine = st.drawing.line(tk);
     const double newLen = ray3d::Length(ray3d::Sub(
         ray3d::Vec3{cutLine.x1, cutLine.y1, cutLine.z1}, ray3d::Vec3{cutLine.x0, cutLine.y0, cutLine.z0}));
     if (newLen < 1e-6) {
-      st.eraseLine(tk);
-      if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
-        st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
+      st.drawing.eraseLine(tk);
+      if (static_cast<size_t>(hit.index) < st.drawing.userLineAttrs.size())
+        st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
     }
   }
   log.push_back("TRIM — segment shortened.");
@@ -33836,11 +33836,11 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
     }
   } else {
     tk = static_cast<size_t>(hit.index);
-    if (tk >= st.lineCount()) {
+    if (tk >= st.drawing.lineCount()) {
       log.push_back("TRIM — nothing to trim at pick.");
       return false;
     }
-    const CadLineRecord tl = st.line(tk);
+    const CadLineRecord tl = st.drawing.line(tk);
     ta = {tl.x0, tl.y0, tl.z0};
     tb = {tl.x1, tl.y1, tl.z1};
   }
@@ -33964,24 +33964,24 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
     ta = a;
     tb = b;
   };
-  for (size_t li = 0; li < st.lineCount(); ++li) {
-    const CadLineRecord ln = st.line(li);
+  for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+    const CadLineRecord ln = st.drawing.line(li);
     consider(false, static_cast<int>(li), -1, ray3d::Vec3{ln.x0, ln.y0, ln.z0}, ray3d::Vec3{ln.x1, ln.y1, ln.z1});
   }
   const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
     const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
       const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
-      if (b3 >= st.vertexCount())
+      if (b3 >= st.drawing.vertexCount())
         return;
       consider(true, pi, vi,
-               ray3d::Vec3{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z},
-               ray3d::Vec3{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z});
+               ray3d::Vec3{st.drawing.vertex(a3).x, st.drawing.vertex(a3).y, st.drawing.vertex(a3).z},
+               ray3d::Vec3{st.drawing.vertex(b3).x, st.drawing.vertex(b3).y, st.drawing.vertex(b3).z});
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       tryEdge(vi);
@@ -34011,10 +34011,10 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
       cutters.push_back(e);
     }
   };
-  addAll(SelectedEntity::Type::LineSeg, static_cast<int>(st.lineCount()));
-  addAll(SelectedEntity::Type::Circle, static_cast<int>(st.circleCount()));
-  addAll(SelectedEntity::Type::Arc, static_cast<int>(st.userArcs.size()));
-  addAll(SelectedEntity::Type::Ellipse, static_cast<int>(st.userEllipses.size()));
+  addAll(SelectedEntity::Type::LineSeg, static_cast<int>(st.drawing.lineCount()));
+  addAll(SelectedEntity::Type::Circle, static_cast<int>(st.drawing.circleCount()));
+  addAll(SelectedEntity::Type::Arc, static_cast<int>(st.drawing.userArcs.size()));
+  addAll(SelectedEntity::Type::Ellipse, static_cast<int>(st.drawing.userEllipses.size()));
   addAll(SelectedEntity::Type::Polyline, nPoly);
 
   std::vector<double> ts;
@@ -34104,19 +34104,19 @@ namespace {
 static bool StagePaperTrimGeometry(const PaperLayout& layout, AppCommandState* staged) {
   if (!staged)
     return false;
-  staged->userLinesFlat.assign(layout.paperLines.begin(), layout.paperLines.end());
-  staged->userLineAttrs = layout.paperLineAttrs;
-  staged->userArcs = layout.paperArcs;
-  staged->userArcAttrs = layout.paperArcAttrs;
-  staged->userEllipses = layout.paperEllipses;
-  staged->userEllAttrs = layout.paperEllAttrs;
-  staged->userPolylineOffsets = layout.paperPolyOffsets;
-  staged->userPolylineVerts.assign(layout.paperPolyVerts.begin(), layout.paperPolyVerts.end());
-  staged->userPolylineClosed = layout.paperPolyClosed;
-  staged->userPolylineAttrs = layout.paperPolyAttrs;
-  staged->userCirclesCxCyZR.clear();
+  staged->drawing.userLinesFlat.assign(layout.paperLines.begin(), layout.paperLines.end());
+  staged->drawing.userLineAttrs = layout.paperLineAttrs;
+  staged->drawing.userArcs = layout.paperArcs;
+  staged->drawing.userArcAttrs = layout.paperArcAttrs;
+  staged->drawing.userEllipses = layout.paperEllipses;
+  staged->drawing.userEllAttrs = layout.paperEllAttrs;
+  staged->drawing.userPolylineOffsets = layout.paperPolyOffsets;
+  staged->drawing.userPolylineVerts.assign(layout.paperPolyVerts.begin(), layout.paperPolyVerts.end());
+  staged->drawing.userPolylineClosed = layout.paperPolyClosed;
+  staged->drawing.userPolylineAttrs = layout.paperPolyAttrs;
+  staged->drawing.userCirclesCxCyZR.clear();
   for (size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
-    staged->pushCircle(CadCircleRecord{layout.paperCircles[i], layout.paperCircles[i + 1], 0.0, layout.paperCircles[i + 2]});
+    staged->drawing.pushCircle(CadCircleRecord{layout.paperCircles[i], layout.paperCircles[i + 1], 0.0, layout.paperCircles[i + 2]});
   }
   return true;
 }
@@ -34139,12 +34139,12 @@ static bool CommitPaperTrimGeometry(AppCommandState& st, const AppCommandState& 
   PaperLayout* layout = ActivePaperGeometryTarget(st);
   if (!layout)
     return false;
-  layout->paperLines.assign(staged.userLinesFlat.begin(), staged.userLinesFlat.end());
-  layout->paperLineAttrs = staged.userLineAttrs;
-  layout->paperPolyOffsets = staged.userPolylineOffsets;
-  layout->paperPolyVerts.assign(staged.userPolylineVerts.begin(), staged.userPolylineVerts.end());
-  layout->paperPolyClosed = staged.userPolylineClosed;
-  layout->paperPolyAttrs = staged.userPolylineAttrs;
+  layout->paperLines.assign(staged.drawing.userLinesFlat.begin(), staged.drawing.userLinesFlat.end());
+  layout->paperLineAttrs = staged.drawing.userLineAttrs;
+  layout->paperPolyOffsets = staged.drawing.userPolylineOffsets;
+  layout->paperPolyVerts.assign(staged.drawing.userPolylineVerts.begin(), staged.drawing.userPolylineVerts.end());
+  layout->paperPolyClosed = staged.drawing.userPolylineClosed;
+  layout->paperPolyAttrs = staged.drawing.userPolylineAttrs;
   BumpCadGpuCache(st);
   return true;
 }
@@ -34178,13 +34178,13 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
       log.push_back("TRIM — line too short.");
       return false;
     }
-    const auto oldLines = staged.userLinesFlat;
-    const auto oldVerts = staged.userPolylineVerts;
-    const auto oldOffsets = staged.userPolylineOffsets;
+    const auto oldLines = staged.drawing.userLinesFlat;
+    const auto oldVerts = staged.drawing.userPolylineVerts;
+    const auto oldOffsets = staged.drawing.userPolylineOffsets;
     ExecuteDrawnSegmentTrimOnce(staged, st.trimCutInfP1x, st.trimCutInfP1y, x2, y2, tol, log);
     st.trimPhase = TP::SelectCuttingEdges;
     st.active = AppCommandState::Kind::None;
-    if (oldLines != staged.userLinesFlat || oldVerts != staged.userPolylineVerts || oldOffsets != staged.userPolylineOffsets) {
+    if (oldLines != staged.drawing.userLinesFlat || oldVerts != staged.drawing.userPolylineVerts || oldOffsets != staged.drawing.userPolylineOffsets) {
       PushUndoSnapshot(st, "Trim paper geometry");
       CommitPaperTrimGeometry(st, staged);
     }
@@ -34404,26 +34404,26 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     // no model-space geometry is read or modified by this branch.
     AppCommandState paperJoin;
     paperJoin.activeSpaceIndex = kModelSpaceIndex;
-    paperJoin.currentLayer = st.currentLayer;
-    paperJoin.currentColor = st.currentColor;
-    paperJoin.userLinesFlat.assign(paper->paperLines.begin(), paper->paperLines.end());
-    paperJoin.userLineAttrs = paper->paperLineAttrs;
-    paperJoin.userPolylineOffsets = paper->paperPolyOffsets;
-    paperJoin.userPolylineVerts.assign(paper->paperPolyVerts.begin(), paper->paperPolyVerts.end());
-    paperJoin.userPolylineVertsBulge = paper->paperPolyVertsBulge;
-    paperJoin.userPolylineClosed = paper->paperPolyClosed;
-    paperJoin.userPolylineAttrs = paper->paperPolyAttrs;
+    paperJoin.drawing.currentLayer = st.drawing.currentLayer;
+    paperJoin.drawing.currentColor = st.drawing.currentColor;
+    paperJoin.drawing.userLinesFlat.assign(paper->paperLines.begin(), paper->paperLines.end());
+    paperJoin.drawing.userLineAttrs = paper->paperLineAttrs;
+    paperJoin.drawing.userPolylineOffsets = paper->paperPolyOffsets;
+    paperJoin.drawing.userPolylineVerts.assign(paper->paperPolyVerts.begin(), paper->paperPolyVerts.end());
+    paperJoin.drawing.userPolylineVertsBulge = paper->paperPolyVertsBulge;
+    paperJoin.drawing.userPolylineClosed = paper->paperPolyClosed;
+    paperJoin.drawing.userPolylineAttrs = paper->paperPolyAttrs;
 
     int unsupported = 0;
     for (const PaperEntityRef& ref : st.selectedPaperEntities) {
       if (ref.type == PaperEntityRef::Type::Line) {
-        if (ref.index < 0 || static_cast<size_t>(ref.index) >= paperJoin.lineCount()) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) >= paperJoin.drawing.lineCount()) {
           ++unsupported;
           continue;
         }
         paperJoin.selection.push_back({SelectedEntity::Type::LineSeg, ref.index});
       } else if (ref.type == PaperEntityRef::Type::Polyline) {
-        if (ref.index < 0 || static_cast<size_t>(ref.index) + 1 >= paperJoin.userPolylineOffsets.size()) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) + 1 >= paperJoin.drawing.userPolylineOffsets.size()) {
           ++unsupported;
           continue;
         }
@@ -34449,13 +34449,13 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     }
 
     PushUndoSnapshot(st, "Join paper geometry");
-    paper->paperLines.assign(paperJoin.userLinesFlat.begin(), paperJoin.userLinesFlat.end());
-    paper->paperLineAttrs = std::move(paperJoin.userLineAttrs);
-    paper->paperPolyOffsets = std::move(paperJoin.userPolylineOffsets);
-    paper->paperPolyVerts.assign(paperJoin.userPolylineVerts.begin(), paperJoin.userPolylineVerts.end());
-    paper->paperPolyVertsBulge = std::move(paperJoin.userPolylineVertsBulge);
-    paper->paperPolyClosed = std::move(paperJoin.userPolylineClosed);
-    paper->paperPolyAttrs = std::move(paperJoin.userPolylineAttrs);
+    paper->paperLines.assign(paperJoin.drawing.userLinesFlat.begin(), paperJoin.drawing.userLinesFlat.end());
+    paper->paperLineAttrs = std::move(paperJoin.drawing.userLineAttrs);
+    paper->paperPolyOffsets = std::move(paperJoin.drawing.userPolylineOffsets);
+    paper->paperPolyVerts.assign(paperJoin.drawing.userPolylineVerts.begin(), paperJoin.drawing.userPolylineVerts.end());
+    paper->paperPolyVertsBulge = std::move(paperJoin.drawing.userPolylineVertsBulge);
+    paper->paperPolyClosed = std::move(paperJoin.drawing.userPolylineClosed);
+    paper->paperPolyAttrs = std::move(paperJoin.drawing.userPolylineAttrs);
     st.selectedPaperEntities.clear();
     BumpCadGpuCache(st);
     log.insert(log.end(), paperLog.begin(), paperLog.end());
@@ -34532,30 +34532,30 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 
   auto readLine = [&](int idx, float* x0, float* y0, float* z0, float* x1, float* y1, float* z1) -> bool {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       return false;
-    *x0 = static_cast<float>(st.line(k).x0);
-    *y0 = static_cast<float>(st.line(k).y0);
-    *z0 = static_cast<float>(st.line(k).z0);
-    *x1 = static_cast<float>(st.line(k).x1);
-    *y1 = static_cast<float>(st.line(k).y1);
-    *z1 = static_cast<float>(st.line(k).z1);
+    *x0 = static_cast<float>(st.drawing.line(k).x0);
+    *y0 = static_cast<float>(st.drawing.line(k).y0);
+    *z0 = static_cast<float>(st.drawing.line(k).z0);
+    *x1 = static_cast<float>(st.drawing.line(k).x1);
+    *y1 = static_cast<float>(st.drawing.line(k).y1);
+    *z1 = static_cast<float>(st.drawing.line(k).z1);
     return true;
   };
 
   auto polyBulgeAt = [&](int vi) -> float {
-    return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-               ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+    return static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size()
+               ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]
                : 0.f;
   };
   // REQ-325 / ADR-053: a Polyline's own curved segment already carries a plane (e.g. re-joining a
   // polyline a previous JOIN gave a tilted arc) — read it instead of assuming world +Z.
   auto polyNormalAt = [&](int vi, float* nx, float* ny, float* nz) {
     const size_t k = static_cast<size_t>(vi) * 3;
-    if (k + 2 < st.userPolylineVertsNormal.size()) {
-      *nx = st.userPolylineVertsNormal[k];
-      *ny = st.userPolylineVertsNormal[k + 1];
-      *nz = st.userPolylineVertsNormal[k + 2];
+    if (k + 2 < st.drawing.userPolylineVertsNormal.size()) {
+      *nx = st.drawing.userPolylineVertsNormal[k];
+      *ny = st.drawing.userPolylineVertsNormal[k + 1];
+      *nz = st.drawing.userPolylineVertsNormal[k + 2];
     } else {
       *nx = 0.f; *ny = 0.f; *nz = 1.f;
     }
@@ -34575,9 +34575,9 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       // its own plane rides along as this edge's normal (\ref Edge::nx). A tilted arc is only
       // refused later, per-component, when it turns out NOT coplanar with what it would join to.
       const size_t k = static_cast<size_t>(se.index);
-      if (k >= st.userArcs.size())
+      if (k >= st.drawing.userArcs.size())
         continue;
-      const CadArc& a = st.userArcs[k];
+      const CadArc& a = st.drawing.userArcs[k];
       // REQ-325 / ADR-053: an arc's true 3D endpoints are only ever `a.cx + r*cos/sin(angle)` when
       // it is flat — that formula assumes world X/Y are the arc's own in-plane axes, which is exactly
       // what a tilted arc's Arbitrary-Axis-Algorithm frame (`CurvePlane`) does NOT agree with. Using
@@ -34596,19 +34596,19 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       edges.push_back(e);
     } else if (se.type == ST::Polyline && se.index >= 0) {
       const int pi = se.index;
-      if ((static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
+      if ((static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       const bool closed =
-          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        const float ax = static_cast<float>(st.vertex(vi).x);
-        const float ay = static_cast<float>(st.vertex(vi).y);
-        const float az = static_cast<float>(st.vertex(vi).z);
-        const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
-        const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
-        const float bz = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).z);
+        const float ax = static_cast<float>(st.drawing.vertex(vi).x);
+        const float ay = static_cast<float>(st.drawing.vertex(vi).y);
+        const float az = static_cast<float>(st.drawing.vertex(vi).z);
+        const float bx = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).x);
+        const float by = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).y);
+        const float bz = static_cast<float>(st.drawing.vertex(static_cast<size_t>(vi + 1)).z);
         Edge e{};
         e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
         e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(vi);
@@ -34616,12 +34616,12 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         edges.push_back(e);
       }
       if (closed && v1 - v0 >= 2) {
-        const float ax = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).x);
-        const float ay = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).y);
-        const float az = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).z);
-        const float bx = static_cast<float>(st.vertex(v0).x);
-        const float by = static_cast<float>(st.vertex(v0).y);
-        const float bz = static_cast<float>(st.vertex(v0).z);
+        const float ax = static_cast<float>(st.drawing.vertex(static_cast<size_t>(v1 - 1)).x);
+        const float ay = static_cast<float>(st.drawing.vertex(static_cast<size_t>(v1 - 1)).y);
+        const float az = static_cast<float>(st.drawing.vertex(static_cast<size_t>(v1 - 1)).z);
+        const float bx = static_cast<float>(st.drawing.vertex(v0).x);
+        const float by = static_cast<float>(st.drawing.vertex(v0).y);
+        const float bz = static_cast<float>(st.drawing.vertex(v0).z);
         Edge e{};
         e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
         e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(v1 - 1);
@@ -34728,11 +34728,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         const Edge& E = edges[static_cast<size_t>(ej)];
         if (E.bulge == 0.f || IsFlatNormal(E.nx, E.ny, E.nz) || E.arcIx < 0)
           continue;
-        if (static_cast<size_t>(E.arcIx) >= st.userArcs.size()) {
+        if (static_cast<size_t>(E.arcIx) >= st.drawing.userArcs.size()) {
           badTiltedArc = true;
           break;
         }
-        const CadArc& a = st.userArcs[static_cast<size_t>(E.arcIx)];
+        const CadArc& a = st.drawing.userArcs[static_cast<size_t>(E.arcIx)];
         ucs::Ucs arcPlane{};
         if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z}, ray3d::Vec3{a.nx, a.ny, a.nz}, &arcPlane)) {
           badTiltedArc = true;
@@ -34909,27 +34909,27 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     if (pv.size() < 6)
       continue;
 
-    if (st.userPolylineOffsets.empty())
-      st.userPolylineOffsets.push_back(0);
-    const int baseVert = st.userPolylineOffsets.back();
+    if (st.drawing.userPolylineOffsets.empty())
+      st.drawing.userPolylineOffsets.push_back(0);
+    const int baseVert = st.drawing.userPolylineOffsets.back();
     const int nv = static_cast<int>(pv.size() / 3);
-    st.userPolylineVerts.insert(st.userPolylineVerts.end(), pv.begin(), pv.end());
-    st.userPolylineOffsets.push_back(baseVert + nv);
-    st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userPolylineVerts.insert(st.drawing.userPolylineVerts.end(), pv.begin(), pv.end());
+    st.drawing.userPolylineOffsets.push_back(baseVert + nv);
+    st.drawing.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+    st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the joined bulges through. Only materialise the array when a
     // segment is actually curved, so a straight-only JOIN keeps its export byte-stable.
     {
       bool anyArc = false;
       for (float b : pvBulge)
         if (b != 0.f) { anyArc = true; break; }
-      if (anyArc || !st.userPolylineVertsBulge.empty()) {
-        SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-        const size_t tail = st.userPolylineVertsBulge.size() >= static_cast<size_t>(nv)
-                                ? st.userPolylineVertsBulge.size() - static_cast<size_t>(nv)
+      if (anyArc || !st.drawing.userPolylineVertsBulge.empty()) {
+        SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+        const size_t tail = st.drawing.userPolylineVertsBulge.size() >= static_cast<size_t>(nv)
+                                ? st.drawing.userPolylineVertsBulge.size() - static_cast<size_t>(nv)
                                 : 0;
         for (size_t k = 0; k < static_cast<size_t>(nv) && k < pvBulge.size(); ++k)
-          st.userPolylineVertsBulge[tail + k] = pvBulge[k];
+          st.drawing.userPolylineVertsBulge[tail + k] = pvBulge[k];
       }
       // REQ-325 / ADR-053: same rule, one level up — materialise the normal array only when a
       // joined segment is actually TILTED, so a flat-only JOIN (the overwhelming common case)
@@ -34937,13 +34937,13 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       bool anyTilted = false;
       for (size_t k = 0; k + 2 < pvNormal.size(); k += 3)
         if (!IsFlatNormal(pvNormal[k], pvNormal[k + 1], pvNormal[k + 2])) { anyTilted = true; break; }
-      if (anyTilted || !st.userPolylineVertsNormal.empty()) {
-        SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-        const size_t tail3 = st.userPolylineVertsNormal.size() >= static_cast<size_t>(nv) * 3
-                                 ? st.userPolylineVertsNormal.size() - static_cast<size_t>(nv) * 3
+      if (anyTilted || !st.drawing.userPolylineVertsNormal.empty()) {
+        SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+        const size_t tail3 = st.drawing.userPolylineVertsNormal.size() >= static_cast<size_t>(nv) * 3
+                                 ? st.drawing.userPolylineVertsNormal.size() - static_cast<size_t>(nv) * 3
                                  : 0;
         for (size_t k = 0; k < static_cast<size_t>(nv) * 3 && k < pvNormal.size(); ++k)
-          st.userPolylineVertsNormal[tail3 + k] = pvNormal[k];
+          st.drawing.userPolylineVertsNormal[tail3 + k] = pvNormal[k];
       }
     }
     polysOut++;
@@ -34968,11 +34968,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   std::sort(lDel.begin(), lDel.end(), std::greater<int>());
   for (int idx : lDel) {
     const size_t k = static_cast<size_t>(idx);
-    if (k >= st.lineCount())
+    if (k >= st.drawing.lineCount())
       continue;
-    st.eraseLine(k);
-    if (static_cast<size_t>(idx) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.eraseLine(k);
+    if (static_cast<size_t>(idx) < st.drawing.userLineAttrs.size())
+      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // REQ-316 / ADR-047: arcs consumed by the join. Descending index, mirror the attr array — the
@@ -34980,11 +34980,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<int> aDel(arcDel.begin(), arcDel.end());
   std::sort(aDel.begin(), aDel.end(), std::greater<int>());
   for (int idx : aDel) {
-    if (static_cast<size_t>(idx) >= st.userArcs.size())
+    if (static_cast<size_t>(idx) >= st.drawing.userArcs.size())
       continue;
-    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   st.selection.clear();
@@ -35015,45 +35015,45 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     PushUndoSnapshot(st, "Overkill paper layout");
     AppCommandState cleanup;
     cleanup.activeSpaceIndex = kModelSpaceIndex;
-    cleanup.userLinesFlat.reserve(layout->paperLines.size());
+    cleanup.drawing.userLinesFlat.reserve(layout->paperLines.size());
     for (float value : layout->paperLines)
-      cleanup.userLinesFlat.push_back(value);
-    cleanup.userLineAttrs = layout->paperLineAttrs;
-    cleanup.userArcs = layout->paperArcs;
-    cleanup.userArcAttrs = layout->paperArcAttrs;
-    cleanup.userPolylineOffsets = layout->paperPolyOffsets;
-    cleanup.userPolylineVerts.reserve(layout->paperPolyVerts.size());
+      cleanup.drawing.userLinesFlat.push_back(value);
+    cleanup.drawing.userLineAttrs = layout->paperLineAttrs;
+    cleanup.drawing.userArcs = layout->paperArcs;
+    cleanup.drawing.userArcAttrs = layout->paperArcAttrs;
+    cleanup.drawing.userPolylineOffsets = layout->paperPolyOffsets;
+    cleanup.drawing.userPolylineVerts.reserve(layout->paperPolyVerts.size());
     for (float value : layout->paperPolyVerts)
-      cleanup.userPolylineVerts.push_back(value);
-    cleanup.userPolylineClosed = layout->paperPolyClosed;
-    cleanup.userPolylineVertsBulge = layout->paperPolyVertsBulge;
-    cleanup.userPolylineAttrs = layout->paperPolyAttrs;
+      cleanup.drawing.userPolylineVerts.push_back(value);
+    cleanup.drawing.userPolylineClosed = layout->paperPolyClosed;
+    cleanup.drawing.userPolylineVertsBulge = layout->paperPolyVertsBulge;
+    cleanup.drawing.userPolylineAttrs = layout->paperPolyAttrs;
     for (size_t i = 0; i + 2 < layout->paperCircles.size(); i += 3) {
-      cleanup.pushCircle(CadCircleRecord{layout->paperCircles[i], layout->paperCircles[i + 1], 0.0,
+      cleanup.drawing.pushCircle(CadCircleRecord{layout->paperCircles[i], layout->paperCircles[i + 1], 0.0,
                                          layout->paperCircles[i + 2]});
-      PushCircleNormal(cleanup.userCircleNormals);
+      PushCircleNormal(cleanup.drawing.userCircleNormals);
     }
-    cleanup.userCircleAttrs = layout->paperCircleAttrs;
+    cleanup.drawing.userCircleAttrs = layout->paperCircleAttrs;
     ExecuteOverkill(cleanup, log);
     layout->paperLines.clear();
-    layout->paperLines.reserve(cleanup.userLinesFlat.size());
-    for (double value : cleanup.userLinesFlat)
+    layout->paperLines.reserve(cleanup.drawing.userLinesFlat.size());
+    for (double value : cleanup.drawing.userLinesFlat)
       layout->paperLines.push_back(static_cast<float>(value));
-    layout->paperLineAttrs = std::move(cleanup.userLineAttrs);
-    layout->paperArcs = std::move(cleanup.userArcs);
-    layout->paperArcAttrs = std::move(cleanup.userArcAttrs);
-    layout->paperPolyOffsets = std::move(cleanup.userPolylineOffsets);
+    layout->paperLineAttrs = std::move(cleanup.drawing.userLineAttrs);
+    layout->paperArcs = std::move(cleanup.drawing.userArcs);
+    layout->paperArcAttrs = std::move(cleanup.drawing.userArcAttrs);
+    layout->paperPolyOffsets = std::move(cleanup.drawing.userPolylineOffsets);
     layout->paperPolyVerts.clear();
-    layout->paperPolyVerts.reserve(cleanup.userPolylineVerts.size());
-    for (double value : cleanup.userPolylineVerts)
+    layout->paperPolyVerts.reserve(cleanup.drawing.userPolylineVerts.size());
+    for (double value : cleanup.drawing.userPolylineVerts)
       layout->paperPolyVerts.push_back(static_cast<float>(value));
-    layout->paperPolyClosed = std::move(cleanup.userPolylineClosed);
-    layout->paperPolyVertsBulge = std::move(cleanup.userPolylineVertsBulge);
-    layout->paperPolyAttrs = std::move(cleanup.userPolylineAttrs);
+    layout->paperPolyClosed = std::move(cleanup.drawing.userPolylineClosed);
+    layout->paperPolyVertsBulge = std::move(cleanup.drawing.userPolylineVertsBulge);
+    layout->paperPolyAttrs = std::move(cleanup.drawing.userPolylineAttrs);
     layout->paperCircles.clear();
-    layout->paperCircleAttrs = std::move(cleanup.userCircleAttrs);
-    for (size_t i = 0; i < cleanup.circleCount(); ++i) {
-      const CadCircleRecord c = cleanup.circle(i);
+    layout->paperCircleAttrs = std::move(cleanup.drawing.userCircleAttrs);
+    for (size_t i = 0; i < cleanup.drawing.circleCount(); ++i) {
+      const CadCircleRecord c = cleanup.drawing.circle(i);
       layout->paperCircles.insert(layout->paperCircles.end(),
                                   {static_cast<float>(c.cx), static_cast<float>(c.cy), static_cast<float>(c.r)});
     }
@@ -35094,15 +35094,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     struct LSeg { double x0 = 0, y0 = 0, x1 = 0, y1 = 0; double z0 = 0, z1 = 0; EntityAttributes attr; };
 
     // Snapshot into a working vector that carries attrs
-    const size_t nL = st.lineCount();
+    const size_t nL = st.drawing.lineCount();
     std::vector<LSeg> segs;
     segs.reserve(nL);
     for (size_t i = 0; i < nL; ++i) {
       const size_t k = i;
-      segs.push_back({ st.line(k).x0,     st.line(k).y0,
-                       st.line(k).x1, st.line(k).y1,
-                       st.line(k).z0, st.line(k).z1,
-                       i < st.userLineAttrs.size() ? st.userLineAttrs[i] : MakeNewEntityAttrs(st) });
+      segs.push_back({ st.drawing.line(k).x0,     st.drawing.line(k).y0,
+                       st.drawing.line(k).x1, st.drawing.line(k).y1,
+                       st.drawing.line(k).z0, st.drawing.line(k).z1,
+                       i < st.drawing.userLineAttrs.size() ? st.drawing.userLineAttrs[i] : MakeNewEntityAttrs(st) });
     }
 
     // ── 1a. Zero-length segments ──────────────────────────────────────────
@@ -35325,12 +35325,12 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     }
 
     // Write back
-    st.userLinesFlat.clear();
-    st.userLineAttrs.clear();
-    st.userLineAttrs.reserve(segs.size());
+    st.drawing.userLinesFlat.clear();
+    st.drawing.userLineAttrs.clear();
+    st.drawing.userLineAttrs.reserve(segs.size());
     for (const auto& s : segs) {
-      st.pushLine(CadLineRecord{s.x0, s.y0, s.z0, s.x1, s.y1, s.z1});
-      st.userLineAttrs.push_back(s.attr);
+      st.drawing.pushLine(CadLineRecord{s.x0, s.y0, s.z0, s.x1, s.y1, s.z1});
+      st.drawing.userLineAttrs.push_back(s.attr);
     }
   }
 
@@ -35338,16 +35338,16 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // 2. CIRCLES — remove exact duplicates (same center + radius)
   // =========================================================================
   {
-    const size_t nC = st.circleCount();
+    const size_t nC = st.drawing.circleCount();
     struct Circ { double cx, cy, z, r; float nx, ny, nz; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {
       float cnx = 0.f, cny = 0.f, cnz = 1.f;
-      CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
-      const CadCircleRecord c = st.circle(i);
+      CircleNormalAt(st.drawing.userCircleNormals, i, &cnx, &cny, &cnz);
+      const CadCircleRecord c = st.drawing.circle(i);
       cs.push_back({ c.cx, c.cy, c.cz, c.r, cnx, cny, cnz,
-                     i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
+                     i < st.drawing.userCircleAttrs.size() ? st.drawing.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
     }
     // Sort by radius then center; allows early break on radius mismatch
     std::sort(cs.begin(), cs.end(), [](const Circ& a, const Circ& b) {
@@ -35371,14 +35371,14 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         if (dx * dx + dy * dy + dz * dz < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
       }
     }
-    st.userCirclesCxCyZR.clear();
-    st.userCircleAttrs.clear();
-    st.userCircleNormals.clear();
+    st.drawing.userCirclesCxCyZR.clear();
+    st.drawing.userCircleAttrs.clear();
+    st.drawing.userCircleNormals.clear();
     for (size_t i = 0; i < cs.size(); ++i) {
       if (!dead[i]) {
-        st.pushCircle(CadCircleRecord{cs[i].cx, cs[i].cy, cs[i].z, cs[i].r});
-        st.userCircleAttrs.push_back(cs[i].attr);
-        PushCircleNormal(st.userCircleNormals, cs[i].nx, cs[i].ny, cs[i].nz);
+        st.drawing.pushCircle(CadCircleRecord{cs[i].cx, cs[i].cy, cs[i].z, cs[i].r});
+        st.drawing.userCircleAttrs.push_back(cs[i].attr);
+        PushCircleNormal(st.drawing.userCircleNormals, cs[i].nx, cs[i].ny, cs[i].nz);
       }
     }
   }
@@ -35389,16 +35389,16 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   //   3b. Delete exact duplicate arcs (same center/radius/startRad/sweepRad).
   // =========================================================================
   {
-    const size_t nA = st.userArcs.size();
-    const size_t nC = st.circleCount();
+    const size_t nA = st.drawing.userArcs.size();
+    const size_t nC = st.drawing.circleCount();
     std::vector<bool> dead(nA, false);
 
     // 3a — arcs over full circles
     for (size_t i = 0; i < nA; ++i) {
       if (dead[i]) continue;
-      const CadArc& a = st.userArcs[i];
+      const CadArc& a = st.drawing.userArcs[i];
       for (size_t c = 0; c < nC; ++c) {
-        const CadCircleRecord cc = st.circle(c);
+        const CadCircleRecord cc = st.drawing.circle(c);
         const double dx = a.cx - cc.cx;
         const double dy = a.cy - cc.cy;
         const double dr = a.r  - cc.r;
@@ -35417,11 +35417,11 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     constexpr float kAngTol = 1e-4f; // ≈ 0.006°
     for (size_t i = 0; i < nA; ++i) {
       if (dead[i]) continue;
-      const CadArc& a = st.userArcs[i];
+      const CadArc& a = st.drawing.userArcs[i];
       const float aStart = normAngle(a.startRad);
       for (size_t j = i + 1; j < nA; ++j) {
         if (dead[j]) continue;
-        const CadArc& b = st.userArcs[j];
+        const CadArc& b = st.drawing.userArcs[j];
         const double dxC = a.cx - b.cx, dyC = a.cy - b.cy, drR = a.r - b.r;
         if (dxC * dxC + dyC * dyC >= tolSq || drR * drR >= tolSq) continue;
         const float dStart = std::fabs(aStart - normAngle(b.startRad));
@@ -35438,32 +35438,32 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     newArcAttrs.reserve(nA);
     for (size_t i = 0; i < nA; ++i) {
       if (!dead[i]) {
-        newArcs.push_back(st.userArcs[i]);
-        newArcAttrs.push_back(i < st.userArcAttrs.size() ? st.userArcAttrs[i] : MakeNewEntityAttrs(st));
+        newArcs.push_back(st.drawing.userArcs[i]);
+        newArcAttrs.push_back(i < st.drawing.userArcAttrs.size() ? st.drawing.userArcAttrs[i] : MakeNewEntityAttrs(st));
       }
     }
-    st.userArcs     = std::move(newArcs);
-    st.userArcAttrs = std::move(newArcAttrs);
+    st.drawing.userArcs     = std::move(newArcs);
+    st.drawing.userArcAttrs = std::move(newArcAttrs);
   }
 
   // =========================================================================
   // 4. POLYLINES — remove zero-length (coincident) vertex steps
   // =========================================================================
   {
-    const int nP = static_cast<int>(st.userPolylineOffsets.size()) > 0
-                     ? static_cast<int>(st.userPolylineOffsets.size()) - 1
+    const int nP = static_cast<int>(st.drawing.userPolylineOffsets.size()) > 0
+                     ? static_cast<int>(st.drawing.userPolylineOffsets.size()) - 1
                      : 0;
     // Collect polylines to erase (those that become degenerate after cleanup).
     // Iterate high→low so earlier polyline offsets stay valid while we mutate.
     std::vector<int> polyToErase;
 
     for (int pi = nP - 1; pi >= 0; --pi) {
-      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (v1 - v0 < 2) { polyToErase.push_back(pi); continue; }
 
-      const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
-                          st.userPolylineClosed[static_cast<size_t>(pi)];
+      const bool closed = static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() &&
+                          st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
 
       // Collect this polyline's vertices, elevation included (issue 01) - the rebuild below used to
       // write every Z back as 0, flattening any polyline OVERKILL touched.
@@ -35497,25 +35497,25 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       // Replace the vertex slice [v0*3, v1*3) with cleaned data
       const int nNew  = static_cast<int>(clean.size());
       const int delta = nNew - (v1 - v0);
-      st.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
+      st.drawing.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
 
       std::vector<float> newV;
       newV.reserve(static_cast<size_t>(nNew) * 3);
       for (const auto& p : clean) { newV.push_back(p.x); newV.push_back(p.y); newV.push_back(p.z); }
-      st.userPolylineVerts.insert(
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+      st.drawing.userPolylineVerts.insert(
+          st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
           newV.begin(), newV.end());
 
       // Adjust all offsets after pi by the vertex delta
-      for (size_t oi = static_cast<size_t>(pi) + 1; oi < st.userPolylineOffsets.size(); ++oi)
-        st.userPolylineOffsets[oi] += delta;
+      for (size_t oi = static_cast<size_t>(pi) + 1; oi < st.drawing.userPolylineOffsets.size(); ++oi)
+        st.drawing.userPolylineOffsets[oi] += delta;
     }
 
     // polyToErase is in descending order (loop ran high→low, push_back is stable)
     for (int pi : polyToErase)
       ErasePolylineByIndex(st, pi);
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // REQ-316 / ADR-047
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
   }
 
   // ── report ────────────────────────────────────────────────────────────────
@@ -35532,9 +35532,9 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // any kind, so on a drawing with surfaces "nothing to clean up" could be read as "your surfaces
   // are clean" when they were never examined. Surfaces are derived from their definitions and are
   // not duplicate linework, so excluding them is correct - being silent about it was not.
-  if (!st.cadSurfaces.empty())
-    log.push_back("OVERKILL — " + std::to_string(st.cadSurfaces.size()) + " surface" +
-                  (st.cadSurfaces.size() == 1 ? " was" : "s were") +
+  if (!st.drawing.cadSurfaces.empty())
+    log.push_back("OVERKILL — " + std::to_string(st.drawing.cadSurfaces.size()) + " surface" +
+                  (st.drawing.cadSurfaces.size() == 1 ? " was" : "s were") +
                   " not examined: a surface is derived from its definition, not duplicate linework.");
 }
 
@@ -35724,13 +35724,13 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
   }
 
   PushUndoSnapshot(st, "Import model");
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.cadMeshes.push_back(std::move(mesh));
+  st.drawing.cadMeshAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
 
   char msg[320];
   std::snprintf(msg, sizeof(msg), "Imported %s — %d triangles, %d parts, scale %.6g.",
-                st.cadMeshes.back()->sourceName.c_str(), r.triangleCount(),
+                st.drawing.cadMeshes.back()->sourceName.c_str(), r.triangleCount(),
                 static_cast<int>(r.parts.size()), unitScale);
   log.push_back(msg);
   // REQ-065 / REQ-201: what did not come in is stated, never dropped in silence.
@@ -35920,8 +35920,8 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
   cloud->intensity = std::move(job.previewIntensity);
 
   PushUndoSnapshot(st, "Import point cloud");
-  st.cadPointClouds.push_back(cloud);
-  st.cadPointCloudAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.cadPointClouds.push_back(cloud);
+  st.drawing.cadPointCloudAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
 
   char msg[384];
@@ -36003,11 +36003,11 @@ std::set<int> ResolvePointCloudsForExport(const AppCommandState& st) {
   std::set<int> resolved;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.cadPointClouds.size())
+        static_cast<size_t>(e.index) < st.drawing.cadPointClouds.size())
       resolved.insert(e.index);
   }
   if (resolved.empty()) {
-    for (int i = 0; i < static_cast<int>(st.cadPointClouds.size()); ++i) resolved.insert(i);
+    for (int i = 0; i < static_cast<int>(st.drawing.cadPointClouds.size()); ++i) resolved.insert(i);
   }
   return resolved;
 }
@@ -36031,7 +36031,7 @@ void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& res
 
   bool anyColor = false, anyIntensity = false;
   for (int idx : resolved) {
-    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    const auto& cloud = st.drawing.cadPointClouds[static_cast<size_t>(idx)];
     if (cloud->hasOutOfCoreCache()) {
       const pointcloudcache::OpenResult opened = pointcloudcache::Open(cloud->cloudCachePath);
       if (opened.ok) {
@@ -36046,7 +36046,7 @@ void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& res
 
   totalCount = 0;
   for (int idx : resolved) {
-    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    const auto& cloud = st.drawing.cadPointClouds[static_cast<size_t>(idx)];
     std::vector<double> cloudXyz;
     std::vector<float> cloudColors, cloudIntensity;
     bool cloudHasColor = false, cloudHasIntensity = false;
@@ -36106,10 +36106,10 @@ PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudE
   plan.fromSelection = false;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.cadPointClouds.size())
+        static_cast<size_t>(e.index) < st.drawing.cadPointClouds.size())
       plan.fromSelection = true;
   for (int idx : resolved) {
-    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    const auto& cloud = st.drawing.cadPointClouds[static_cast<size_t>(idx)];
     plan.pointCount += cloud->totalPointCount > 0 ? cloud->totalPointCount : cloud->pointCount();
   }
   const char* ext = format == PointCloudExportFormat::Pts ? ".pts"
@@ -36117,7 +36117,7 @@ PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudE
                   : format == PointCloudExportFormat::Las ? ".las" : ".laz";
   plan.defaultFileName =
       resolved.size() == 1
-          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
+          ? std::filesystem::u8path(st.drawing.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
                     .stem().u8string() + ext
           : std::string("pointclouds") + ext;
   return plan;
@@ -36136,7 +36136,7 @@ PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudE
 bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
                              const std::string& pathUtf8, std::vector<std::string>& log) {
   const std::string name = PointCloudExportCommandName(format);
-  if (st.cadPointClouds.empty()) {
+  if (st.drawing.cadPointClouds.empty()) {
     log.push_back(name + " — the drawing has no point clouds.");
     return false;
   }
@@ -36189,7 +36189,7 @@ bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
 static void ExportSelectedPointClouds(AppCommandState& st, PointCloudExportFormat format,
                                       std::vector<std::string>& log) {
   const std::string name = PointCloudExportCommandName(format);
-  if (st.cadPointClouds.empty()) {
+  if (st.drawing.cadPointClouds.empty()) {
     log.push_back(name + " — the drawing has no point clouds.");
     return;
   }
@@ -36238,12 +36238,12 @@ int ExpireSubObjectSelection(AppCommandState& st) {
     // solid the user picked is still there, still the same object, and losing the selection because
     // something else was deleted would be a defect rather than an expiry. So the cached index is
     // REPAIRED from the identity rather than trusted.
-    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.cadSolids.size() ||
-        st.cadSolids[static_cast<size_t>(s.solidIndex)] != sp) {
-      const auto at = std::find(st.cadSolids.begin(), st.cadSolids.end(), sp);
-      if (at == st.cadSolids.end())
+    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.drawing.cadSolids.size() ||
+        st.drawing.cadSolids[static_cast<size_t>(s.solidIndex)] != sp) {
+      const auto at = std::find(st.drawing.cadSolids.begin(), st.drawing.cadSolids.end(), sp);
+      if (at == st.drawing.cadSolids.end())
         return true;  // still alive somewhere, but no longer in this drawing
-      s.solidIndex = static_cast<int>(at - st.cadSolids.begin());
+      s.solidIndex = static_cast<int>(at - st.drawing.cadSolids.begin());
     }
     if (s.index < 0)
       return true;
@@ -36288,10 +36288,10 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   double bestT = 0.0;
   SelectedSubObject best{};
   solidpick::Pick bestPick{};
-  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i) {
     if (!SolidVisible(st, i))
       continue;
-    const CadSolidPtr& sp = st.cadSolids[i];
+    const CadSolidPtr& sp = st.drawing.cadSolids[i];
     // The solid's OWN cached triangles, not the coalesced display batch: the batch merges solids
     // that draw identically into shared buffers (#194) and carries no per-face channel, so neither
     // the pick nor the highlight can be resolved from it (REQ-318 item 13).
@@ -36328,7 +36328,7 @@ static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidInde
 
 /// The nearest PIPE RUN solid under \p ray, as a `SelectedEntity` of `Type::PipeRun` (issue #486).
 /// A whole-entity pick only — deliberately NOT routed through `PickSubObjectAcrossSolids`/
-/// `SelectedSubObject`, which is scoped to `st.cadSolids` throughout the sub-object selection
+/// `SelectedSubObject`, which is scoped to `st.drawing.cadSolids` throughout the sub-object selection
 /// system (FILLET/CHAMFER/PRESSPULL edge-and-face picking): a pipe run's derived solid was never
 /// meant to be sub-object-edited, only selected/highlighted/erased/reported, the same boundary
 /// `Type::Solid` itself states on its own doc comment.
@@ -36386,7 +36386,7 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
   const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
   const bool haveSolid = PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable) &&
-                        sub.solidIndex >= 0 && static_cast<std::size_t>(sub.solidIndex) < st.cadSolids.size();
+                        sub.solidIndex >= 0 && static_cast<std::size_t>(sub.solidIndex) < st.drawing.cadSolids.size();
 
   // Pipe runs (issue #486): whichever of a real solid or a pipe run's derived solid the ray hits
   // FIRST wins — the same "nearer one answers" rule every other entity-vs-entity precedence in
@@ -36415,8 +36415,8 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
 
 static int PickPdfUnderlayAt(const AppCommandState& st, double localX, double localY) {
   constexpr float kPdfPi = 3.14159265f;
-  for (int pi = static_cast<int>(st.pdfAttachments.size()) - 1; pi >= 0; --pi) {
-    const PdfAttachment& att = st.pdfAttachments[static_cast<std::size_t>(pi)];
+  for (int pi = static_cast<int>(st.drawing.pdfAttachments.size()) - 1; pi >= 0; --pi) {
+    const PdfAttachment& att = st.drawing.pdfAttachments[static_cast<std::size_t>(pi)];
     if (att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
       continue;
     const float W = att.pageWidthPts * att.scale;
@@ -36447,7 +36447,7 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
   double tSolid = 0.0;
   float solidTol = 0.f;  // computed once: it sweeps the drawing's extents
   if (rq.modelSpace && rq.eyeRayValid && edLen > 1e-12 && !rq.surveyPointUnderCursor &&
-      (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty())) {
+      (!st.drawing.cadSolids.empty() || !st.pipeRunWorldSolids.empty())) {
     solidTol = CadOffsetEntityPickTolWorld(st);
     haveSolid = PickClosestSolidEntity(st, rq.eyeRay, solidTol, &solidE, &tSolid);
   }
@@ -36490,7 +36490,7 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
     }
     const int ann = PickCadAnnotationAt(static_cast<float>(rq.rawX), static_cast<float>(rq.rawY), st,
                                         rq.orthoHalfH, rq.viewportHeightPx, rq.orbitRay);
-    if (ann >= 0 && !hiddenAtZ(static_cast<double>(st.cadAnnotations[static_cast<size_t>(ann)].insZ))) {
+    if (ann >= 0 && !hiddenAtZ(static_cast<double>(st.drawing.cadAnnotations[static_cast<size_t>(ann)].insZ))) {
       r.family = ViewportPickFamily::Annotation;
       r.entity.type = SelectedEntity::Type::Annotation;
       r.entity.index = ann;
@@ -36599,16 +36599,16 @@ bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& 
   if (!out || s.kind == solidpick::Kind::None || s.index < 0)
     return false;
   const CadSolidPtr sp = s.owner.lock();
-  if (!sp || s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(s.solidIndex)] != sp)
+  if (!sp || s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(s.solidIndex)] != sp)
     return false;  // expired, or the index has not been repaired yet — say nothing rather than guess
   out->title = std::string("Solid ") + solidpick::KindName(s.kind) + " " + std::to_string(s.index);
   // 1-based, matching how the command line numbers solids everywhere else. A readout that counts
   // from zero while the log counts from one is two names for one object.
   out->solid = std::to_string(s.solidIndex + 1);
   static const EntityAttributes kDefaults{};
-  const EntityAttributes& a = static_cast<size_t>(s.solidIndex) < st.cadSolidAttrs.size()
-                                  ? st.cadSolidAttrs[static_cast<size_t>(s.solidIndex)]
+  const EntityAttributes& a = static_cast<size_t>(s.solidIndex) < st.drawing.cadSolidAttrs.size()
+                                  ? st.drawing.cadSolidAttrs[static_cast<size_t>(s.solidIndex)]
                                   : kDefaults;
   // The STORED values, not the resolved ones. "ByLayer" is the answer the user needs — it is what
   // the Properties panel shows and what they would change — where a resolved "#FFFFFF" would hide
@@ -36655,13 +36655,13 @@ bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solid
   return true;
 }
 bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
-  if (solidIndex >= st.cadSolids.size())
+  if (solidIndex >= st.drawing.cadSolids.size())
     return false;
-  if (!st.cadSolids[solidIndex])
+  if (!st.drawing.cadSolids[solidIndex])
     return false;
-  if (solidIndex >= st.cadSolidAttrs.size())
+  if (solidIndex >= st.drawing.cadSolidAttrs.size())
     return true;  // attrs are length-locked to cadSolids; a short array means defaults, not hidden
-  const EntityAttributes& a = st.cadSolidAttrs[solidIndex];
+  const EntityAttributes& a = st.drawing.cadSolidAttrs[solidIndex];
   // REQ-084 (d): an isolated-out solid is invisible, so it must not be drawn OR answer a click.
   if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
     return false;
@@ -36670,13 +36670,13 @@ bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
 }
 
 bool PointCloudVisible(const AppCommandState& st, size_t index) {
-  if (index >= st.cadPointClouds.size())
+  if (index >= st.drawing.cadPointClouds.size())
     return false;
-  if (!st.cadPointClouds[index])
+  if (!st.drawing.cadPointClouds[index])
     return false;
-  if (index >= st.cadPointCloudAttrs.size())
+  if (index >= st.drawing.cadPointCloudAttrs.size())
     return true;  // attrs are length-locked to cadPointClouds; short array means defaults, not hidden
-  const EntityAttributes& a = st.cadPointCloudAttrs[index];
+  const EntityAttributes& a = st.drawing.cadPointCloudAttrs[index];
   // REQ-084 (d): an isolated-out cloud is invisible, so it must not be drawn OR answer a click.
   if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
     return false;
@@ -36697,7 +36697,7 @@ void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>
 }
 
 const pointcloudcache::OpenCache* GetOrOpenPointCloudCache(AppCommandState& st, int cloudIdx) {
-  const CadPointCloud& pc = *st.cadPointClouds[static_cast<size_t>(cloudIdx)];
+  const CadPointCloud& pc = *st.drawing.cadPointClouds[static_cast<size_t>(cloudIdx)];
   for (const auto& entry : st.pointCloudOpenCaches)
     if (entry.cloudIndex == cloudIdx && entry.cachePath == pc.cloudCachePath)
       return entry.ok ? &entry.cache : nullptr;
@@ -36777,10 +36777,10 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
   double bestX = 0, bestY = 0, bestZ = 0;
   bool anyCacheOpenFailed = false;
   constexpr int kMaxProbeLeaves = 24;
-  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+  for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
     if (!PointCloudVisible(st, pci))
       continue;
-    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    const std::shared_ptr<const CadPointCloud>& pc = st.drawing.cadPointClouds[pci];
     if (!pc)
       continue;
     const int cloudIdx = static_cast<int>(pci);
@@ -36873,7 +36873,7 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
       ReadExtractCenterlineNeighborhood(*cache, cx, cy, cz, radius, neighborhood);
     if (neighborhood.empty()) {
       // No cache, or no cached leaves fell in range — fall back to the bounded preview sample.
-      const std::vector<double>& P = st.cadPointClouds[static_cast<size_t>(bestCloud)]->pointsXyz;
+      const std::vector<double>& P = st.drawing.cadPointClouds[static_cast<size_t>(bestCloud)]->pointsXyz;
       for (size_t i = 0; i + 2 < P.size(); i += 3) {
         const double dx = P[i] - cx, dy = P[i + 1] - cy, dz = P[i + 2] - cz;
         if (dx * dx + dy * dy + dz * dz <= r2) {
@@ -36918,8 +36918,8 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
     return;
   }
   PushUndoSnapshot(st, "Extract Centerline");
-  st.pushLine(CadLineRecord{st.extractCenterlineP0X, st.extractCenterlineP0Y, st.extractCenterlineP0Z, st.extractCenterlineP1X, st.extractCenterlineP1Y, st.extractCenterlineP1Z});
-  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.pushLine(CadLineRecord{st.extractCenterlineP0X, st.extractCenterlineP0Y, st.extractCenterlineP0Z, st.extractCenterlineP1X, st.extractCenterlineP1Y, st.extractCenterlineP1Z});
+  st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("EXTRACTCENTERLINE — line placed along the fitted cylinder axis.");
 }
@@ -36941,9 +36941,9 @@ static bool BlockRefWorldSolidVisible(const AppCommandState& st, size_t solidInd
 static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
   std::uint64_t sig = 1469598103934665603ull;
   const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
-  mix(st.cadBlockRefs.size());
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
-    const CadBlockRef& r = st.cadBlockRefs[bi];
+  mix(st.drawing.cadBlockRefs.size());
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
+    const CadBlockRef& r = st.drawing.cadBlockRefs[bi];
     for (float v : {r.xf.x, r.xf.y, r.xf.z, r.xf.sx, r.xf.sy, r.xf.sz, r.xf.rotX, r.xf.rotY, r.xf.rotZ}) {
       std::uint32_t bits = 0;
       std::memcpy(&bits, &v, sizeof(bits));
@@ -36953,15 +36953,15 @@ static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
       mix(c);
     // The insert's layer / colour resolve every ByBlock solid inside it, so an edit to them
     // (REQ-352 — a pipe fitting is a block reference) must re-derive the world solids too.
-    if (bi < st.cadBlockRefAttrs.size()) {
-      for (unsigned char c : st.cadBlockRefAttrs[bi].layer)
+    if (bi < st.drawing.cadBlockRefAttrs.size()) {
+      for (unsigned char c : st.drawing.cadBlockRefAttrs[bi].layer)
         mix(c);
       mix(0);
-      for (unsigned char c : st.cadBlockRefAttrs[bi].color)
+      for (unsigned char c : st.drawing.cadBlockRefAttrs[bi].color)
         mix(c);
     }
   }
-  for (const CadBlockDefinition& d : st.blockDefs)
+  for (const CadBlockDefinition& d : st.drawing.blockDefs)
     mix(d.content.cadSolids.size());
   return sig;
 }
@@ -36973,11 +36973,11 @@ static void RebuildBlockRefWorldSolids(AppCommandState& st) {
   st.blockRefWorldSolidsSig = sig;
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
-  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
     const EntityAttributes insertAttr =
-        bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{};
+        bi < st.drawing.cadBlockRefAttrs.size() ? st.drawing.cadBlockRefAttrs[bi] : EntityAttributes{};
     std::vector<CadBlockWorldSolid> ws;
-    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi], insertAttr, &ws);
+    CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], insertAttr, &ws);
     for (CadBlockWorldSolid& w : ws) {
       if (!w.solid)
         continue;
@@ -37026,11 +37026,11 @@ static std::uint64_t SinglePipeRunSig(const CadPipeRun& r) {
 static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
   std::uint64_t sig = 1469598103934665603ull;
   const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
-  mix(st.cadPipeRuns.size());
+  mix(st.drawing.cadPipeRuns.size());
   // Built from the SAME per-run signature the solid cache keys on, so the two cannot disagree about
   // what "changed" means. It previously covered only the path and the size, which left a wall or
   // class change invisible to this gate — the early-out would keep a solid built at the old wall.
-  for (const CadPipeRun& r : st.cadPipeRuns)
+  for (const CadPipeRun& r : st.drawing.cadPipeRuns)
     mix(SinglePipeRunSig(r));
   return sig;
 }
@@ -37047,8 +37047,8 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
     // each run's attributes onto its solids rather than leave them drawing in the old ones.
     for (size_t i = 0; i < st.pipeRunWorldSolidAttrs.size() && i < st.pipeRunWorldSolidOwnerIndex.size(); ++i) {
       const size_t ri = static_cast<size_t>(st.pipeRunWorldSolidOwnerIndex[i]);
-      if (ri < st.cadPipeRunAttrs.size())
-        st.pipeRunWorldSolidAttrs[i] = st.cadPipeRunAttrs[ri];
+      if (ri < st.drawing.cadPipeRunAttrs.size())
+        st.pipeRunWorldSolidAttrs[i] = st.drawing.cadPipeRunAttrs[ri];
     }
     return;
   }
@@ -37057,23 +37057,23 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
   const auto rebuildT0 = std::chrono::steady_clock::now();
-  st.pipeRunSolidCacheSigs.resize(st.cadPipeRuns.size(), 0);
-  st.pipeRunSolidCache.resize(st.cadPipeRuns.size());
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
-    const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
+  st.pipeRunSolidCacheSigs.resize(st.drawing.cadPipeRuns.size(), 0);
+  st.pipeRunSolidCache.resize(st.drawing.cadPipeRuns.size());
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    const EntityAttributes runAttr = ri < st.drawing.cadPipeRunAttrs.size() ? st.drawing.cadPipeRunAttrs[ri] : EntityAttributes{};
     // Re-sweep only what changed. Appending one vertex while routing used to re-sweep every run in
     // the drawing; a tube costs ~11 ms per point of route, so that was the click cost growing with
     // the whole drawing rather than with the run being drawn.
-    const std::uint64_t runSig = SinglePipeRunSig(st.cadPipeRuns[ri]);
+    const std::uint64_t runSig = SinglePipeRunSig(st.drawing.cadPipeRuns[ri]);
     if (st.pipeRunSolidCacheSigs[ri] != runSig || st.pipeRunSolidCache[ri].empty()) {
       st.pipeRunSolidCacheSigs[ri] = runSig;
       st.pipeRunSolidCache[ri].clear();
       const auto sweepT0 = std::chrono::steady_clock::now();
-      (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &st.pipeRunSolidCache[ri]);
+      (void)CadBuildPipeRunSolids(st.drawing.cadPipeRuns[ri], &st.pipeRunSolidCache[ri]);
       const std::chrono::duration<double, std::milli> sweepMs = std::chrono::steady_clock::now() - sweepT0;
       st.pipeRunPerf.sweep.Add(sweepMs.count());
       ++st.pipeRunPerf.runsSwept;
-      st.pipeRunPerf.lastRunVerts = static_cast<int>(st.cadPipeRuns[ri].vertsXyz.size() / 3);
+      st.pipeRunPerf.lastRunVerts = static_cast<int>(st.drawing.cadPipeRuns[ri].vertsXyz.size() / 3);
     } else {
       ++st.pipeRunPerf.runsReused;
     }
@@ -37231,7 +37231,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
   };
 
-  for (const CadSolidPtr& sp : st.cadSolids)
+  for (const CadSolidPtr& sp : st.drawing.cadSolids)
     tessellateSolidPtr(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     tessellateSolidPtr(sp);
@@ -37259,16 +37259,16 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     float lineweightMm = 0.f;
   };
   std::vector<VisibleSolid> visible;
-  visible.reserve(st.cadSolids.size());
+  visible.reserve(st.drawing.cadSolids.size());
   std::uint64_t sig = 1469598103934665603ull;  // FNV-1a offset basis
   const auto mix = [&sig](std::uint64_t v) {
     sig = (sig ^ v) * 1099511628211ull;
   };
   mix(st.solidDisplayRegenCount);
-  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i) {
     if (!SolidVisible(st, i))
       continue;  // filtered here, so the renderer stays ignorant of layers and isolation
-    const CadSolidPtr& sp = st.cadSolids[i];
+    const CadSolidPtr& sp = st.drawing.cadSolids[i];
     const auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
                                  [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
     if (it == st.solidDisplayCache.end() || it->empty())
@@ -37277,7 +37277,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // owns that repair, and appending mid-walk would both invalidate this loop's own references and
     // create an entity attribute — with a fresh id — from a display refresh, which is the last place
     // that should be minting them.
-    const EntityAttributes& attr = i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : kDefaultSolidAttrs;
+    const EntityAttributes& attr = i < st.drawing.cadSolidAttrs.size() ? st.drawing.cadSolidAttrs[i] : kDefaultSolidAttrs;
     const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
     VisibleSolid vs;
     vs.tess = &*it;
@@ -37672,8 +37672,8 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
 
   PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(spec->kind));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
 
   log.push_back(SolidCreatedMessage(spec->kind, mp));
@@ -37711,8 +37711,8 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   // cutting whatever now sits at that slot (code review on #478, finding 9).
   for (std::size_t k = 0; k < solids.size(); ++k) {
     const int idx = solids[k];
-    const bool same = k < owners.size() && idx >= 0 && static_cast<std::size_t>(idx) < st.cadSolids.size() &&
-                      !owners[k].expired() && owners[k].lock() == st.cadSolids[static_cast<std::size_t>(idx)];
+    const bool same = k < owners.size() && idx >= 0 && static_cast<std::size_t>(idx) < st.drawing.cadSolids.size() &&
+                      !owners[k].expired() && owners[k].lock() == st.drawing.cadSolids[static_cast<std::size_t>(idx)];
     if (!same) {
       log.push_back("SECTION — the selected solids changed before the plane was picked. Nothing was "
                     "sectioned; run SECTION again.");
@@ -37739,9 +37739,9 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   cuts.reserve(solids.size());
   for (const int idx : solids) {
     // Already held to its owner above; the range test stays so this loop is safe on its own.
-    if (idx < 0 || static_cast<std::size_t>(idx) >= st.cadSolids.size())
+    if (idx < 0 || static_cast<std::size_t>(idx) >= st.drawing.cadSolids.size())
       continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
+    const CadSolidPtr& sp = st.drawing.cadSolids[static_cast<std::size_t>(idx)];
     if (!sp)
       continue;
     Cut c;
@@ -37797,13 +37797,13 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       el.nz = static_cast<float>(c.ellipseArc.normal.z);
       el.startRad = static_cast<float>(c.ellipseArc.startParam);
       el.sweepRad = static_cast<float>(c.ellipseArc.sweep);
-      st.userEllipses.push_back(el);
-      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      st.drawing.userEllipses.push_back(el);
+      st.drawing.userEllAttrs.push_back(MakeNewEntityAttrs(st));
       float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
       CadCoord::LocalFromWorld(st, c.ellipseArc.chordA.x, c.ellipseArc.chordA.y, &ax, &ay);
       CadCoord::LocalFromWorld(st, c.ellipseArc.chordB.x, c.ellipseArc.chordB.y, &bx, &by);
-      st.pushLine(CadLineRecord{ax, ay, static_cast<float>(c.ellipseArc.chordA.z), bx, by, static_cast<float>(c.ellipseArc.chordB.z)});
-      st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+      st.drawing.pushLine(CadLineRecord{ax, ay, static_cast<float>(c.ellipseArc.chordA.z), bx, by, static_cast<float>(c.ellipseArc.chordB.z)});
+      st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
       made += 2;
       continue;
     }
@@ -37827,8 +37827,8 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       el.nx = static_cast<float>(c.ellipse.normal.x);
       el.ny = static_cast<float>(c.ellipse.normal.y);
       el.nz = static_cast<float>(c.ellipse.normal.z);
-      st.userEllipses.push_back(el);
-      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      st.drawing.userEllipses.push_back(el);
+      st.drawing.userEllAttrs.push_back(MakeNewEntityAttrs(st));
       ++made;
       continue;
     }
@@ -37853,30 +37853,30 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       for (const brep::PathSeg& sg : loop.segs)
         bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
 
-      const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
+      const int before = static_cast<int>(st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.back());
       if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
         // REQ-201: every case is explicitly reported, not silently dropped.
         log.push_back("SECTION — a solid's section outline failed to append; skipped.");
         ++failed;
         continue;
       }
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
       for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
-                                                       static_cast<int>(st.userPolylineVertsBulge.size());
+                                                       static_cast<int>(st.drawing.userPolylineVertsBulge.size());
            ++i)
-        st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
+        st.drawing.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
       // REQ-325 / ADR-053: each vertex carries the plane its curved segment turns in. A section on a
       // vertical or tilted plane has curved segments in THAT plane — a sphere's vertical section is a
       // circle standing on edge — and the default +Z would draw them lying flat, and export them
       // flat (GitHub #521).
       for (std::size_t i = 0; i < bulges.size(); ++i) {
         const std::size_t k = (static_cast<std::size_t>(before) + i) * 3;
-        if (k + 2 >= st.userPolylineVertsNormal.size())
+        if (k + 2 >= st.drawing.userPolylineVertsNormal.size())
           break;
-        st.userPolylineVertsNormal[k] = static_cast<float>(c.plane.zAxis.x);
-        st.userPolylineVertsNormal[k + 1] = static_cast<float>(c.plane.zAxis.y);
-        st.userPolylineVertsNormal[k + 2] = static_cast<float>(c.plane.zAxis.z);
+        st.drawing.userPolylineVertsNormal[k] = static_cast<float>(c.plane.zAxis.x);
+        st.drawing.userPolylineVertsNormal[k + 1] = static_cast<float>(c.plane.zAxis.y);
+        st.drawing.userPolylineVertsNormal[k + 2] = static_cast<float>(c.plane.zAxis.z);
       }
       ++made;
     }
@@ -37923,7 +37923,7 @@ std::string CadSectionPromptText(const AppCommandState& st) {
 /// Resolve the selection into solid indices and move to the plane phase, or say why not.
 static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
   st.sectionSolidIndices.clear();
-  const int nSolid = static_cast<int>(st.cadSolids.size());
+  const int nSolid = static_cast<int>(st.drawing.cadSolids.size());
   for (const SelectedEntity& e : st.selection)
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
       st.sectionSolidIndices.push_back(e.index);
@@ -37937,7 +37937,7 @@ static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>
       st.sectionSolidIndices.end());
   st.sectionSolidOwners.clear();
   for (const int idx : st.sectionSolidIndices)
-    st.sectionSolidOwners.push_back(st.cadSolids[static_cast<std::size_t>(idx)]);
+    st.sectionSolidOwners.push_back(st.drawing.cadSolids[static_cast<std::size_t>(idx)]);
   if (st.sectionSolidIndices.empty()) {
     // Stays in the selection phase rather than ending: the user picked something, it just was not
     // a solid, and throwing them out of the command for that is the behaviour this increment exists
@@ -38096,7 +38096,7 @@ void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
   bool fromSelection = false;
   for (const SelectedEntity& e : st.selection)
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 &&
-        static_cast<std::size_t>(e.index) < st.cadSolids.size()) {
+        static_cast<std::size_t>(e.index) < st.drawing.cadSolids.size()) {
       targets.push_back(e.index);
       fromSelection = true;
     }
@@ -38109,7 +38109,7 @@ void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
                     "selection to check the whole drawing.");
       return;
     }
-    for (int i = 0; i < static_cast<int>(st.cadSolids.size()); ++i)
+    for (int i = 0; i < static_cast<int>(st.drawing.cadSolids.size()); ++i)
       targets.push_back(i);
   }
 
@@ -38123,7 +38123,7 @@ void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
                 (targets.size() == 1 ? "" : "s") + (fromSelection ? " (selected)." : " (whole drawing)."));
 
   for (const int idx : targets) {
-    const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
+    const CadSolidPtr& sp = st.drawing.cadSolids[static_cast<std::size_t>(idx)];
     char buf[420];
     if (!sp) {
       std::snprintf(buf, sizeof(buf), "  [%d] missing — the drawing holds no solid at this index.", idx);
@@ -38163,18 +38163,18 @@ void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
-  if (st.cadSolids.empty()) {
+  if (st.drawing.cadSolids.empty()) {
     log.push_back("No solids in this drawing.");
     return;
   }
-  log.push_back("Solids: " + std::to_string(st.cadSolids.size()));
-  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
-    const CadSolidPtr& sp = st.cadSolids[i];
+  log.push_back("Solids: " + std::to_string(st.drawing.cadSolids.size()));
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i) {
+    const CadSolidPtr& sp = st.drawing.cadSolids[i];
     if (!sp)
       continue;
     const brep::MassProperties mp = brep::ComputeMassProperties(*sp);
-    const char* layer = (i < st.cadSolidAttrs.size() && !st.cadSolidAttrs[i].layer.empty())
-                            ? st.cadSolidAttrs[i].layer.c_str()
+    const char* layer = (i < st.drawing.cadSolidAttrs.size() && !st.drawing.cadSolidAttrs[i].layer.empty())
+                            ? st.drawing.cadSolidAttrs[i].layer.c_str()
                             : "0";
     char buf[420];
     // Volume and area come from the topology, never from the recipe (ADR-045 (c)) — so a solid whose
@@ -38230,18 +38230,18 @@ void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void CadReportMassProperties(const AppCommandState& st, std::vector<std::string>& log) {
-  if (st.cadSolids.empty()) {
+  if (st.drawing.cadSolids.empty()) {
     log.push_back("No solids in this drawing.");
     return;
   }
   log.push_back("Mass properties (unit density, so mass = volume):");
-  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
-    const CadSolidPtr& sp = st.cadSolids[i];
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i) {
+    const CadSolidPtr& sp = st.drawing.cadSolids[i];
     if (!sp)
       continue;
     const brep::MassProperties mp = brep::ComputeMassProperties(*sp);
-    const char* layer = (i < st.cadSolidAttrs.size() && !st.cadSolidAttrs[i].layer.empty())
-                            ? st.cadSolidAttrs[i].layer.c_str()
+    const char* layer = (i < st.drawing.cadSolidAttrs.size() && !st.drawing.cadSolidAttrs[i].layer.empty())
+                            ? st.drawing.cadSolidAttrs[i].layer.c_str()
                             : "0";
     char hdr[220];
     std::snprintf(hdr, sizeof(hdr), "  [%d] %s on layer %s", static_cast<int>(i),
@@ -38305,21 +38305,21 @@ bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity
 
   if (sel.type == SelectedEntity::Type::Polyline) {
     const size_t pi = static_cast<size_t>(sel.index);
-    if (pi + 1 >= st.userPolylineOffsets.size())
+    if (pi + 1 >= st.drawing.userPolylineOffsets.size())
       return false;
-    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    const bool closed = pi < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[pi] != 0;
     if (!closed)
       return false;
-    const int vB = st.userPolylineOffsets[pi];
-    const int vE = st.userPolylineOffsets[pi + 1];
+    const int vB = st.drawing.userPolylineOffsets[pi];
+    const int vE = st.drawing.userPolylineOffsets[pi + 1];
     std::vector<ray3d::Vec3> pts;
     for (int v = vB; v < vE; ++v) {
       const size_t b = static_cast<size_t>(v);
-      if (b >= st.vertexCount())
+      if (b >= st.drawing.vertexCount())
         return false;
-      pts.push_back({static_cast<double>(st.vertex(b).x),
-                     static_cast<double>(st.vertex(b).y),
-                     static_cast<double>(st.vertex(b).z)});
+      pts.push_back({static_cast<double>(st.drawing.vertex(b).x),
+                     static_cast<double>(st.drawing.vertex(b).y),
+                     static_cast<double>(st.drawing.vertex(b).z)});
     }
     // A closed polyline may or may not repeat its first vertex at the end.
     if (pts.size() >= 2 && ray3d::Length(ray3d::Sub(pts.front(), pts.back())) < 1e-7)
@@ -38357,9 +38357,9 @@ bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity
 
   if (sel.type == SelectedEntity::Type::Circle) {
     const size_t ci = static_cast<size_t>(sel.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return false;
-    const CadCircleRecord cc = st.circle(ci);
+    const CadCircleRecord cc = st.drawing.circle(ci);
     const double cx = cc.cx;
     const double cy = cc.cy;
     const double cz = cc.cz;
@@ -38367,10 +38367,10 @@ bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity
     if (!(r > 0.0))
       return false;
     ray3d::Vec3 nrm{0, 0, 1};
-    if (ci * 3 + 2 < st.userCircleNormals.size()) {
-      const ray3d::Vec3 cand{static_cast<double>(st.userCircleNormals[ci * 3 + 0]),
-                             static_cast<double>(st.userCircleNormals[ci * 3 + 1]),
-                             static_cast<double>(st.userCircleNormals[ci * 3 + 2])};
+    if (ci * 3 + 2 < st.drawing.userCircleNormals.size()) {
+      const ray3d::Vec3 cand{static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 0]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 1]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 2])};
       if (ray3d::Length(cand) > 1e-9)
         nrm = ray3d::Normalize(cand);
     }
@@ -38442,9 +38442,9 @@ void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vect
   PushUndoSnapshot(st, "Extrude");
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -38590,9 +38590,9 @@ static void CommitExtrude(AppCommandState& st, double height, std::vector<std::s
   PushUndoSnapshot(st, "Extrude");
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -38700,9 +38700,9 @@ static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
   }
   PushUndoSnapshot(st, "Loft");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   if (skipped > 0)
     log.push_back("LOFT — " + std::to_string(skipped) +
                   " selected object(s) are not profiles and were ignored.");
@@ -38763,21 +38763,21 @@ namespace {
                                           brep::SweepPath* out) {
   if (sel.type == SelectedEntity::Type::Polyline) {
     const std::size_t pi = static_cast<std::size_t>(sel.index);
-    if (sel.index < 0 || pi + 1 >= st.userPolylineOffsets.size())
+    if (sel.index < 0 || pi + 1 >= st.drawing.userPolylineOffsets.size())
       return false;
-    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
-    const int vB = st.userPolylineOffsets[pi];
-    const int vE = st.userPolylineOffsets[pi + 1];
+    const bool closed = pi < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[pi] != 0;
+    const int vB = st.drawing.userPolylineOffsets[pi];
+    const int vE = st.drawing.userPolylineOffsets[pi + 1];
     if (vE - vB < 2)
       return false;
     std::vector<ray3d::Vec3> pts;
     for (int v = vB; v < vE; ++v) {
       const std::size_t f = static_cast<std::size_t>(v);
-      if (f >= st.vertexCount())
+      if (f >= st.drawing.vertexCount())
         return false;
-      pts.push_back({static_cast<double>(st.vertex(f).x),
-                     static_cast<double>(st.vertex(f).y),
-                     static_cast<double>(st.vertex(f).z)});
+      pts.push_back({static_cast<double>(st.drawing.vertex(f).x),
+                     static_cast<double>(st.drawing.vertex(f).y),
+                     static_cast<double>(st.drawing.vertex(f).z)});
     }
     if (closed) {
       // A closed polyline may or may not repeat its first vertex at the end
@@ -38793,7 +38793,7 @@ namespace {
       const std::size_t k1 = (k + 1) % pts.size();
       const std::size_t vi = static_cast<std::size_t>(vB) + k;
       const float bulge =
-          vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
+          vi < st.drawing.userPolylineVertsBulge.size() ? st.drawing.userPolylineVertsBulge[vi] : 0.f;
       brep::SweepSegment seg;
       if (std::fabs(bulge) > 1e-6f) {
         // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — same construction
@@ -38801,10 +38801,10 @@ namespace {
         // bulge segment spanning a change in elevation was refused outright ("not a planar arc"),
         // even a genuinely tilted-but-planar one from JOIN.
         float nx = 0.f, ny = 0.f, nz = 1.f;
-        if (vi * 3 + 2 < st.userPolylineVertsNormal.size()) {
-          nx = st.userPolylineVertsNormal[vi * 3];
-          ny = st.userPolylineVertsNormal[vi * 3 + 1];
-          nz = st.userPolylineVertsNormal[vi * 3 + 2];
+        if (vi * 3 + 2 < st.drawing.userPolylineVertsNormal.size()) {
+          nx = st.drawing.userPolylineVertsNormal[vi * 3];
+          ny = st.drawing.userPolylineVertsNormal[vi * 3 + 1];
+          nz = st.drawing.userPolylineVertsNormal[vi * 3 + 2];
         }
         if (IsFlatNormal(nx, ny, nz)) {
           if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
@@ -38857,22 +38857,22 @@ namespace {
   }
   if (sel.type == SelectedEntity::Type::LineSeg) {
     const std::size_t b = static_cast<std::size_t>(sel.index);
-    if (sel.index < 0 || b >= st.lineCount())
+    if (sel.index < 0 || b >= st.drawing.lineCount())
       return false;
-    const ray3d::Vec3 p0{static_cast<double>(st.line(b).x0),
-                         static_cast<double>(st.line(b).y0),
-                         static_cast<double>(st.line(b).z0)};
-    const ray3d::Vec3 p1{static_cast<double>(st.line(b).x1),
-                         static_cast<double>(st.line(b).y1),
-                         static_cast<double>(st.line(b).z1)};
+    const ray3d::Vec3 p0{static_cast<double>(st.drawing.line(b).x0),
+                         static_cast<double>(st.drawing.line(b).y0),
+                         static_cast<double>(st.drawing.line(b).z0)};
+    const ray3d::Vec3 p1{static_cast<double>(st.drawing.line(b).x1),
+                         static_cast<double>(st.drawing.line(b).y1),
+                         static_cast<double>(st.drawing.line(b).z1)};
     out->points = {p0, p1};
     out->segments = {brep::SweepSegment{}};  // one straight segment
     return true;
   }
   if (sel.type == SelectedEntity::Type::Arc) {
-    if (sel.index < 0 || static_cast<std::size_t>(sel.index) >= st.userArcs.size())
+    if (sel.index < 0 || static_cast<std::size_t>(sel.index) >= st.drawing.userArcs.size())
       return false;
-    const CadArc& a = st.userArcs[static_cast<std::size_t>(sel.index)];
+    const CadArc& a = st.drawing.userArcs[static_cast<std::size_t>(sel.index)];
     if (!(a.r > 0.0f) || !(std::fabs(a.sweepRad) > 1e-6f))
       return false;
     ucs::Ucs frame;
@@ -38895,9 +38895,9 @@ namespace {
     // profile role first for every selected entity in order, so a Circle only reaches here when it
     // is not the first closed shape selected.
     const std::size_t ci = static_cast<std::size_t>(sel.index);
-    if (sel.index < 0 || ci >= st.circleCount())
+    if (sel.index < 0 || ci >= st.drawing.circleCount())
       return false;
-    const CadCircleRecord cc = st.circle(ci);
+    const CadCircleRecord cc = st.drawing.circle(ci);
     const double cx = cc.cx;
     const double cy = cc.cy;
     const double cz = cc.cz;
@@ -38905,10 +38905,10 @@ namespace {
     if (!(r > 0.0))
       return false;
     ray3d::Vec3 nrm{0, 0, 1};
-    if (ci * 3 + 2 < st.userCircleNormals.size()) {
-      const ray3d::Vec3 cand{static_cast<double>(st.userCircleNormals[ci * 3 + 0]),
-                             static_cast<double>(st.userCircleNormals[ci * 3 + 1]),
-                             static_cast<double>(st.userCircleNormals[ci * 3 + 2])};
+    if (ci * 3 + 2 < st.drawing.userCircleNormals.size()) {
+      const ray3d::Vec3 cand{static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 0]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 1]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 2])};
       if (ray3d::Length(cand) > 1e-9)
         nrm = ray3d::Normalize(cand);
     }
@@ -39015,9 +39015,9 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   }
   PushUndoSnapshot(st, "Sweep");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   st.selection.clear();
   CancelSweepCommand(st);
@@ -39230,9 +39230,9 @@ static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std:
   PushUndoSnapshot(st, "Revolve");
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -39332,7 +39332,7 @@ const char* BooleanVerb(CadBooleanOp op) {
 
 /// Solid indices in the current selection, de-duplicated, in selection order.
 std::vector<int> SelectedSolidIndices(const AppCommandState& st) {
-  const int n = static_cast<int>(st.cadSolids.size());
+  const int n = static_cast<int>(st.drawing.cadSolids.size());
   std::vector<int> idx;
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < n &&
@@ -39343,7 +39343,7 @@ std::vector<int> SelectedSolidIndices(const AppCommandState& st) {
 }
 
 std::vector<int> SelectedCircleIndices(const AppCommandState& st) {
-  const int n = static_cast<int>(st.circleCount());
+  const int n = static_cast<int>(st.drawing.circleCount());
   std::vector<int> idx;
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && e.index < n &&
@@ -39553,7 +39553,7 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
   std::vector<int> all = minuend;
   all.insert(all.end(), subtrahend.begin(), subtrahend.end());
   for (int i : all) {
-    if (i < 0 || static_cast<size_t>(i) >= st.cadSolids.size() || !st.cadSolids[static_cast<size_t>(i)]) {
+    if (i < 0 || static_cast<size_t>(i) >= st.drawing.cadSolids.size() || !st.drawing.cadSolids[static_cast<size_t>(i)]) {
       log.push_back(verb + " — a selected solid is missing. Nothing changed.");
       return;
     }
@@ -39563,7 +39563,7 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     std::vector<brep::Solid> s;
     s.reserve(v.size());
     for (int i : v)
-      s.push_back(*st.cadSolids[static_cast<size_t>(i)]);
+      s.push_back(*st.drawing.cadSolids[static_cast<size_t>(i)]);
     return s;
   };
 
@@ -39635,18 +39635,18 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     // Circles as cylindrical cutters (centre+normal+radius, auto-depth through hole)
     const std::vector<int> circleCutters = SelectedCircleIndices(st);
     for (int ci : circleCutters) {
-      if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount()) continue;
-      const CadCircleRecord cr = st.circle(static_cast<size_t>(ci));
+      if (ci < 0 || static_cast<size_t>(ci) >= st.drawing.circleCount()) continue;
+      const CadCircleRecord cr = st.drawing.circle(static_cast<size_t>(ci));
       const double cx = cr.cx;
       const double cy = cr.cy;
       const double cz = cr.cz;
       const double r = cr.r;
       double nx = 0, ny = 0, nz = 1;
       const size_t ni = static_cast<size_t>(ci) * 3;
-      if (ni + 2 < st.userCircleNormals.size()) {
-        nx = st.userCircleNormals[ni + 0];
-        ny = st.userCircleNormals[ni + 1];
-        nz = st.userCircleNormals[ni + 2];
+      if (ni + 2 < st.drawing.userCircleNormals.size()) {
+        nx = st.drawing.userCircleNormals[ni + 0];
+        ny = st.drawing.userCircleNormals[ni + 1];
+        nz = st.drawing.userCircleNormals[ni + 2];
       }
       if (!(r > 0.0) || !std::isfinite(r)) {
         log.push_back(verb + " — circle " + std::to_string(ci) + " has invalid radius. Nothing changed.");
@@ -39670,22 +39670,22 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     return;
   }
 
-  const EntityAttributes attrs = static_cast<size_t>(minuend[0]) < st.cadSolidAttrs.size()
-                                     ? st.cadSolidAttrs[static_cast<size_t>(minuend[0])]
+  const EntityAttributes attrs = static_cast<size_t>(minuend[0]) < st.drawing.cadSolidAttrs.size()
+                                     ? st.drawing.cadSolidAttrs[static_cast<size_t>(minuend[0])]
                                      : MakeNewEntityAttrs(st);
   PushUndoSnapshot(st, verb);
   std::vector<int> sorted = all;
   std::sort(sorted.begin(), sorted.end(), std::greater<int>());
   for (int i : sorted) {
-    st.cadSolids.erase(st.cadSolids.begin() + i);
-    if (static_cast<size_t>(i) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + i);
+    st.drawing.cadSolids.erase(st.drawing.cadSolids.begin() + i);
+    if (static_cast<size_t>(i) < st.drawing.cadSolidAttrs.size())
+      st.drawing.cadSolidAttrs.erase(st.drawing.cadSolidAttrs.begin() + i);
   }
   for (brep::Solid& s : result) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(attrs);
-    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.drawing.cadSolidAttrs.push_back(attrs);
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -39823,7 +39823,7 @@ std::string CadSlicePromptText(const AppCommandState& st) {
 
 static void SliceEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
   st.sliceSolidIndices.clear();
-  const int nSolid = static_cast<int>(st.cadSolids.size());
+  const int nSolid = static_cast<int>(st.drawing.cadSolids.size());
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
       st.sliceSolidIndices.push_back(e.index);
@@ -39869,12 +39869,12 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   };
   std::vector<Result> results;
   for (int idx : st.sliceSolidIndices) {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSolids.size() || !st.cadSolids[static_cast<size_t>(idx)])
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadSolids.size() || !st.drawing.cadSolids[static_cast<size_t>(idx)])
       continue;
     brep::Solid above;
     brep::Solid below;
     brep::Problem why = brep::Problem::Ok;
-    if (!brep::Slice(*st.cadSolids[static_cast<size_t>(idx)], st.sliceP1, n, keep, &above, &below, &why)) {
+    if (!brep::Slice(*st.drawing.cadSolids[static_cast<size_t>(idx)], st.sliceP1, n, keep, &above, &below, &why)) {
       log.push_back(std::string("SLICE — ") + brep::ProblemText(why) + " Nothing changed.");
       return;
     }
@@ -39896,15 +39896,15 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   std::sort(results.begin(), results.end(), [](const Result& a, const Result& b) { return a.index > b.index; });
   int made = 0;
   for (Result& r : results) {
-    EntityAttributes attrs = static_cast<size_t>(r.index) < st.cadSolidAttrs.size()
-                                 ? st.cadSolidAttrs[static_cast<size_t>(r.index)]
+    EntityAttributes attrs = static_cast<size_t>(r.index) < st.drawing.cadSolidAttrs.size()
+                                 ? st.drawing.cadSolidAttrs[static_cast<size_t>(r.index)]
                                  : MakeNewEntityAttrs(st);
-    st.cadSolids.erase(st.cadSolids.begin() + r.index);
-    if (static_cast<size_t>(r.index) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + r.index);
+    st.drawing.cadSolids.erase(st.drawing.cadSolids.begin() + r.index);
+    if (static_cast<size_t>(r.index) < st.drawing.cadSolidAttrs.size())
+      st.drawing.cadSolidAttrs.erase(st.drawing.cadSolidAttrs.begin() + r.index);
     for (brep::Solid& piece : r.pieces) {
-      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(piece)));
-      st.cadSolidAttrs.push_back(attrs);
+      st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(piece)));
+      st.drawing.cadSolidAttrs.push_back(attrs);
       ++made;
     }
   }
@@ -39988,9 +39988,9 @@ bool CadCommitPressPullTarget(AppCommandState& st, const PressPullTarget& t, dou
   }
   PushUndoSnapshot(st, "PressPull");
   const brep::MassProperties mp = brep::ComputeMassProperties(built);
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(built)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(built)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   return true;
 }
@@ -40111,8 +40111,8 @@ bool CadBuildPressPullSolid(const AppCommandState& st, double distance, brep::So
   if (st.pressPullOnFace) {
     const CadSolidPtr sp = st.pressPullFace.owner.lock();
     if (!sp || st.pressPullFace.solidIndex < 0 ||
-        static_cast<size_t>(st.pressPullFace.solidIndex) >= st.cadSolids.size() ||
-        st.cadSolids[static_cast<size_t>(st.pressPullFace.solidIndex)] != sp)
+        static_cast<size_t>(st.pressPullFace.solidIndex) >= st.drawing.cadSolids.size() ||
+        st.drawing.cadSolids[static_cast<size_t>(st.pressPullFace.solidIndex)] != sp)
       return false;
     brep::Problem why = brep::Problem::Ok;
     return brep::PushPullFace(*sp, st.pressPullFace.index, distance, out, &why);
@@ -40229,8 +40229,8 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
                       std::vector<std::string>& log) {
   const CadSolidPtr sp = ref.owner.lock();
   if (ref.kind != solidpick::Kind::Face || !sp || ref.solidIndex < 0 ||
-      static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp) {
+      static_cast<size_t>(ref.solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp) {
     log.push_back("PRESSPULL - that face is no longer there.");
     return false;
   }
@@ -40248,7 +40248,7 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
   // re-tessellation that follows from BumpCadGpuCache.
   PushUndoSnapshot(st, "PressPull");
   const auto replaced = std::make_shared<const brep::Solid>(std::move(moved));
-  st.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
+  st.drawing.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
 
   // The selection FOLLOWS the edit. Push/pull preserves topology, so the face index still names the
   // same face - but the reference is keyed on the solid's IDENTITY (ADR-049), and the solid has
@@ -40290,7 +40290,7 @@ bool CadCommitSolidEdit(AppCommandState& st, const SelectedSubObject& ref, brep:
                         std::vector<std::string>& log) {
   PushUndoSnapshot(st, undoLabel);
   const auto replaced = std::make_shared<const brep::Solid>(std::move(edited));
-  st.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
+  st.drawing.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
   // The selection FOLLOWS the edit, exactly as it does after a push. These operations preserve the
   // topology counts, so the index still names the same sub-object — but the reference is keyed on
   // the solid's IDENTITY (ADR-049) and the solid has just been replaced, so left alone it would
@@ -40316,8 +40316,8 @@ CadSolidPtr CadLiveSolidFor(const AppCommandState& st, const SelectedSubObject& 
                             solidpick::Kind want) {
   CadSolidPtr sp = ref.owner.lock();
   if (ref.kind != want || !sp || ref.index < 0 || ref.solidIndex < 0 ||
-      static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
+      static_cast<size_t>(ref.solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
     return nullptr;
   return sp;
 }
@@ -40388,8 +40388,8 @@ bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
       return false;
     }
   const CadSolidPtr sp = st.subObjectSelection.front().owner.lock();
-  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
+  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
     log.push_back("FILLET - that edge is no longer there.");
     return false;
   }
@@ -40412,7 +40412,7 @@ bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
   // One undo step for the whole edit, however many edges were named (REQ-323 item 8).
   PushUndoSnapshot(st, "Fillet");
   const auto replaced = std::make_shared<const brep::Solid>(std::move(rounded));
-  st.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
+  st.drawing.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
 
   // **The sub-object selection is CLEARED, and this is where fillet differs from push/pull.**
   // `CadApplyPushPull` re-points its references at the replaced solid because a push preserves the
@@ -40521,8 +40521,8 @@ bool CadApplyChamferToSelectedEdges(AppCommandState& st, double distance,
       return false;
     }
   const CadSolidPtr sp = st.subObjectSelection.front().owner.lock();
-  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
+  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
     log.push_back("CHAMFER - that edge is no longer there.");
     return false;
   }
@@ -40542,7 +40542,7 @@ bool CadApplyChamferToSelectedEdges(AppCommandState& st, double distance,
   // One undo step for the whole edit, however many edges were named (REQ-331 item 11).
   PushUndoSnapshot(st, "Chamfer");
   const auto replaced = std::make_shared<const brep::Solid>(std::move(bevelled));
-  st.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
+  st.drawing.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
   // Cleared for the fillet's reason: a chamfer changes the TOPOLOGY, so the selected edge is gone
   // and every index after it has shifted (the kernel compacts). ADR-049's expiring reference.
   st.subObjectSelection.clear();
@@ -40622,8 +40622,8 @@ bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& re
   if (!outAnchor || !outAxis || ref.kind != solidpick::Kind::Face || ref.index < 0)
     return false;
   const CadSolidPtr sp = ref.owner.lock();
-  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
-      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
+  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.drawing.cadSolids.size() ||
+      st.drawing.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
     return false;
   if (static_cast<size_t>(ref.index) >= sp->faces.size())
     return false;
@@ -41262,8 +41262,8 @@ void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
 
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(st.solidKind));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
 
   log.push_back(SolidCreatedMessage(st.solidKind, mp));
@@ -41632,8 +41632,8 @@ void CommitPolysolid(AppCommandState& st, std::vector<std::string>& log) {
   }
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
   CancelPolysolidCommand(st);
@@ -41871,20 +41871,20 @@ namespace {
 void AppendRevcloudPolyline(AppCommandState& st, const std::vector<double>& xy,
                             const std::vector<float>& bulge, double z) {
   const int n = static_cast<int>(bulge.size());
-  if (st.userPolylineOffsets.empty())
-    st.userPolylineOffsets.push_back(0);
-  const int baseVert = st.userPolylineOffsets.back();
+  if (st.drawing.userPolylineOffsets.empty())
+    st.drawing.userPolylineOffsets.push_back(0);
+  const int baseVert = st.drawing.userPolylineOffsets.back();
   for (int i = 0; i < n; ++i) {
-    st.pushVertex(CadPolyVertex{static_cast<float>(xy[static_cast<std::size_t>(i) * 2]), static_cast<float>(xy[static_cast<std::size_t>(i) * 2 + 1]), static_cast<float>(z)});
+    st.drawing.pushVertex(CadPolyVertex{static_cast<float>(xy[static_cast<std::size_t>(i) * 2]), static_cast<float>(xy[static_cast<std::size_t>(i) * 2 + 1]), static_cast<float>(z)});
   }
-  st.userPolylineOffsets.push_back(baseVert + n);
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+  st.drawing.userPolylineOffsets.push_back(baseVert + n);
+  SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
   for (int i = 0; i < n; ++i)
-    st.userPolylineVertsBulge[static_cast<std::size_t>(baseVert) + static_cast<std::size_t>(i)] =
+    st.drawing.userPolylineVertsBulge[static_cast<std::size_t>(baseVert) + static_cast<std::size_t>(i)] =
         bulge[static_cast<std::size_t>(i)];
-  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-  st.userPolylineClosed.push_back(1u);
-  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+  st.drawing.userPolylineClosed.push_back(1u);
+  st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
 }
@@ -41979,12 +41979,12 @@ bool RevcloudCornersFromObject(const AppCommandState& st, const SelectedEntity& 
   const std::size_t i = static_cast<std::size_t>(hit.index);
   if (hit.type == T::Circle) {
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
+    CircleNormalAt(st.drawing.userCircleNormals, i, &nx, &ny, &nz);
     if (std::fabs(nx) > 1e-6f || std::fabs(ny) > 1e-6f) {
       log.push_back("REVCLOUD - that circle is not flat in the XY plane; a cloud can only follow a flat shape.");
       return false;
     }
-    const CadCircleRecord circle = st.circle(i);
+    const CadCircleRecord circle = st.drawing.circle(i);
     const double cx = circle.cx;
     const double cy = circle.cy;
     const double r = circle.r;
@@ -42006,25 +42006,25 @@ bool RevcloudCornersFromObject(const AppCommandState& st, const SelectedEntity& 
     return true;
   }
   // Polyline.
-  if (i >= st.userPolylineClosed.size() || !st.userPolylineClosed[i]) {
+  if (i >= st.drawing.userPolylineClosed.size() || !st.drawing.userPolylineClosed[i]) {
     log.push_back("REVCLOUD - that polyline is not closed; close it first (or draw the cloud by clicking points).");
     return false;
   }
-  const int a = st.userPolylineOffsets[i];
-  const int b = st.userPolylineOffsets[i + 1];
-  *z = st.vertex(a).z;
+  const int a = st.drawing.userPolylineOffsets[i];
+  const int b = st.drawing.userPolylineOffsets[i + 1];
+  *z = st.drawing.vertex(a).z;
   for (int v = a; v < b; ++v) {
     const std::size_t at = static_cast<std::size_t>(v);
-    if (static_cast<std::size_t>(v) < st.userPolylineVertsBulge.size() && st.userPolylineVertsBulge[at] != 0.f) {
+    if (static_cast<std::size_t>(v) < st.drawing.userPolylineVertsBulge.size() && st.drawing.userPolylineVertsBulge[at] != 0.f) {
       log.push_back("REVCLOUD - that polyline has curved segments; a cloud can only follow straight edges.");
       return false;
     }
-    if (std::fabs(static_cast<double>(st.vertex(static_cast<size_t>(at)).z) - *z) > 1e-4) {
+    if (std::fabs(static_cast<double>(st.drawing.vertex(static_cast<size_t>(at)).z) - *z) > 1e-4) {
       log.push_back("REVCLOUD - that polyline is not flat; a cloud can only follow a flat shape.");
       return false;
     }
-    corners->push_back(st.vertex(static_cast<size_t>(at)).x);
-    corners->push_back(st.vertex(static_cast<size_t>(at)).y);
+    corners->push_back(st.drawing.vertex(static_cast<size_t>(at)).x);
+    corners->push_back(st.drawing.vertex(static_cast<size_t>(at)).y);
   }
   return true;
 }
@@ -42353,7 +42353,7 @@ struct PlannedElbow {
 };
 
 /// Attempts to plan ONE bend's auto-fit: catalog lookup (\ref CadPipeCatalogFind may import a
-/// not-yet-imported library entry into \p st.blockDefs as a side effect — harmless and idempotent
+/// not-yet-imported library entry into \p st.drawing.blockDefs as a side effect — harmless and idempotent
 /// even if the overall run is later refused), port/engagement resolution, a cutback-fits-the-leg
 /// budget check, and two-port orientation. Returns false — falling back to a smooth bend, with the
 /// reason logged — for any reason; never creates a `CadBlockRef`, only plans one.
@@ -42364,10 +42364,10 @@ bool TryPlanAutoFitBend(AppCommandState& st, CadPipePartType elbowType, const st
   std::string blockName;
   if (!CadPipeCatalogFind(st, elbowType, nominalSize, pressureClass, &blockName, log))
     return false;  // CadPipeCatalogFind already logged why
-  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, blockName);
   if (di < 0)
     return false;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   const CadBlockConnection* nearC = nullptr;
   const CadBlockConnection* farC = nullptr;
   PickElbowPorts(def, &nearC, &farC);
@@ -42467,7 +42467,7 @@ void PlanPipeRunAutoFittings(AppCommandState& st, const std::vector<double>& dra
 // --- Auto-fitting tee insertion at branch nodes (issue #486 increment B6 / REQ-345) -------------
 
 /// One leg meeting at a shared point: either the NEW draft's own endpoint (`runIndex < 0`) or an
-/// EXISTING `CadPipeRun`'s endpoint (`runIndex` into `st.cadPipeRuns`, `atStart` which end).
+/// EXISTING `CadPipeRun`'s endpoint (`runIndex` into `st.drawing.cadPipeRuns`, `atStart` which end).
 /// `dir` points AWAY from the shared point, into that run's own body — the same "away from the
 /// joint" convention on both sides so the through-pair test below needs no special-casing.
 struct BranchLeg {
@@ -42484,8 +42484,8 @@ struct BranchLeg {
 void FindExistingRunLegsAt(const AppCommandState& st, const ray3d::Vec3& pt,
                            std::vector<BranchLeg>* legs) {
   constexpr double kCoincidentEps = 1e-6;
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
-    const CadPipeRun& run = st.cadPipeRuns[ri];
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.drawing.cadPipeRuns[ri];
     const size_t n = run.vertsXyz.size() / 3;
     if (n < 2)
       continue;
@@ -42588,10 +42588,10 @@ bool TryPlanBranchTee(AppCommandState& st, const std::vector<BranchLeg>& legs,
   std::string blockName;
   if (!CadPipeCatalogFind(st, CadPipePartType::Tee, nominalSize, pressureClass, &blockName, log))
     return false;
-  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, blockName);
   if (di < 0)
     return false;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   const CadBlockConnection* inletC = nullptr;
   const CadBlockConnection* outletC = nullptr;
   const CadBlockConnection* branchC = nullptr;
@@ -42732,7 +42732,7 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
     return;
 
   for (int k = 0; k < 2; ++k) {
-    CadPipeRun scratch = st.cadPipeRuns[static_cast<size_t>(plan.existingRunIdx[k])];
+    CadPipeRun scratch = st.drawing.cadPipeRuns[static_cast<size_t>(plan.existingRunIdx[k])];
     const size_t n = scratch.vertsXyz.size() / 3;
     const size_t vi = plan.existingAtStart[k] ? 0 : (n - 1);
     scratch.vertsXyz[vi * 3 + 0] = plan.existingCut[k].x;
@@ -42786,13 +42786,13 @@ EntityAttributes MakeNewPipeRunAttrs(AppCommandState& st, std::string_view nomin
 void RemoveLivePipeRun(AppCommandState& st) {
   const int idx = st.pipeRunLiveIndex;
   st.pipeRunLiveIndex = -1;
-  if (idx < 0 || static_cast<size_t>(idx) >= st.cadPipeRuns.size())
+  if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadPipeRuns.size())
     return;
-  if (static_cast<size_t>(idx) + 1 != st.cadPipeRuns.size())
+  if (static_cast<size_t>(idx) + 1 != st.drawing.cadPipeRuns.size())
     return;
-  st.cadPipeRuns.pop_back();
-  if (!st.cadPipeRunAttrs.empty())
-    st.cadPipeRunAttrs.pop_back();
+  st.drawing.cadPipeRuns.pop_back();
+  if (!st.drawing.cadPipeRunAttrs.empty())
+    st.drawing.cadPipeRunAttrs.pop_back();
   BumpCadGpuCache(st);
 }
 
@@ -42836,12 +42836,12 @@ void SyncLivePipeRun(AppCommandState& st) {
   // actionable. REQ-201 is unaffected — a `CadPipeRun` stores a PATH, and an unbuildable path was
   // always allowed to exist in the draft.
 
-  if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.cadPipeRuns.size()) {
-    st.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);
+  if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.drawing.cadPipeRuns.size()) {
+    st.drawing.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);
   } else {
-    st.cadPipeRuns.push_back(std::move(run));
-    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
-    st.pipeRunLiveIndex = static_cast<int>(st.cadPipeRuns.size()) - 1;
+    st.drawing.cadPipeRuns.push_back(std::move(run));
+    st.drawing.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    st.pipeRunLiveIndex = static_cast<int>(st.drawing.cadPipeRuns.size()) - 1;
   }
   BumpCadGpuCache(st);
 }
@@ -42905,7 +42905,7 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Create Pipe Run");
   for (const BranchFitPlan& bf : branchFits) {
     for (int k = 0; k < 2; ++k) {
-      CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(bf.existingRunIdx[k])];
+      CadPipeRun& run = st.drawing.cadPipeRuns[static_cast<size_t>(bf.existingRunIdx[k])];
       const size_t n = run.vertsXyz.size() / 3;
       const size_t vi = bf.existingAtStart[k] ? 0 : (n - 1);
       run.vertsXyz[vi * 3 + 0] = bf.existingCut[k].x;
@@ -42919,8 +42919,8 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   size_t totalVerts = 0;
   for (size_t p = 0; p < pieceRuns.size(); ++p) {
     totalVerts += pieceRuns[p].vertsXyz.size() / 3;
-    st.cadPipeRuns.push_back(std::move(pieceRuns[p]));
-    st.cadPipeRunAttrs.push_back(lineAttrs);
+    st.drawing.cadPipeRuns.push_back(std::move(pieceRuns[p]));
+    st.drawing.cadPipeRunAttrs.push_back(lineAttrs);
     if (elbowIx < elbows.size()) {
       const PlannedElbow& e = elbows[elbowIx++];
       CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log, &lineAttrs);
@@ -43247,8 +43247,8 @@ namespace {
 /// Finds a network by name (case-sensitive — names are user-chosen labels, not identifiers with a
 /// canonical case). Returns -1 if none matches.
 int FindPipingSystemByName(const AppCommandState& st, const std::string& name) {
-  for (size_t i = 0; i < st.cadPipingSystems.size(); ++i) {
-    if (st.cadPipingSystems[i].name == name)
+  for (size_t i = 0; i < st.drawing.cadPipingSystems.size(); ++i) {
+    if (st.drawing.cadPipingSystems[i].name == name)
       return static_cast<int>(i);
   }
   return -1;
@@ -43258,7 +43258,7 @@ int FindPipingSystemByName(const AppCommandState& st, const std::string& name) {
 /// `REMOVE` report and store in, matching `CadPipingSystem::pipeRunIndices`'s own stated invariant.
 std::vector<int> SelectedPipeRunIndices(const AppCommandState& st) {
   std::set<int> ix;
-  const size_t n = st.cadPipeRuns.size();
+  const size_t n = st.drawing.cadPipeRuns.size();
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < n)
       ix.insert(e.index);
@@ -43275,11 +43275,11 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
   for (char& c : verb) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
   const auto listAll = [&]() {
-    if (st.cadPipingSystems.empty()) {
+    if (st.drawing.cadPipingSystems.empty()) {
       log.push_back("PIPESYS - no piping networks defined. Usage: PIPESYS NEW <name>.");
       return;
     }
-    for (const CadPipingSystem& sys : st.cadPipingSystems) {
+    for (const CadPipingSystem& sys : st.drawing.cadPipingSystems) {
       log.push_back("PIPESYS - \"" + sys.name + "\": " + std::to_string(sys.pipeRunIndices.size()) +
                     " run(s).");
     }
@@ -43305,7 +43305,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
     PushUndoSnapshot(st, "Create Piping Network");
     CadPipingSystem sys;
     sys.name = name;
-    st.cadPipingSystems.push_back(std::move(sys));
+    st.drawing.cadPipingSystems.push_back(std::move(sys));
     log.push_back("PIPESYS - network \"" + name + "\" created.");
     return;
   }
@@ -43331,12 +43331,12 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
       return;
     }
     PushUndoSnapshot(st, verb == "add" ? "Add To Piping Network" : "Remove From Piping Network");
-    CadPipingSystem& target = st.cadPipingSystems[static_cast<size_t>(sysIx)];
+    CadPipingSystem& target = st.drawing.cadPipingSystems[static_cast<size_t>(sysIx)];
     if (verb == "add") {
       // A run belongs to at most one network (CadPipingSystem's own doc comment) — drop it from
       // whichever network already holds it before it joins this one, rather than refusing or
       // silently duplicating the reference.
-      for (CadPipingSystem& other : st.cadPipingSystems) {
+      for (CadPipingSystem& other : st.drawing.cadPipingSystems) {
         for (int idx : picked) {
           auto& runs = other.pipeRunIndices;
           runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
@@ -43369,8 +43369,8 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
     rest = StringUtil::trimCopy(rest);
     int sysIx = -1;
     size_t oldNameLen = 0;
-    for (size_t i = 0; i < st.cadPipingSystems.size(); ++i) {
-      const std::string& candidate = st.cadPipingSystems[i].name;
+    for (size_t i = 0; i < st.drawing.cadPipingSystems.size(); ++i) {
+      const std::string& candidate = st.drawing.cadPipingSystems[i].name;
       if (rest.size() > candidate.size() && rest.compare(0, candidate.size(), candidate) == 0 &&
           rest[candidate.size()] == ' ' && candidate.size() > oldNameLen) {
         sysIx = static_cast<int>(i);
@@ -43382,7 +43382,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
                     "<old name> must exactly match an existing network.");
       return;
     }
-    const std::string oldName = st.cadPipingSystems[static_cast<size_t>(sysIx)].name;
+    const std::string oldName = st.drawing.cadPipingSystems[static_cast<size_t>(sysIx)].name;
     std::string newName = StringUtil::trimCopy(rest.substr(oldNameLen));
     if (newName.empty()) {
       log.push_back("PIPESYS RENAME - a new name is required.");
@@ -43393,7 +43393,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
       return;
     }
     PushUndoSnapshot(st, "Rename Piping Network");
-    st.cadPipingSystems[static_cast<size_t>(sysIx)].name = newName;
+    st.drawing.cadPipingSystems[static_cast<size_t>(sysIx)].name = newName;
     log.push_back("PIPESYS - \"" + oldName + "\" renamed to \"" + newName + "\".");
     return;
   }
@@ -43410,7 +43410,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
     PushUndoSnapshot(st, "Delete Piping Network");
     // Deleting a NETWORK never deletes its pipe runs — they simply become unassigned, the same
     // "container owns no geometry" split CadPipingSystem's own doc comment states.
-    st.cadPipingSystems.erase(st.cadPipingSystems.begin() + sysIx);
+    st.drawing.cadPipingSystems.erase(st.drawing.cadPipingSystems.begin() + sysIx);
     log.push_back("PIPESYS - network \"" + name + "\" deleted (its pipe runs are unaffected).");
     return;
   }
@@ -43443,20 +43443,20 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     const int idx = AddPaperLayout(st);
     if (!name.empty()) {
       bool taken = false;
-      for (int i = 0; i < static_cast<int>(st.paperLayouts.size()); ++i) {
-        if (i != idx && st.paperLayouts[static_cast<size_t>(i)].name == name) {
+      for (int i = 0; i < static_cast<int>(st.drawing.paperLayouts.size()); ++i) {
+        if (i != idx && st.drawing.paperLayouts[static_cast<size_t>(i)].name == name) {
           taken = true;
           break;
         }
       }
       if (taken) {
         log.push_back("LAYOUT NEW - a layout named \"" + name + "\" already exists; created \"" +
-                      st.paperLayouts[static_cast<size_t>(idx)].name + "\" instead.");
+                      st.drawing.paperLayouts[static_cast<size_t>(idx)].name + "\" instead.");
       } else {
-        st.paperLayouts[static_cast<size_t>(idx)].name = name;
+        st.drawing.paperLayouts[static_cast<size_t>(idx)].name = name;
       }
     }
-    log.push_back("LAYOUT - created \"" + st.paperLayouts[static_cast<size_t>(idx)].name + "\".");
+    log.push_back("LAYOUT - created \"" + st.drawing.paperLayouts[static_cast<size_t>(idx)].name + "\".");
     return;
   }
 
@@ -43466,8 +43466,8 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     rest = StringUtil::trimCopy(rest);
     int sourceIx = -1;
     size_t sourceLen = 0;
-    for (size_t i = 0; i < st.paperLayouts.size(); ++i) {
-      const std::string& candidate = st.paperLayouts[i].name;
+    for (size_t i = 0; i < st.drawing.paperLayouts.size(); ++i) {
+      const std::string& candidate = st.drawing.paperLayouts[i].name;
       if (rest == candidate) {
         sourceIx = static_cast<int>(i);
         sourceLen = candidate.size();
@@ -43483,7 +43483,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     if (sourceIx >= 0) {
       copyName = StringUtil::trimCopy(rest.substr(sourceLen));
     } else if (rest.empty() && st.activeSpaceIndex >= 0 &&
-               st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size())) {
+               st.activeSpaceIndex < static_cast<int>(st.drawing.paperLayouts.size())) {
       sourceIx = st.activeSpaceIndex;
     }
     if (sourceIx < 0) {
@@ -43505,8 +43505,8 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     rest = StringUtil::trimCopy(rest);
     int targetIx = -1;
     size_t matchLen = 0;
-    for (size_t i = 0; i < st.paperLayouts.size(); ++i) {
-      const std::string& candidate = st.paperLayouts[i].name;
+    for (size_t i = 0; i < st.drawing.paperLayouts.size(); ++i) {
+      const std::string& candidate = st.drawing.paperLayouts[i].name;
       if (rest == candidate) {
         targetIx = static_cast<int>(i);
         matchLen = rest.size();
@@ -43521,7 +43521,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     std::string remainder = (targetIx >= 0) ? StringUtil::trimCopy(rest.substr(matchLen)) : rest;
     if (targetIx < 0) {
       // No layout name matched (or the whole line was blank) — fall back to the active layout.
-      if (st.activeSpaceIndex >= 0 && st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size())) {
+      if (st.activeSpaceIndex >= 0 && st.activeSpaceIndex < static_cast<int>(st.drawing.paperLayouts.size())) {
         targetIx = st.activeSpaceIndex;
         remainder = rest;
       }
@@ -43536,24 +43536,24 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
       const std::string newName = StringUtil::trimCopy(remainder);
       if (newName.empty()) {
         log.push_back("LAYOUT RENAME - a new name is required, e.g. LAYOUT RENAME " +
-                      st.paperLayouts[static_cast<size_t>(targetIx)].name + " Site Plan.");
+                      st.drawing.paperLayouts[static_cast<size_t>(targetIx)].name + " Site Plan.");
         return;
       }
-      for (int i = 0; i < static_cast<int>(st.paperLayouts.size()); ++i) {
-        if (i != targetIx && st.paperLayouts[static_cast<size_t>(i)].name == newName) {
+      for (int i = 0; i < static_cast<int>(st.drawing.paperLayouts.size()); ++i) {
+        if (i != targetIx && st.drawing.paperLayouts[static_cast<size_t>(i)].name == newName) {
           log.push_back("LAYOUT RENAME - a layout named \"" + newName + "\" already exists.");
           return;
         }
       }
-      const std::string oldName = st.paperLayouts[static_cast<size_t>(targetIx)].name;
+      const std::string oldName = st.drawing.paperLayouts[static_cast<size_t>(targetIx)].name;
       PushUndoSnapshot(st, "Rename layout");
-      st.paperLayouts[static_cast<size_t>(targetIx)].name = newName;
+      st.drawing.paperLayouts[static_cast<size_t>(targetIx)].name = newName;
       log.push_back("LAYOUT - \"" + oldName + "\" renamed to \"" + newName + "\".");
       return;
     }
 
     // DELETE: same path (confirmation/undo) as the tab-bar's own Delete, per REQ-401.
-    const std::string deletedName = st.paperLayouts[static_cast<size_t>(targetIx)].name;
+    const std::string deletedName = st.drawing.paperLayouts[static_cast<size_t>(targetIx)].name;
     DeletePaperLayout(st, targetIx);
     log.push_back("LAYOUT - \"" + deletedName + "\" deleted.");
     return;
@@ -43616,12 +43616,12 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
   const std::string typed = StringUtil::trimCopy(args);
   if (typed.empty()) {
     log.push_back("VPSCALE - current viewport scale is " +
-                  PlotScaleLabel(st.drawingInsUnits, vp->scaleModelPerPaperIn) +
+                  PlotScaleLabel(st.drawing.drawingInsUnits, vp->scaleModelPerPaperIn) +
                   ". Usage: VPSCALE 1:20, or VPSCALE 50.");
     return;
   }
   float mup = 0.f;
-  if (!ParseTypedVpScale(typed, st.drawingInsUnits, mup)) {
+  if (!ParseTypedVpScale(typed, st.drawing.drawingInsUnits, mup)) {
     log.push_back("VPSCALE - could not read \"" + typed + "\" as a scale. Use 1:N (e.g. 1:20) or a "
                   "plain number of model units per plotted inch.");
     return;
@@ -43629,12 +43629,12 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
   PushUndoSnapshot(st, "Viewport scale");
   vp->scaleModelPerPaperIn = mup;
   BumpCadGpuCache(st);
-  log.push_back("VPSCALE - viewport scale set to " + PlotScaleLabel(st.drawingInsUnits, mup) + ".");
+  log.push_back("VPSCALE - viewport scale set to " + PlotScaleLabel(st.drawing.drawingInsUnits, mup) + ".");
 }
 
 void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
   const std::string name = StringUtil::trimCopy(args);
-  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size())) {
+  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.drawing.paperLayouts.size())) {
     log.push_back("VPMATCHSCALE - switch to a paper layout first.");
     return;
   }
@@ -43642,9 +43642,9 @@ void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std
     log.push_back("VPMATCHSCALE - specify a drawing scale name. Usage: VPMATCHSCALE 1:50.");
     return;
   }
-  const auto scaleIt = std::find_if(st.annotationScales.begin(), st.annotationScales.end(),
+  const auto scaleIt = std::find_if(st.drawing.annotationScales.begin(), st.drawing.annotationScales.end(),
       [&](const CadAnnotationScale& scale) { return scale.name == name; });
-  if (scaleIt == st.annotationScales.end()) {
+  if (scaleIt == st.drawing.annotationScales.end()) {
     log.push_back("VPMATCHSCALE - unknown drawing scale \"" + name + "\".");
     return;
   }
@@ -43658,7 +43658,7 @@ void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std
     indices.push_back(st.selectedViewportIndex);
   std::sort(indices.begin(), indices.end());
   indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-  auto& viewports = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].viewports;
+  auto& viewports = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].viewports;
   if (indices.empty() || std::any_of(indices.begin(), indices.end(), [&](int i) {
         return i < 0 || i >= static_cast<int>(viewports.size()) || viewports[static_cast<size_t>(i)].locked;
       })) {
@@ -43693,7 +43693,7 @@ void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.pageSetupLayoutIdx = st.activeSpaceIndex;
   st.pageSetupManagerSel = -1;
   st.showPageSetupManager = true;
-  log.push_back("PAGESETUP - opened for \"" + st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name +
+  log.push_back("PAGESETUP - opened for \"" + st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name +
                 "\".");
 }
 
@@ -43734,7 +43734,7 @@ bool NearestPointOnPipeRun(const CadPipeRun& run, const ray3d::Vec3& pick, size_
   return true;
 }
 
-/// Splices \p partType into `st.cadPipeRuns[runIdx]` at the point of \p run nearest \p pick.
+/// Splices \p partType into `st.drawing.cadPipeRuns[runIdx]` at the point of \p run nearest \p pick.
 /// Reuses B5's own `PickElbowPorts` (an inline 2-port, Inlet/Outlet-tagged fitting is exactly what
 /// a mid-span valve/flange/reducer/coupling needs too) and the single-port `CadBlockSnapInsertTo
 /// Connection` primitive — NOT B5/B6's two-port rigid alignment: a round pipe's cross-section is
@@ -43744,9 +43744,9 @@ bool NearestPointOnPipeRun(const CadPipeRun& run, const ray3d::Vec3& pick, size_
 /// "the model decides" reasoning B5/B6 both use for their own unpinned far side(s).
 bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& blockName,
                            const ray3d::Vec3& pick, std::vector<std::string>& log) {
-  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.drawing.cadPipeRuns.size())
     return false;
-  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  const CadPipeRun& run = st.drawing.cadPipeRuns[static_cast<size_t>(runIdx)];
   size_t segIx = 0;
   ray3d::Vec3 station;
   if (!NearestPointOnPipeRun(run, pick, &segIx, &station)) {
@@ -43764,10 +43764,10 @@ bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& b
     return false;
   }
 
-  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, blockName);
   if (di < 0)
     return false;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   const CadBlockConnection* inletC = nullptr;
   const CadBlockConnection* outletC = nullptr;
   PickElbowPorts(def, &inletC, &outletC);
@@ -43838,14 +43838,14 @@ bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& b
   // colour — an override included — not the current ones (REQ-353). A reducer therefore reads as
   // the run it was spliced into (issue #564 Q4).
   const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
-      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+      static_cast<size_t>(runIdx) < st.drawing.cadPipeRunAttrs.size() ? st.drawing.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
                                                                : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Insert Pipe Fitting");
-  st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);  // keeps the original's index
-  st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(lineAttrs);
-  const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
-  for (CadPipingSystem& sys : st.cadPipingSystems) {
+  st.drawing.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);  // keeps the original's index
+  st.drawing.cadPipeRuns.push_back(std::move(piece2));
+  st.drawing.cadPipeRunAttrs.push_back(lineAttrs);
+  const int piece2Idx = static_cast<int>(st.drawing.cadPipeRuns.size()) - 1;
+  for (CadPipingSystem& sys : st.drawing.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
         sys.pipeRunIndices.end()) {
       sys.pipeRunIndices.push_back(piece2Idx);
@@ -43867,9 +43867,9 @@ bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& b
 /// here is unchanged, including that refusal, so `PIPEFIT <part type>` works precisely as before.
 bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
                       const ray3d::Vec3& pick, std::vector<std::string>& log) {
-  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.drawing.cadPipeRuns.size())
     return false;
-  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  const CadPipeRun& run = st.drawing.cadPipeRuns[static_cast<size_t>(runIdx)];
   std::string blockName;
   if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
                           &blockName, log))
@@ -43890,8 +43890,8 @@ bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int
     return false;
   *outRunIdx = -1;
   double best = std::numeric_limits<double>::infinity();
-  for (size_t i = 0; i < st.cadPipeRuns.size(); ++i) {
-    const CadPipeRun& run = st.cadPipeRuns[i];
+  for (size_t i = 0; i < st.drawing.cadPipeRuns.size(); ++i) {
+    const CadPipeRun& run = st.drawing.cadPipeRuns[i];
     size_t seg = 0;
     ray3d::Vec3 station{};
     if (!NearestPointOnPipeRun(run, pick, &seg, &station))
@@ -43985,14 +43985,14 @@ void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 namespace {
 
-/// Splits `st.cadPipeRuns[runIdx]` at the point of the run nearest \p pick — no fitting, no
+/// Splits `st.drawing.cadPipeRuns[runIdx]` at the point of the run nearest \p pick — no fitting, no
 /// engagement cutback, the pieces meet exactly at the projected station. Shares `NearestPointOn
 /// PipeRun` with `TrySplicePipeFit`; unlike that function there is no catalog part, so orientation
 /// and port resolution simply do not apply here.
 bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, std::vector<std::string>& log) {
-  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.drawing.cadPipeRuns.size())
     return false;
-  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  const CadPipeRun& run = st.drawing.cadPipeRuns[static_cast<size_t>(runIdx)];
   size_t segIx = 0;
   ray3d::Vec3 station;
   if (!NearestPointOnPipeRun(run, pick, &segIx, &station)) {
@@ -44035,14 +44035,14 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
 
   // The far piece is the same line: it keeps the run's layer and colour, an override included (REQ-353).
   const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
-      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+      static_cast<size_t>(runIdx) < st.drawing.cadPipeRunAttrs.size() ? st.drawing.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
                                                                : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Split Pipe Run");
-  st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);
-  st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(lineAttrs);
-  const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
-  for (CadPipingSystem& sys : st.cadPipingSystems) {
+  st.drawing.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);
+  st.drawing.cadPipeRuns.push_back(std::move(piece2));
+  st.drawing.cadPipeRunAttrs.push_back(lineAttrs);
+  const int piece2Idx = static_cast<int>(st.drawing.cadPipeRuns.size()) - 1;
+  for (CadPipingSystem& sys : st.drawing.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
         sys.pipeRunIndices.end()) {
       sys.pipeRunIndices.push_back(piece2Idx);
@@ -44079,10 +44079,10 @@ namespace {
 /// same shape `ExecuteDeleteSelection` already uses for a pipe-run erase, pulled out here so
 /// `HandlePipeJoinCommand` does not have to duplicate it for the one run a merge consumes.
 void EraseOnePipeRunReindexed(AppCommandState& st, int idx) {
-  st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
-  if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
-    st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  for (CadPipingSystem& sys : st.cadPipingSystems) {
+  st.drawing.cadPipeRuns.erase(st.drawing.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+  if (static_cast<size_t>(idx) < st.drawing.cadPipeRunAttrs.size())
+    st.drawing.cadPipeRunAttrs.erase(st.drawing.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  for (CadPipingSystem& sys : st.drawing.cadPipingSystems) {
     auto& runs = sys.pipeRunIndices;
     runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
     for (int& ri : runs) {
@@ -44100,8 +44100,8 @@ void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PIPEJOIN - select exactly two pipe runs first.");
     return;
   }
-  const CadPipeRun& ra = st.cadPipeRuns[static_cast<size_t>(picked[0])];
-  const CadPipeRun& rb = st.cadPipeRuns[static_cast<size_t>(picked[1])];
+  const CadPipeRun& ra = st.drawing.cadPipeRuns[static_cast<size_t>(picked[0])];
+  const CadPipeRun& rb = st.drawing.cadPipeRuns[static_cast<size_t>(picked[1])];
   if (ra.nominalSize != rb.nominalSize || ra.pressureClassTag != rb.pressureClassTag) {
     log.push_back("PIPEJOIN - the two runs must share the same nominal size and pressure class.");
     return;
@@ -44174,7 +44174,7 @@ void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   const int keepIdx = std::min(picked[0], picked[1]);
   const int dropIdx = std::max(picked[0], picked[1]);
   PushUndoSnapshot(st, "Join Pipe Runs");
-  st.cadPipeRuns[static_cast<size_t>(keepIdx)] = std::move(mergedRun);
+  st.drawing.cadPipeRuns[static_cast<size_t>(keepIdx)] = std::move(mergedRun);
   EraseOnePipeRunReindexed(st, dropIdx);
   st.selection.clear();
   BumpCadGpuCache(st);
@@ -44238,7 +44238,7 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
   int changed = 0, refused = 0, refusedWall = 0;
   PushUndoSnapshot(st, "Change Pipe Properties");
   for (int idx : picked) {
-    CadPipeRun candidate = st.cadPipeRuns[static_cast<size_t>(idx)];
+    CadPipeRun candidate = st.drawing.cadPipeRuns[static_cast<size_t>(idx)];
     candidate.nominalSize = sizeTok;
     candidate.pressureClassTag = classTag;
     if (wallGiven)
@@ -44257,7 +44257,7 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
       ++refused;
       continue;
     }
-    st.cadPipeRuns[static_cast<size_t>(idx)] = std::move(candidate);
+    st.drawing.cadPipeRuns[static_cast<size_t>(idx)] = std::move(candidate);
     ++changed;
   }
   BumpCadGpuCache(st);
@@ -44324,22 +44324,22 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   const std::size_t i = static_cast<std::size_t>(hit.index);
   switch (hit.type) {
   case T::LineSeg:
-    anchor = ray3d::Vec3{st.line(i).x0, st.line(i).y0, st.line(i).z0};
+    anchor = ray3d::Vec3{st.drawing.line(i).x0, st.drawing.line(i).y0, st.drawing.line(i).z0};
     break;
   case T::Arc: {
-    const CadArc& a = st.userArcs[i];
+    const CadArc& a = st.drawing.userArcs[i];
     anchor = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
     break;
   }
   case T::Circle: {
-    const CadCircleRecord circle = st.circle(i);
+    const CadCircleRecord circle = st.drawing.circle(i);
     anchor = ray3d::Vec3{circle.cx + circle.r, circle.cy, circle.cz};
     break;
   }
   default: {
-    const std::size_t base = static_cast<std::size_t>(st.userPolylineOffsets[i]);
-    anchor = ray3d::Vec3{st.vertex(base).x, st.vertex(base).y,
-                         st.vertex(base).z};
+    const std::size_t base = static_cast<std::size_t>(st.drawing.userPolylineOffsets[i]);
+    anchor = ray3d::Vec3{st.drawing.vertex(base).x, st.drawing.vertex(base).y,
+                         st.drawing.vertex(base).z};
     break;
   }
   }
@@ -44355,12 +44355,12 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   case T::LineSeg: {
     flat = AppendFlatPoint(frame, anchor, planeTol, &path, true) &&
            AppendFlatPoint(frame,
-                           ray3d::Vec3{st.line(i).x1, st.line(i).y1, st.line(i).z1},
+                           ray3d::Vec3{st.drawing.line(i).x1, st.drawing.line(i).y1, st.drawing.line(i).z1},
                            planeTol, &path, false);
     break;
   }
   case T::Arc: {
-    const CadArc& a = st.userArcs[i];
+    const CadArc& a = st.drawing.userArcs[i];
     const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{a.nx, a.ny, a.nz});
     if (std::fabs(std::fabs(ray3d::Dot(n, frame.zAxis)) - 1.0) > 1e-6) {
       flat = false;
@@ -44384,13 +44384,13 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   }
   case T::Circle: {
     float cnx = 0.f, cny = 0.f, cnz = 1.f;
-    CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
+    CircleNormalAt(st.drawing.userCircleNormals, i, &cnx, &cny, &cnz);
     const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{cnx, cny, cnz});
     if (std::fabs(std::fabs(ray3d::Dot(n, frame.zAxis)) - 1.0) > 1e-6) {
       flat = false;
       break;
     }
-    const CadCircleRecord circle = st.circle(i);
+    const CadCircleRecord circle = st.drawing.circle(i);
     const double r = circle.r;
     const ucs::Point2D c = ucs::WorldToPlane(frame, ray3d::Vec3{circle.cx, circle.cy, circle.cz});
     const double kPiLocal = 3.14159265358979323846;
@@ -44401,24 +44401,24 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
     break;
   }
   default: {
-    const std::size_t b = static_cast<std::size_t>(st.userPolylineOffsets[i]);
-    const std::size_t e = static_cast<std::size_t>(st.userPolylineOffsets[i + 1]);
+    const std::size_t b = static_cast<std::size_t>(st.drawing.userPolylineOffsets[i]);
+    const std::size_t e = static_cast<std::size_t>(st.drawing.userPolylineOffsets[i + 1]);
     // A polyline's ARC segments come across too (REQ-316 / ADR-047 gave the store per-vertex
     // bulges). The bulge on vertex `v` describes the segment LEAVING it, and `tan(theta/4)` is the
     // DXF convention both stores share — so the included angle is `4*atan(bulge)`, which is exactly
     // what `PathSeg::sweep` wants, sign and all. Converted here rather than in the kernel, because
     // `brep` does not know what a `CadPolyline` is (ADR-050 (a)).
     auto bulgeAt = [&](std::size_t v) {
-      return v < st.userPolylineVertsBulge.size()
-                 ? static_cast<double>(st.userPolylineVertsBulge[v])
+      return v < st.drawing.userPolylineVertsBulge.size()
+                 ? static_cast<double>(st.drawing.userPolylineVertsBulge[v])
                  : 0.0;
     };
     for (std::size_t v = b; v < e && flat; ++v) {
       double off = 0.0;
       const ucs::Point2D q = ucs::WorldToPlane(
           frame,
-          ray3d::Vec3{st.vertex(static_cast<size_t>(v)).x, st.vertex(static_cast<size_t>(v)).y,
-                      st.vertex(static_cast<size_t>(v)).z},
+          ray3d::Vec3{st.drawing.vertex(static_cast<size_t>(v)).x, st.drawing.vertex(static_cast<size_t>(v)).y,
+                      st.drawing.vertex(static_cast<size_t>(v)).z},
           &off);
       if (std::fabs(off) > planeTol) {
         flat = false;
@@ -44429,7 +44429,7 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
       else
         path.segs.push_back(brep::PathSeg{q, 4.0 * std::atan(bulgeAt(v - 1))});
     }
-    if (flat && i < st.userPolylineClosed.size() && st.userPolylineClosed[i] != 0 &&
+    if (flat && i < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[i] != 0 &&
         path.segs.size() >= 2) {
       path.segs.push_back(brep::PathSeg{path.start, 4.0 * std::atan(bulgeAt(e - 1))});
       path.closed = true;
@@ -44457,8 +44457,8 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   }
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
   CancelPolysolidCommand(st);
@@ -44890,7 +44890,7 @@ void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log
   st.selBoxWaitingSecond = false;
   st.sectionPlanePhase = AppCommandState::SectionPlanePhase::PickFaceOrPoint;
   st.sectionPlaneP1 = ray3d::Vec3{};
-  if (st.cadSolids.empty()) {
+  if (st.drawing.cadSolids.empty()) {
     // Said before the user hunts for something to click. The command still opens: a solid can be
     // created and picked without retyping, and refusing outright would be a command that works or
     // not depending on drawing order.
@@ -45632,35 +45632,35 @@ namespace {
 template <typename StateT>
 auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   using T = SelectedEntity::Type;
-  using Attr = std::remove_reference_t<decltype(st.userLineAttrs[0])>;
+  using Attr = std::remove_reference_t<decltype(st.drawing.userLineAttrs[0])>;
   if (e.index < 0)
     return static_cast<Attr*>(nullptr);
   const size_t i = static_cast<size_t>(e.index);
   auto at = [i](auto& v) -> Attr* { return i < v.size() ? &v[i] : nullptr; };
   switch (e.type) {
-  case T::LineSeg:      return at(st.userLineAttrs);
-  case T::Circle:       return at(st.userCircleAttrs);
-  case T::Polyline:     return at(st.userPolylineAttrs);
-  case T::Arc:          return at(st.userArcAttrs);
-  case T::Ellipse:      return at(st.userEllAttrs);
-  case T::Annotation:   return at(st.cadAnnotationAttrs);
-  case T::FilledRegion: return at(st.cadFilledRegionAttrs);
-  case T::Mesh:         return at(st.cadMeshAttrs);
-  case T::PointCloud:   return at(st.cadPointCloudAttrs);  // REQ-171
-  case T::FeatureLine:  return at(st.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
+  case T::LineSeg:      return at(st.drawing.userLineAttrs);
+  case T::Circle:       return at(st.drawing.userCircleAttrs);
+  case T::Polyline:     return at(st.drawing.userPolylineAttrs);
+  case T::Arc:          return at(st.drawing.userArcAttrs);
+  case T::Ellipse:      return at(st.drawing.userEllAttrs);
+  case T::Annotation:   return at(st.drawing.cadAnnotationAttrs);
+  case T::FilledRegion: return at(st.drawing.cadFilledRegionAttrs);
+  case T::Mesh:         return at(st.drawing.cadMeshAttrs);
+  case T::PointCloud:   return at(st.drawing.cadPointCloudAttrs);  // REQ-171
+  case T::FeatureLine:  return at(st.drawing.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
   // REQ-068 / ADR-036 (a). A surface has carried an EntityAttributes since the store was written —
   // it simply had no SelectedEntity::Type to be reached through, and no EntityKind, so its `id` was
   // never assigned. Adding it here is what gives a surface REQ-084 isolation gating and Properties
   // layer/colour, both inherited rather than re-implemented.
-  case T::Surface:      return at(st.cadSurfaceAttrs);
-  case T::Table:        return at(st.cadTableAttrs);
-  case T::PositionMarker: return at(st.cadPositionMarkerAttrs);  // REQ-359
-  case T::Multileader:    return at(st.cadMultileaderAttrs);     // REQ-367
-  case T::Spline:         return at(st.cadSplineAttrs);          // REQ-443
-  case T::Point:          return at(st.cadPointAttrs);           // REQ-456
-  case T::BlockRef:     return at(st.cadBlockRefAttrs);
-  case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
-  case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
+  case T::Surface:      return at(st.drawing.cadSurfaceAttrs);
+  case T::Table:        return at(st.drawing.cadTableAttrs);
+  case T::PositionMarker: return at(st.drawing.cadPositionMarkerAttrs);  // REQ-359
+  case T::Multileader:    return at(st.drawing.cadMultileaderAttrs);     // REQ-367
+  case T::Spline:         return at(st.drawing.cadSplineAttrs);          // REQ-443
+  case T::Point:          return at(st.drawing.cadPointAttrs);           // REQ-456
+  case T::BlockRef:     return at(st.drawing.cadBlockRefAttrs);
+  case T::Solid:        return at(st.drawing.cadSolidAttrs);    // REQ-352
+  case T::PipeRun:      return at(st.drawing.cadPipeRunAttrs);  // REQ-352
   // Survey points, PDF underlays and the section plane carry no EntityAttributes.
   default:              return static_cast<Attr*>(nullptr);
   }
@@ -45753,7 +45753,7 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
   if (layer.empty())
     return;
   if (CadSelectionLayer(st).empty()) {
-    st.currentLayer = layer;
+    st.drawing.currentLayer = layer;
     SyncDrawingLayerTableWithGeometry(st);
     return;
   }
@@ -45766,23 +45766,23 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
 // ---------------------------------------------------------------------------
 
 void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
-  st.modelUnitsPerPlottedInch = modelUnitsPerPlottedInch;
+  st.drawing.modelUnitsPerPlottedInch = modelUnitsPerPlottedInch;
   RepositionAllSurveyPointLabels(st);
   st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
   st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
-  st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
+  st.surveyLabelLayoutCacheMup = st.drawing.modelUnitsPerPlottedInch;
   BumpCadGpuCache(st);
 }
 
 void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
   st.currentAnnotationScaleIndex = -1;
-  if (st.annotationScales.empty())
+  if (st.drawing.annotationScales.empty())
     return;
   int best = 0;
   float bestDiff = 1.e30f;
-  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
-    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
-    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
+  for (int i = 0; i < static_cast<int>(st.drawing.annotationScales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.drawing.annotationScales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - st.drawing.modelUnitsPerPlottedInch);
     if (d < bestDiff) {
       bestDiff = d;
       best = i;
@@ -45792,11 +45792,11 @@ void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
 }
 
 void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index) {
-  if (st.annotationScales.empty()) {
+  if (st.drawing.annotationScales.empty()) {
     st.currentAnnotationScaleIndex = -1;
     return;
   }
-  const int n = static_cast<int>(st.annotationScales.size());
+  const int n = static_cast<int>(st.drawing.annotationScales.size());
   const int ix = std::clamp(index, 0, n - 1);
   if (ix == st.currentAnnotationScaleIndex)
     return;
@@ -45824,14 +45824,14 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
     log.push_back("Drawing Settings — " + bad + " Nothing was changed.");
     return false;
   }
-  const bool unitsChanged = drawingInsUnits != st.drawingInsUnits;
-  const bool scaleChanged = modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch;
-  const bool settingsChanged = next != st.drawingSettings;
+  const bool unitsChanged = drawingInsUnits != st.drawing.drawingInsUnits;
+  const bool scaleChanged = modelUnitsPerPlottedInch != st.drawing.modelUnitsPerPlottedInch;
+  const bool settingsChanged = next != st.drawing.drawingSettings;
   if (!unitsChanged && !scaleChanged && !settingsChanged)
     return true;
   PushUndoSnapshot(st, "Drawing Settings");
-  st.drawingInsUnits = drawingInsUnits;  // a relabel: no coordinate is touched (REQ-022)
-  st.drawingSettings = next;
+  st.drawing.drawingInsUnits = drawingInsUnits;  // a relabel: no coordinate is touched (REQ-022)
+  st.drawing.drawingSettings = next;
   if (scaleChanged)
     SetDrawingPlotScale(st, modelUnitsPerPlottedInch);
   BumpCadGpuCache(st);  // document property: marks the drawing modified
@@ -45905,7 +45905,7 @@ void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vect
   if (color.empty())
     return;
   if (CadSelectionColor(st).empty()) {
-    st.currentColor = color;
+    st.drawing.currentColor = color;
     return;
   }
   const int n = CadApplyColorToSelection(st, color);
@@ -46000,7 +46000,7 @@ void LayMCurFromSelection(AppCommandState& st, std::vector<std::string>& log) {
                   "unchanged. Select one object.");
     return;
   }
-  st.currentLayer = layer;
+  st.drawing.currentLayer = layer;
   SyncDrawingLayerTableWithGeometry(st);
   log.push_back("LAYMCUR — \"" + layer + "\" is now the current layer.");
   EndPropCommand(st);
@@ -46298,18 +46298,18 @@ void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>*
       if (a.id != 0)
         out->push_back(a.id);
   };
-  take(st.userLineAttrs);
-  take(st.userCircleAttrs);
-  take(st.userPolylineAttrs);
-  take(st.userArcAttrs);
-  take(st.userEllAttrs);
-  take(st.cadAnnotationAttrs);
-  take(st.cadFilledRegionAttrs);
-  take(st.cadMeshAttrs);
-  take(st.cadPointCloudAttrs);
-  take(st.cadSurfaceAttrs);
-  take(st.cadTableAttrs);
-  take(st.cadBlockRefAttrs);
+  take(st.drawing.userLineAttrs);
+  take(st.drawing.userCircleAttrs);
+  take(st.drawing.userPolylineAttrs);
+  take(st.drawing.userArcAttrs);
+  take(st.drawing.userEllAttrs);
+  take(st.drawing.cadAnnotationAttrs);
+  take(st.drawing.cadFilledRegionAttrs);
+  take(st.drawing.cadMeshAttrs);
+  take(st.drawing.cadPointCloudAttrs);
+  take(st.drawing.cadSurfaceAttrs);
+  take(st.drawing.cadTableAttrs);
+  take(st.drawing.cadBlockRefAttrs);
 }
 
 /// Ids of the current selection that isolation can act on, plus how many picks it had to skip
@@ -46402,9 +46402,9 @@ void EndObjectIsolation(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 Viewport* CurrentViewport(AppCommandState& st) {
-  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size()))
+  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.drawing.paperLayouts.size()))
     return nullptr;
-  PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
   // Floating viewport wins when the user is editing the model through one (REQ-036).
   if (InFloatingModelSpace(st) && st.floatingViewportLayout == st.activeSpaceIndex &&
       st.floatingViewportIndex >= 0 && st.floatingViewportIndex < static_cast<int>(L.viewports.size()))
@@ -46460,8 +46460,8 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     st.pendingZoomExtents = false;
     Viewport* vp = nullptr;
     if (st.floatingViewportLayout >= 0 &&
-        static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size()) {
-      PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)];
+        static_cast<size_t>(st.floatingViewportLayout) < st.drawing.paperLayouts.size()) {
+      PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)];
       if (st.floatingViewportIndex >= 0 && static_cast<size_t>(st.floatingViewportIndex) < L.viewports.size())
         vp = &L.viewports[static_cast<size_t>(st.floatingViewportIndex)];
     }
@@ -46487,7 +46487,7 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     }
     // ComputeRobustWorldExtents (despite the name) returns LOCAL coordinates — the same convention
     // every raw entity store uses. vp->modelCenterX/Y is WORLD (local + worldDocumentOrigin): see
-    // AddViewportRect's default (`= cmd.worldDocumentOriginX`) and the screen<->model conversions in
+    // AddViewportRect's default (`= cmd.drawing.worldDocumentOriginX`) and the screen<->model conversions in
     // CadUi.cpp/PdfPlot.cpp, which both add/subtract the origin around this same field. Framing in
     // LOCAL and writing straight into a WORLD field left the viewport pointed at the wrong place by
     // exactly worldDocumentOriginX/Y whenever it's nonzero (i.e. after any import that rebases the
@@ -46497,8 +46497,8 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
       return;
     }
-    vp->modelCenterX += st.worldDocumentOriginX;
-    vp->modelCenterY += st.worldDocumentOriginY;
+    vp->modelCenterX += st.drawing.worldDocumentOriginX;
+    vp->modelCenterY += st.drawing.worldDocumentOriginY;
     BumpCadGpuCache(st);
     char vbuf[256];
     std::snprintf(vbuf, sizeof(vbuf),
@@ -46527,8 +46527,8 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     // REQ-120 originally excluded floating model space from this branch and framed the MODEL extents
     // into the SHEET camera instead — which is the defect issue #100 reports. Corrected here.
     const PaperLayout* sheet = nullptr;
-    if (st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
-      sheet = &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+    if (st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.drawing.paperLayouts.size())
+      sheet = &st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
 
     if (sheet) {
       // The PAGE is the meaningful extent of a layout, and a layout with no geometry on it yet must
@@ -47264,8 +47264,8 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   } else {
     if (!tilted)
       ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
-    st.userEllipses.push_back(ell);
-    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.userEllipses.push_back(ell);
+    st.drawing.userEllAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   st.active = K::None;
@@ -47301,25 +47301,25 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     L->paperPolyClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     L->paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    if (st.userPolylineOffsets.empty())
-      st.userPolylineOffsets.push_back(0);
-    const int baseVert = st.userPolylineOffsets.back();
-    st.userPolylineVerts.insert(st.userPolylineVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
-    st.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
-    st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+    if (st.drawing.userPolylineOffsets.empty())
+      st.drawing.userPolylineOffsets.push_back(0);
+    const int baseVert = st.drawing.userPolylineOffsets.back();
+    st.drawing.userPolylineVerts.insert(st.drawing.userPolylineVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
+    st.drawing.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
+    st.drawing.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+    st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the draft's per-vertex bulges into the store. Only materialise the
     // parallel array once a curved segment actually exists (a straight-only drawing keeps it empty
     // so its internal document payload re-saves byte-identically).
     bool draftHasArc = false;
     for (float b : st.polylineDraftBulge)
       if (b != 0.f) { draftHasArc = true; break; }
-    if (draftHasArc || !st.userPolylineVertsBulge.empty()) {
-      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
-      const size_t tail = st.userPolylineVertsBulge.size() >= nvert ? st.userPolylineVertsBulge.size() - nvert : 0;
+    if (draftHasArc || !st.drawing.userPolylineVertsBulge.empty()) {
+      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
+      const size_t tail = st.drawing.userPolylineVertsBulge.size() >= nvert ? st.drawing.userPolylineVertsBulge.size() - nvert : 0;
       for (size_t k = 0; k < nvert && k < st.polylineDraftBulge.size(); ++k)
-        st.userPolylineVertsBulge[tail + k] = st.polylineDraftBulge[k];
+        st.drawing.userPolylineVertsBulge[tail + k] = st.polylineDraftBulge[k];
     }
   }
   BumpCadGpuCache(st);
@@ -47367,8 +47367,8 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     // New geometry lands on the active work plane (REQ-058); ELEV moves that plane, and the
     // default is world XY, so this is 0 until the user changes it.
     // Anchor's own elevation, then this end's (snap overrides ELEV).
-    st.pushLine(CadLineRecord{st.anchorX, st.anchorY, st.anchorZ, x, y, CadCommitElevation(st)});
-    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.pushLine(CadLineRecord{st.anchorX, st.anchorY, st.anchorZ, x, y, CadCommitElevation(st)});
+    st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
 
@@ -47592,7 +47592,7 @@ bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocal
     return true;
   }
 
-  const bool solidClickable = modelSpace && (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty());
+  const bool solidClickable = modelSpace && (!st.drawing.cadSolids.empty() || !st.pipeRunWorldSolids.empty());
   ViewportPickRequest rq;
   rq.rawX = rawLocalX;
   rq.rawY = rawLocalY;
@@ -47829,9 +47829,9 @@ static bool HasPaperModifyPhase(const AppCommandState& st) {
 namespace {
 static bool HandlePaperModifyPick(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
   if (!HasPaperModifyPhase(st) || st.activeSpaceIndex < 0 ||
-      static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size() || InFloatingModelSpace(st))
+      static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size() || InFloatingModelSpace(st))
     return false;
-  PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
   PaperEntityRef hit{};
   const bool picked = PickPaperEntityAt(layout, x, y, std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit);
   auto isCurve = [](const PaperEntityRef& ref) {
@@ -47925,7 +47925,7 @@ static bool HandlePaperModifyPick(AppCommandState& st, float x, float y, std::ve
 
 static void MaybeEstablishDocumentOriginFromTypedPoint(AppCommandState& st, const std::string& line,
                                                        std::vector<std::string>& log) {
-  if (st.worldDocumentOriginX != 0.0 || st.worldDocumentOriginY != 0.0)
+  if (st.drawing.worldDocumentOriginX != 0.0 || st.drawing.worldDocumentOriginY != 0.0)
     return;  // frame already established — inert, and must stay inert (see above)
   double wx = 0.;
   double wy = 0.;
@@ -49314,7 +49314,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (!(issIdle >> pv) || pv <= 0.f)
         log.push_back("PLOTSCALE — usage: PLOTSCALE <model_units_per_plotted_inch> (example: 50 for 1\"=50').");
       else {
-        if (pv != st.modelUnitsPerPlottedInch) {
+        if (pv != st.drawing.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(st, pv);
           NoteUserPlotScale(st);  // REQ-375
@@ -49402,36 +49402,36 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (plotTok == "featurelinelist" || plotTok == "fllist") {
-      const size_t n = st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
+      const size_t n = st.drawing.featureLineOffsets.empty() ? 0 : st.drawing.featureLineOffsets.size() - 1;
       if (n == 0) {
         log.push_back("FEATURELINELIST — no feature lines in the drawing.");
         return;
       }
       for (size_t i = 0; i < n; ++i) {
-        const int b = st.featureLineOffsets[i], e = st.featureLineOffsets[i + 1];
-        const std::string nm = i < st.featureLineInfo.size() ? st.featureLineInfo[i].name : std::string();
-        const bool closed = i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0;
+        const int b = st.drawing.featureLineOffsets[i], e = st.drawing.featureLineOffsets[i + 1];
+        const std::string nm = i < st.drawing.featureLineInfo.size() ? st.drawing.featureLineInfo[i].name : std::string();
+        const bool closed = i < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[i] != 0;
         int elevPts = 0;
         for (int v = b; v < e; ++v)
-          if (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+          if (static_cast<size_t>(v) < st.drawing.featureLineElevPt.size() && st.drawing.featureLineElevPt[v])
             ++elevPts;
         log.push_back("Feature line " + std::to_string(i + 1) + ": \"" + nm + "\" — " +
                       std::to_string(e - b) + " vertices (" + std::to_string((e - b) - elevPts) +
                       " PI, " + std::to_string(elevPts) + " elevation point(s))" +
                       (closed ? ", closed" : "") + ", entity id " +
-                      std::to_string(i < st.featureLineAttrs.size() ? st.featureLineAttrs[i].id : 0));
+                      std::to_string(i < st.drawing.featureLineAttrs.size() ? st.drawing.featureLineAttrs[i].id : 0));
         for (int v = b; v < e; ++v) {
           const size_t base = static_cast<size_t>(v) * 3;
-          if (base + 2 >= st.featureLineVerts.size())
+          if (base + 2 >= st.drawing.featureLineVerts.size())
             break;
           char buf[160];
           std::snprintf(buf, sizeof(buf), "  %s %d: %.3f, %.3f, elevation %.3f",
-                        (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+                        (static_cast<size_t>(v) < st.drawing.featureLineElevPt.size() && st.drawing.featureLineElevPt[v])
                             ? "elev pt"
                             : "PI     ",
-                        v - b + 1, static_cast<double>(st.featureLineVerts[base]),
-                        static_cast<double>(st.featureLineVerts[base + 1]),
-                        static_cast<double>(st.featureLineVerts[base + 2]));
+                        v - b + 1, static_cast<double>(st.drawing.featureLineVerts[base]),
+                        static_cast<double>(st.drawing.featureLineVerts[base + 1]),
+                        static_cast<double>(st.drawing.featureLineVerts[base + 2]));
           log.push_back(buf);
         }
       }
@@ -49455,7 +49455,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // edit the table without a panel existing.
     if (plotTok == "flelevedit" || plotTok == "featurelineelevedit") {
       const int flCount =
-          st.featureLineOffsets.empty() ? 0 : static_cast<int>(st.featureLineOffsets.size()) - 1;
+          st.drawing.featureLineOffsets.empty() ? 0 : static_cast<int>(st.drawing.featureLineOffsets.size()) - 1;
       if (flCount <= 0) {
         log.push_back("FLELEVEDIT — no feature lines in the drawing. Draw one with FEATURELINE first.");
         return;
@@ -49490,7 +49490,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           return;
         }
         const size_t ii = (static_cast<size_t>(flNum)- 1);
-        const std::string nm = ii < st.featureLineInfo.size() ? st.featureLineInfo[ii].name : std::string();
+        const std::string nm = ii < st.drawing.featureLineInfo.size() ? st.drawing.featureLineInfo[ii].name : std::string();
         log.push_back("FLELEV — feature line " + std::to_string(flNum) + " \"" + nm + "\": " +
                       std::to_string(rows.size()) + " points.");
         log.push_back("   #  type     station    elevation   length ahead   grade back   grade ahead");
@@ -49659,10 +49659,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (surface < 0 || !end || *end != '\0' || id == 0)
           log.push_back("SURFDRAPE — usage: SURFDRAPE <surface>, <image-id>.");
         else {
-          const auto image = std::find_if(st.cadRasterImages.begin(), st.cadRasterImages.end(),
+          const auto image = std::find_if(st.drawing.cadRasterImages.begin(), st.drawing.cadRasterImages.end(),
               [&](const CadRasterImage& candidate) { return candidate.id == static_cast<std::uint64_t>(id); });
-          if (image == st.cadRasterImages.end()) log.push_back("SURFDRAPE — no attached image has ID " + std::to_string(id) + ".");
-          else SetModelRasterDrape(st, static_cast<size_t>(image - st.cadRasterImages.begin()),
+          if (image == st.drawing.cadRasterImages.end()) log.push_back("SURFDRAPE — no attached image has ID " + std::to_string(id) + ".");
+          else SetModelRasterDrape(st, static_cast<size_t>(image - st.drawing.cadRasterImages.begin()),
                                    static_cast<size_t>(surface), log);
         }
       }
@@ -50280,7 +50280,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.active = AppCommandState::Kind::None;
       return;
     }
-    CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+    CommitSurfSwapEdgeLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50297,7 +50297,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.active = AppCommandState::Kind::None;
       return;
     }
-    CommitSurfAddPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+    CommitSurfAddPointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), CadCommitElevation(st), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50314,7 +50314,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.active = AppCommandState::Kind::None;
       return;
     }
-    CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+    CommitSurfDelPointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50339,7 +50339,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back("SURFACEMOVEPOINT — pick the new position (Z = work plane).");
       return;
     }
-    CommitSurfMovePointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
+    CommitSurfMovePointLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
                              static_cast<double>(px), static_cast<double>(py), CadCommitElevation(st), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50356,7 +50356,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.active = AppCommandState::Kind::None;
       return;
     }
-    CommitSurfDelLineLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+    CommitSurfDelLineLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                            static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50381,7 +50381,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back("QUICKPROFILE — second point of the sample line.");
       return;
     }
-    CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
+    CommitQuickProfileLocal(st, st.drawing.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
                             static_cast<double>(px), static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -50823,7 +50823,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       const bool paperText = ActivePaperGeometryTarget(st) != nullptr;
       const std::string tr = StringUtil::trimCopy(line);
       if (tr.empty())
-        st.textHeightDraft = paperText ? st.defaultPlottedTextHeightInches : DefaultAnnotationTextHeightWorld(st);
+        st.textHeightDraft = paperText ? st.drawing.defaultPlottedTextHeightInches : DefaultAnnotationTextHeightWorld(st);
       else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || !std::isfinite(st.textHeightDraft) ||
                st.textHeightDraft <= 0.f) {
         log.push_back("TEXT — invalid height.");
@@ -50860,7 +50860,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         // directly. Model-space TEXT divides by the plot scale to reach plotted inches.
         const float plottedHeightInches =
             paperTarget ? st.textHeightDraft
-                        : st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+                        : st.textHeightDraft / std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
         const float insZ = paperTarget ? 0.f : CadCommitElevation(st);
         ann.plottedHeightInches = plottedHeightInches;
         // REQ-204 finite-coords / REQ-201: a non-finite insertion, elevation, rotation, or height —
@@ -50872,7 +50872,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         // the way in and overflows to inf only once scaled by the text length. Issue #117; same shape
         // as the CIRCLE infinite-radius guard (REQ-204, issue #59).
         float rbMnX = 0.f, rbMnY = 0.f, rbMxX = 0.f, rbMxY = 0.f;
-        CadAnnotationRoughBounds(ann, st.modelUnitsPerPlottedInch, &rbMnX, &rbMnY, &rbMxX, &rbMxY);
+        CadAnnotationRoughBounds(ann, st.drawing.modelUnitsPerPlottedInch, &rbMnX, &rbMnY, &rbMxX, &rbMxY);
         if (!std::isfinite(ann.insX) || !std::isfinite(ann.insY) || !std::isfinite(insZ) ||
             !std::isfinite(ann.rotationRad) || !std::isfinite(plottedHeightInches) ||
             plottedHeightInches <= 0.f || !std::isfinite(rbMnX) || !std::isfinite(rbMnY) ||
@@ -50890,8 +50890,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         } else {
           ann.insZ = insZ;  // model TEXT: snap overrides ELEV (REQ-058)
           StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new TEXT adopts the active text style
-          st.cadAnnotations.push_back(std::move(ann));
-          st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+          st.drawing.cadAnnotations.push_back(std::move(ann));
+          st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
         }
         // Issue #56. Not a rendering concern — this is what makes the new entity get an id at all.
         // MakeNewEntityAttrs leaves id 0 and relies on the EnsureEntityIds sweep, and that sweep
@@ -51886,7 +51886,7 @@ static bool LayerNamesEqCi(const std::string& a, const std::string& b) {
 }
 
 const CadLayerRow* FindDrawingLayerRowCi(const AppCommandState& st, const std::string& layerName) {
-  for (const auto& r : st.drawingLayerTable) {
+  for (const auto& r : st.drawing.drawingLayerTable) {
     if (LayerNamesEqCi(r.name, layerName))
       return &r;
   }
@@ -52048,7 +52048,7 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     const int nSnapCircles = static_cast<int>(att.snapCirclesCxCyR.size()) / 3;
     const int nSnapText    = static_cast<int>(att.snapTextPos.size())      / 2;
     PushUndoSnapshot(st, "PDF attach");
-    st.pdfAttachments.push_back(std::move(att));
+    st.drawing.pdfAttachments.push_back(std::move(att));
     char snapMsg[128];
     std::snprintf(snapMsg, sizeof(snapMsg),
                   "PDFATTACH — placed.  Snap: %d lines, %d circles, %d text.",
@@ -52079,9 +52079,9 @@ void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) 
 }
 
 void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<std::string>& log) {
-  if (pdfIndex < 0 || pdfIndex >= static_cast<int>(st.pdfAttachments.size()))
+  if (pdfIndex < 0 || pdfIndex >= static_cast<int>(st.drawing.pdfAttachments.size()))
     return;
-  const PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(pdfIndex)];
+  const PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(pdfIndex)];
   const auto& snap = att.snapLinesFlat;
   if (snap.empty()) {
     log.push_back("Vectorize — no line snap geometry in this PDF underlay.");
@@ -52097,16 +52097,16 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
     const float sx2 = snap[i + 2] * att.scale, sy2 = snap[i + 3] * att.scale;
     // Z = 0 is correct here regardless of the UCS: a PDF underlay is a flat raster/vector
     // sheet with no elevation of its own.
-    st.pushLine(CadLineRecord{att.insertX + sx1 * cosR - sy1 * sinR, att.insertY + sx1 * sinR + sy1 * cosR, 0.f, att.insertX + sx2 * cosR - sy2 * sinR, att.insertY + sx2 * sinR + sy2 * cosR, 0.f});
+    st.drawing.pushLine(CadLineRecord{att.insertX + sx1 * cosR - sy1 * sinR, att.insertY + sx1 * sinR + sy1 * cosR, 0.f, att.insertX + sx2 * cosR - sy2 * sinR, att.insertY + sx2 * sinR + sy2 * cosR, 0.f});
     ++n;
   }
   EnsureAttrCounts(st);
   // Tag newly-added lines with this underlay's layer.
   if (!att.layer.empty()) {
-    const size_t total = st.lineCount();
+    const size_t total = st.drawing.lineCount();
     const size_t firstNew = total - static_cast<size_t>(n);
-    for (size_t k = firstNew; k < total && k < st.userLineAttrs.size(); ++k)
-      st.userLineAttrs[k].layer = att.layer;
+    for (size_t k = firstNew; k < total && k < st.drawing.userLineAttrs.size(); ++k)
+      st.drawing.userLineAttrs[k].layer = att.layer;
   }
   BumpCadGpuCache(st);
   char buf[128];
@@ -52218,16 +52218,16 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   };
   auto getAttrs = [&](const SelectedEntity& e) -> const EntityAttributes* {
     switch (e.type) {
-    case T::LineSeg:    return (size_t)e.index < cmd.userLineAttrs.size()       ? &cmd.userLineAttrs[(size_t)e.index]       : nullptr;
-    case T::Circle:     return (size_t)e.index < cmd.userCircleAttrs.size()     ? &cmd.userCircleAttrs[(size_t)e.index]     : nullptr;
-    case T::Arc:        return (size_t)e.index < cmd.userArcAttrs.size()        ? &cmd.userArcAttrs[(size_t)e.index]        : nullptr;
-    case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
-    case T::Spline:     return e.index >= 0 && (size_t)e.index < cmd.cadSplineAttrs.size() ? &cmd.cadSplineAttrs[(size_t)e.index] : nullptr;
-    case T::Point:      return e.index >= 0 && (size_t)e.index < cmd.cadPointAttrs.size() ? &cmd.cadPointAttrs[(size_t)e.index] : nullptr;
-    case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
-    case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
-    case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
-    case T::BlockRef:   return (size_t)e.index < cmd.cadBlockRefAttrs.size()    ? &cmd.cadBlockRefAttrs[(size_t)e.index]    : nullptr;
+    case T::LineSeg:    return (size_t)e.index < cmd.drawing.userLineAttrs.size()       ? &cmd.drawing.userLineAttrs[(size_t)e.index]       : nullptr;
+    case T::Circle:     return (size_t)e.index < cmd.drawing.userCircleAttrs.size()     ? &cmd.drawing.userCircleAttrs[(size_t)e.index]     : nullptr;
+    case T::Arc:        return (size_t)e.index < cmd.drawing.userArcAttrs.size()        ? &cmd.drawing.userArcAttrs[(size_t)e.index]        : nullptr;
+    case T::Ellipse:    return (size_t)e.index < cmd.drawing.userEllAttrs.size()        ? &cmd.drawing.userEllAttrs[(size_t)e.index]        : nullptr;
+    case T::Spline:     return e.index >= 0 && (size_t)e.index < cmd.drawing.cadSplineAttrs.size() ? &cmd.drawing.cadSplineAttrs[(size_t)e.index] : nullptr;
+    case T::Point:      return e.index >= 0 && (size_t)e.index < cmd.drawing.cadPointAttrs.size() ? &cmd.drawing.cadPointAttrs[(size_t)e.index] : nullptr;
+    case T::Polyline:   return (size_t)e.index < cmd.drawing.userPolylineAttrs.size()   ? &cmd.drawing.userPolylineAttrs[(size_t)e.index]   : nullptr;
+    case T::Annotation: return (size_t)e.index < cmd.drawing.cadAnnotationAttrs.size()  ? &cmd.drawing.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
+    case T::Table:      return (size_t)e.index < cmd.drawing.cadTableAttrs.size()       ? &cmd.drawing.cadTableAttrs[(size_t)e.index]       : nullptr;
+    case T::BlockRef:   return (size_t)e.index < cmd.drawing.cadBlockRefAttrs.size()    ? &cmd.drawing.cadBlockRefAttrs[(size_t)e.index]    : nullptr;
     default:            return nullptr;
     }
   };
@@ -52241,16 +52241,16 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case T::Ellipse:  if (!typeMatches(OT::Ellipse)) return false; break;
     case T::Polyline: if (!typeMatches(OT::Polyline))return false; break;
     case T::Spline:
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadSplines.size() || cmd.qsObjectType != OT::All)
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.cadSplines.size() || cmd.qsObjectType != OT::All)
         return false;
       break;
     case T::Point:
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadPoints.size() || cmd.qsObjectType != OT::All)
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.cadPoints.size() || cmd.qsObjectType != OT::All)
         return false;
       break;
     case T::Annotation: {
-      if ((size_t)e.index >= cmd.cadAnnotations.size()) return false;
-      const auto k = cmd.cadAnnotations[(size_t)e.index].kind;
+      if ((size_t)e.index >= cmd.drawing.cadAnnotations.size()) return false;
+      const auto k = cmd.drawing.cadAnnotations[(size_t)e.index].kind;
       using AK = CadAnnotation::Kind;
       if (cmd.qsObjectType == OT::Text       && k != AK::Text)       return false;
       if (cmd.qsObjectType == OT::Mtext      && k != AK::Mtext)      return false;
@@ -52297,23 +52297,23 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
       double len = 0.0;
       if (e.type == T::LineSeg) {
         const size_t k = (size_t)e.index;
-        if (k < cmd.lineCount())
-          len = std::hypot(cmd.line(k).x1 - cmd.line(k).x0,
-                           cmd.line(k).y1 - cmd.line(k).y0);
+        if (k < cmd.drawing.lineCount())
+          len = std::hypot(cmd.drawing.line(k).x1 - cmd.drawing.line(k).x0,
+                           cmd.drawing.line(k).y1 - cmd.drawing.line(k).y0);
       } else if (e.type == T::Polyline) {
-        const int np = (int)cmd.userPolylineOffsets.size();
+        const int np = (int)cmd.drawing.userPolylineOffsets.size();
         if (e.index >= 0 && e.index + 1 < np) {
-          const int sv = cmd.userPolylineOffsets[(size_t)e.index];
-          const int ev = cmd.userPolylineOffsets[(size_t)e.index + 1];
+          const int sv = cmd.drawing.userPolylineOffsets[(size_t)e.index];
+          const int ev = cmd.drawing.userPolylineOffsets[(size_t)e.index + 1];
           for (int vi = sv; vi + 1 < ev; ++vi) {
             const size_t nextVi = (size_t)vi + 1;
-            if (nextVi < cmd.vertexCount())
-              len += std::hypot(cmd.vertex(nextVi).x - cmd.vertex(vi).x,
-                                cmd.vertex(nextVi).y - cmd.vertex(vi).y);
+            if (nextVi < cmd.drawing.vertexCount())
+              len += std::hypot(cmd.drawing.vertex(nextVi).x - cmd.drawing.vertex(vi).x,
+                                cmd.drawing.vertex(nextVi).y - cmd.drawing.vertex(vi).y);
           }
         }
-      } else if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {
-        len = spline::Length(cmd.cadSplines[static_cast<size_t>(e.index)]);
+      } else if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.drawing.cadSplines.size()) {
+        len = spline::Length(cmd.drawing.cadSplines[static_cast<size_t>(e.index)]);
       }
       return matchNum(static_cast<float>(len));
     }
@@ -52321,32 +52321,32 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
       double r = 0.0;
       if (e.type == T::Spline) return false;
       if (e.type == T::Circle) {
-        if ((size_t)e.index < cmd.circleCount()) r = cmd.circle((size_t)e.index).r;
-      } else if (e.type == T::Arc && (size_t)e.index < cmd.userArcs.size()) {
-        r = cmd.userArcs[(size_t)e.index].r;
+        if ((size_t)e.index < cmd.drawing.circleCount()) r = cmd.drawing.circle((size_t)e.index).r;
+      } else if (e.type == T::Arc && (size_t)e.index < cmd.drawing.userArcs.size()) {
+        r = cmd.drawing.userArcs[(size_t)e.index].r;
       }
       return matchNum(static_cast<float>(r));
     }
     case QP::Closed:
-      if (e.type == T::Polyline && (size_t)e.index < cmd.userPolylineClosed.size()) {
-        const bool closed = cmd.userPolylineClosed[(size_t)e.index] != 0;
+      if (e.type == T::Polyline && (size_t)e.index < cmd.drawing.userPolylineClosed.size()) {
+        const bool closed = cmd.drawing.userPolylineClosed[(size_t)e.index] != 0;
         if (cmd.qsOperator == QO::SelectAll) return true;
         const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
         return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
       }
-      if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {
-        const bool closed = cmd.cadSplines[static_cast<size_t>(e.index)].periodic;
+      if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.drawing.cadSplines.size()) {
+        const bool closed = cmd.drawing.cadSplines[static_cast<size_t>(e.index)].periodic;
         if (cmd.qsOperator == QO::SelectAll) return true;
         const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
         return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
       }
       return false;
     case QP::Content:
-      if (e.type == T::Annotation && (size_t)e.index < cmd.cadAnnotations.size())
-        return matchStr(cmd.cadAnnotations[(size_t)e.index].text);
-      if (e.type == T::Table && (size_t)e.index < cmd.cadTables.size()) {
+      if (e.type == T::Annotation && (size_t)e.index < cmd.drawing.cadAnnotations.size())
+        return matchStr(cmd.drawing.cadAnnotations[(size_t)e.index].text);
+      if (e.type == T::Table && (size_t)e.index < cmd.drawing.cadTables.size()) {
         std::string joined;
-        for (const std::string& c : cmd.cadTables[(size_t)e.index].cells) {
+        for (const std::string& c : cmd.drawing.cadTables[(size_t)e.index].cells) {
           if (!joined.empty())
             joined += " ";
           joined += c;
@@ -52360,8 +52360,8 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
 
   auto testSurvey = [&](int spi) -> bool {
     if (!typeMatches(OT::SurveyPoint)) return false;
-    if ((size_t)spi >= cmd.surveyPoints.size()) return false;
-    const SurveyPoint& sp = cmd.surveyPoints[(size_t)spi];
+    if ((size_t)spi >= cmd.drawing.surveyPoints.size()) return false;
+    const SurveyPoint& sp = cmd.drawing.surveyPoints[(size_t)spi];
     switch (cmd.qsProperty) {
     case QP::Layer:       return matchStr(sp.layer);
     case QP::Id:          return matchNum(static_cast<float>(sp.id));
@@ -52388,21 +52388,21 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   };
 
   if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
-    const int nLines = (int)(cmd.lineCount());
+    const int nLines = (int)(cmd.drawing.lineCount());
     for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
-    const int nCirc = (int)cmd.circleCount();
+    const int nCirc = (int)cmd.drawing.circleCount();
     for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
-    for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
-    for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
-    for (int i = 0; i < (int)cmd.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
-    for (int i = 0; i < (int)cmd.cadPoints.size(); ++i)     addCad({SelectedEntity::Type::Point, i});
-    for (int i = 0; i < (int)cmd.alignments.size(); ++i)    addCad({SelectedEntity::Type::Alignment, i});  // REQ-480
-    const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
+    for (int i = 0; i < (int)cmd.drawing.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
+    for (int i = 0; i < (int)cmd.drawing.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
+    for (int i = 0; i < (int)cmd.drawing.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
+    for (int i = 0; i < (int)cmd.drawing.cadPoints.size(); ++i)     addCad({SelectedEntity::Type::Point, i});
+    for (int i = 0; i < (int)cmd.drawing.alignments.size(); ++i)    addCad({SelectedEntity::Type::Alignment, i});  // REQ-480
+    const int nPoly = std::max(0, (int)cmd.drawing.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
-    for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
-    for (int i = 0; i < (int)cmd.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
-    for (int i = 0; i < (int)cmd.cadBlockRefs.size(); ++i)   addCad({SelectedEntity::Type::BlockRef, i});
-    for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
+    for (int i = 0; i < (int)cmd.drawing.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
+    for (int i = 0; i < (int)cmd.drawing.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
+    for (int i = 0; i < (int)cmd.drawing.cadBlockRefs.size(); ++i)   addCad({SelectedEntity::Type::BlockRef, i});
+    for (int i = 0; i < (int)cmd.drawing.surveyPoints.size(); ++i)   addSurvey(i);
   } else {
     for (const auto& e : cmd.selection)           addCad(e);
     for (int spi : cmd.selectedSurveyPointIndices) addSurvey(spi);

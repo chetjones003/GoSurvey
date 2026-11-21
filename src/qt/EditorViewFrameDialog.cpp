@@ -25,7 +25,7 @@ namespace {
 // nudged up and the end down by a millionth of an INTERNAL station, and the displayed value is then taken from that
 // point, so a station equation at the endpoint cannot move the default into its gap.
 QString StationText(const AppCommandState& state, const alignment::Alignment& a, double internalStation, bool isEnd) {
-  alignment::StationFormat fmt = state.alignmentStationFormat;
+  alignment::StationFormat fmt = state.drawing.alignmentStationFormat;
   fmt.decimals = std::max(fmt.decimals, 6);
   const double nudged = internalStation + (isEnd ? -1e-6 : 1e-6);
   return QString::fromStdString(alignment::FormatStation(a.DisplayedStation(nudged, true), fmt));
@@ -34,27 +34,27 @@ QString StationText(const AppCommandState& state, const alignment::Alignment& a,
 }  // namespace
 
 QString RunCreateViewFramesDialog(QWidget* parent, const AppCommandState& state) {
-  if (state.alignments.empty()) return {};
+  if (state.drawing.alignments.empty()) return {};
 
   QDialog dialog(parent);
   dialog.setWindowTitle("Create View Frames");
   auto* form = new QFormLayout;
 
   auto* alignmentBox = new QComboBox(&dialog);
-  for (const alignment::Alignment& a : state.alignments)
+  for (const alignment::Alignment& a : state.drawing.alignments)
     alignmentBox->addItem(QString::fromStdString(a.name));
   form->addRow("Alignment:", alignmentBox);
 
   auto* startEdit = new QLineEdit(&dialog);
   auto* endEdit = new QLineEdit(&dialog);
   auto fillRange = [&](int index) {
-    const alignment::Alignment& a = state.alignments[static_cast<size_t>(index)];
+    const alignment::Alignment& a = state.drawing.alignments[static_cast<size_t>(index)];
     startEdit->setText(StationText(state, a, a.StartStation(), false));
     endEdit->setText(StationText(state, a, a.EndStation(), true));
   };
   fillRange(0);
   QObject::connect(alignmentBox, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int index) {
-    if (index >= 0 && index < static_cast<int>(state.alignments.size())) fillRange(index);
+    if (index >= 0 && index < static_cast<int>(state.drawing.alignments.size())) fillRange(index);
   });
   form->addRow("Start station:", startEdit);
   form->addRow("End station:", endEdit);
@@ -69,8 +69,8 @@ QString RunCreateViewFramesDialog(QWidget* parent, const AppCommandState& state)
   form->addRow("Sheet size:", sheetBox);
 
   // The named scales (REQ-517.3): the drawing's own list, or the standard list when it has none yet.
-  std::vector<CadAnnotationScale> scales = state.viewportZoomScales;
-  if (scales.empty()) EnsureStandardAnnotationScales(scales, state.drawingInsUnits);
+  std::vector<CadAnnotationScale> scales = state.drawing.viewportZoomScales;
+  if (scales.empty()) EnsureStandardAnnotationScales(scales, state.drawing.drawingInsUnits);
   auto* scaleBox = new QComboBox(&dialog);
   // REQ-517.8: AUTO is the first choice and the default; it picks the best-fit scale when the frames are made.
   scaleBox->addItem(QStringLiteral("AUTO"));

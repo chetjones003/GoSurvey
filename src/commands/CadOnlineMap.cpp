@@ -152,7 +152,7 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
   using GP = AppCommandState::GeoCmdPhase;
   ++frame_;
   draws_.clear();
-  const DrawingSettings& s = st.drawingSettings;
+  const DrawingSettings& s = st.drawing.drawingSettings;
   const OnlineMapInfo& info = OnlineMapInfoOf(s.onlineMap);
   bool capturing = st.active == AppCommandState::Kind::GeoCaptureArea && st.geoCmdPhase == GP::Capturing;
   if (!capturing)
@@ -192,8 +192,8 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
   // ---- The drawing's location: any change re-places every tile (the textures stay) -----------------
   const int map = static_cast<int>(s.onlineMap);
   const bool locationChanged = !haveLocation_ || s.zoneCode != locZone_ || s.transform != locTransform_ ||
-                               s.footDefinition != locFoot_ || st.drawingInsUnits != locInsUnits_ ||
-                               st.worldDocumentOriginX != locOriginX_ || st.worldDocumentOriginY != locOriginY_;
+                               s.footDefinition != locFoot_ || st.drawing.drawingInsUnits != locInsUnits_ ||
+                               st.drawing.worldDocumentOriginX != locOriginX_ || st.drawing.worldDocumentOriginY != locOriginY_;
   if (locationChanged || map != map_) {
     latch_.OnLocationChanged();
     havePlan_ = false;
@@ -204,9 +204,9 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
     locZone_ = s.zoneCode;
     locTransform_ = s.transform;
     locFoot_ = s.footDefinition;
-    locInsUnits_ = st.drawingInsUnits;
-    locOriginX_ = st.worldDocumentOriginX;
-    locOriginY_ = st.worldDocumentOriginY;
+    locInsUnits_ = st.drawing.drawingInsUnits;
+    locOriginX_ = st.drawing.worldDocumentOriginX;
+    locOriginY_ = st.drawing.worldDocumentOriginY;
     for (auto& [key, t] : tiles_) {
       t.xyuv.clear();
       t.placeFailed = false;

@@ -724,7 +724,7 @@ size_t CountRefsForDef(const CadBlockDefinition& def, const std::vector<CadBlock
 
 CadBlockDynamicExportLossCounts ComputeCadBlockDynamicExportLossCounts(const AppCommandState& st) {
   CadBlockDynamicExportLossCounts out;
-  for (const CadBlockDefinition& def : st.blockDefs) {
+  for (const CadBlockDefinition& def : st.drawing.blockDefs) {
     if (!CadBlockDefinitionNeedsDynamicDwgExport(def))
       continue;
     bool hasVisibility = !def.visibilityStates.empty();
@@ -764,8 +764,8 @@ CadBlockDynamicExportLossCounts ComputeCadBlockDynamicExportLossCounts(const App
 
     const CadBlockParameter* linear = FirstLinearParameter(def);
     if (linear != nullptr && linearStretch &&
-        InsertParamValuesConflict(def, linear->name, st.cadBlockRefs))
-      out.insertParamConflicts += CountRefsForDef(def, st.cadBlockRefs);
+        InsertParamValuesConflict(def, linear->name, st.drawing.cadBlockRefs))
+      out.insertParamConflicts += CountRefsForDef(def, st.drawing.cadBlockRefs);
   }
   return out;
 }

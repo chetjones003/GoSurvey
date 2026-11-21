@@ -333,7 +333,7 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     layerNames[row] = new QComboBox(layers);
     layerNames[row]->setObjectName(QString("projectLayerName%1").arg(i));
     layerNames[row]->setEditable(true);
-    for (const auto& existing : m_State.drawingLayerTable)
+    for (const auto& existing : m_State.drawing.drawingLayerTable)
       layerNames[row]->addItem(Utf8(existing.name));
     layerNames[row]->setCurrentText(Utf8(staged.defaults.objectLayers[row].layer));
     layers->setCellWidget(i, 1, layerNames[row]);

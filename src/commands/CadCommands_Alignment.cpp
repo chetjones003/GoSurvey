@@ -93,8 +93,8 @@ bool ParseNum(const std::string& s, double* v) {
 
 int FindAlignment(const AppCommandState& st, const std::string& name) {
   const std::string want = Lower(name);
-  for (size_t i = 0; i < st.alignments.size(); ++i) {
-    if (Lower(st.alignments[i].name) == want) return static_cast<int>(i);
+  for (size_t i = 0; i < st.drawing.alignments.size(); ++i) {
+    if (Lower(st.drawing.alignments[i].name) == want) return static_cast<int>(i);
   }
   return -1;
 }
@@ -111,11 +111,11 @@ const char* TypeName(alignment::AlignmentType t) {
 }
 
 std::string StaFmt(const AppCommandState& st, double displayed) {
-  return alignment::FormatStation(displayed, st.alignmentStationFormat);  // REQ-483.4: the drawing's station format
+  return alignment::FormatStation(displayed, st.drawing.alignmentStationFormat);  // REQ-483.4: the drawing's station format
 }
 
 bool ParseSta(const AppCommandState& st, const std::string& text, double* displayed) {
-  return alignment::ParseStation(text, displayed, st.alignmentStationFormat);
+  return alignment::ParseStation(text, displayed, st.drawing.alignmentStationFormat);
 }
 
 std::string Sta(const AppCommandState& st, const alignment::Alignment& a, double internalStation) {
@@ -140,7 +140,7 @@ alignment::Alignment* Resolve(AppCommandState& st, const std::string& cmd, const
     log.push_back(cmd + " - no alignment named \"" + field + "\".");
     return nullptr;
   }
-  return &st.alignments[static_cast<size_t>(ix)];
+  return &st.drawing.alignments[static_cast<size_t>(ix)];
 }
 
 /// Continuity warnings at the alignment's requirement level, and reverse-curve notes (REQ-482).
@@ -272,8 +272,8 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
   PushUndoSnapshot(st, "Add alignment geometry");
   // PushUndoSnapshot copied the pre-edit state; re-resolve in case it reallocated nothing but be exact.
   const int ix = FindAlignment(st, f[0]);
-  st.alignments[static_cast<size_t>(ix)] = std::move(edited);
-  const alignment::Alignment& r = st.alignments[static_cast<size_t>(ix)];
+  st.drawing.alignments[static_cast<size_t>(ix)] = std::move(edited);
+  const alignment::Alignment& r = st.drawing.alignments[static_cast<size_t>(ix)];
   log.push_back("ALIGNMENTADD - \"" + r.name + "\" now has " + std::to_string(r.Entities().size()) +
                 " entities, length " + Lin(st, r.Length()) + ", ending at station " + Sta(st, r, r.EndStation()) + ".");
   RefreshAlignmentOffsets(st, log);  // REQ-488 linked offsets and REQ-493.2 dynamic tables follow the new entity
@@ -282,13 +282,13 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
 // ALIGNMENTLIST [<name>]  (REQ-501.1 properties, REQ-494 entity list)
 void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string name = Trim(args);
-  if (st.alignments.empty()) {
+  if (st.drawing.alignments.empty()) {
     log.push_back("ALIGNMENTLIST - this drawing has no alignments.");
     return;
   }
-  for (const alignment::Alignment& a : st.alignments) {
+  for (const alignment::Alignment& a : st.drawing.alignments) {
     if (!name.empty() && Lower(a.name) != Lower(name)) continue;
-    const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
+    const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.drawing.alignmentStyles, a);
     log.push_back("ALIGNMENT: " + a.name + "  [" + TypeName(a.type) + ", layer " + a.layer + ", style " + a.style + "]");
     if (!a.description.empty()) log.push_back("  Description:   " + a.description);
     for (const auto& [key, value] : a.metadata) log.push_back("  " + key + ": " + value);  // REQ-480.1
@@ -338,7 +338,7 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
       log.push_back(row);
     }
     if (!criteriaName.empty()) {  // REQ-502: design warnings in the list, as the spec asks
-      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
+      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(st.drawing.alignmentCheckSets, criteriaName)) {
         for (const alignment::DesignFinding& fd : alignment::CheckDesign(a, *checkSet, st.displayLinearPrecision))
           log.push_back("  WARNING: design check, entity " + std::to_string(fd.entity) + ": " + fd.text);
       }
@@ -356,7 +356,7 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
     return;
   }
   PushUndoSnapshot(st, "Delete alignment");
-  st.alignments.erase(st.alignments.begin() + ix);
+  st.drawing.alignments.erase(st.drawing.alignments.begin() + ix);
   RefreshViewFrameGroups(st, log);  // REQ-517.9: the alignment's view frame groups go with it, in the same step
   BumpCadGpuCache(st);  // the plan drops the alignment's drawing at once, not at the next redraw
   log.push_back("ALIGNMENTDELETE - removed \"" + name + "\".");
@@ -366,9 +366,9 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
 // which every geometry edit and the alignment erase path already call, so no caller has to remember it.
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<std::string> notes;
-  alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
+  alignment::SyncViewFrameGroups(st.drawing.alignments, st.drawing.viewFrameGroups, &notes);
   for (const std::string& n : notes) log.push_back(n);
-  alignment::SyncSampleLines(st.alignments, st.sampleLines);  // REQ-519.13: a deleted alignment takes its lines
+  alignment::SyncSampleLines(st.drawing.alignments, st.drawing.sampleLines);  // REQ-519.13: a deleted alignment takes its lines
 }
 
 namespace {
@@ -408,17 +408,17 @@ void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vecto
     log.push_back("VIEWFRAMEDELETE - no alignment named \"" + name + "\".");
     return;
   }
-  const std::uint64_t id = st.alignments[static_cast<size_t>(ix)].id;
+  const std::uint64_t id = st.drawing.alignments[static_cast<size_t>(ix)].id;
   size_t count = 0;
-  for (const alignment::ViewFrameGroup& g : st.viewFrameGroups) count += g.alignmentId == id ? 1 : 0;
+  for (const alignment::ViewFrameGroup& g : st.drawing.viewFrameGroups) count += g.alignmentId == id ? 1 : 0;
   if (count == 0) {
     log.push_back("VIEWFRAMEDELETE - \"" + name + "\" has no view frame groups.");
     return;
   }
   PushUndoSnapshot(st, "Delete view frames");
-  st.viewFrameGroups.erase(std::remove_if(st.viewFrameGroups.begin(), st.viewFrameGroups.end(),
+  st.drawing.viewFrameGroups.erase(std::remove_if(st.drawing.viewFrameGroups.begin(), st.drawing.viewFrameGroups.end(),
                                           [id](const alignment::ViewFrameGroup& g) { return g.alignmentId == id; }),
-                           st.viewFrameGroups.end());
+                           st.drawing.viewFrameGroups.end());
   BumpCadGpuCache(st);
   log.push_back("VIEWFRAMEDELETE - removed " + std::to_string(count) + " view frame group(s) from \"" + name + "\".");
 }
@@ -498,10 +498,10 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
     log.push_back("CREATEVIEWFRAMES - no sheet size \"" + f[3] + "\". Use a name from Page Setup, such as ARCH D.");
     return;
   }
-  EnsureStandardAnnotationScales(st.viewportZoomScales, st.drawingInsUnits);
+  EnsureStandardAnnotationScales(st.drawing.viewportZoomScales, st.drawing.drawingInsUnits);
   const bool autoScale = NormalizeName(f[4]) == "AUTO";
   const CadAnnotationScale* scale = nullptr;
-  for (const CadAnnotationScale& candidate : st.viewportZoomScales)
+  for (const CadAnnotationScale& candidate : st.drawing.viewportZoomScales)
     if (!autoScale && NormalizeName(candidate.name) == NormalizeName(f[4])) scale = &candidate;
   if (!autoScale && scale == nullptr) {  // REQ-517.3: named scales only
     log.push_back("CREATEVIEWFRAMES - \"" + f[4] + "\" is not a named scale in this drawing's scale list.");
@@ -545,7 +545,7 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
     s.sheetWidthIn = std::max(s.sheetWidthIn - kSheetAllowanceWidthIn, 0.0);
     s.sheetHeightIn = std::max(s.sheetHeightIn - kSheetAllowanceHeightIn, 0.0);
     std::string whyScale;
-    if (!ChooseBestFitScale(*a, s, st.viewportZoomScales, whyScale)) {
+    if (!ChooseBestFitScale(*a, s, st.drawing.viewportZoomScales, whyScale)) {
       log.push_back("CREATEVIEWFRAMES - refused: " + whyScale + ". No view frames were created.");
       return;
     }
@@ -565,7 +565,7 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   g.settings = s;
   g.frames = alignment::ComputeViewFrames(*a, s);
   const size_t count = g.frames.size();
-  st.viewFrameGroups.push_back(std::move(g));
+  st.drawing.viewFrameGroups.push_back(std::move(g));
   BumpCadGpuCache(st);
   log.push_back("CREATEVIEWFRAMES - " + std::to_string(count) + " view frame(s) along \"" + a->name + "\" (" +
                 s.sheetName + ", " + s.scaleName + (autoScale ? " chosen automatically" : "") + ", overlap " +
@@ -607,12 +607,12 @@ bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
     out->minY = std::min(out->minY, y);
     out->maxY = std::max(out->maxY, y);
   };
-  for (size_t i = 0; i < tb.lineCount(); ++i) {
-    const CadLineRecord ln = tb.line(i);
+  for (size_t i = 0; i < tb.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = tb.drawing.line(i);
     add(ln.x0, ln.y0);
     add(ln.x1, ln.y1);
   }
-  for (size_t v = 0; v < tb.vertexCount(); ++v) add(tb.vertex(v).x, tb.vertex(v).y);
+  for (size_t v = 0; v < tb.drawing.vertexCount(); ++v) add(tb.drawing.vertex(v).x, tb.drawing.vertex(v).y);
   return any;
 }
 
@@ -620,14 +620,14 @@ bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
 bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
   bool found = false;
   double bestArea = -1.0;
-  for (size_t p = 0; p + 1 < tb.userPolylineOffsets.size(); ++p) {
-    const int v0 = tb.userPolylineOffsets[p], v1 = tb.userPolylineOffsets[p + 1];
+  for (size_t p = 0; p + 1 < tb.drawing.userPolylineOffsets.size(); ++p) {
+    const int v0 = tb.drawing.userPolylineOffsets[p], v1 = tb.drawing.userPolylineOffsets[p + 1];
     if (v1 - v0 != 4) continue;
     Box b;
     bool first = true;
     for (int v = v0; v < v1; ++v) {
-      const double x = tb.vertex(static_cast<size_t>(v)).x;
-      const double y = tb.vertex(static_cast<size_t>(v)).y;
+      const double x = tb.drawing.vertex(static_cast<size_t>(v)).x;
+      const double y = tb.drawing.vertex(static_cast<size_t>(v)).y;
       if (first) {
         b.minX = b.maxX = x;
         b.minY = b.maxY = y;
@@ -651,36 +651,36 @@ bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
 
 // REQ-518.8: copies the title block's lines and polylines onto `sheet`, moved by (dx, dy) paper inches.
 void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, double dx, double dy) {
-  for (size_t i = 0; i < tb.lineCount(); ++i) {
-    const CadLineRecord ln = tb.line(i);
+  for (size_t i = 0; i < tb.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = tb.drawing.line(i);
     sheet.paperLines.push_back(static_cast<float>(ln.x0 + dx));
     sheet.paperLines.push_back(static_cast<float>(ln.y0 + dy));
     sheet.paperLines.push_back(0.f);
     sheet.paperLines.push_back(static_cast<float>(ln.x1 + dx));
     sheet.paperLines.push_back(static_cast<float>(ln.y1 + dy));
     sheet.paperLines.push_back(0.f);
-    EntityAttributes attr = i < tb.userLineAttrs.size() ? tb.userLineAttrs[i] : EntityAttributes{};
+    EntityAttributes attr = i < tb.drawing.userLineAttrs.size() ? tb.drawing.userLineAttrs[i] : EntityAttributes{};
     attr.id = 0;  // the sheet's own copy takes a fresh identity when it is saved
     sheet.paperLineAttrs.push_back(attr);
   }
   if (sheet.paperPolyOffsets.empty()) sheet.paperPolyOffsets.push_back(0);
-  for (size_t p = 0; p + 1 < tb.userPolylineOffsets.size(); ++p) {
-    for (int v = tb.userPolylineOffsets[p]; v < tb.userPolylineOffsets[p + 1]; ++v) {
+  for (size_t p = 0; p + 1 < tb.drawing.userPolylineOffsets.size(); ++p) {
+    for (int v = tb.drawing.userPolylineOffsets[p]; v < tb.drawing.userPolylineOffsets[p + 1]; ++v) {
       const size_t vi = static_cast<size_t>(v);
-      sheet.paperPolyVerts.push_back(static_cast<float>(tb.vertex(vi).x + dx));
-      sheet.paperPolyVerts.push_back(static_cast<float>(tb.vertex(vi).y + dy));
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.drawing.vertex(vi).x + dx));
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.drawing.vertex(vi).y + dy));
       sheet.paperPolyVerts.push_back(0.f);
-      sheet.paperPolyVertsBulge.push_back(vi < tb.userPolylineVertsBulge.size() ? tb.userPolylineVertsBulge[vi] : 0.f);
+      sheet.paperPolyVertsBulge.push_back(vi < tb.drawing.userPolylineVertsBulge.size() ? tb.drawing.userPolylineVertsBulge[vi] : 0.f);
     }
-    sheet.paperPolyClosed.push_back(p < tb.userPolylineClosed.size() ? tb.userPolylineClosed[p] : 0);
-    EntityAttributes attr = p < tb.userPolylineAttrs.size() ? tb.userPolylineAttrs[p] : EntityAttributes{};
+    sheet.paperPolyClosed.push_back(p < tb.drawing.userPolylineClosed.size() ? tb.drawing.userPolylineClosed[p] : 0);
+    EntityAttributes attr = p < tb.drawing.userPolylineAttrs.size() ? tb.drawing.userPolylineAttrs[p] : EntityAttributes{};
     attr.id = 0;
     sheet.paperPolyAttrs.push_back(attr);
     sheet.paperPolyOffsets.push_back(static_cast<int>(sheet.paperPolyVerts.size() / 3));
   }
   // REQ-518.8: the block's own text (labels and notes) comes across too. Styles and annotative scales name entries
   // the sheet's drawing does not have, so they are dropped; the baked height, font and style values are kept.
-  for (const CadAnnotation& src : tb.cadAnnotations) {
+  for (const CadAnnotation& src : tb.drawing.cadAnnotations) {
     if (src.kind != CadAnnotation::Kind::Text && src.kind != CadAnnotation::Kind::Mtext) continue;
     CadAnnotation a = src;
     a.insX = static_cast<float>(src.insX + dx);
@@ -761,8 +761,8 @@ int ArchDPresetIndex() {
 double FieldColumnLeftOnSheet(const SheetTitleBlock& tb) {
   double left = tb.inner.maxX;
   bool found = false;
-  for (size_t i = 0; i < tb.state.lineCount(); ++i) {
-    const CadLineRecord ln = tb.state.line(i);
+  for (size_t i = 0; i < tb.state.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = tb.state.drawing.line(i);
     const double x0 = ln.x0, y0 = ln.y0;
     const double y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                // horizontal lines only
@@ -898,7 +898,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
 
   // REQ-518.4: exactly one view frame group follows the alignment; with two, the sheets could not tell which to use.
   std::vector<const alignment::ViewFrameGroup*> groups;
-  for (const alignment::ViewFrameGroup& g : st.viewFrameGroups)
+  for (const alignment::ViewFrameGroup& g : st.drawing.viewFrameGroups)
     if (g.alignmentId == a->id) groups.push_back(&g);
   if (groups.empty()) {
     log.push_back("CREATESHEETS - \"" + a->name + "\" has no view frame group. No sheets were created.");
@@ -968,8 +968,8 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   // REQ-518.9: the right-hand column's horizontal box lines (in sheet coordinates) give the field rows: one per cell.
   double columnLeft = borderOnSheet.maxX;
   std::vector<double> lineYs;
-  for (size_t i = 0; i < titleBlock.lineCount(); ++i) {
-    const CadLineRecord ln = titleBlock.line(i);
+  for (size_t i = 0; i < titleBlock.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = titleBlock.drawing.line(i);
     const double x0 = ln.x0, y0 = ln.y0;
     const double y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                      // horizontal lines only
@@ -988,8 +988,8 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   double fieldRight = columnRight;
   if (lineYs.size() >= 2) {
     const double fieldsLow = lineYs.back(), fieldsHigh = lineYs.front();
-    for (size_t i = 0; i < titleBlock.lineCount(); ++i) {
-      const CadLineRecord ln = titleBlock.line(i);
+    for (size_t i = 0; i < titleBlock.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = titleBlock.drawing.line(i);
       const double x0 = ln.x0 + dx, x1 = ln.x1 + dx;
       const double y0 = ln.y0 + dy, y1 = ln.y1 + dy;
       if (std::fabs(x0 - x1) > 1e-6) continue;                                  // vertical lines only
@@ -1003,7 +1003,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
 
   // Build every sheet before the undo snapshot, so a refusal above leaves history untouched.
   std::vector<std::string> takenNames;
-  for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
+  for (const PaperLayout& layout : st.drawing.paperLayouts) takenNames.push_back(Lower(layout.name));
   auto nameTaken = [&takenNames](const std::string& name) {
     return std::find(takenNames.begin(), takenNames.end(), Lower(name)) != takenNames.end();
   };
@@ -1022,7 +1022,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     sheet.presetIdx = archD;
     CopyTitleBlockOntoSheet(sheet, titleBlock, dx, dy);
     sheet.viewports.assign(1, SheetViewportForFrame(*a, fr, sized.settings, inner));
-    AddSheetFields(sheet, *a, fr, sized.settings, st.alignmentStationFormat, columnLeft, fieldRight, rowMids);
+    AddSheetFields(sheet, *a, fr, sized.settings, st.drawing.alignmentStationFormat, columnLeft, fieldRight, rowMids);
     AddNorthArrow(sheet, sheet.viewports[0], arrowX, arrowY);
     sheet.viewInit = false;  // fit the new sheet to the window on first entry
     sheets.push_back(std::move(sheet));
@@ -1030,19 +1030,19 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
 
   PushUndoSnapshot(st, "Create sheets");  // REQ-518.5: one undo step removes every sheet and the frame resize
   const size_t framesBefore = g.frames.size();
-  for (alignment::ViewFrameGroup& stored : st.viewFrameGroups)
+  for (alignment::ViewFrameGroup& stored : st.drawing.viewFrameGroups)
     if (stored.id == g.id) stored = sized;
   // The title block's layers come into this drawing where they are not already here.
-  for (const CadLayerRow& row : titleBlock.drawingLayerTable) {
-    const bool present = std::any_of(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+  for (const CadLayerRow& row : titleBlock.drawing.drawingLayerTable) {
+    const bool present = std::any_of(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                                      [&row](const CadLayerRow& have) { return have.name == row.name; });
-    if (!present) st.drawingLayerTable.push_back(row);
+    if (!present) st.drawing.drawingLayerTable.push_back(row);
   }
   std::string names;
   for (PaperLayout& sheet : sheets) {
     if (!names.empty()) names += ", ";
     names += sheet.name;
-    st.paperLayouts.push_back(std::move(sheet));
+    st.drawing.paperLayouts.push_back(std::move(sheet));
   }
   BumpCadGpuCache(st);
   char resize[320];
@@ -1087,7 +1087,7 @@ void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vec
       log.push_back("CREATESAMPLELINES - no surface named \"" + surfaceText + "\". No sample lines were created.");
       return;
     }
-    const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+    const CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)];
     if (surface.kind != SurfaceKind::Tin || !surface.tin) {
       log.push_back("CREATESAMPLELINES - \"" + surfaceText +
                     "\" is not a built TIN surface; sections need a TIN. No sample lines were created.");
@@ -1097,13 +1097,13 @@ void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vec
 
   std::vector<alignment::SampleLine> lines;
   std::string why;
-  if (!alignment::ComputeSampleLines(*a, s, st.alignmentStationFormat, &lines, &why)) {
+  if (!alignment::ComputeSampleLines(*a, s, st.drawing.alignmentStationFormat, &lines, &why)) {
     log.push_back("CREATESAMPLELINES - refused: " + why + ". No sample lines were created.");
     return;
   }
   // A name already on this alignment would leave two lines the command cannot tell apart.
   for (const alignment::SampleLine& line : lines) {
-    for (const alignment::SampleLine& have : st.sampleLines) {
+    for (const alignment::SampleLine& have : st.drawing.sampleLines) {
       if (have.alignmentId == a->id && Lower(have.name) == Lower(line.name)) {
         log.push_back("CREATESAMPLELINES - refused: a sample line named \"" + line.name + "\" already exists on \"" +
                       a->name + "\". No sample lines were created.");
@@ -1119,7 +1119,7 @@ void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vec
   std::string noData;
   size_t withGround = 0;
   if (surfaceIndex >= 0) {
-    const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+    const CadSurface& surface = st.drawing.cadSurfaces[static_cast<size_t>(surfaceIndex)];
     const std::unique_ptr<ISurfaceQuery> query = MakeSurfaceQueryForCommands(st, surface);
     if (!query) {
       log.push_back("CREATESAMPLELINES - \"" + surfaceText + "\" is not a built surface. No sample lines were created.");
@@ -1146,7 +1146,7 @@ void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vec
   for (alignment::SampleLine& line : lines) {
     line.id = st.nextEntityId++;
     line.alignmentId = alignmentId;
-    st.sampleLines.push_back(std::move(line));
+    st.drawing.sampleLines.push_back(std::move(line));
   }
   BumpCadGpuCache(st);
   std::string message = "CREATESAMPLELINES - " + std::to_string(count) + " sample line(s) on \"" + alignmentName + "\", " +
@@ -1196,7 +1196,7 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
 
   // REQ-519.4: the chosen lines must belong to this alignment. ALL (or none given) is every line on it.
   std::vector<const alignment::SampleLine*> pool;
-  for (const alignment::SampleLine& line : st.sampleLines)
+  for (const alignment::SampleLine& line : st.drawing.sampleLines)
     if (line.alignmentId == a->id) pool.push_back(&line);
   if (pool.empty()) {
     log.push_back("CREATESECTIONSHEETS - \"" + a->name + "\" has no sample lines. Make them with CREATESAMPLELINES first. "
@@ -1252,7 +1252,7 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
   const double columnWidth = (plotMaxX - plotMinX) / static_cast<double>(perSheet);
 
   std::vector<std::string> takenNames;
-  for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
+  for (const PaperLayout& layout : st.drawing.paperLayouts) takenNames.push_back(Lower(layout.name));
   auto nameTaken = [&takenNames](const std::string& name) {
     return std::find(takenNames.begin(), takenNames.end(), Lower(name)) != takenNames.end();
   };
@@ -1319,16 +1319,16 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
 
   PushUndoSnapshot(st, "Create section sheets");  // REQ-519.5: one undo step removes every sheet
   // The title block's layers come into this drawing where they are not already here (as CREATESHEETS).
-  for (const CadLayerRow& row : tb.state.drawingLayerTable) {
-    const bool present = std::any_of(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+  for (const CadLayerRow& row : tb.state.drawing.drawingLayerTable) {
+    const bool present = std::any_of(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                                      [&row](const CadLayerRow& have) { return have.name == row.name; });
-    if (!present) st.drawingLayerTable.push_back(row);
+    if (!present) st.drawing.drawingLayerTable.push_back(row);
   }
   std::string names;
   for (PaperLayout& sheet : sheets) {
     if (!names.empty()) names += ", ";
     names += sheet.name;
-    st.paperLayouts.push_back(std::move(sheet));
+    st.drawing.paperLayouts.push_back(std::move(sheet));
   }
   BumpCadGpuCache(st);
   log.push_back("CREATESECTIONSHEETS - " + std::to_string(chosen.size()) + " section(s) on " + std::to_string(sheetCount) +
@@ -1344,14 +1344,14 @@ constexpr double kProfileStationTol = 1e-6;
 // Index of the profile named \p name (case-insensitive), or -1.
 int FindProfileIndex(const AppCommandState& st, const std::string& name) {
   const std::string key = Lower(Trim(name));
-  for (size_t i = 0; i < st.profiles.size(); ++i)
-    if (Lower(st.profiles[i].name) == key) return static_cast<int>(i);
+  for (size_t i = 0; i < st.drawing.profiles.size(); ++i)
+    if (Lower(st.drawing.profiles[i].name) == key) return static_cast<int>(i);
   return -1;
 }
 
 // The alignment with stable id \p id, or nullptr when it has been deleted (REQ-521.7).
 const alignment::Alignment* AlignmentById(const AppCommandState& st, std::uint64_t id) {
-  for (const alignment::Alignment& a : st.alignments)
+  for (const alignment::Alignment& a : st.drawing.alignments)
     if (a.id == id) return &a;
   return nullptr;
 }
@@ -1407,7 +1407,7 @@ void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::v
   p.id = st.nextEntityId++;
   p.name = name;
   p.alignmentId = alignmentId;
-  st.profiles.push_back(std::move(p));
+  st.drawing.profiles.push_back(std::move(p));
   log.push_back("CREATEDESIGNPROFILE - profile \"" + name + "\" on \"" + alignmentName + "\" created with no PVIs.");
 }
 
@@ -1428,8 +1428,8 @@ void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std
     log.push_back("PROFILEPVI - no profile named \"" + Trim(f[0]) + "\". No PVI was changed.");
     return;
   }
-  const std::string profileName = st.profiles[static_cast<size_t>(pi)].name;
-  const alignment::Alignment* a = AlignmentById(st, st.profiles[static_cast<size_t>(pi)].alignmentId);
+  const std::string profileName = st.drawing.profiles[static_cast<size_t>(pi)].name;
+  const alignment::Alignment* a = AlignmentById(st, st.drawing.profiles[static_cast<size_t>(pi)].alignmentId);
   if (a == nullptr) {
     log.push_back("PROFILEPVI - profile \"" + profileName + "\" has no alignment (alignment missing). No PVI was changed.");
     return;
@@ -1447,7 +1447,7 @@ void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std
     return;
   }
 
-  alignment::VerticalProfile candidate = st.profiles[static_cast<size_t>(pi)];
+  alignment::VerticalProfile candidate = st.drawing.profiles[static_cast<size_t>(pi)];
   bool replaced = false;
   for (alignment::VerticalPoint& q : candidate.points) {
     if (std::abs(q.station - station) <= kProfileStationTol) {  // edit: keep the PVI's station
@@ -1470,7 +1470,7 @@ void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std
 
   const std::string staText = Sta(st, *a, station);
   PushUndoSnapshot(st, replaced ? "Edit profile PVI" : "Add profile PVI");
-  st.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
+  st.drawing.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
   log.push_back("PROFILEPVI - profile \"" + profileName + "\": PVI at " + staText + (replaced ? " changed" : " added") +
                 " (elevation " + Lin(st, elevation) +
                 (curveLength > 0.0 ? ", curve length " + Lin(st, curveLength) : std::string(", no curve")) + ").");
@@ -1492,8 +1492,8 @@ void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<
     log.push_back("PROFILEDELPVI - no profile named \"" + Trim(f[0]) + "\". No PVI was removed.");
     return;
   }
-  const std::string profileName = st.profiles[static_cast<size_t>(pi)].name;
-  const alignment::Alignment* a = AlignmentById(st, st.profiles[static_cast<size_t>(pi)].alignmentId);
+  const std::string profileName = st.drawing.profiles[static_cast<size_t>(pi)].name;
+  const alignment::Alignment* a = AlignmentById(st, st.drawing.profiles[static_cast<size_t>(pi)].alignmentId);
   if (a == nullptr) {
     log.push_back("PROFILEDELPVI - profile \"" + profileName + "\" has no alignment (alignment missing). No PVI was removed.");
     return;
@@ -1507,7 +1507,7 @@ void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<
                   ". No PVI was removed.");
     return;
   }
-  alignment::VerticalProfile candidate = st.profiles[static_cast<size_t>(pi)];
+  alignment::VerticalProfile candidate = st.drawing.profiles[static_cast<size_t>(pi)];
   const auto found = std::find_if(candidate.points.begin(), candidate.points.end(), [station](const alignment::VerticalPoint& q) {
     return std::abs(q.station - station) <= kProfileStationTol;
   });
@@ -1524,7 +1524,7 @@ void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<
   }
   const std::string staText = Sta(st, *a, station);
   PushUndoSnapshot(st, "Delete profile PVI");
-  st.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
+  st.drawing.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
   log.push_back("PROFILEDELPVI - profile \"" + profileName + "\": PVI at " + staText + " removed.");
 }
 
@@ -1541,7 +1541,7 @@ void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("PROFILEQUERY - no profile named \"" + Trim(f[0]) + "\".");
     return;
   }
-  const alignment::VerticalProfile& p = st.profiles[static_cast<size_t>(pi)];
+  const alignment::VerticalProfile& p = st.drawing.profiles[static_cast<size_t>(pi)];
   const alignment::Alignment* a = AlignmentById(st, p.alignmentId);
   if (a == nullptr) {
     log.push_back("PROFILEQUERY - profile \"" + p.name + "\" has no alignment (alignment missing), so it has no design path.");
@@ -1576,11 +1576,11 @@ void RunProfileList(AppCommandState& st, const std::string& args, std::vector<st
     log.push_back("PROFILELIST - usage: PROFILELIST");
     return;
   }
-  if (st.profiles.empty()) {
+  if (st.drawing.profiles.empty()) {
     log.push_back("PROFILELIST - no profiles in this drawing.");
     return;
   }
-  for (const alignment::VerticalProfile& p : st.profiles) {
+  for (const alignment::VerticalProfile& p : st.drawing.profiles) {
     const alignment::Alignment* a = AlignmentById(st, p.alignmentId);
     std::string line = "PROFILELIST - \"" + p.name + "\" on " +
                        (a != nullptr ? "\"" + a->name + "\"" : std::string("alignment missing")) + ", " +
@@ -1607,9 +1607,9 @@ void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<
     log.push_back("PROFILEDELETE - no profile named \"" + Trim(f[0]) + "\".");
     return;
   }
-  const std::string name = st.profiles[static_cast<size_t>(pi)].name;
+  const std::string name = st.drawing.profiles[static_cast<size_t>(pi)].name;
   PushUndoSnapshot(st, "Delete design profile");
-  st.profiles.erase(st.profiles.begin() + pi);
+  st.drawing.profiles.erase(st.drawing.profiles.begin() + pi);
   log.push_back("PROFILEDELETE - profile \"" + name + "\" deleted.");
 }
 
@@ -1641,9 +1641,9 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
       log.push_back("GETSTATIONOFFSET - the point number must be a number.");
       return;
     }
-    const auto point = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+    const auto point = std::find_if(st.drawing.surveyPoints.begin(), st.drawing.surveyPoints.end(),
                                     [&](const SurveyPoint& p) { return p.id == static_cast<int>(number); });
-    if (point == st.surveyPoints.end()) {
+    if (point == st.drawing.surveyPoints.end()) {
       log.push_back("GETSTATIONOFFSET - no survey point numbered " + f[2] + ".");
       return;
     }
@@ -1674,7 +1674,7 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
   } else {
     const int si = FindSurfaceIndex(st, surfaceName);
     std::unique_ptr<ISurfaceQuery> ground =
-        si < 0 ? nullptr : MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+        si < 0 ? nullptr : MakeSurfaceQueryForCommands(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
     double z = 0.0;
     if (si < 0) line += " There is no surface named \"" + surfaceName + "\".";
     else if (!ground) line += " \"" + surfaceName + "\" is not a built surface.";
@@ -1751,7 +1751,7 @@ std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double 
   const alignment::Alignment* best = nullptr;
   alignment::StationOffset bestSo;
   double bestAbs = maxOffset;
-  for (const alignment::Alignment& a : st.alignments) {
+  for (const alignment::Alignment& a : st.drawing.alignments) {
     if (a.Empty()) continue;
     const alignment::StationOffset so = a.GetStationOffset(lx, ly);
     if (std::fabs(so.offset) <= bestAbs) {
@@ -1771,7 +1771,7 @@ bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displaye
   const alignment::Alignment* bestAl = nullptr;
   alignment::Point2 bestPt{};
   double bestDist2 = std::numeric_limits<double>::infinity();
-  for (const alignment::Alignment& a : st.alignments) {
+  for (const alignment::Alignment& a : st.drawing.alignments) {
     if (a.Empty())
       continue;
     const std::vector<double> raws = a.RawStationsForDisplayed(displayed);
@@ -1866,7 +1866,7 @@ bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::st
 namespace {
 
 alignment::Alignment* FindById(AppCommandState& st, std::uint64_t id) {
-  for (alignment::Alignment& a : st.alignments) {
+  for (alignment::Alignment& a : st.drawing.alignments) {
     if (a.id == id) return &a;
   }
   return nullptr;
@@ -1876,7 +1876,7 @@ alignment::Alignment* FindById(AppCommandState& st, std::uint64_t id) {
 /// longer exists detaches the offset (it keeps its geometry); an offset that can no longer be built keeps its last
 /// geometry and says why.
 void RefreshLinkedOffsetsImpl(AppCommandState& st, std::vector<std::string>& log) {
-  for (alignment::Alignment& off : st.alignments) {
+  for (alignment::Alignment& off : st.drawing.alignments) {
     if (off.parentId == 0) continue;
     alignment::Alignment* parent = FindById(st, off.parentId);
     if (parent == nullptr) {
@@ -1983,22 +1983,22 @@ bool ParseTableKind(const std::string& word, alignment::AlignmentTableKind* k) {
 /// is never touched. A table whose alignment can no longer be tabulated (labels removed) keeps its last text and says so.
 void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
   bool any = false;
-  for (const alignment::Alignment& a : st.alignments) {
+  for (const alignment::Alignment& a : st.drawing.alignments) {
     for (const alignment::AlignmentTableLink& link : a.tables) {
       if (!link.dynamic) continue;
-      const int ti = FindEntityIndexById(st.cadTableAttrs, link.tableId);
-      if (ti < 0 || static_cast<size_t>(ti) >= st.cadTables.size()) continue;
+      const int ti = FindEntityIndexById(st.drawing.cadTableAttrs, link.tableId);
+      if (ti < 0 || static_cast<size_t>(ti) >= st.drawing.cadTables.size()) continue;
       alignment::AlignmentTableText text;
       std::string why;
-      if (!alignment::BuildAlignmentTableText(a, link.kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.alignmentStationFormat)) {
+      if (!alignment::BuildAlignmentTableText(a, link.kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.drawing.alignmentStationFormat)) {
         log.push_back("  Table for \"" + a.name + "\" was not updated: " + why + ".");
         continue;
       }
       if (link.firstRow != 0 || link.rowCount != 0) text = alignment::SliceTableRows(text, link.firstRow, link.rowCount);
-      CadTable& tbl = st.cadTables[static_cast<size_t>(ti)];
+      CadTable& tbl = st.drawing.cadTables[static_cast<size_t>(ti)];
       tbl.cols = text.cols;
       tbl.cells = text.cells;
-      CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+      CadTableFitToContent(&tbl, st.drawing.modelUnitsPerPlottedInch);
       any = true;
     }
   }
@@ -2012,7 +2012,7 @@ namespace {
 // ALIGNMENTLABEL <name>, SEGMENT, <entity#>: REQ-492.3 Single Segment label on one picked segment.
 void RunAlignmentSingleSegmentLabel(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
   assert(f.size() == 3);
-  assert(st.alignments.size() < 100000000);
+  assert(st.drawing.alignments.size() < 100000000);
   alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
   if (a == nullptr) return;
   double n = 0.0;
@@ -2119,14 +2119,14 @@ bool ParseAlignmentTableOptions(const std::vector<std::string>& f, AlignmentTabl
 /// The data table style a new alignment table uses: STYLE= when given, else the current table style, else Standard
 /// (REQ-493.1: the table style is a REQ-478 table style). Null when STYLE= names no data table style.
 const CadTableStyle* AlignmentTableStyle(const AppCommandState& st, const std::string& requested) {
-  assert(st.tableStyles.size() < 100000);
+  assert(st.drawing.tableStyles.size() < 100000);
   assert(requested.size() < 4096);
   if (!requested.empty()) {
-    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, requested);
+    const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, requested);
     return s != nullptr && !s->point ? s : nullptr;
   }
-  const CadTableStyle* current = CadTableFindStyle(st.tableStyles, st.tablePendingStyle);
-  return current != nullptr && !current->point ? current : CadTableFindStyle(st.tableStyles, "Standard");
+  const CadTableStyle* current = CadTableFindStyle(st.drawing.tableStyles, st.tablePendingStyle);
+  return current != nullptr && !current->point ? current : CadTableFindStyle(st.drawing.tableStyles, "Standard");
 }
 
 /// Adds one drawing TABLE holding `text` with its top-left at drawing-local (lx, ly); returns its stable id.
@@ -2138,22 +2138,22 @@ std::uint64_t InsertAlignmentCadTable(AppCommandState& st, const alignment::Alig
   tbl.cols = text.cols;
   tbl.cells = text.cells;
   if (const TextStyle* ts = ActiveTextStyle(st)) tbl.fontFamily = ts->fontFamily;
-  tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  tbl.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
   if (style != nullptr) {
     tbl.styleName = style->name;
     tbl.plottedHeightInches = style->textHeightInches;
-    if (const TextStyle* ts = TextStyles::Find(st.textStyles, style->textStyleName)) tbl.fontFamily = ts->fontFamily;
+    if (const TextStyle* ts = TextStyles::Find(st.drawing.textStyles, style->textStyleName)) tbl.fontFamily = ts->fontFamily;
   }
-  CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+  CadTableFitToContent(&tbl, st.drawing.modelUnitsPerPlottedInch);
   tbl.insX = static_cast<float>(lx);
   tbl.insY = static_cast<float>(ly) + tbl.height;  // top-left, body below it, as VOLTABLE places its table
   tbl.insZ = CadCommitElevation(st);
   *width = tbl.width;
-  st.cadTables.push_back(std::move(tbl));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  st.drawing.cadTables.push_back(std::move(tbl));
+  AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
   EnsureAttrCounts(st);
-  st.cadTableAttrs.back().id = st.nextEntityId++;  // the link needs a stable id now, not at the next sweep (REQ-076)
-  return st.cadTableAttrs.back().id;
+  st.drawing.cadTableAttrs.back().id = st.nextEntityId++;  // the link needs a stable id now, not at the next sweep (REQ-076)
+  return st.drawing.cadTableAttrs.back().id;
 }
 
 }  // namespace
@@ -2181,7 +2181,7 @@ void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector
   }
   alignment::AlignmentTableText text;
   std::string why;
-  if (!alignment::BuildAlignmentTableText(*a, kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.alignmentStationFormat)) {
+  if (!alignment::BuildAlignmentTableText(*a, kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.drawing.alignmentStationFormat)) {
     log.push_back("ALIGNMENTTABLE - " + why + ". No table was made.");
     return;
   }
@@ -2216,7 +2216,7 @@ void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& 
 void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
   RefreshAlignmentOffsetsOnly(st, log);
   RefreshFeatureLineLinks(st, log);  // REQ-498.2: feature lines made from an alignment follow it
-  for (const alignment::Alignment& alignment : st.alignments)
+  for (const alignment::Alignment& alignment : st.drawing.alignments)
     RefreshSurfaceProfilesForAlignment(st, alignment.id, log);
 }
 
@@ -2495,7 +2495,7 @@ void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vect
                 Sta(st, *target, target->EndStation()) + "." + (note.empty() ? "" : " " + note + "."));
   // REQ-487.2: a linked offset keeps its side on the ground; facing the other way, right becomes left.
   int followed = 0;
-  for (alignment::Alignment& child : st.alignments) {
+  for (alignment::Alignment& child : st.drawing.alignments) {
     if (child.parentId != parentId || parentId == 0) continue;
     child.offsetDistance = -child.offsetDistance;
     ++followed;
@@ -2810,7 +2810,7 @@ void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vecto
     off.parentId = parentId;
     log.push_back("OFFSETALIGNMENT - created \"" + off.name + "\" (" + Lin(st, std::fabs(off.offsetDistance)) +
                   (off.offsetDistance < 0.0 ? " left" : " right") + "), length " + Lin(st, off.Length()) + ".");
-    st.alignments.push_back(std::move(off));
+    st.drawing.alignments.push_back(std::move(off));
   }
 }
 
@@ -2907,8 +2907,8 @@ void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::ve
       CadPoint p{};
       p.x = h.point.x;
       p.y = h.point.y;
-      st.cadPoints.push_back(p);
-      st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+      st.drawing.cadPoints.push_back(p);
+      st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
     }
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTINTERSECT - " + std::to_string(hits.size()) + " point(s) placed.");
@@ -2920,13 +2920,13 @@ void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<
   std::string name = Trim(args);
   if (name.empty()) {
     for (const SelectedEntity& e : st.selection) {
-      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 && static_cast<size_t>(e.index) < st.alignments.size()) {
-        name = st.alignments[static_cast<size_t>(e.index)].name;
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.alignments.size()) {
+        name = st.drawing.alignments[static_cast<size_t>(e.index)].name;
         break;
       }
     }
   }
-  if (name.empty() && !st.alignments.empty()) name = st.alignments.front().name;
+  if (name.empty() && !st.drawing.alignments.empty()) name = st.drawing.alignments.front().name;
   if (name.empty()) {
     log.push_back("EDITALIGNMENT - this drawing has no alignments.");
     return;
@@ -2977,8 +2977,8 @@ bool ParseGeometryCodes(const std::string& text, std::vector<std::string>* codes
 // shape, size and colour per geometry point code; DEFAULT returns the code to the style's cross)
 void RunAlignmentStyleMarker(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
   assert(!f.empty());
-  assert(!st.alignmentStyles.empty());
-  const AlignmentStyle* current = f.size() >= 4 && f.size() <= 6 ? AlignmentStyles::Find(st.alignmentStyles, f[1]) : nullptr;
+  assert(!st.drawing.alignmentStyles.empty());
+  const AlignmentStyle* current = f.size() >= 4 && f.size() <= 6 ? AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]) : nullptr;
   std::vector<std::string> codes;
   std::string bad;
   if (current == nullptr || !ParseGeometryCodes(f.size() >= 3 ? f[2] : std::string{}, &codes, &bad) || codes.size() != 1) {
@@ -3010,7 +3010,7 @@ void RunAlignmentStyleMarker(AppCommandState& st, const std::vector<std::string>
     markers.push_back(std::move(spec));
   }
   PushUndoSnapshot(st, "Alignment style");
-  *AlignmentStyles::Find(st.alignmentStyles, f[1]) = std::move(edited);
+  *AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]) = std::move(edited);
   BumpCadGpuCache(st);
   log.push_back("ALIGNMENTSTYLE - \"" + f[1] + "\" " + codes[0] + " marker set to " + f[3] + ".");
 }
@@ -3018,7 +3018,7 @@ void RunAlignmentStyleMarker(AppCommandState& st, const std::vector<std::string>
 }  // namespace
 
 void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  AlignmentStyles::EnsureStandard(st.drawing.alignmentStyles);
   const auto usage = [&]() {
     log.push_back(
         "ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE LIST | NEW <style> | DELETE <style> | ASSIGN <alignment>, <style> | "
@@ -3035,13 +3035,13 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
   const std::vector<std::string> f = SplitFields(trimmed);
   const std::string verb = Lower(f[0]);
   if (verb == "list") {
-    if (st.alignmentStyles.empty()) {
+    if (st.drawing.alignmentStyles.empty()) {
       log.push_back("ALIGNMENTSTYLE - no alignment styles.");
       return;
     }
-    for (const AlignmentStyle& s : st.alignmentStyles)
+    for (const AlignmentStyle& s : st.drawing.alignmentStyles)
       log.push_back("  STYLE \"" + s.name + "\"  (used by " +
-                    std::to_string(AlignmentStyles::CountAlignmentsResolvingTo(st.alignments, st.alignmentStyles, s.name)) +
+                    std::to_string(AlignmentStyles::CountAlignmentsResolvingTo(st.drawing.alignments, st.drawing.alignmentStyles, s.name)) +
                     " alignment(s))");
     return;
   }
@@ -3051,14 +3051,14 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       return;
     }
     const std::string name = f[1];
-    if (AlignmentStyles::Find(st.alignmentStyles, name)) {
+    if (AlignmentStyles::Find(st.drawing.alignmentStyles, name)) {
       log.push_back("ALIGNMENTSTYLE - a style named \"" + name + "\" already exists.");
       return;
     }
     PushUndoSnapshot(st, "Alignment style");
     AlignmentStyle s = AlignmentStyles::StandardAlignmentStyle();
     s.name = name;
-    st.alignmentStyles.push_back(std::move(s));
+    st.drawing.alignmentStyles.push_back(std::move(s));
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTSTYLE - created style \"" + name + "\" (copied from Standard).");
     return;
@@ -3073,24 +3073,24 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       log.push_back("ALIGNMENTSTYLE - \"Standard\" cannot be deleted.");
       return;
     }
-    const int users = AlignmentStyles::CountAlignmentsResolvingTo(st.alignments, st.alignmentStyles, name);
+    const int users = AlignmentStyles::CountAlignmentsResolvingTo(st.drawing.alignments, st.drawing.alignmentStyles, name);
     if (users > 0) {
       log.push_back("ALIGNMENTSTYLE - \"" + name + "\" is used by " + std::to_string(users) +
                     " alignment(s) and cannot be deleted.");
       return;
     }
-    if (name == st.alignmentStyleCurrent) {
+    if (name == st.drawing.alignmentStyleCurrent) {
       log.push_back("ALIGNMENTSTYLE - \"" + name + "\" is the current style and cannot be deleted; make another current first.");
       return;
     }
-    const auto it = std::find_if(st.alignmentStyles.begin(), st.alignmentStyles.end(),
+    const auto it = std::find_if(st.drawing.alignmentStyles.begin(), st.drawing.alignmentStyles.end(),
                                  [&](const AlignmentStyle& s) { return s.name == name; });
-    if (it == st.alignmentStyles.end()) {
+    if (it == st.drawing.alignmentStyles.end()) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + name + "\".");
       return;
     }
     PushUndoSnapshot(st, "Alignment style");
-    st.alignmentStyles.erase(it);
+    st.drawing.alignmentStyles.erase(it);
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTSTYLE - deleted style \"" + name + "\".");
     return;
@@ -3100,7 +3100,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       usage();
       return;
     }
-    const AlignmentStyle* current = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    const AlignmentStyle* current = AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]);
     if (current == nullptr) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
       return;
@@ -3120,7 +3120,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       if (Lower(want) == "none") {
         edited.checkSetName.clear();
         ok = true;
-      } else if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, want)) {
+      } else if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.drawing.alignmentCheckSets, want)) {
         edited.checkSetName = set->name;
         ok = true;
       }
@@ -3147,7 +3147,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       return;
     }
     PushUndoSnapshot(st, "Alignment style");
-    *AlignmentStyles::Find(st.alignmentStyles, f[1]) = std::move(edited);
+    *AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]) = std::move(edited);
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTSTYLE - style \"" + f[1] + "\": " + f[2] + " set to " + f[3] + ".");
     return;
@@ -3159,7 +3159,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     }
     alignment::Alignment* a = Resolve(st, "ALIGNMENTSTYLE", f[1], log);
     if (a == nullptr) return;
-    if (!AlignmentStyles::Find(st.alignmentStyles, f[2])) {
+    if (!AlignmentStyles::Find(st.drawing.alignmentStyles, f[2])) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + f[2] + "\".");
       return;
     }
@@ -3175,7 +3175,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       usage();
       return;
     }
-    AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    AlignmentStyle* s = AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
       return;
@@ -3197,7 +3197,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       usage();
       return;
     }
-    AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    AlignmentStyle* s = AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
       return;
@@ -3215,13 +3215,13 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     return;
   }
   if (verb == "current" && f.size() == 2) {  // REQ-491 / REQ-478 current style
-    const AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    const AlignmentStyle* s = AlignmentStyles::Find(st.drawing.alignmentStyles, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
       return;
     }
     PushUndoSnapshot(st, "Alignment style");
-    st.alignmentStyleCurrent = f[1];
+    st.drawing.alignmentStyleCurrent = f[1];
     log.push_back("ALIGNMENTSTYLE - \"" + f[1] + "\" is now the current style; new alignments use it.");
     return;
   }
@@ -3249,13 +3249,13 @@ std::string* LabelSetItemStyle(AlignmentLabelSet& s, const std::string& item) {
 // ALIGNMENTLABELSET STYLE, <set>, MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>
 void RunAlignmentLabelSetStyle(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
   assert(!f.empty());
-  assert(!st.alignmentLabelSets.empty());
+  assert(!st.drawing.alignmentLabelSets.empty());
   if (f.size() < 4 || f[1].empty() || f[2].empty() || f[3].empty()) {
     log.push_back("ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET STYLE, <set>, "
                   "MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>.");
     return;
   }
-  AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+  AlignmentLabelSet* s = AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]);
   if (s == nullptr) {
     log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
     return;
@@ -3265,12 +3265,12 @@ void RunAlignmentLabelSetStyle(AppCommandState& st, const std::vector<std::strin
                   f[2] + "\".");
     return;
   }
-  if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[3]) == nullptr) {
+  if (AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, f[3]) == nullptr) {
     log.push_back("ALIGNMENTLABELSET - no alignment label style named \"" + f[3] + "\" (see ALIGNMENTLABELSTYLE LIST).");
     return;
   }
   PushUndoSnapshot(st, "Alignment label set");
-  s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+  s = AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]);
   *LabelSetItemStyle(*s, f[2]) = f[3];
   BumpCadGpuCache(st);
   log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " labels now use label style \"" + f[3] + "\".");
@@ -3280,12 +3280,12 @@ void RunAlignmentLabelSetStyle(AppCommandState& st, const std::vector<std::strin
 // Geometry Points item may repeat with different styles, e.g. BP and EP in one and the PIs in another)
 void RunAlignmentLabelSetGeometry(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
   assert(!f.empty());
-  assert(!st.alignmentLabelSets.empty());
+  assert(!st.drawing.alignmentLabelSets.empty());
   const char* usage = "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET GEOMETRY, <set>, CODES, <codes>|ALL | "
                       "ADD, <label style>, <codes> | REMOVE, <item#> (codes: BP EP PI PC PT PCC PRC TS ST CS SC SS RS Mid).";
   const std::string op = f.size() >= 3 ? Lower(f[2]) : std::string{};
   const bool shapeOk = (op == "codes" && f.size() == 4) || (op == "add" && f.size() == 5) || (op == "remove" && f.size() == 4);
-  const AlignmentLabelSet* current = shapeOk ? AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]) : nullptr;
+  const AlignmentLabelSet* current = shapeOk ? AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]) : nullptr;
   if (!shapeOk || current == nullptr) {
     log.push_back(shapeOk ? "ALIGNMENTLABELSET - no label set named \"" + f[1] + "\"." : std::string(usage));
     return;
@@ -3301,7 +3301,7 @@ void RunAlignmentLabelSetGeometry(AppCommandState& st, const std::vector<std::st
       return;
     }
     if (op == "codes") edited.geometryCodes = codes;
-    else if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[3]) == nullptr) {
+    else if (AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, f[3]) == nullptr) {
       log.push_back("ALIGNMENTLABELSET - no alignment label style named \"" + f[3] + "\".");
       return;
     } else edited.extraGeometryItems.push_back({f[3], codes});
@@ -3315,7 +3315,7 @@ void RunAlignmentLabelSetGeometry(AppCommandState& st, const std::vector<std::st
     edited.extraGeometryItems.erase(edited.extraGeometryItems.begin() + static_cast<std::ptrdiff_t>(n) - 1);
   }
   PushUndoSnapshot(st, "Alignment label set");
-  *AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]) = std::move(edited);
+  *AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]) = std::move(edited);
   BumpCadGpuCache(st);
   log.push_back("ALIGNMENTLABELSET - \"" + f[1] + "\" geometry point items updated.");
 }
@@ -3323,8 +3323,8 @@ void RunAlignmentLabelSetGeometry(AppCommandState& st, const std::vector<std::st
 }  // namespace
 
 void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
-  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
+  AlignmentLabelSets::EnsureStandard(st.drawing.alignmentLabelSets);
+  AlignmentLabelStyles::EnsureStandard(st.drawing.alignmentLabelStyles);
   const auto usage = [&]() {
     log.push_back(
         "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET LIST | NEW <set> | DELETE <set> | ASSIGN <alignment>, <set> | "
@@ -3346,11 +3346,11 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       for (const std::string& c : codes) text += (text.empty() ? "" : " ") + c;
       return text.empty() ? std::string("all") : text;
     };
-    for (const AlignmentLabelSet& s : st.alignmentLabelSets) {
+    for (const AlignmentLabelSet& s : st.drawing.alignmentLabelSets) {
       log.push_back("  LABEL SET \"" + s.name + "\"  major=" + Lin(st, s.majorInterval) + " minor=" +
                     Lin(st, s.minorInterval) +
                     "  (used by " +
-                    std::to_string(AlignmentLabelSets::CountAlignmentsResolvingTo(st.alignments, st.alignmentLabelSets,
+                    std::to_string(AlignmentLabelSets::CountAlignmentsResolvingTo(st.drawing.alignments, st.drawing.alignmentLabelSets,
                                                                                   s.name)) +
                     " alignment(s))");
       log.push_back("    Geometry points 1: " + joined(s.geometryCodes) + " in \"" + s.geometryStyle + "\"");
@@ -3365,19 +3365,19 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       usage();
       return;
     }
-    if (AlignmentLabelSets::Find(st.alignmentLabelSets, f[1])) {
+    if (AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1])) {
       log.push_back("ALIGNMENTLABELSET - a label set named \"" + f[1] + "\" already exists.");
       return;
     }
     PushUndoSnapshot(st, "Alignment label set");
     AlignmentLabelSet s = AlignmentLabelSets::StandardLabelSet();
     s.name = f[1];
-    const bool metric = st.drawingInsUnits == 4 || st.drawingInsUnits == 6;
+    const bool metric = st.drawing.drawingInsUnits == 4 || st.drawing.drawingInsUnits == 6;
     if (metric) {  // REQ-492.2: 20 m major stations in a metric drawing; minors keep the imperial 1:5 ratio
       s.majorInterval = 20.0;
       s.minorInterval = 4.0;
     }
-    st.alignmentLabelSets.push_back(std::move(s));
+    st.drawing.alignmentLabelSets.push_back(std::move(s));
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTLABELSET - created label set \"" + f[1] + "\" (copied from Standard" +
                   (metric ? ", major 20 m, minor 4 m)." : ")."));
@@ -3392,20 +3392,20 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       log.push_back("ALIGNMENTLABELSET - \"Standard\" cannot be deleted.");
       return;
     }
-    const int users = AlignmentLabelSets::CountAlignmentsResolvingTo(st.alignments, st.alignmentLabelSets, f[1]);
+    const int users = AlignmentLabelSets::CountAlignmentsResolvingTo(st.drawing.alignments, st.drawing.alignmentLabelSets, f[1]);
     if (users > 0) {
       log.push_back("ALIGNMENTLABELSET - \"" + f[1] + "\" is used by " + std::to_string(users) +
                     " alignment(s) and cannot be deleted.");
       return;
     }
-    const auto it = std::find_if(st.alignmentLabelSets.begin(), st.alignmentLabelSets.end(),
+    const auto it = std::find_if(st.drawing.alignmentLabelSets.begin(), st.drawing.alignmentLabelSets.end(),
                                  [&](const AlignmentLabelSet& s) { return s.name == f[1]; });
-    if (it == st.alignmentLabelSets.end()) {
+    if (it == st.drawing.alignmentLabelSets.end()) {
       log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
       return;
     }
     PushUndoSnapshot(st, "Alignment label set");
-    st.alignmentLabelSets.erase(it);
+    st.drawing.alignmentLabelSets.erase(it);
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTLABELSET - deleted label set \"" + f[1] + "\".");
     return;
@@ -3417,7 +3417,7 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
     }
     alignment::Alignment* a = Resolve(st, "ALIGNMENTLABELSET", f[1], log);
     if (a == nullptr) return;
-    if (!AlignmentLabelSets::Find(st.alignmentLabelSets, f[2])) {
+    if (!AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[2])) {
       log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[2] + "\".");
       return;
     }
@@ -3433,7 +3433,7 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       usage();
       return;
     }
-    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
       return;
@@ -3454,7 +3454,7 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       usage();
       return;
     }
-    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
       return;
@@ -3475,7 +3475,7 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       usage();
       return;
     }
-    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, f[1]);
     if (s == nullptr) {
       log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
       return;
@@ -3590,7 +3590,7 @@ bool EditAlignmentLabelStyle(const AppCommandState& st, AlignmentLabelStyle& s, 
     return true;
   }
   if (which == "textstyle") {
-    if (TextStyles::Find(st.textStyles, value) == nullptr) {
+    if (TextStyles::Find(st.drawing.textStyles, value) == nullptr) {
       log.push_back("ALIGNMENTLABELSTYLE - no text style named \"" + value + "\" (see STYLE).");
       return false;
     }
@@ -3603,25 +3603,25 @@ bool EditAlignmentLabelStyle(const AppCommandState& st, AlignmentLabelStyle& s, 
 // REQ-478 pattern: Standard and a style a label set still uses cannot be deleted.
 void RunAlignmentLabelStyleDelete(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
   assert(!name.empty());
-  assert(!st.alignmentLabelStyles.empty());
+  assert(!st.drawing.alignmentLabelStyles.empty());
   if (name == AlignmentLabelStyles::kStandardName) {
     log.push_back("ALIGNMENTLABELSTYLE - \"Standard\" cannot be deleted.");
     return;
   }
-  const auto it = std::find_if(st.alignmentLabelStyles.begin(), st.alignmentLabelStyles.end(),
+  const auto it = std::find_if(st.drawing.alignmentLabelStyles.begin(), st.drawing.alignmentLabelStyles.end(),
                                [&](const AlignmentLabelStyle& s) { return s.name == name; });
-  if (it == st.alignmentLabelStyles.end()) {
+  if (it == st.drawing.alignmentLabelStyles.end()) {
     log.push_back("ALIGNMENTLABELSTYLE - no label style named \"" + name + "\".");
     return;
   }
-  const int users = AlignmentLabelStyles::CountLabelSetsUsing(st.alignmentLabelSets, name);
+  const int users = AlignmentLabelStyles::CountLabelSetsUsing(st.drawing.alignmentLabelSets, name);
   if (users > 0) {
     log.push_back("ALIGNMENTLABELSTYLE - \"" + name + "\" is used by " + std::to_string(users) +
                   " label set(s) and cannot be deleted; assign another style first (ALIGNMENTLABELSET STYLE).");
     return;
   }
   PushUndoSnapshot(st, "Alignment label style");
-  st.alignmentLabelStyles.erase(std::find_if(st.alignmentLabelStyles.begin(), st.alignmentLabelStyles.end(),
+  st.drawing.alignmentLabelStyles.erase(std::find_if(st.drawing.alignmentLabelStyles.begin(), st.drawing.alignmentLabelStyles.end(),
                                              [&](const AlignmentLabelStyle& s) { return s.name == name; }));
   log.push_back("ALIGNMENTLABELSTYLE - deleted label style \"" + name + "\".");
 }
@@ -3630,7 +3630,7 @@ void RunAlignmentLabelStyleDelete(AppCommandState& st, const std::string& name, 
 
 // ALIGNMENTLABELSTYLE LIST | NEW <style> | DELETE <style> | SET <style>, HEIGHT|COLOR|TEXTSTYLE, <value>  (REQ-492.5)
 void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
+  AlignmentLabelStyles::EnsureStandard(st.drawing.alignmentLabelStyles);
   const std::vector<std::string> f = SplitFields(Trim(args));
   const std::string verb = f.empty() ? std::string{} : Lower(f[0]);
   const auto usage = [&] {
@@ -3638,14 +3638,14 @@ void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::v
                   "SET, <style>, HEIGHT|COLOR|TEXTSTYLE|PRECISION|PREFIX|SUFFIX|ORIENTATION, <value>.");
   };
   if (verb == "list") {
-    for (const AlignmentLabelStyle& s : st.alignmentLabelStyles)
+    for (const AlignmentLabelStyle& s : st.drawing.alignmentLabelStyles)
       log.push_back("  LABEL STYLE \"" + s.name + "\"  height=" + FormatLinear(s.heightInches, 3) + "in  colour=" +
                     CadColorDisplayLabel(s.color) + "  text style=" + s.textStyle + "  precision=" +
                     (s.precision < 0 ? std::string("drawing") : std::to_string(s.precision)) +
                     (s.prefix.empty() ? "" : "  prefix=\"" + s.prefix + "\"") +
                     (s.suffix.empty() ? "" : "  suffix=\"" + s.suffix + "\"") +
                     "  orientation=" + (s.viewOriented ? "view" : "object") + "  (used by " +
-                    std::to_string(AlignmentLabelStyles::CountLabelSetsUsing(st.alignmentLabelSets, s.name)) +
+                    std::to_string(AlignmentLabelStyles::CountLabelSetsUsing(st.drawing.alignmentLabelSets, s.name)) +
                     " label set(s))");
     return;
   }
@@ -3654,14 +3654,14 @@ void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::v
     return;
   }
   if (verb == "new") {
-    if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]) != nullptr) {
+    if (AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, f[1]) != nullptr) {
       log.push_back("ALIGNMENTLABELSTYLE - a label style named \"" + f[1] + "\" already exists.");
       return;
     }
     PushUndoSnapshot(st, "Alignment label style");
     AlignmentLabelStyle s = AlignmentLabelStyles::StandardLabelStyle();
     s.name = f[1];
-    st.alignmentLabelStyles.push_back(std::move(s));
+    st.drawing.alignmentLabelStyles.push_back(std::move(s));
     log.push_back("ALIGNMENTLABELSTYLE - created label style \"" + f[1] + "\" (copied from Standard).");
     return;
   }
@@ -3670,7 +3670,7 @@ void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::v
     return;
   }
   if (verb == "set" && f.size() >= 4) {
-    const AlignmentLabelStyle* current = AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]);
+    const AlignmentLabelStyle* current = AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, f[1]);
     if (current == nullptr) {
       log.push_back("ALIGNMENTLABELSTYLE - no label style named \"" + f[1] + "\".");
       return;
@@ -3678,7 +3678,7 @@ void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::v
     AlignmentLabelStyle edited = *current;
     if (!EditAlignmentLabelStyle(st, edited, f[2], Trim(f[3]), log)) return;
     PushUndoSnapshot(st, "Alignment label style");
-    *AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]) = std::move(edited);
+    *AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, f[1]) = std::move(edited);
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTLABELSTYLE - \"" + f[1] + "\" " + f[2] + " set to " + Trim(f[3]) + ".");
     return;
@@ -3692,8 +3692,8 @@ namespace {
 // REQ-502: the report names the alignment's own check set and its findings.
 alignment::AlignmentReportFormat ReportFormatFor(const AppCommandState& st, const alignment::Alignment& a,
                                                  alignment::AlignmentReportFormat fmt) {
-  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
-  if (!criteriaName.empty()) fmt.checkSet = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName);
+  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.drawing.alignmentStyles, a);
+  if (!criteriaName.empty()) fmt.checkSet = alignment::FindCheckSet(st.drawing.alignmentCheckSets, criteriaName);
   return fmt;
 }
 
@@ -3714,13 +3714,13 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
   }
   if (exportKind.empty() && !f.empty()) filterName = Trim(f[0]);
 
-  if (st.alignments.empty()) {
+  if (st.drawing.alignments.empty()) {
     log.push_back("ALIGNMENTREPORT - this drawing has no alignments.");
     return;
   }
 
   std::vector<const alignment::Alignment*> targets;
-  for (const alignment::Alignment& a : st.alignments) {
+  for (const alignment::Alignment& a : st.drawing.alignments) {
     if (!filterName.empty() && Lower(a.name) != Lower(filterName)) continue;
     targets.push_back(&a);
   }
@@ -3732,7 +3732,7 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
   alignment::AlignmentReportFormat fmt;
   fmt.linearPrecision = st.displayLinearPrecision;
   fmt.angles = CadAngleDisplaySettings(st);
-  fmt.station = st.alignmentStationFormat;
+  fmt.station = st.drawing.alignmentStationFormat;
 
   if (exportKind.empty()) {
     for (size_t i = 0; i < targets.size(); ++i) {
@@ -3815,7 +3815,7 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
     log.push_back("ALIGNMENTSURFACE - no surface named \"" + f[1] + "\".");
     return;
   }
-  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
   if (!ground) {
     log.push_back("ALIGNMENTSURFACE - \"" + f[1] + "\" is not a built surface.");
     return;
@@ -3982,8 +3982,8 @@ void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std:
 bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld) {
   float bestD2 = tolWorld * tolWorld;
   int bestA = -1, bestL = -1;
-  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
-    const alignment::Alignment& a = st.alignments[ai];
+  for (size_t ai = 0; ai < st.drawing.alignments.size(); ++ai) {
+    const alignment::Alignment& a = st.drawing.alignments[ai];
     for (size_t li = 0; li < a.stationLabels.size(); ++li) {
       const alignment::StationOffsetLabelPlacement p =
           alignment::PlaceStationOffsetLabel(a, a.stationLabels[li], st.displayLinearPrecision);
@@ -4002,14 +4002,14 @@ bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float t
   st.alignLabelDragMoved = false;
   st.alignLabelDragAlignment = bestA;
   st.alignLabelDragIndex = bestL;
-  st.alignLabelDragOriginal = st.alignments[static_cast<size_t>(bestA)].stationLabels[static_cast<size_t>(bestL)];
+  st.alignLabelDragOriginal = st.drawing.alignments[static_cast<size_t>(bestA)].stationLabels[static_cast<size_t>(bestL)];
   return true;
 }
 
 void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly) {
   if (!st.alignLabelDragActive) return;
-  if (st.alignLabelDragAlignment < 0 || static_cast<size_t>(st.alignLabelDragAlignment) >= st.alignments.size()) return;
-  alignment::Alignment& a = st.alignments[static_cast<size_t>(st.alignLabelDragAlignment)];
+  if (st.alignLabelDragAlignment < 0 || static_cast<size_t>(st.alignLabelDragAlignment) >= st.drawing.alignments.size()) return;
+  alignment::Alignment& a = st.drawing.alignments[static_cast<size_t>(st.alignLabelDragAlignment)];
   if (st.alignLabelDragIndex < 0 || static_cast<size_t>(st.alignLabelDragIndex) >= a.stationLabels.size()) return;
   alignment::StationOffsetLabel& label = a.stationLabels[static_cast<size_t>(st.alignLabelDragIndex)];
   if (alignment::MoveStationOffsetLabelTo(a, &label, {static_cast<double>(lx), static_cast<double>(ly)})) {
@@ -4021,11 +4021,11 @@ void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly) {
 void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std::string>& log) {
   if (!st.alignLabelDragActive) return;
   const int ai = st.alignLabelDragAlignment, li = st.alignLabelDragIndex;
-  const bool valid = ai >= 0 && static_cast<size_t>(ai) < st.alignments.size() && li >= 0 &&
-                     static_cast<size_t>(li) < st.alignments[static_cast<size_t>(ai)].stationLabels.size();
+  const bool valid = ai >= 0 && static_cast<size_t>(ai) < st.drawing.alignments.size() && li >= 0 &&
+                     static_cast<size_t>(li) < st.drawing.alignments[static_cast<size_t>(ai)].stationLabels.size();
   st.alignLabelDragActive = false;
   if (!valid) return;
-  alignment::Alignment& a = st.alignments[static_cast<size_t>(ai)];
+  alignment::Alignment& a = st.drawing.alignments[static_cast<size_t>(ai)];
   auto& label = a.stationLabels[static_cast<size_t>(li)];
   if (!commit || !st.alignLabelDragMoved) {  // cancel, or a click that did not move: nothing to record
     label = st.alignLabelDragOriginal;
@@ -4036,19 +4036,19 @@ void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std:
   const alignment::StationOffsetLabel moved = label;
   label = st.alignLabelDragOriginal;
   PushUndoSnapshot(st, "Move alignment station label");
-  st.alignments[static_cast<size_t>(ai)].stationLabels[static_cast<size_t>(li)] = moved;
+  st.drawing.alignments[static_cast<size_t>(ai)].stationLabels[static_cast<size_t>(li)] = moved;
   BumpCadGpuCache(st);
   const alignment::StationOffsetLabelPlacement p = alignment::PlaceStationOffsetLabel(
-      st.alignments[static_cast<size_t>(ai)], moved, st.displayLinearPrecision);
+      st.drawing.alignments[static_cast<size_t>(ai)], moved, st.displayLinearPrecision);
   log.push_back("ALIGNMENTLABEL - label " + std::to_string(li + 1) + " moved: " + p.text + ".");
 }
 
 // EDITALIGNMENTSTYLE [<style>] - REQ-491. Opens the Alignment Style editor in the Qt editor; headless it lists the style.
 void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  AlignmentStyles::EnsureStandard(st.drawing.alignmentStyles);
   std::string name = Trim(args);
-  if (name.empty() && !st.alignmentStyles.empty()) name = st.alignmentStyles.front().name;
-  if (AlignmentStyles::Find(st.alignmentStyles, name) == nullptr) {
+  if (name.empty() && !st.drawing.alignmentStyles.empty()) name = st.drawing.alignmentStyles.front().name;
+  if (AlignmentStyles::Find(st.drawing.alignmentStyles, name) == nullptr) {
     log.push_back("EDITALIGNMENTSTYLE - no style named \"" + name + "\".");
     return;
   }
@@ -4064,8 +4064,8 @@ void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::ve
 namespace {
 
 int AlignmentIndexById(const AppCommandState& st, std::uint64_t id) {
-  for (size_t i = 0; i < st.alignments.size(); ++i) {
-    if (st.alignments[i].id == id) return static_cast<int>(i);
+  for (size_t i = 0; i < st.drawing.alignments.size(); ++i) {
+    if (st.drawing.alignments[i].id == id) return static_cast<int>(i);
   }
   return -1;
 }
@@ -4086,7 +4086,7 @@ bool BuildFeatureLineVerts(const AppCommandState& st, const alignment::Alignment
       if (why) *why = "the surface \"" + info.surfaceName + "\" is not in the drawing";
       return false;
     }
-    ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+    ground = MakeSurfaceQueryForCommands(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
     if (!ground) {
       if (why) *why = "the surface \"" + info.surfaceName + "\" is not a built surface";
       return false;
@@ -4117,19 +4117,19 @@ bool BuildFeatureLineVerts(const AppCommandState& st, const alignment::Alignment
 
 // Replaces the vertices of feature line `index` in place, shifting every later line's offsets by the change in count.
 void ReplaceFeatureLineVerts(AppCommandState& st, size_t index, const std::vector<double>& xyz) {
-  if (index + 1 >= st.featureLineOffsets.size()) return;
-  const int a = st.featureLineOffsets[index], b = st.featureLineOffsets[index + 1];
+  if (index + 1 >= st.drawing.featureLineOffsets.size()) return;
+  const int a = st.drawing.featureLineOffsets[index], b = st.drawing.featureLineOffsets[index + 1];
   const int oldCount = b - a, newCount = static_cast<int>(xyz.size() / 3);
-  const bool flagsMatch = st.featureLineElevPt.size() == st.featureLineVerts.size() / 3;
-  st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
-                            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
-  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3, xyz.begin(), xyz.end());
+  const bool flagsMatch = st.drawing.featureLineElevPt.size() == st.drawing.featureLineVerts.size() / 3;
+  st.drawing.featureLineVerts.erase(st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                            st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3, xyz.begin(), xyz.end());
   if (flagsMatch) {  // the vertices are elevation points, the flag FEATURELINE gives a typed elevation
-    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + a, st.featureLineElevPt.begin() + b);
-    st.featureLineElevPt.insert(st.featureLineElevPt.begin() + a, static_cast<size_t>(newCount), static_cast<uint8_t>(1));
+    st.drawing.featureLineElevPt.erase(st.drawing.featureLineElevPt.begin() + a, st.drawing.featureLineElevPt.begin() + b);
+    st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.begin() + a, static_cast<size_t>(newCount), static_cast<uint8_t>(1));
   }
   const int delta = newCount - oldCount;
-  for (size_t j = index + 1; j < st.featureLineOffsets.size(); ++j) st.featureLineOffsets[j] += delta;
+  for (size_t j = index + 1; j < st.drawing.featureLineOffsets.size(); ++j) st.drawing.featureLineOffsets[j] += delta;
 }
 
 }  // namespace
@@ -4138,8 +4138,8 @@ void ReplaceFeatureLineVerts(AppCommandState& st, size_t index, const std::vecto
 // is gone. A line whose surface or ground can no longer be read keeps its last vertices and says why.
 void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log) {
   bool changed = false;
-  for (size_t i = 0; i < st.featureLineInfo.size(); ++i) {
-    CadFeatureLineInfo& info = st.featureLineInfo[i];
+  for (size_t i = 0; i < st.drawing.featureLineInfo.size(); ++i) {
+    CadFeatureLineInfo& info = st.drawing.featureLineInfo[i];
     if (info.sourceAlignmentId == 0) continue;
     const int ai = AlignmentIndexById(st, info.sourceAlignmentId);
     if (ai < 0) {
@@ -4149,7 +4149,7 @@ void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log)
     }
     std::vector<double> xyz;
     std::string why;
-    if (!BuildFeatureLineVerts(st, st.alignments[static_cast<size_t>(ai)], info, &xyz, &why)) {
+    if (!BuildFeatureLineVerts(st, st.drawing.alignments[static_cast<size_t>(ai)], info, &xyz, &why)) {
       log.push_back("  Feature line \"" + info.name + "\" was not updated: " + why + ".");
       continue;
     }
@@ -4209,17 +4209,17 @@ void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, s
     return;
   }
   PushUndoSnapshot(st, "Feature line from alignment");
-  if (st.featureLineOffsets.empty()) st.featureLineOffsets.push_back(0);
-  const int base = st.featureLineOffsets.back();
-  st.featureLineVerts.insert(st.featureLineVerts.end(), xyz.begin(), xyz.end());
-  st.featureLineElevPt.resize(st.featureLineVerts.size() / 3, static_cast<uint8_t>(1));
-  st.featureLineOffsets.push_back(base + static_cast<int>(xyz.size() / 3));
-  st.featureLineClosed.push_back(0);
+  if (st.drawing.featureLineOffsets.empty()) st.drawing.featureLineOffsets.push_back(0);
+  const int base = st.drawing.featureLineOffsets.back();
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), xyz.begin(), xyz.end());
+  st.drawing.featureLineElevPt.resize(st.drawing.featureLineVerts.size() / 3, static_cast<uint8_t>(1));
+  st.drawing.featureLineOffsets.push_back(base + static_cast<int>(xyz.size() / 3));
+  st.drawing.featureLineClosed.push_back(0);
   const std::string zText = info.hasSurface ? "Z from \"" + info.surfaceName + "\"" : std::string("constant Z");
   const size_t count = xyz.size() / 3;
-  st.featureLineInfo.push_back(std::move(info));
-  AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
-                       st.featureLineInfo.back().name);  // REQ-361
+  st.drawing.featureLineInfo.push_back(std::move(info));
+  AppendNewObjectAttrs(st, st.drawing.featureLineAttrs, st.drawing.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                       st.drawing.featureLineInfo.back().name);  // REQ-361
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
   log.push_back("FEATURELINEFROMALIGNMENT - feature line \"" + a->name + "\" made from the alignment: " +
@@ -4237,13 +4237,13 @@ bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfa
                                    std::vector<std::string>& log) {
   const int ai = [&]() {
     const std::string want = Lower(alignmentName);
-    for (size_t i = 0; i < st.alignments.size(); ++i) {
-      if (Lower(st.alignments[i].name) == want) return static_cast<int>(i);
+    for (size_t i = 0; i < st.drawing.alignments.size(); ++i) {
+      if (Lower(st.drawing.alignments[i].name) == want) return static_cast<int>(i);
     }
     return -1;
   }();
   if (ai < 0) return false;
-  const alignment::Alignment& a = st.alignments[static_cast<size_t>(ai)];
+  const alignment::Alignment& a = st.drawing.alignments[static_cast<size_t>(ai)];
   const int si = FindSurfaceIndex(st, surfaceName);
   if (si < 0) {
     log.push_back("QUICKPROFILE - no surface named \"" + surfaceName + "\".");
@@ -4253,7 +4253,7 @@ bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfa
     log.push_back("QUICKPROFILE - \"" + a.name + "\" has no geometry to sample.");
     return true;
   }
-  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.drawing.cadSurfaces[static_cast<size_t>(si)]);
   if (!ground) {
     log.push_back("QUICKPROFILE - \"" + surfaceName + "\" is not a built surface.");
     return true;
@@ -4332,7 +4332,7 @@ void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector
   } else if (field == "description") {
     edited.description = value;
   } else if (field == "style") {
-    if (AlignmentStyles::Find(st.alignmentStyles, value) == nullptr) {
+    if (AlignmentStyles::Find(st.drawing.alignmentStyles, value) == nullptr) {
       log.push_back("ALIGNMENTPROPS - no style named \"" + value + "\".");
       return;
     }
@@ -4376,8 +4376,8 @@ void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector
 namespace {
 
 int FindCheckSetIndex(const AppCommandState& st, const std::string& name) {
-  for (size_t i = 0; i < st.alignmentCheckSets.size(); ++i) {
-    if (Lower(st.alignmentCheckSets[i].name) == Lower(name)) return static_cast<int>(i);
+  for (size_t i = 0; i < st.drawing.alignmentCheckSets.size(); ++i) {
+    if (Lower(st.drawing.alignmentCheckSets[i].name) == Lower(name)) return static_cast<int>(i);
   }
   return -1;
 }
@@ -4402,11 +4402,11 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
   }
   const std::string verb = Lower(f[0]);
   if (verb == "list") {
-    if (st.alignmentCheckSets.empty()) {
+    if (st.drawing.alignmentCheckSets.empty()) {
       log.push_back("ALIGNMENTCHECKSET - no check sets. Make one with ALIGNMENTCHECKSET NEW, <name>.");
       return;
     }
-    for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) {
+    for (const alignment::AlignmentCheckSet& s : st.drawing.alignmentCheckSets) {
       log.push_back("ALIGNMENTCHECKSET: " + s.name + "  [" + (s.kind == alignment::CheckSetKind::Rail ? "rail" : "road") +
                     ", " + std::to_string(s.radiusTable.size()) + " radius row(s), min tangent " +
                     FormatLinear(s.minTangent, st.displayLinearPrecision) + ", min spiral " +
@@ -4438,7 +4438,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       }
     }
     PushUndoSnapshot(st, "New check set");
-    st.alignmentCheckSets.push_back(made);
+    st.drawing.alignmentCheckSets.push_back(made);
     log.push_back("ALIGNMENTCHECKSET - created \"" + name + "\" (" +
                   (made.kind == alignment::CheckSetKind::Rail ? "rail" : "road") + ").");
     return;
@@ -4453,14 +4453,14 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       log.push_back("ALIGNMENTCHECKSET - no check set named \"" + Trim(f[1]) + "\".");
       return;
     }
-    const std::string name = st.alignmentCheckSets[static_cast<size_t>(idx)].name;
+    const std::string name = st.drawing.alignmentCheckSets[static_cast<size_t>(idx)].name;
     PushUndoSnapshot(st, "Delete check set");
-    st.alignmentCheckSets.erase(st.alignmentCheckSets.begin() + idx);
+    st.drawing.alignmentCheckSets.erase(st.drawing.alignmentCheckSets.begin() + idx);
     int cleared = 0;
-    for (AlignmentStyle& style : st.alignmentStyles) {
+    for (AlignmentStyle& style : st.drawing.alignmentStyles) {
       if (Lower(style.checkSetName) == Lower(name)) style.checkSetName.clear();
     }
-    for (alignment::Alignment& a : st.alignments) {
+    for (alignment::Alignment& a : st.drawing.alignments) {
       if (Lower(a.checkSetName) == Lower(name)) {
         a.checkSetName.clear();
         ++cleared;
@@ -4480,7 +4480,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       log.push_back("ALIGNMENTCHECKSET - no check set named \"" + Trim(f[1]) + "\".");
       return;
     }
-    alignment::AlignmentCheckSet edited = st.alignmentCheckSets[static_cast<size_t>(idx)];
+    alignment::AlignmentCheckSet edited = st.drawing.alignmentCheckSets[static_cast<size_t>(idx)];
     const std::string what = Lower(Trim(f[2]));
     if (what == "radius") {
       double speed = 0.0, minRadius = 0.0;
@@ -4517,13 +4517,13 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       log.push_back(usage);
       return;
     }
-    if (edited == st.alignmentCheckSets[static_cast<size_t>(idx)]) {
+    if (edited == st.drawing.alignmentCheckSets[static_cast<size_t>(idx)]) {
       log.push_back("ALIGNMENTCHECKSET - nothing changed.");
       return;
     }
     PushUndoSnapshot(st, "Edit check set");
-    st.alignmentCheckSets[static_cast<size_t>(idx)] = std::move(edited);
-    log.push_back("ALIGNMENTCHECKSET - \"" + st.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" updated.");
+    st.drawing.alignmentCheckSets[static_cast<size_t>(idx)] = std::move(edited);
+    log.push_back("ALIGNMENTCHECKSET - \"" + st.drawing.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" updated.");
     return;
   }
   if (verb == "load" && f.size() == 2) {  // REQ-502: reference values loaded from a user file
@@ -4544,10 +4544,10 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
     for (alignment::AlignmentCheckSet& s : loaded) {
       const int at = FindCheckSetIndex(st, s.name);
       if (at >= 0) {
-        st.alignmentCheckSets[static_cast<size_t>(at)] = std::move(s);
+        st.drawing.alignmentCheckSets[static_cast<size_t>(at)] = std::move(s);
         ++replaced;
       } else {
-        st.alignmentCheckSets.push_back(std::move(s));
+        st.drawing.alignmentCheckSets.push_back(std::move(s));
         ++added;
       }
     }
@@ -4562,12 +4562,12 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       return;
     }
     std::ofstream out(Trim(f[2]), std::ios::binary | std::ios::trunc);
-    out << AlignmentCheckSetsToJsonText({st.alignmentCheckSets[static_cast<size_t>(idx)]});
+    out << AlignmentCheckSetsToJsonText({st.drawing.alignmentCheckSets[static_cast<size_t>(idx)]});
     if (!out.good()) {
       log.push_back("ALIGNMENTCHECKSET - could not write \"" + Trim(f[2]) + "\".");
       return;
     }
-    log.push_back("ALIGNMENTCHECKSET - \"" + st.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" saved to \"" +
+    log.push_back("ALIGNMENTCHECKSET - \"" + st.drawing.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" saved to \"" +
                   Trim(f[2]) + "\".");
     return;
   }
@@ -4592,7 +4592,7 @@ void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vec
       log.push_back("ALIGNMENTCRITERIA - no check set named \"" + want + "\".");
       return;
     }
-    const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];
+    const alignment::AlignmentCheckSet& set = st.drawing.alignmentCheckSets[static_cast<size_t>(idx)];
     std::string why;
     if (!alignment::CriteriaAllowed(a->type, set.kind, &why)) {
       log.push_back("ALIGNMENTCRITERIA - " + why + ".");
@@ -4600,14 +4600,14 @@ void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vec
     }
     setName = set.name;
   }
-  if (setName == st.alignments[ai].checkSetName) {
+  if (setName == st.drawing.alignments[ai].checkSetName) {
     log.push_back("ALIGNMENTCRITERIA - \"" + a->name + "\" already uses " +
                   (setName.empty() ? std::string("no criteria.") : "\"" + setName + "\"."));
     return;
   }
   PushUndoSnapshot(st, "Alignment criteria");
-  st.alignments[ai].checkSetName = setName;
-  log.push_back("ALIGNMENTCRITERIA - \"" + st.alignments[ai].name + "\" " +
+  st.drawing.alignments[ai].checkSetName = setName;
+  log.push_back("ALIGNMENTCRITERIA - \"" + st.drawing.alignments[ai].name + "\" " +
                 (setName.empty() ? std::string("has no design criteria.") : "is checked against \"" + setName + "\"."));
 }
 
@@ -4641,7 +4641,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
   const double internal = raws.front();
   const size_t ai = static_cast<size_t>(FindAlignment(st, a->name));
   const auto sameStation = [internal](const alignment::DesignSpeed& d) { return std::fabs(d.internalStation - internal) < 1e-6; };
-  const auto& current = st.alignments[ai].designSpeeds;
+  const auto& current = st.drawing.alignments[ai].designSpeeds;
   const auto found = std::find_if(current.begin(), current.end(), sameStation);
   if (clear) {
     if (found == current.end()) {
@@ -4649,7 +4649,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
       return;
     }
     PushUndoSnapshot(st, "Clear design speed");
-    auto& after = st.alignments[ai].designSpeeds;
+    auto& after = st.drawing.alignments[ai].designSpeeds;
     after.erase(std::remove_if(after.begin(), after.end(), sameStation), after.end());
     log.push_back("ALIGNMENTSPEED - design speed cleared at " + StaFmt(st, displayed) + ".");
     return;
@@ -4660,7 +4660,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
     return;
   }
   PushUndoSnapshot(st, "Set design speed");
-  auto& after = st.alignments[ai].designSpeeds;
+  auto& after = st.drawing.alignments[ai].designSpeeds;
   const auto again = std::find_if(after.begin(), after.end(), sameStation);
   if (again != after.end()) {
     again->speed = speed;
@@ -4683,7 +4683,7 @@ void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector
   }
   const alignment::Alignment* a = Resolve(st, "ALIGNMENTCHECK", f[0], log);
   if (a == nullptr) return;
-  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, *a);
+  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.drawing.alignmentStyles, *a);
   if (criteriaName.empty()) {
     log.push_back("ALIGNMENTCHECK - \"" + a->name + "\" has no design criteria. Apply a set with ALIGNMENTCRITERIA.");
     return;
@@ -4693,7 +4693,7 @@ void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector
     log.push_back("ALIGNMENTCHECK - the check set \"" + criteriaName + "\" is missing.");
     return;
   }
-  const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];
+  const alignment::AlignmentCheckSet& set = st.drawing.alignmentCheckSets[static_cast<size_t>(idx)];
   const std::vector<alignment::DesignFinding> findings = alignment::CheckDesign(*a, set, st.displayLinearPrecision);
   if (findings.empty()) {
     log.push_back("ALIGNMENTCHECK - \"" + a->name + "\" meets \"" + set.name + "\".");
@@ -4943,14 +4943,14 @@ bool ApplyCreateOptions(AppCommandState& st, const CreateOptions& o, alignment::
   if (o.description) a->description = *o.description;
   if (o.layer && !o.layer->empty()) a->layer = *o.layer;
   if (o.style && !o.style->empty()) {
-    if (AlignmentStyles::Find(st.alignmentStyles, *o.style) == nullptr) {
+    if (AlignmentStyles::Find(st.drawing.alignmentStyles, *o.style) == nullptr) {
       *why = "no alignment style named \"" + *o.style + "\"";
       return false;
     }
     a->style = *o.style;
   }
   if (o.labelSet && !o.labelSet->empty()) {
-    if (AlignmentLabelSets::Find(st.alignmentLabelSets, *o.labelSet) == nullptr) {
+    if (AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, *o.labelSet) == nullptr) {
       *why = "no alignment label set named \"" + *o.labelSet + "\"";
       return false;
     }
@@ -4963,7 +4963,7 @@ bool ApplyCreateOptions(AppCommandState& st, const CreateOptions& o, alignment::
       *why = "no check set named \"" + *o.criteria + "\"";
       return false;
     }
-    const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];
+    const alignment::AlignmentCheckSet& set = st.drawing.alignmentCheckSets[static_cast<size_t>(idx)];
     if (!alignment::CriteriaAllowed(a->type, set.kind, why)) return false;
     a->checkSetName = set.name;
   }
@@ -4982,7 +4982,7 @@ alignment::Alignment NewAlignment(const AppCommandState& st, const std::string& 
   a.name = name;
   a.layer = MakeNewEntityAttrs(st).layer;
   if (a.layer.empty()) a.layer = "0";
-  if (AlignmentStyles::Find(st.alignmentStyles, st.alignmentStyleCurrent) != nullptr) a.style = st.alignmentStyleCurrent;
+  if (AlignmentStyles::Find(st.drawing.alignmentStyles, st.drawing.alignmentStyleCurrent) != nullptr) a.style = st.drawing.alignmentStyleCurrent;
   assert(!a.layer.empty());
   return a;
 }
@@ -4990,7 +4990,7 @@ alignment::Alignment NewAlignment(const AppCommandState& st, const std::string& 
 }  // namespace
 
 void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   assert(args.size() < 65536);
   const std::vector<std::string> f = SplitFields(args);
   const char* usage = "ALIGNMENTMETA - usage: ALIGNMENTMETA <alignment>, SET, <name>, <value> | <alignment>, REMOVE, <name> | "
@@ -5034,10 +5034,10 @@ void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<
 }
 
 void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  assert(st.alignmentStationFormat.decimals >= 0);
+  assert(st.drawing.alignmentStationFormat.decimals >= 0);
   assert(args.size() < 4096);
   const std::vector<std::string> f = SplitFields(args);
-  alignment::StationFormat fmt = st.alignmentStationFormat;
+  alignment::StationFormat fmt = st.drawing.alignmentStationFormat;
   const char* usage = "STATIONFORMAT - usage: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=1..6][, DECIMALS=0..6]"
                       "[, PREFIX=<text>][, SUFFIX=<text>] | DEFAULT.";
   if (f.size() == 1 && Lower(Trim(f[0])) == "default") fmt = alignment::StationFormat{};
@@ -5075,29 +5075,29 @@ void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<
   }
   if (!f.empty() && !(f.size() == 1 && Trim(f[0]).empty())) {
     PushUndoSnapshot(st, "Station format");
-    st.alignmentStationFormat = fmt;
+    st.drawing.alignmentStationFormat = fmt;
   }
   log.push_back("STATIONFORMAT - stations are written like " + StaFmt(st, 1245.32) + " (delimiter " +
-                (st.alignmentStationFormat.delimiter == '\0' ? std::string("none")
-                                                             : std::string(1, st.alignmentStationFormat.delimiter)) +
-                ", " + std::to_string(st.alignmentStationFormat.digitsRight) + " digit(s) after it, " +
-                std::to_string(st.alignmentStationFormat.decimals) + " decimal(s)).");
+                (st.drawing.alignmentStationFormat.delimiter == '\0' ? std::string("none")
+                                                             : std::string(1, st.drawing.alignmentStationFormat.delimiter)) +
+                ", " + std::to_string(st.drawing.alignmentStationFormat.digitsRight) + " digit(s) after it, " +
+                std::to_string(st.drawing.alignmentStationFormat.decimals) + " decimal(s)).");
 }
 
 std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base) {
   assert(!base.empty());
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   if (FindAlignment(st, base) < 0) return base;
-  for (size_t n = 2; n <= st.alignments.size() + 2; ++n) {  // one of these is free: there are only so many names
+  for (size_t n = 2; n <= st.drawing.alignments.size() + 2; ++n) {  // one of these is free: there are only so many names
     const std::string candidate = base + " (" + std::to_string(n) + ")";
     if (FindAlignment(st, candidate) < 0) return candidate;
   }
-  return base + " (" + std::to_string(st.alignments.size() + 3) + ")";
+  return base + " (" + std::to_string(st.drawing.alignments.size() + 3) + ")";
 }
 
 std::string NextAlignmentName(const AppCommandState& st) {
-  assert(st.alignments.size() < st.alignments.max_size());
-  for (size_t n = 1; n <= st.alignments.size() + 1; ++n) {
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
+  for (size_t n = 1; n <= st.drawing.alignments.size() + 1; ++n) {
     const std::string name = "Alignment - (" + std::to_string(n) + ")";
     if (FindAlignment(st, name) < 0) return name;
   }
@@ -5109,7 +5109,7 @@ double EffectiveAlignmentCurveRadius(const AppCommandState& st) {
   assert(st.alignmentCurveSettings.radius >= 0.0);
   if (st.alignmentCurveSettings.radius > 0.0) return st.alignmentCurveSettings.radius;
   // REQ-485.2: 100 ft, or 30 m in a metric drawing ($INSUNITS 6 metres, 4 millimetres).
-  const double r = st.drawingInsUnits == 6 ? 30.0 : st.drawingInsUnits == 4 ? 30000.0 : 100.0;
+  const double r = st.drawing.drawingInsUnits == 6 ? 30.0 : st.drawing.drawingInsUnits == 4 ? 30000.0 : 100.0;
   assert(r > 0.0);
   return r;
 }
@@ -5117,7 +5117,7 @@ double EffectiveAlignmentCurveRadius(const AppCommandState& st) {
 // ALIGNMENT <name>[, <description>[, <starting station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=][, CRITERIA=]
 //   [, SPEED=]  (REQ-480, REQ-485.1). With no arguments the Qt editor opens the Create Alignment dialog.
 void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   if (Trim(args).empty() && st.createAlignmentDialogAvailable) {
     st.createAlignmentDialogRequested = true;
     log.push_back("ALIGNMENT - opening the Create Alignment dialog.");
@@ -5153,8 +5153,8 @@ void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vecto
   }
   PushUndoSnapshot(st, "Create alignment");
   a.id = st.nextEntityId++;
-  st.alignments.push_back(std::move(a));
-  const alignment::Alignment& made = st.alignments.back();
+  st.drawing.alignments.push_back(std::move(a));
+  const alignment::Alignment& made = st.drawing.alignments.back();
   log.push_back("ALIGNMENT - created \"" + made.name + "\" (" + TypeName(made.type) + ", starting station " +
                 StaFmt(st, made.startingStation) + "). Lay it out with ALIGNMENTLAYOUT or ALIGNMENTADD.");
 }
@@ -5186,8 +5186,8 @@ bool AddSourceSegments(const AppCommandState& st, const SelectedEntity& se, int 
   using T = SelectedEntity::Type;
   const size_t ix = static_cast<size_t>(se.index);
   const std::string obj = "object " + std::to_string(srcNo);
-  if (se.type == T::LineSeg && se.index >= 0 && ix < st.lineCount()) {
-    const CadLineRecord v = st.line(ix);
+  if (se.type == T::LineSeg && se.index >= 0 && ix < st.drawing.lineCount()) {
+    const CadLineRecord v = st.drawing.line(ix);
     if (std::hypot(v.x1 - v.x0, v.y1 - v.y0) <= 1e-9 && std::fabs(v.z1 - v.z0) > 1e-9) {
       *why = obj + " is a vertical line; it has no length in plan";
       return false;
@@ -5200,8 +5200,8 @@ bool AddSourceSegments(const AppCommandState& st, const SelectedEntity& se, int 
     *zSeen = *zSeen || v.z0 != 0.0 || v.z1 != 0.0;
     return true;
   }
-  if (se.type == T::Arc && se.index >= 0 && ix < st.userArcs.size()) {
-    const CadArc& ar = st.userArcs[ix];
+  if (se.type == T::Arc && se.index >= 0 && ix < st.drawing.userArcs.size()) {
+    const CadArc& ar = st.drawing.userArcs[ix];
     if (std::fabs(ar.nx) > 1e-6 || std::fabs(ar.ny) > 1e-6) {
       *why = obj + " is an arc that is not in plan (its plane is tilted)";
       return false;
@@ -5228,19 +5228,19 @@ bool AddVertexSourceSegments(const AppCommandState& st, const SelectedEntity& se
   assert(segs != nullptr && zSeen != nullptr && why != nullptr);
   assert(se.type == SelectedEntity::Type::Polyline || se.type == SelectedEntity::Type::FeatureLine);
   const bool feature = se.type == SelectedEntity::Type::FeatureLine;
-  const std::vector<int>& offsets = feature ? st.featureLineOffsets : st.userPolylineOffsets;
+  const std::vector<int>& offsets = feature ? st.drawing.featureLineOffsets : st.drawing.userPolylineOffsets;
   const size_t ix = static_cast<size_t>(se.index);
   if (se.index < 0 || ix + 1 >= offsets.size()) {
     *why = "object " + std::to_string(srcNo) + " no longer exists";
     return false;
   }
   const int v0 = offsets[ix], cnt = offsets[ix + 1] - offsets[ix];
-  const bool closed = feature ? (ix < st.featureLineClosed.size() && st.featureLineClosed[ix] != 0)
-                              : (ix < st.userPolylineClosed.size() && st.userPolylineClosed[ix] != 0);
+  const bool closed = feature ? (ix < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[ix] != 0)
+                              : (ix < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[ix] != 0);
   auto vert = [&](int k, int c) {
     const size_t vi = static_cast<size_t>(v0 + k);
-    if (feature) return st.featureLineVerts[vi * 3 + static_cast<size_t>(c)];
-    const CadPolyVertex pv = st.vertex(vi);
+    if (feature) return st.drawing.featureLineVerts[vi * 3 + static_cast<size_t>(c)];
+    const CadPolyVertex pv = st.drawing.vertex(vi);
     return c == 0 ? pv.x : c == 1 ? pv.y : pv.z;
   };
   double zMin = std::numeric_limits<double>::infinity(), zMax = -zMin;
@@ -5257,7 +5257,7 @@ bool AddVertexSourceSegments(const AppCommandState& st, const SelectedEntity& se
     const int k1 = (k + 1) % cnt;
     const alignment::Point2 p0{vert(k, 0), vert(k, 1)}, p1{vert(k1, 0), vert(k1, 1)};
     const size_t bi = static_cast<size_t>(v0 + k);
-    const double bulge = !feature && bi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[bi] : 0.0;
+    const double bulge = !feature && bi < st.drawing.userPolylineVertsBulge.size() ? st.drawing.userPolylineVertsBulge[bi] : 0.0;
     segs->push_back(alignment::SegmentFromBulge(p0, p1, bulge, srcNo));
   }
   return true;
@@ -5294,7 +5294,7 @@ void CommitFromObjects(AppCommandState& st, alignment::Alignment made, bool eras
     PushUndoSnapshot(st, "Create alignment from objects");
   }
   made.id = st.nextEntityId++;
-  st.alignments.push_back(std::move(made));
+  st.drawing.alignments.push_back(std::move(made));
   st.selection.clear();
   BumpCadGpuCache(st);
 }
@@ -5308,7 +5308,7 @@ void StartAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& lo
 // Converts the SELECTED lines, arcs, 2D polylines and feature lines (REQ-485.2). Line -> Tangent, Arc -> Curve, a
 // polyline bulge segment -> Curve; never a vertex approximation. With no arguments the objects are picked first.
 void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   if (Trim(args).empty()) {
     StartAlignmentFromObjects(st, log);
     return;
@@ -5364,7 +5364,7 @@ void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args,
   }
   const size_t sources = st.selection.size();
   CommitFromObjects(st, std::move(made), o.erase);
-  const alignment::Alignment& r = st.alignments.back();
+  const alignment::Alignment& r = st.drawing.alignments.back();
   if (zSeen) log.push_back(cmd + "elevations were ignored; an alignment is plan geometry.");
   for (const std::string& w : warn) log.push_back(cmd + w + ".");
   log.push_back(cmd + "created \"" + r.name + "\": " + std::to_string(r.Entities().size()) + " entities (" +
@@ -5439,9 +5439,9 @@ bool RebuildLayout(AppCommandState& st, std::vector<std::string>& log) {
     PushUndoSnapshot(st, "Alignment layout");
     s.snapshotTaken = true;
   }
-  st.alignments[static_cast<size_t>(ix)] = std::move(result);
+  st.drawing.alignments[static_cast<size_t>(ix)] = std::move(result);
   BumpCadGpuCache(st);
-  assert(st.alignments[static_cast<size_t>(ix)].name == s.name);
+  assert(st.drawing.alignments[static_cast<size_t>(ix)].name == s.name);
   return true;
 }
 
@@ -5450,7 +5450,7 @@ void FinishLayout(AppCommandState& st, std::vector<std::string>& log) {
   const int ix = FindAlignment(st, st.alignmentLayout.name);
   st.active = AppCommandState::Kind::None;
   if (ix < 0) return;
-  const alignment::Alignment& a = st.alignments[static_cast<size_t>(ix)];
+  const alignment::Alignment& a = st.drawing.alignments[static_cast<size_t>(ix)];
   assert(a.name == st.alignmentLayout.name);
   if (a.Empty()) {
     log.push_back("ALIGNMENTLAYOUT - \"" + a.name + "\" has no geometry yet.");
@@ -5605,7 +5605,7 @@ bool HandleLayoutText(AppCommandState& st, const std::string& line, std::vector<
 }
 
 void StartAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& log) {
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   const std::vector<SelectedEntity> preselected = st.selection;
   if (!BeginInteractive(st, AppCommandState::Kind::AlignmentFromObjects, "CREATEALIGNMENTFROMOBJECTS", log)) return;
   st.alignmentFromObjects = {};

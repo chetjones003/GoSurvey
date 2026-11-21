@@ -73,12 +73,12 @@ bool NeedsNativeDialog(const QString& command) {
 }
 int SelectedSurface(const AppCommandState& state) {
   for (const auto& item : state.selection)
-    if (item.type == SelectedEntity::Type::Surface && item.index >= 0 && item.index < static_cast<int>(state.cadSurfaces.size())) return item.index;
+    if (item.type == SelectedEntity::Type::Surface && item.index >= 0 && item.index < static_cast<int>(state.drawing.cadSurfaces.size())) return item.index;
   return -1;
 }
 int SelectedAlignment(const AppCommandState& state) {
   for (const auto& item : state.selection)
-    if (item.type == SelectedEntity::Type::Alignment && item.index >= 0 && item.index < static_cast<int>(state.alignments.size())) return item.index;
+    if (item.type == SelectedEntity::Type::Alignment && item.index >= 0 && item.index < static_cast<int>(state.drawing.alignments.size())) return item.index;
   return -1;
 }
 
@@ -1152,7 +1152,7 @@ void EditorWindow::BuildRibbonPages() {
           static const float az[] = {0, 0, 270, 90, 0, 180, 45, 315, 135, 225};
           static const float el[] = {90, -90, 0, 0, 0, 0, 35.264f, 35.264f, 35.264f, 35.264f};
           if (index < 10) m_Viewport->SetOrientation(az[index], el[index]);
-          else if (index - 10 < static_cast<int>(m_State.namedViews.size())) RestoreNamedView(m_State, m_State.namedViews[index - 10], m_Log);
+          else if (index - 10 < static_cast<int>(m_State.drawing.namedViews.size())) RestoreNamedView(m_State, m_State.drawing.namedViews[index - 10], m_Log);
           Refresh();
         });
       }
@@ -1164,13 +1164,13 @@ void EditorWindow::BuildRibbonPages() {
           model.manageLabel = QStringLiteral("Manage Text Styles...");
           model.columns = 3;
           model.tileIcon = CadCommandIcon(QStringLiteral("text.png"));
-          TextStyles::EnsureStandard(m_State.textStyles);
-          for (const auto& style : m_State.textStyles)
+          TextStyles::EnsureStandard(m_State.drawing.textStyles);
+          for (const auto& style : m_State.drawing.textStyles)
             model.entries.append(Text(style.name.c_str()));
-          model.current = Text(m_State.activeTextStyleName.c_str());
+          model.current = Text(m_State.drawing.activeTextStyleName.c_str());
           model.previewFont = [this](const QString& entry) {
             QFont font(QStringLiteral("Segoe UI"), 12);
-            if (const TextStyle* style = TextStyles::Find(m_State.textStyles, entry.toUtf8().toStdString()))
+            if (const TextStyle* style = TextStyles::Find(m_State.drawing.textStyles, entry.toUtf8().toStdString()))
               if (!style->fontFamily.empty())
                 font.setFamily(Text(style->fontFamily.c_str()));
             return font;
@@ -1189,11 +1189,11 @@ void EditorWindow::BuildRibbonPages() {
           model.manageLabel = QStringLiteral("Manage Dimension Styles...");
           model.columns = 2;
           model.tileIcon = CadCommandIcon(QStringLiteral("dimstyle.png"));
-          for (const auto& style : m_State.dimensionStyles)
+          for (const auto& style : m_State.drawing.dimensionStyles)
             model.entries.append(Text(style.name.c_str()));
-          model.current = Text(m_State.activeDimensionStyle.name.c_str());
+          model.current = Text(m_State.drawing.activeDimensionStyle.name.c_str());
           model.previewIcon = [this](const QString& entry) {
-            const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, entry.toUtf8().toStdString());
+            const DimensionStyle* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, entry.toUtf8().toStdString());
             if (style == nullptr)
               return QIcon();
             return RibbonDimStylePreviewIcon(*style);
@@ -1212,11 +1212,11 @@ void EditorWindow::BuildRibbonPages() {
           model.manageLabel = QStringLiteral("Manage Multileader Styles...");
           model.columns = 2;
           model.tileIcon = CadCommandIcon(QStringLiteral("Multileader.png"));
-          for (const auto& style : m_State.multileaderStyles)
+          for (const auto& style : m_State.drawing.multileaderStyles)
             model.entries.append(Text(style.name.c_str()));
-          model.current = Text(m_State.activeMultileaderStyle.name.c_str());
+          model.current = Text(m_State.drawing.activeMultileaderStyle.name.c_str());
           model.previewIcon = [this](const QString& entry) {
-            const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, entry.toUtf8().toStdString());
+            const MultileaderStyle* style = MultileaderStyles::Find(m_State.drawing.multileaderStyles, entry.toUtf8().toStdString());
             if (style == nullptr)
               return QIcon();
             return RibbonMleaderStylePreviewIcon(*style, entry);
@@ -1234,12 +1234,12 @@ void EditorWindow::BuildRibbonPages() {
           model.manageLabel = QStringLiteral("Manage Table Styles...");
           model.columns = 2;
           model.tileIcon = CadCommandIcon(QStringLiteral("Table.png"));
-          for (const auto& style : m_State.tableStyles)
+          for (const auto& style : m_State.drawing.tableStyles)
             model.entries.append(Text(style.name.c_str()));
           const std::string active = m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle;
           model.current = Text(active.c_str());
           model.previewIcon = [this](const QString& entry) {
-            const CadTableStyle* style = CadTableFindStyle(m_State.tableStyles, entry.toUtf8().toStdString());
+            const CadTableStyle* style = CadTableFindStyle(m_State.drawing.tableStyles, entry.toUtf8().toStdString());
             if (style == nullptr)
               return QIcon();
             return RibbonTableStylePreviewIcon(*style);
@@ -1256,7 +1256,7 @@ void EditorWindow::BuildRibbonPages() {
         connect(frame, &QComboBox::activated, this, [this](int index) {
           if (index == 0) SetActiveUcs(m_State, ucs::Ucs{}, m_Log);
           else if (index <= 6) SetActiveUcs(m_State, ucs::OrthographicPresets()[index - 1].frame, m_Log);
-          else if (index - 7 < static_cast<int>(m_State.ucsNamed.size())) SetActiveUcs(m_State, m_State.ucsNamed[index - 7].frame, m_Log);
+          else if (index - 7 < static_cast<int>(m_State.drawing.ucsNamed.size())) SetActiveUcs(m_State, m_State.drawing.ucsNamed[index - 7].frame, m_Log);
           Refresh();
         });
       }
@@ -1399,37 +1399,37 @@ void EditorWindow::BuildRibbonPages() {
 void EditorWindow::PickRibbonAnnotStyle(const QString& galleryObjectName, const QString& styleName) {
   const std::string name = styleName.toUtf8().toStdString();
   if (galleryObjectName == QStringLiteral("ribbonTextStyleGallery")) {
-    if (TextStyles::Find(m_State.textStyles, name) == nullptr)
+    if (TextStyles::Find(m_State.drawing.textStyles, name) == nullptr)
       return;
     // The current text style is drawing content now (issue #1557 phase 1b), so the change is undoable.
-    if (name != m_State.activeTextStyleName)
+    if (name != m_State.drawing.activeTextStyleName)
       PushUndoSnapshot(m_State, "Text style");
     SetActiveTextStyle(m_State, name);
     Refresh();
     return;
   }
   if (galleryObjectName == QStringLiteral("ribbonDimStyleGallery")) {
-    const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name);
+    const DimensionStyle* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, name);
     if (style == nullptr)
       return;
     PushUndoSnapshot(m_State, "DIMSTY current");
-    m_State.activeDimensionStyle = *style;
+    m_State.drawing.activeDimensionStyle = *style;
     m_State.dimStyleDraft = *style;
     Refresh();
     return;
   }
   if (galleryObjectName == QStringLiteral("ribbonMleaderStyleGallery")) {
-    const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name);
+    const MultileaderStyle* style = MultileaderStyles::Find(m_State.drawing.multileaderStyles, name);
     if (style == nullptr)
       return;
     PushUndoSnapshot(m_State, "MLEADERSTYLE current");
-    m_State.activeMultileaderStyle = *style;
+    m_State.drawing.activeMultileaderStyle = *style;
     m_State.mleaderStyleDraft = *style;
     Refresh();
     return;
   }
   if (galleryObjectName == QStringLiteral("ribbonTableStyleGallery")) {
-    if (CadTableFindStyle(m_State.tableStyles, name) == nullptr)
+    if (CadTableFindStyle(m_State.drawing.tableStyles, name) == nullptr)
       return;
     m_State.tablePendingStyle = name;
     Refresh();
@@ -1466,11 +1466,11 @@ void EditorWindow::RefreshRibbon() {
   int hatch = -1;
   const int alignment = paper ? -1 : SelectedAlignment(m_State);
   if (!paper) for (const int i : m_State.selectedSurveyPointIndices)
-    if (i >= 0 && i < static_cast<int>(m_State.surveyPoints.size())) { point = i; break; }
+    if (i >= 0 && i < static_cast<int>(m_State.drawing.surveyPoints.size())) { point = i; break; }
   for (const auto& item : m_State.selection) {
-    if (!paper && item.type == SelectedEntity::Type::PointCloud && item.index >= 0 && item.index < static_cast<int>(m_State.cadPointClouds.size())) cloud = item.index;
-    if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 && item.index < static_cast<int>(m_State.pdfAttachments.size())) pdf = item.index;
-    if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.cadFilledRegions.size())) hatch = item.index;
+    if (!paper && item.type == SelectedEntity::Type::PointCloud && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.cadPointClouds.size())) cloud = item.index;
+    if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.pdfAttachments.size())) pdf = item.index;
+    if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.cadFilledRegions.size())) hatch = item.index;
   }
   const bool hatchActive = hatch >= 0 || m_State.active == AppCommandState::Kind::Hatch;
   const QString desired = !m_State.blockEditorName.empty() ? "BlockEditor" : surface >= 0 ? "SurfaceCtx" : point >= 0 ? "SurveyPointCtx" : cloud >= 0 ? "PointCloudCtx" : hatchActive ? "HatchCtx" : alignment >= 0 ? "AlignmentCtx" : QString{};
@@ -1487,15 +1487,15 @@ void EditorWindow::RefreshRibbon() {
     ribbon->setTabVisible(i, visible); page->setEnabled(drawing);
     if (name == desired) desiredIndex = i;
     QString label = name;
-    if (name == "SurfaceCtx") label = surface >= 0 ? "TIN Surface: " + Text(m_State.cadSurfaces[surface].name.c_str()) : "TIN Surface";
-    else if (name == "SurveyPointCtx") label = point >= 0 ? QString("Survey Point: %1").arg(m_State.surveyPoints[point].id) : "Survey Point";
+    if (name == "SurfaceCtx") label = surface >= 0 ? "TIN Surface: " + Text(m_State.drawing.cadSurfaces[surface].name.c_str()) : "TIN Surface";
+    else if (name == "SurveyPointCtx") label = point >= 0 ? QString("Survey Point: %1").arg(m_State.drawing.surveyPoints[point].id) : "Survey Point";
     else if (name == "PointCloudCtx") label = "Point Cloud";
     else if (name == "BlockEditor") label = "Block Editor";
     else if (name == "GeolocationCtx") label = "Geolocation";
     else if (name == "PdfCtx") label = "PDF Underlay";
     else if (name == "HatchCtx") label = "Hatch";
     else if (name == "AlignmentCtx")
-      label = alignment >= 0 ? "Alignment: " + Text(m_State.alignments[static_cast<std::size_t>(alignment)].name.c_str()) : "Alignment";
+      label = alignment >= 0 ? "Alignment: " + Text(m_State.drawing.alignments[static_cast<std::size_t>(alignment)].name.c_str()) : "Alignment";
     ribbon->setTabText(i, label);
   }
   if (desired != previous) {
@@ -1508,13 +1508,13 @@ void EditorWindow::RefreshRibbon() {
   }
   for (auto* action : findChildren<QAction*>()) {
     const auto route = action->property("ribbonCommand").toString();
-    if (route == "@captureArea" || route == "@captureViewport") action->setEnabled(m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off);
-    if (route == "@removeCaptures") action->setEnabled(!m_State.drawingSettings.capturedAreas.empty());
+    if (route == "@captureArea" || route == "@captureViewport") action->setEnabled(m_State.drawing.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off);
+    if (route == "@removeCaptures") action->setEnabled(!m_State.drawing.drawingSettings.capturedAreas.empty());
     if (route == "UNISOLATEOBJECTS") action->setEnabled(!m_State.hiddenEntityIds.empty());
     const auto id = action->property("ribbonId").toString(); if (id.isEmpty()) continue;
     bool enabled = drawing && !action->property("releasePlaceholder").toBool() && !action->property("nativeDialogPending").toBool();
     if (id == "##RibbonPlotPreview" || id == "##RibbonViewDetails" || id == "##OutDwfxExport") enabled = enabled && paper &&
-        m_State.activeSpaceIndex >= 0 && static_cast<size_t>(m_State.activeSpaceIndex) < m_State.paperLayouts.size();
+        m_State.activeSpaceIndex >= 0 && static_cast<size_t>(m_State.activeSpaceIndex) < m_State.drawing.paperLayouts.size();
     if (id == "##RibbonPasteHome") enabled = enabled && !m_State.clipboard.empty();
     if (id == "##ClipPasteSpecial") enabled = enabled && !m_State.clipboard.empty();
     if (id == "##RibbonCopyClipHome") enabled = enabled && (!m_State.selection.empty() || !m_State.selectedPaperEntities.empty());
@@ -1530,7 +1530,7 @@ void EditorWindow::RefreshRibbon() {
     }
     action->setEnabled(enabled);
     if (id == "##GeoMap") {
-      const auto& map = OnlineMapInfoOf(m_State.drawingSettings.onlineMap);
+      const auto& map = OnlineMapInfoOf(m_State.drawing.drawingSettings.onlineMap);
       action->setText(Text(map.label)); action->setProperty("cadIcon", Text(map.icon) + ".png"); action->setIcon(CadCommandIcon(Text(map.icon) + ".png"));
     }
   }
@@ -1541,37 +1541,37 @@ void EditorWindow::RefreshRibbon() {
       const QSignalBlocker block(combo); combo->clear(); combo->addItems(values); combo->setCurrentText(selected);
     }
   };
-  QStringList layers; for (const auto& layer : m_State.drawingLayerTable) layers.append(Text(layer.name.c_str()));
+  QStringList layers; for (const auto& layer : m_State.drawing.drawingLayerTable) layers.append(Text(layer.name.c_str()));
   const auto selectedLayer = CadSelectionLayer(m_State);
   if (auto* combo = findChild<QComboBox*>("ribbonLayer"); combo && !combo->hasFocus() && !combo->view()->isVisible())
-    RibbonFillLayerCombo(combo, m_State.drawingLayerTable, Text((selectedLayer.empty() ? m_State.currentLayer : selectedLayer).c_str()));
-  const auto* region = hatch >= 0 ? &m_State.cadFilledRegions[hatch] : nullptr;
-  const auto* attrs = hatch >= 0 && hatch < static_cast<int>(m_State.cadFilledRegionAttrs.size()) ? &m_State.cadFilledRegionAttrs[hatch] : nullptr;
+    RibbonFillLayerCombo(combo, m_State.drawing.drawingLayerTable, Text((selectedLayer.empty() ? m_State.drawing.currentLayer : selectedLayer).c_str()));
+  const auto* region = hatch >= 0 ? &m_State.drawing.cadFilledRegions[hatch] : nullptr;
+  const auto* attrs = hatch >= 0 && hatch < static_cast<int>(m_State.drawing.cadFilledRegionAttrs.size()) ? &m_State.drawing.cadFilledRegionAttrs[hatch] : nullptr;
   if (auto* combo = findChild<QComboBox*>("ribbonHatchLayer"); combo && !combo->hasFocus() && !combo->view()->isVisible())
-    RibbonFillLayerCombo(combo, m_State.drawingLayerTable, Text((attrs ? attrs->layer : m_State.hatchLayer.empty() ? m_State.currentLayer : m_State.hatchLayer).c_str()));
+    RibbonFillLayerCombo(combo, m_State.drawing.drawingLayerTable, Text((attrs ? attrs->layer : m_State.hatchLayer.empty() ? m_State.drawing.currentLayer : m_State.hatchLayer).c_str()));
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonHatchPattern")) { const QSignalBlocker block(combo); const auto& pattern = region ? region->patternName : m_State.hatchPatternName; combo->setCurrentText(pattern.empty() ? "SOLID" : Text(pattern.c_str())); }
   if (auto* angle = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchAngle")) { const QSignalBlocker block(angle); angle->setValue(region ? region->patternAngleDeg : m_State.hatchAngleDeg); }
   if (auto* scale = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchScale")) { const QSignalBlocker block(scale); scale->setValue(region ? region->patternScale : m_State.hatchScale); }
   if (auto* transparency = ribbon->findChild<QSpinBox*>("ribbonHatchTransparency")) { const QSignalBlocker block(transparency); transparency->setValue(qRound((attrs ? std::max(0.f, attrs->transparency) : m_State.hatchTransparency01) * 100)); }
-  if (auto* combo = findChild<QComboBox*>("ribbonColor")) { const QSignalBlocker block(combo); const auto selected = CadSelectionColor(m_State); combo->setCurrentText(Text((selected.empty() ? m_State.currentColor : selected).c_str())); }
+  if (auto* combo = findChild<QComboBox*>("ribbonColor")) { const QSignalBlocker block(combo); const auto selected = CadSelectionColor(m_State); combo->setCurrentText(Text((selected.empty() ? m_State.drawing.currentColor : selected).c_str())); }
   if (auto* textGallery = findChild<QToolButton*>(QStringLiteral("ribbonTextStyleGallery"))) {
-    SyncRibbonStyleGalleryButton(textGallery, Text(m_State.activeTextStyleName.c_str()));
+    SyncRibbonStyleGalleryButton(textGallery, Text(m_State.drawing.activeTextStyleName.c_str()));
     QStringList entries;
-    for (const auto& style : m_State.textStyles)
+    for (const auto& style : m_State.drawing.textStyles)
       entries.append(Text(style.name.c_str()));
     textGallery->setProperty("ribbonStyleEntries", entries);
   }
   if (auto* dimGallery = findChild<QToolButton*>(QStringLiteral("ribbonDimStyleGallery"))) {
-    SyncRibbonStyleGalleryButton(dimGallery, Text(m_State.activeDimensionStyle.name.c_str()));
+    SyncRibbonStyleGalleryButton(dimGallery, Text(m_State.drawing.activeDimensionStyle.name.c_str()));
     QStringList entries;
-    for (const auto& style : m_State.dimensionStyles)
+    for (const auto& style : m_State.drawing.dimensionStyles)
       entries.append(Text(style.name.c_str()));
     dimGallery->setProperty("ribbonStyleEntries", entries);
   }
   if (auto* mleaderGallery = findChild<QToolButton*>(QStringLiteral("ribbonMleaderStyleGallery"))) {
-    SyncRibbonStyleGalleryButton(mleaderGallery, Text(m_State.activeMultileaderStyle.name.c_str()));
+    SyncRibbonStyleGalleryButton(mleaderGallery, Text(m_State.drawing.activeMultileaderStyle.name.c_str()));
     QStringList entries;
-    for (const auto& style : m_State.multileaderStyles)
+    for (const auto& style : m_State.drawing.multileaderStyles)
       entries.append(Text(style.name.c_str()));
     mleaderGallery->setProperty("ribbonStyleEntries", entries);
   }
@@ -1579,7 +1579,7 @@ void EditorWindow::RefreshRibbon() {
     const std::string activeTable = m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle;
     SyncRibbonStyleGalleryButton(tableGallery, Text(activeTable.c_str()));
     QStringList entries;
-    for (const auto& style : m_State.tableStyles)
+    for (const auto& style : m_State.drawing.tableStyles)
       entries.append(Text(style.name.c_str()));
     tableGallery->setProperty("ribbonStyleEntries", entries);
   }
@@ -1592,17 +1592,17 @@ void EditorWindow::RefreshRibbon() {
   }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonUcs")) {
     const QSignalBlocker block(combo); while (combo->count() > 7) combo->removeItem(7);
-    for (const auto& frame : m_State.ucsNamed) combo->addItem(Text(frame.name.c_str()));
+    for (const auto& frame : m_State.drawing.ucsNamed) combo->addItem(Text(frame.name.c_str()));
     int selected = ucs::FramesMatch(m_State.activeUcs, ucs::Ucs{}) ? 0 : -1;
     if (selected < 0) for (int i = 0; i < 6; ++i) if (ucs::FramesMatch(m_State.activeUcs, ucs::OrthographicPresets()[i].frame)) { selected = i + 1; break; }
-    if (selected < 0) for (int i = 0; i < static_cast<int>(m_State.ucsNamed.size()); ++i) if (ucs::FramesMatch(m_State.activeUcs, m_State.ucsNamed[i].frame)) { selected = i + 7; break; }
+    if (selected < 0) for (int i = 0; i < static_cast<int>(m_State.drawing.ucsNamed.size()); ++i) if (ucs::FramesMatch(m_State.activeUcs, m_State.drawing.ucsNamed[i].frame)) { selected = i + 7; break; }
     if (selected < 0) { combo->addItem("Unnamed"); selected = combo->count() - 1; }
     combo->setCurrentIndex(selected);
   }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonNamedView")) {
     const QSignalBlocker block(combo);
     while (combo->count() > 10) combo->removeItem(10);
-    for (const auto& view : m_State.namedViews) combo->addItem(Text(view.name.c_str()));
+    for (const auto& view : m_State.drawing.namedViews) combo->addItem(Text(view.name.c_str()));
     const auto* current = CurrentNamedView(m_State); combo->setCurrentText(current ? Text(current->name.c_str()) : "Unsaved View");
   }
   if (auto* size = ribbon->findChild<QDoubleSpinBox*>("ribbonPointSize")) { const QSignalBlocker block(size); size->setValue(m_State.pointCloudDisplay.pointSizePx); }
@@ -1610,8 +1610,8 @@ void EditorWindow::RefreshRibbon() {
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonPointColor")) { const QSignalBlocker block(combo); combo->setCurrentIndex(static_cast<int>(m_State.pointCloudDisplay.colorScheme)); }
   if (auto* radius = ribbon->findChild<QDoubleSpinBox*>("ribbonCenterlineRadius")) { const QSignalBlocker block(radius); radius->setValue(m_State.extractCenterlineSearchRadiusFt); }
   if (auto* tolerance = ribbon->findChild<QSpinBox*>("ribbonCenterlineTolerance")) { const QSignalBlocker block(tolerance); tolerance->setValue(qRound(m_State.extractCenterlineMaxResidualRatio * 100)); }
-  if (pdf >= 0 && pdf < static_cast<int>(m_State.pdfAttachments.size())) {
-    const PdfAttachment& att = m_State.pdfAttachments[static_cast<size_t>(pdf)];
+  if (pdf >= 0 && pdf < static_cast<int>(m_State.drawing.pdfAttachments.size())) {
+    const PdfAttachment& att = m_State.drawing.pdfAttachments[static_cast<size_t>(pdf)];
     if (auto* fade = ribbon->findChild<QSpinBox*>("ribbonPdfFade")) {
       const QSignalBlocker block(fade);
       fade->setValue(qRound(std::clamp(att.fade, 0.f, 1.f) * 100.f));
@@ -1658,12 +1658,12 @@ void EditorWindow::EditRibbonHatch(const QString& field, const QString& value) {
     for (const auto& project : m_State.openProjects) if (project.uid == uid && project.readOnly) { Refresh(); return; }
   }
   std::vector<int> selected;
-  for (const auto& item : m_State.selection) if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.cadFilledRegions.size())) selected.push_back(item.index);
+  for (const auto& item : m_State.selection) if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.cadFilledRegions.size())) selected.push_back(item.index);
   if (!selected.empty()) {
     PushUndoSnapshot(m_State, "Edit hatch");
-    m_State.cadFilledRegionAttrs.resize(m_State.cadFilledRegions.size());
+    m_State.drawing.cadFilledRegionAttrs.resize(m_State.drawing.cadFilledRegions.size());
     for (int index : selected) {
-      auto& region = m_State.cadFilledRegions[index]; auto& attrs = m_State.cadFilledRegionAttrs[index];
+      auto& region = m_State.drawing.cadFilledRegions[index]; auto& attrs = m_State.drawing.cadFilledRegionAttrs[index];
       if (field == "pattern") region.patternName = value.toUtf8().toStdString();
       else if (field == "layer") attrs.layer = value.toUtf8().toStdString();
       else if (field == "color") attrs.color = value.toStdString();
@@ -1695,13 +1695,13 @@ void EditorWindow::EditRibbonPdf(const QString& field, const QString& value) {
   std::vector<int> selected;
   for (const auto& item : m_State.selection)
     if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 &&
-        item.index < static_cast<int>(m_State.pdfAttachments.size()))
+        item.index < static_cast<int>(m_State.drawing.pdfAttachments.size()))
       selected.push_back(item.index);
   if (selected.empty())
     return;
   PushUndoSnapshot(m_State, "Edit PDF underlay");
   for (const int index : selected) {
-    PdfAttachment& att = m_State.pdfAttachments[static_cast<size_t>(index)];
+    PdfAttachment& att = m_State.drawing.pdfAttachments[static_cast<size_t>(index)];
     if (field == "fade")
       att.fade = std::clamp(value.toFloat(), 0.f, 1.f);
     else if (field == "snapLines")
@@ -1722,7 +1722,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   QString command = id;
   for (const auto& item : qtribbon::kButtons) if (Text(item.id) == id) { if (item.placeholder) return; command = Text(item.command); break; }
   const int surface = SelectedSurface(m_State);
-  const std::string surfaceName = surface >= 0 ? m_State.cadSurfaces[surface].name : std::string{};
+  const std::string surfaceName = surface >= 0 ? m_State.drawing.cadSurfaces[surface].name : std::string{};
   // REQ-486 / REQ-487: the Alignment tab's commands act on the selected alignment.
   const int selectedAlignment = SelectedAlignment(m_State);
   if (command.contains("{alignment}")) {
@@ -1731,12 +1731,12 @@ void EditorWindow::RunRibbonAction(const QString& id) {
       Refresh();
       return;
     }
-    command.replace("{alignment}", Text(m_State.alignments[static_cast<std::size_t>(selectedAlignment)].name.c_str()));
+    command.replace("{alignment}", Text(m_State.drawing.alignments[static_cast<std::size_t>(selectedAlignment)].name.c_str()));
   }
   if (command == "@alignmentGeometryEditor") {
     if (selectedAlignment >= 0) {
       CancelActiveCommand(m_State, m_Log);
-      m_State.alignmentLayoutToolsName = m_State.alignments[static_cast<std::size_t>(selectedAlignment)].name;
+      m_State.alignmentLayoutToolsName = m_State.drawing.alignments[static_cast<std::size_t>(selectedAlignment)].name;
     }
     Refresh();
     return;
@@ -1898,8 +1898,8 @@ void EditorWindow::RunRibbonAction(const QString& id) {
           v[i] = fields[i].trimmed().toDouble(&parsed);
           valid = parsed && std::isfinite(v[i]);
         }
-        const float localX = valid ? static_cast<float>(v[0] - m_State.worldDocumentOriginX) : 0.f;
-        const float localY = valid ? static_cast<float>(v[1] - m_State.worldDocumentOriginY) : 0.f;
+        const float localX = valid ? static_cast<float>(v[0] - m_State.drawing.worldDocumentOriginX) : 0.f;
+        const float localY = valid ? static_cast<float>(v[1] - m_State.drawing.worldDocumentOriginY) : 0.f;
         const float width = static_cast<float>(v[2]);
         const float height = static_cast<float>(v[3]);
         const float rotation = static_cast<float>(v[4] * (3.14159265358979323846 / 180.0));
@@ -1909,7 +1909,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
           m_Log.push_back("Drape Image — enter finite coordinates, positive width and height, and a finite rotation.");
         } else if (AttachModelRasterImage(m_State, path.toUtf8().constData(), localX, localY, width, height,
                                           rotation, m_Log)) {
-          SetModelRasterDrape(m_State, m_State.cadRasterImages.size() - 1, static_cast<size_t>(surface), m_Log);
+          SetModelRasterDrape(m_State, m_State.drawing.cadRasterImages.size() - 1, static_cast<size_t>(surface), m_Log);
         }
       }
     }
@@ -1919,11 +1919,11 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   else if (command == "@surfaceRebuild" && surface >= 0) Submit(Text(("SURFACEREBUILD " + surfaceName).c_str()));
   else if (command == "@extractContours" && surface >= 0) Submit(Text(("EXTRACT " + surfaceName).c_str()));
   else if (command == "@pdfBackground" || command == "@pdfVectorize" || command == "@pdfSnap") {
-    for (const auto& item : m_State.selection) if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 && item.index < static_cast<int>(m_State.pdfAttachments.size())) {
-      if (command == "@pdfBackground") { PushUndoSnapshot(m_State, "PDF background"); m_State.pdfAttachments[item.index].showBackground = !m_State.pdfAttachments[item.index].showBackground; BumpCadGpuCache(m_State); }
+    for (const auto& item : m_State.selection) if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.pdfAttachments.size())) {
+      if (command == "@pdfBackground") { PushUndoSnapshot(m_State, "PDF background"); m_State.drawing.pdfAttachments[item.index].showBackground = !m_State.drawing.pdfAttachments[item.index].showBackground; BumpCadGpuCache(m_State); }
       else if (command == "@pdfSnap") {
         PushUndoSnapshot(m_State, "PDF snap");
-        m_State.pdfAttachments[item.index].snapEnabled = !m_State.pdfAttachments[item.index].snapEnabled;
+        m_State.drawing.pdfAttachments[item.index].snapEnabled = !m_State.drawing.pdfAttachments[item.index].snapEnabled;
       }
       else VectorizePdfAttachmentLines(m_State, item.index, m_Log);
       break;
@@ -1947,7 +1947,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     ShowActiveLayoutDetails();
   } else if (command == "@exportCurrentLayoutPdf") {
     if (InFloatingModelSpace(m_State) || m_State.activeSpaceIndex < 0 ||
-        static_cast<size_t>(m_State.activeSpaceIndex) >= m_State.paperLayouts.size()) {
+        static_cast<size_t>(m_State.activeSpaceIndex) >= m_State.drawing.paperLayouts.size()) {
       m_Log.push_back("PDF Export — switch to a paper layout first.");
     } else {
       QFileDialog dialog(this, "Export current layout to PDF", {}, "PDF (*.pdf)");

@@ -110,20 +110,20 @@ std::uint64_t CurrentFeatureId(QComboBox* combo) {
 }
 
 int CurrentFeatureIndex(EditorWindow& window, QComboBox* combo) {
-  return FindEntityIndexById(window.State().featureLineAttrs, CurrentFeatureId(combo));
+  return FindEntityIndexById(window.State().drawing.featureLineAttrs, CurrentFeatureId(combo));
 }
 
 void RefreshFeatureLines(EditorWindow& window, QComboBox* combo, std::uint64_t preferredId) {
   EnsureEntityIds(window.State());
   const QSignalBlocker blocker(combo);
   combo->clear();
-  for (size_t i = 0; i + 1 < window.State().featureLineOffsets.size(); ++i) {
-    const std::string name = i < window.State().featureLineInfo.size()
-                                 ? window.State().featureLineInfo[i].name
+  for (size_t i = 0; i + 1 < window.State().drawing.featureLineOffsets.size(); ++i) {
+    const std::string name = i < window.State().drawing.featureLineInfo.size()
+                                 ? window.State().drawing.featureLineInfo[i].name
                                  : std::string();
     const QString label = name.empty() ? QString("Feature line %1").arg(i + 1)
                                        : QString::fromUtf8(name.c_str());
-    combo->addItem(label, QVariant::fromValue<qulonglong>(window.State().featureLineAttrs[i].id));
+    combo->addItem(label, QVariant::fromValue<qulonglong>(window.State().drawing.featureLineAttrs[i].id));
   }
   const int ix = combo->findData(QVariant::fromValue<qulonglong>(preferredId));
   combo->setCurrentIndex(ix);
@@ -132,10 +132,10 @@ void RefreshFeatureLines(EditorWindow& window, QComboBox* combo, std::uint64_t p
 void RefreshSurfaces(EditorWindow& window, QComboBox* combo, std::uint64_t preferredId = 0) {
   const QSignalBlocker blocker(combo);
   combo->clear();
-  for (size_t i = 0; i < window.State().cadSurfaces.size(); ++i) {
-    const std::string name = window.State().cadSurfaces[i].name;
-    const std::uint64_t id = i < window.State().cadSurfaceAttrs.size()
-                                 ? window.State().cadSurfaceAttrs[i].id : 0;
+  for (size_t i = 0; i < window.State().drawing.cadSurfaces.size(); ++i) {
+    const std::string name = window.State().drawing.cadSurfaces[i].name;
+    const std::uint64_t id = i < window.State().drawing.cadSurfaceAttrs.size()
+                                 ? window.State().drawing.cadSurfaceAttrs[i].id : 0;
     combo->addItem(QString::fromUtf8(name.c_str()), QVariant::fromValue<qulonglong>(id));
   }
   const int ix = combo->findData(QVariant::fromValue<qulonglong>(preferredId));
@@ -164,7 +164,7 @@ void EditorWindow::ShowGradingTools() {
       if (auto* presets = prior->findChild<QComboBox*>("gradingPreset")) {
         const QSignalBlocker blocker(presets);
         presets->clear();
-        for (const auto& preset : m_State.gradingPresets)
+        for (const auto& preset : m_State.drawing.gradingPresets)
           presets->addItem(QString::fromUtf8(preset.name.c_str()));
         presets->setCurrentIndex(-1);
       }
@@ -226,8 +226,8 @@ void EditorWindow::ShowGradingTools() {
   auto* line = new QComboBox(dialog); line->setObjectName("gradingFeatureLine");
   RefreshFeatureLines(*this, line, m_State.selection.size() == 1 &&
       m_State.selection.front().type == SelectedEntity::Type::FeatureLine &&
-      m_State.selection.front().index >= 0 && static_cast<size_t>(m_State.selection.front().index) < m_State.featureLineAttrs.size()
-          ? m_State.featureLineAttrs[static_cast<size_t>(m_State.selection.front().index)].id : 0);
+      m_State.selection.front().index >= 0 && static_cast<size_t>(m_State.selection.front().index) < m_State.drawing.featureLineAttrs.size()
+          ? m_State.drawing.featureLineAttrs[static_cast<size_t>(m_State.selection.front().index)].id : 0);
   auto* target = new QComboBox(dialog); target->setObjectName("gradingTarget");
   target->addItem(GradingIcon(dialog, PaletteGlyph::Surface), "Surface");
   target->addItem(GradingIcon(dialog, PaletteGlyph::Distance), "Distance");
@@ -275,9 +275,9 @@ void EditorWindow::ShowGradingTools() {
   updateFields(target->currentIndex());
   auto populateInputs = [this, line, target, surface, value, grade, cut, fill, side, updateFields](int) {
     const int ix = CurrentFeatureIndex(*this, line);
-    if (ix < 0 || static_cast<size_t>(ix) >= m_State.featureLineInfo.size() ||
-        !m_State.featureLineInfo[static_cast<size_t>(ix)].grading) return;
-    const auto& def = *m_State.featureLineInfo[static_cast<size_t>(ix)].grading;
+    if (ix < 0 || static_cast<size_t>(ix) >= m_State.drawing.featureLineInfo.size() ||
+        !m_State.drawing.featureLineInfo[static_cast<size_t>(ix)].grading) return;
+    const auto& def = *m_State.drawing.featureLineInfo[static_cast<size_t>(ix)].grading;
     const QSignalBlocker block(target);
     target->setCurrentIndex(static_cast<int>(def.target));
     updateFields(target->currentIndex());
@@ -303,7 +303,7 @@ void EditorWindow::ShowGradingTools() {
     if (auto* presets = dialog->findChild<QComboBox*>("gradingPreset")) {
       const QSignalBlocker blocker(presets);
       presets->clear();
-      for (const auto& preset : m_State.gradingPresets)
+      for (const auto& preset : m_State.drawing.gradingPresets)
         presets->addItem(QString::fromUtf8(preset.name.c_str()));
       presets->setCurrentIndex(-1);
     }
@@ -332,8 +332,8 @@ void EditorWindow::ShowGradingTools() {
       return;
     }
     if (!SelectFeature(*this, line)) { status->setText("Select a feature line to begin grading."); return; }
-    const bool wasResult = static_cast<size_t>(lineIx) < m_State.featureLineInfo.size() &&
-                           m_State.featureLineInfo[static_cast<size_t>(lineIx)].grading.has_value();
+    const bool wasResult = static_cast<size_t>(lineIx) < m_State.drawing.featureLineInfo.size() &&
+                           m_State.drawing.featureLineInfo[static_cast<size_t>(lineIx)].grading.has_value();
     Submit("GRADING");
     if (m_State.active != AppCommandState::Kind::Grading) { status->setText(m_Log.empty() ? "GRADING did not start." : QString::fromUtf8(m_Log.back().c_str())); return; }
     Submit("T");
@@ -345,14 +345,14 @@ void EditorWindow::ShowGradingTools() {
       if (target->currentIndex() == 1) { Submit("P"); Submit(QString::number(grade->value(), 'f', grade->decimals())); }
     }
     Submit("C"); Submit(cut->text()); Submit("F"); Submit(fill->text());
-    if (static_cast<size_t>(lineIx) < m_State.featureLineClosed.size() &&
-        !m_State.featureLineClosed[static_cast<size_t>(lineIx)]) {
+    if (static_cast<size_t>(lineIx) < m_State.drawing.featureLineClosed.size() &&
+        !m_State.drawing.featureLineClosed[static_cast<size_t>(lineIx)]) {
       Submit("D"); Submit(side->currentIndex() == 0 ? "L" : "R");
     }
     Submit("");
     EnsureEntityIds(m_State);
     const std::uint64_t resultId = wasResult ? selectedId :
-        (m_State.featureLineAttrs.empty() ? 0 : m_State.featureLineAttrs.back().id);
+        (m_State.drawing.featureLineAttrs.empty() ? 0 : m_State.drawing.featureLineAttrs.back().id);
     RefreshFeatureLines(*this, line, resultId);
     populateInputs(line->currentIndex());
     status->setText(m_Log.empty() ? "No grading result." : QString::fromUtf8(m_Log.back().c_str()));
@@ -370,19 +370,19 @@ void EditorWindow::ShowGradingTools() {
       [this, line, copyBaseline, target, surface, value, grade, cut, fill, side, status, create, paletteIsCurrent] {
     if (!paletteIsCurrent()) return;
     const int sourceIndex = CurrentFeatureIndex(*this, line);
-    if (sourceIndex < 0 || static_cast<size_t>(sourceIndex) >= m_State.featureLineInfo.size() ||
-        !m_State.featureLineInfo[static_cast<size_t>(sourceIndex)].grading) {
+    if (sourceIndex < 0 || static_cast<size_t>(sourceIndex) >= m_State.drawing.featureLineInfo.size() ||
+        !m_State.drawing.featureLineInfo[static_cast<size_t>(sourceIndex)].grading) {
       status->setText("Select an existing grading result to copy."); return;
     }
-    const auto source = *m_State.featureLineInfo[static_cast<size_t>(sourceIndex)].grading;
+    const auto source = *m_State.drawing.featureLineInfo[static_cast<size_t>(sourceIndex)].grading;
     if (source.target == CadGradingDefinition::Target::Surface &&
         FindSurfaceIndexById(m_State, source.surfaceId) < 0) {
       status->setText("The source target surface no longer exists. Choose another grading criteria."); return;
     }
     const int baseline = CurrentFeatureIndex(*this, copyBaseline);
     if (baseline < 0 || baseline == sourceIndex) { status->setText("Choose a different feature line as the new baseline."); return; }
-    if (static_cast<size_t>(baseline) < m_State.featureLineInfo.size() &&
-        m_State.featureLineInfo[static_cast<size_t>(baseline)].grading) {
+    if (static_cast<size_t>(baseline) < m_State.drawing.featureLineInfo.size() &&
+        m_State.drawing.featureLineInfo[static_cast<size_t>(baseline)].grading) {
       status->setText("The new baseline must be an ordinary feature line."); return;
     }
     target->setCurrentIndex(static_cast<int>(source.target));
@@ -416,7 +416,7 @@ void EditorWindow::ShowGradingTools() {
     const QString selected = presets->currentText();
     const QSignalBlocker blocker(presets);
     presets->clear();
-    for (const auto& preset : m_State.gradingPresets)
+    for (const auto& preset : m_State.drawing.gradingPresets)
       presets->addItem(QString::fromUtf8(preset.name.c_str()));
     const int ix = presets->findText(selected, Qt::MatchFixedString);
     if (ix >= 0) presets->setCurrentIndex(ix);
@@ -454,23 +454,23 @@ void EditorWindow::ShowGradingTools() {
   QObject::connect(createFromPreset, &QPushButton::clicked, dialog,
       [this, line, presets, status, create, paletteIsCurrent, applyPresetToFields] {
     if (!paletteIsCurrent()) return;
-    if (presets->currentIndex() < 0 || static_cast<size_t>(presets->currentIndex()) >= m_State.gradingPresets.size()) {
+    if (presets->currentIndex() < 0 || static_cast<size_t>(presets->currentIndex()) >= m_State.drawing.gradingPresets.size()) {
       status->setText("Choose a grading preset first."); return;
     }
     const int baselineIndex = CurrentFeatureIndex(*this, line);
-    if (baselineIndex < 0 || (static_cast<size_t>(baselineIndex) < m_State.featureLineInfo.size() &&
-        m_State.featureLineInfo[static_cast<size_t>(baselineIndex)].grading)) {
+    if (baselineIndex < 0 || (static_cast<size_t>(baselineIndex) < m_State.drawing.featureLineInfo.size() &&
+        m_State.drawing.featureLineInfo[static_cast<size_t>(baselineIndex)].grading)) {
       status->setText("Choose an ordinary feature line as the new baseline. Presets always create a new result."); return;
     }
-    const auto& preset = m_State.gradingPresets[static_cast<size_t>(presets->currentIndex())];
+    const auto& preset = m_State.drawing.gradingPresets[static_cast<size_t>(presets->currentIndex())];
     if (!applyPresetToFields(preset)) return;
     create->click();
   });
   QObject::connect(presets, qOverload<int>(&QComboBox::currentIndexChanged), dialog,
                    [this, presets, presetName, applyPresetToFields, paletteIsCurrent](int ix) {
     if (!paletteIsCurrent()) return;
-    if (ix < 0 || static_cast<size_t>(ix) >= m_State.gradingPresets.size()) return;
-    const auto& p = m_State.gradingPresets[static_cast<size_t>(ix)];
+    if (ix < 0 || static_cast<size_t>(ix) >= m_State.drawing.gradingPresets.size()) return;
+    const auto& p = m_State.drawing.gradingPresets[static_cast<size_t>(ix)];
     presetName->setText(QString::fromUtf8(p.name.c_str()));
     applyPresetToFields(p);
   });
@@ -480,10 +480,10 @@ void EditorWindow::ShowGradingTools() {
     const QString qname = presetName->text().trimmed();
     if (qname.isEmpty()) { status->setText("Enter a name for the grading preset."); return; }
     const std::string name = qname.toUtf8().toStdString();
-    auto found = std::find_if(m_State.gradingPresets.begin(), m_State.gradingPresets.end(),
+    auto found = std::find_if(m_State.drawing.gradingPresets.begin(), m_State.drawing.gradingPresets.end(),
         [&name](const CadGradingPreset& p) { return QString::fromUtf8(p.name.c_str()).compare(
             QString::fromUtf8(name.c_str()), Qt::CaseInsensitive) == 0; });
-    if ((update && found == m_State.gradingPresets.end()) || (!update && found != m_State.gradingPresets.end())) {
+    if ((update && found == m_State.drawing.gradingPresets.end()) || (!update && found != m_State.drawing.gradingPresets.end())) {
       status->setText(update ? "Select an existing preset to update." : "A preset with that name already exists."); return;
     }
     bool cutOk = false, fillOk = false;
@@ -504,7 +504,7 @@ void EditorWindow::ShowGradingTools() {
       status->setText("Choose an existing target surface before saving this preset."); return;
     }
     PushUndoSnapshot(m_State, update ? "Update grading preset" : "Create grading preset");
-    if (update) *found = std::move(preset); else m_State.gradingPresets.push_back(std::move(preset));
+    if (update) *found = std::move(preset); else m_State.drawing.gradingPresets.push_back(std::move(preset));
     refreshPresets();
     status->setText(update ? "Grading preset updated." : "Grading preset saved in this drawing.");
   };
@@ -513,9 +513,9 @@ void EditorWindow::ShowGradingTools() {
   QObject::connect(deletePreset, &QPushButton::clicked, dialog, [this, presets, status, refreshPresets, paletteIsCurrent] {
     if (!paletteIsCurrent()) return;
     const int ix = presets->currentIndex();
-    if (ix < 0 || static_cast<size_t>(ix) >= m_State.gradingPresets.size()) { status->setText("Select a preset to delete."); return; }
+    if (ix < 0 || static_cast<size_t>(ix) >= m_State.drawing.gradingPresets.size()) { status->setText("Select a preset to delete."); return; }
     PushUndoSnapshot(m_State, "Delete grading preset");
-    m_State.gradingPresets.erase(m_State.gradingPresets.begin() + ix);
+    m_State.drawing.gradingPresets.erase(m_State.drawing.gradingPresets.begin() + ix);
     refreshPresets(); status->setText("Grading preset deleted from this drawing.");
   });
 

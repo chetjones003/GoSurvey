@@ -21,9 +21,9 @@
 }
 
 [[nodiscard]] inline size_t ToolspaceFeatureLineCount(const AppCommandState& st) {
-  if (st.featureLineOffsets.empty())
+  if (st.drawing.featureLineOffsets.empty())
     return 0;
-  return st.featureLineOffsets.size() - 1;
+  return st.drawing.featureLineOffsets.size() - 1;
 }
 
 inline void AppendToolspaceSurfaceFolderLines(const CadSurface& s, std::vector<std::string>* out) {
@@ -59,23 +59,23 @@ inline void AppendToolspaceProspectorLines(const AppCommandState& st, std::vecto
   out->push_back(ToolspaceActiveDrawingName(st));
   out->push_back("Points");
   out->push_back("Point Groups");
-  for (const PointGroup& g : st.pointGroups)
+  for (const PointGroup& g : st.drawing.pointGroups)
     out->push_back(g.name);
   out->push_back("Surfaces");
-  for (const CadSurface& s : st.cadSurfaces)
+  for (const CadSurface& s : st.drawing.cadSurfaces)
     AppendToolspaceSurfaceFolderLines(s, out);
   out->push_back("Feature Lines");
   const size_t nFl = ToolspaceFeatureLineCount(st);
   for (size_t i = 0; i < nFl; ++i) {
-    if (i < st.featureLineInfo.size() && !st.featureLineInfo[i].name.empty())
-      out->push_back(st.featureLineInfo[i].name);
+    if (i < st.drawing.featureLineInfo.size() && !st.drawing.featureLineInfo[i].name.empty())
+      out->push_back(st.drawing.featureLineInfo[i].name);
     else
       out->push_back("Feature Line " + std::to_string(i + 1));
   }
   // REQ-480.4 (issue #121): the folder exists only once the drawing owns an alignment.
-  if (!st.alignments.empty()) {
+  if (!st.drawing.alignments.empty()) {
     out->push_back("Alignments");
-    for (const alignment::Alignment& a : st.alignments)
+    for (const alignment::Alignment& a : st.drawing.alignments)
       out->push_back(a.name);
   }
 }
@@ -86,16 +86,16 @@ inline void AppendToolspaceSettingsLines(const AppCommandState& st, std::vector<
   out->push_back(ToolspaceActiveDrawingName(st));
   out->push_back("General");
   out->push_back("Text Styles");
-  for (const TextStyle& ts : st.textStyles)
+  for (const TextStyle& ts : st.drawing.textStyles)
     out->push_back(ts.name);
   out->push_back("Layers");
-  for (const CadLayerRow& row : st.drawingLayerTable)
+  for (const CadLayerRow& row : st.drawing.drawingLayerTable)
     out->push_back(row.name);
   out->push_back("Dimension Style");
-  out->push_back(st.activeDimensionStyle.name);
+  out->push_back(st.drawing.activeDimensionStyle.name);
   out->push_back("Surface");
   out->push_back("Surface Styles");
-  for (const SurfaceStyle& ss : st.surfaceStyles)
+  for (const SurfaceStyle& ss : st.drawing.surfaceStyles)
     out->push_back(ss.name);
 }
 

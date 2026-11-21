@@ -229,15 +229,15 @@ TEST_CASE("PROFILE commands: create, add three PVIs, query the curve, and list i
   NorthRoadCommand(st, log);
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   REQUIRE(LogHas(log, "created with no PVIs"));
-  REQUIRE(st.profiles.size() == 1);
-  CHECK(st.profiles[0].alignmentId == st.alignments[0].id);
+  REQUIRE(st.drawing.profiles.size() == 1);
+  CHECK(st.drawing.profiles[0].alignmentId == st.drawing.alignments[0].id);
 
   // The last PVI goes in before the curved middle one: a curve needs a PVI after it (REQ-521.3).
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "PROFILEPVI Design, 2+50, 110, 100", log);
-  REQUIRE(st.profiles[0].points.size() == 3);
-  CHECK(st.profiles[0].points[1].curveLength == Approx(100.0));
+  REQUIRE(st.drawing.profiles[0].points.size() == 3);
+  CHECK(st.drawing.profiles[0].points[1].curveLength == Approx(100.0));
 
   Submit(st, "PROFILEQUERY Design, 2+50", log);
   CHECK(LogHas(log, "Design point ("));
@@ -257,9 +257,9 @@ TEST_CASE("PROFILEPVI with a station already used edits that PVI and keeps its s
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "PROFILEPVI Design, 2+50, 110, 100", log);
   Submit(st, "PROFILEPVI Design, 2+50, 120, 0", log);  // edit: elevation 120, no curve
-  REQUIRE(st.profiles[0].points.size() == 3);
-  CHECK(st.profiles[0].points[1].elevation == Approx(120.0));
-  CHECK(st.profiles[0].points[1].curveLength == Approx(0.0));
+  REQUIRE(st.drawing.profiles[0].points.size() == 3);
+  CHECK(st.drawing.profiles[0].points[1].elevation == Approx(120.0));
+  CHECK(st.drawing.profiles[0].points[1].curveLength == Approx(0.0));
   CHECK(LogHas(log, "PVI at 2+50.00 changed"));
 }
 
@@ -271,17 +271,17 @@ TEST_CASE("PROFILEPVI refusals name the reason and change nothing", "[req521][pr
   Submit(st, "PROFILEPVI Design, 0+00, 100, 50", log);  // a curve on the first PVI
   CHECK(LogHas(log, "refused"));
   CHECK(LogHas(log, "first PVI"));
-  CHECK(st.profiles[0].points.empty());
+  CHECK(st.drawing.profiles[0].points.empty());
 
   Submit(st, "PROFILEPVI Design, 6+00, 100", log);  // outside the 500 ft alignment
   CHECK(LogHas(log, "outside the alignment"));
-  CHECK(st.profiles[0].points.empty());
+  CHECK(st.drawing.profiles[0].points.empty());
 
   Submit(st, "PROFILEPVI Nope, 0+00, 100", log);
   CHECK(LogHas(log, "no profile named"));
   Submit(st, "PROFILEPVI Design, 0+00, banana", log);
   CHECK(LogHas(log, "not understood"));
-  CHECK(st.profiles[0].points.empty());
+  CHECK(st.drawing.profiles[0].points.empty());
 }
 
 TEST_CASE("CREATEDESIGNPROFILE refuses a duplicate name (case-insensitive) and an unknown alignment", "[req521][profile]") {
@@ -291,9 +291,9 @@ TEST_CASE("CREATEDESIGNPROFILE refuses a duplicate name (case-insensitive) and a
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   Submit(st, "CREATEDESIGNPROFILE Road, DESIGN", log);
   CHECK(LogHas(log, "already exists"));
-  CHECK(st.profiles.size() == 1);
+  CHECK(st.drawing.profiles.size() == 1);
   Submit(st, "CREATEDESIGNPROFILE Missing, Other", log);
-  CHECK(st.profiles.size() == 1);
+  CHECK(st.drawing.profiles.size() == 1);
 }
 
 TEST_CASE("PROFILEDELPVI removes a PVI, refuses one that leaves an invalid profile, and reports a missing PVI",
@@ -309,13 +309,13 @@ TEST_CASE("PROFILEDELPVI removes a PVI, refuses one that leaves an invalid profi
 
   Submit(st, "PROFILEDELPVI Design, 0+00", log);  // would leave a curve on the first PVI
   CHECK(LogHas(log, "refused"));
-  CHECK(st.profiles[0].points.size() == 3);
+  CHECK(st.drawing.profiles[0].points.size() == 3);
 
   Submit(st, "PROFILEDELPVI Design, 1+00", log);
   CHECK(LogHas(log, "has no PVI at 1+00"));
 
   Submit(st, "PROFILEDELPVI Design, 2+50", log);
-  REQUIRE(st.profiles[0].points.size() == 2);
+  REQUIRE(st.drawing.profiles[0].points.size() == 2);
   CHECK(LogHas(log, "PVI at 2+50.00 removed"));
 }
 
@@ -325,7 +325,7 @@ TEST_CASE("PROFILEDELETE removes the profile; a second delete reports it is gone
   NorthRoadCommand(st, log);
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   Submit(st, "PROFILEDELETE Design", log);
-  CHECK(st.profiles.empty());
+  CHECK(st.drawing.profiles.empty());
   Submit(st, "PROFILEDELETE Design", log);
   CHECK(LogHas(log, "no profile named"));
 }
@@ -339,17 +339,17 @@ TEST_CASE("PROFILE commands undo in one step each, restoring the previous profil
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
-  REQUIRE(st.profiles[0].points.size() == 2);
+  REQUIRE(st.drawing.profiles[0].points.size() == 2);
 
   Submit(st, "UNDO", log);  // removes the 5+00 PVI
-  REQUIRE(st.profiles.size() == 1);
-  CHECK(st.profiles[0].points.size() == 1);
+  REQUIRE(st.drawing.profiles.size() == 1);
+  CHECK(st.drawing.profiles[0].points.size() == 1);
 
   Submit(st, "UNDO", log);  // removes the 0+00 PVI
-  CHECK(st.profiles[0].points.empty());
+  CHECK(st.drawing.profiles[0].points.empty());
 
   Submit(st, "UNDO", log);  // removes the profile
-  CHECK(st.profiles.empty());
+  CHECK(st.drawing.profiles.empty());
 }
 
 TEST_CASE("PROFILE changes are refused on a read-only project and change nothing", "[req521][profile]") {
@@ -365,7 +365,7 @@ TEST_CASE("PROFILE changes are refused on a read-only project and change nothing
 
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   CHECK(LogHas(log, "read-only"));
-  CHECK(st.profiles.empty());
+  CHECK(st.drawing.profiles.empty());
 }
 
 // ---- save/reopen and a deleted alignment (REQ-521.7, .8, acceptance 5, 6) ----
@@ -384,11 +384,11 @@ TEST_CASE("profile survives save and reopen with the same PVIs, ids and queries"
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
-  REQUIRE(back.profiles.size() == 1);
-  const alignment::VerticalProfile& p = back.profiles[0];
+  REQUIRE(back.drawing.profiles.size() == 1);
+  const alignment::VerticalProfile& p = back.drawing.profiles[0];
   CHECK(p.name == "Design");
-  CHECK(p.id == st.profiles[0].id);
-  CHECK(p.alignmentId == back.alignments[0].id);
+  CHECK(p.id == st.drawing.profiles[0].id);
+  CHECK(p.alignmentId == back.drawing.alignments[0].id);
   REQUIRE(p.points.size() == 3);
   CHECK(p.points[1].station == Approx(250.0));
   CHECK(p.points[1].elevation == Approx(110.0));
@@ -408,8 +408,8 @@ TEST_CASE("a profile whose alignment is deleted is kept, reported as alignment m
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "ALIGNMENTDELETE Road", log);
-  REQUIRE(st.alignments.empty());
-  REQUIRE(st.profiles.size() == 1);  // kept (REQ-521.7)
+  REQUIRE(st.drawing.alignments.empty());
+  REQUIRE(st.drawing.profiles.size() == 1);  // kept (REQ-521.7)
 
   Submit(st, "PROFILELIST", log);
   CHECK(LogHas(log, "\"Design\" on alignment missing"));
@@ -417,14 +417,14 @@ TEST_CASE("a profile whose alignment is deleted is kept, reported as alignment m
   CHECK(LogHas(log, "has no alignment (alignment missing)"));
   Submit(st, "PROFILEPVI Design, 3+00, 101", log);
   CHECK(LogHas(log, "PROFILEPVI - profile \"Design\" has no alignment"));  // the edit's own refusal, not the list line
-  CHECK(st.profiles[0].points.size() == 2);
+  CHECK(st.drawing.profiles[0].points.size() == 2);
 
   // The same state survives save and reopen, and the reopened drawing reports it the same way.
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
-  REQUIRE(back.profiles.size() == 1);
+  REQUIRE(back.drawing.profiles.size() == 1);
   std::vector<std::string> backLog;
   Submit(back, "PROFILELIST", backLog);
   CHECK(LogHas(backLog, "\"Design\" on alignment missing"));
@@ -462,11 +462,11 @@ TEST_CASE("PROFILEPVI refuses a curve that overlaps the one before it, and chang
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "PROFILEPVI Design, 1+00, 105, 100", log);
-  REQUIRE(st.profiles[0].points.size() == 3);
+  REQUIRE(st.drawing.profiles[0].points.size() == 3);
   // The 2+00 curve (half 75) and the 1+00 curve (half 50) need 125 ft of a 100 ft tangent.
   Submit(st, "PROFILEPVI Design, 2+00, 110, 150", log);
   CHECK(LogHas(log, "overlap"));
-  CHECK(st.profiles[0].points.size() == 3);
+  CHECK(st.drawing.profiles[0].points.size() == 3);
 }
 
 TEST_CASE("PROFILEPVI, PROFILEDELPVI and PROFILEDELETE are refused on a read-only project", "[req521][profile]") {
@@ -485,11 +485,11 @@ TEST_CASE("PROFILEPVI, PROFILEDELPVI and PROFILEDELETE are refused on a read-onl
 
   Submit(st, "PROFILEPVI Design, 2+50, 110", log);
   CHECK(LogHas(log, "read-only"));
-  CHECK(st.profiles[0].points.size() == 2);
+  CHECK(st.drawing.profiles[0].points.size() == 2);
   Submit(st, "PROFILEDELPVI Design, 0+00", log);
-  CHECK(st.profiles[0].points.size() == 2);
+  CHECK(st.drawing.profiles[0].points.size() == 2);
   Submit(st, "PROFILEDELETE Design", log);
-  CHECK(st.profiles.size() == 1);
+  CHECK(st.drawing.profiles.size() == 1);
 }
 
 TEST_CASE("PROFILEPVI edit, PROFILEDELPVI and PROFILEDELETE each undo in one step", "[req521][profile]") {
@@ -500,25 +500,25 @@ TEST_CASE("PROFILEPVI edit, PROFILEDELPVI and PROFILEDELETE each undo in one ste
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "PROFILEPVI Design, 2+50, 110, 100", log);
-  REQUIRE(st.profiles[0].points.size() == 3);
+  REQUIRE(st.drawing.profiles[0].points.size() == 3);
 
   Submit(st, "PROFILEPVI Design, 2+50, 120, 0", log);  // edit
-  REQUIRE(st.profiles[0].points[1].elevation == Approx(120.0));
+  REQUIRE(st.drawing.profiles[0].points[1].elevation == Approx(120.0));
   Submit(st, "UNDO", log);
-  CHECK(st.profiles[0].points[1].elevation == Approx(110.0));
-  CHECK(st.profiles[0].points[1].curveLength == Approx(100.0));
+  CHECK(st.drawing.profiles[0].points[1].elevation == Approx(110.0));
+  CHECK(st.drawing.profiles[0].points[1].curveLength == Approx(100.0));
 
   Submit(st, "PROFILEDELPVI Design, 2+50", log);  // remove
-  REQUIRE(st.profiles[0].points.size() == 2);
+  REQUIRE(st.drawing.profiles[0].points.size() == 2);
   Submit(st, "UNDO", log);
-  REQUIRE(st.profiles[0].points.size() == 3);
-  CHECK(st.profiles[0].points[1].station == Approx(250.0));
+  REQUIRE(st.drawing.profiles[0].points.size() == 3);
+  CHECK(st.drawing.profiles[0].points[1].station == Approx(250.0));
 
   Submit(st, "PROFILEDELETE Design", log);  // delete the profile
-  REQUIRE(st.profiles.empty());
+  REQUIRE(st.drawing.profiles.empty());
   Submit(st, "UNDO", log);
-  REQUIRE(st.profiles.size() == 1);
-  CHECK(st.profiles[0].points.size() == 3);
+  REQUIRE(st.drawing.profiles.size() == 1);
+  CHECK(st.drawing.profiles[0].points.size() == 3);
 }
 
 TEST_CASE("a drawing with no design profiles writes no designProfiles key (REQ-521.8)", "[req521][profile]") {
@@ -574,15 +574,15 @@ TEST_CASE("UNDO restores the profile list exactly (every id, name, alignment and
   Submit(st, "PROFILEPVI Design, 0+00, 100", log);
   Submit(st, "PROFILEPVI Design, 5+00, 100", log);
   Submit(st, "PROFILEPVI Design, 2+50, 110, 100", log);
-  const std::vector<alignment::VerticalProfile> before = st.profiles;
+  const std::vector<alignment::VerticalProfile> before = st.drawing.profiles;
 
   Submit(st, "PROFILEPVI Design, 2+50, 120, 0", log);
   Submit(st, "UNDO", log);
-  CHECK(SameProfiles(st.profiles, before));
+  CHECK(SameProfiles(st.drawing.profiles, before));
 
   Submit(st, "PROFILEDELPVI Design, 2+50", log);
   Submit(st, "UNDO", log);
-  CHECK(SameProfiles(st.profiles, before));
+  CHECK(SameProfiles(st.drawing.profiles, before));
 }
 
 TEST_CASE("a design profile with a malformed stored point is not loaded, and the load log names it", "[req521][profile]") {
@@ -599,7 +599,7 @@ TEST_CASE("a design profile with a malformed stored point is not loaded, and the
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, doc.dump(), loadLog));
-  CHECK(back.profiles.empty());
+  CHECK(back.drawing.profiles.empty());
   CHECK(LogHas(loadLog, "was not loaded"));
 }
 
@@ -616,8 +616,8 @@ TEST_CASE("a wrong-typed stored field never fails the drawing load (REQ-521.8)",
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, doc.dump(), loadLog));
-  REQUIRE(back.profiles.size() == 1);
-  CHECK(back.profiles[0].alignmentId == 0);
+  REQUIRE(back.drawing.profiles.size() == 1);
+  CHECK(back.drawing.profiles[0].alignmentId == 0);
 }
 
 TEST_CASE("a design profile with no name, a repeated name, or no points is not loaded, and the load log names it",
@@ -635,7 +635,7 @@ TEST_CASE("a design profile with no name, a repeated name, or no points is not l
   AppCommandState a = Drawing();
   std::vector<std::string> aLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(a, noName.dump(), aLog));
-  CHECK(a.profiles.empty());
+  CHECK(a.drawing.profiles.empty());
   CHECK(LogHas(aLog, "entry 1 was not loaded: its name is missing or blank"));
 
   nlohmann::json repeated = base;
@@ -644,7 +644,7 @@ TEST_CASE("a design profile with no name, a repeated name, or no points is not l
   AppCommandState b = Drawing();
   std::vector<std::string> bLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(b, repeated.dump(), bLog));
-  CHECK(b.profiles.size() == 1);
+  CHECK(b.drawing.profiles.size() == 1);
   CHECK(LogHas(bLog, "already has that name"));
 
   nlohmann::json noPoints = base;
@@ -652,7 +652,7 @@ TEST_CASE("a design profile with no name, a repeated name, or no points is not l
   AppCommandState c = Drawing();
   std::vector<std::string> cLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(c, noPoints.dump(), cLog));
-  CHECK(c.profiles.empty());
+  CHECK(c.drawing.profiles.empty());
   CHECK(LogHas(cLog, "stored points are missing"));
 }
 
@@ -682,7 +682,7 @@ TEST_CASE("PROFILELIST marks a loaded profile whose curves overlap as geometry n
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, doc.dump(), loadLog));
-  REQUIRE(back.profiles.size() == 1);
+  REQUIRE(back.drawing.profiles.size() == 1);
   std::vector<std::string> listLog;
   Submit(back, "PROFILELIST", listLog);
   CHECK(LogHas(listLog, "geometry not valid"));
@@ -702,15 +702,15 @@ TEST_CASE("a stored profile name is trimmed, and a blank one is not loaded", "[r
   AppCommandState a = Drawing();
   std::vector<std::string> aLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(a, padded.dump(), aLog));
-  REQUIRE(a.profiles.size() == 1);
-  CHECK(a.profiles[0].name == "Design");
+  REQUIRE(a.drawing.profiles.size() == 1);
+  CHECK(a.drawing.profiles[0].name == "Design");
 
   nlohmann::json blank = base;
   blank["document"]["designProfiles"][0]["name"] = "   ";
   AppCommandState b = Drawing();
   std::vector<std::string> bLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(b, blank.dump(), bLog));
-  CHECK(b.profiles.empty());
+  CHECK(b.drawing.profiles.empty());
   CHECK(LogHas(bLog, "name is missing or blank"));
 }
 
@@ -728,7 +728,7 @@ TEST_CASE("a stored point with an extra value, or an entry that is not an object
   AppCommandState a = Drawing();
   std::vector<std::string> aLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(a, extra.dump(), aLog));
-  CHECK(a.profiles.empty());
+  CHECK(a.drawing.profiles.empty());
   CHECK(LogHas(aLog, "malformed"));
 
   nlohmann::json notObject = base;
@@ -736,7 +736,7 @@ TEST_CASE("a stored point with an extra value, or an entry that is not an object
   AppCommandState b = Drawing();
   std::vector<std::string> bLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(b, notObject.dump(), bLog));
-  CHECK(b.profiles.empty());
+  CHECK(b.drawing.profiles.empty());
   CHECK(LogHas(bLog, "not an object"));
 }
 
@@ -748,9 +748,9 @@ TEST_CASE("PROFILEDELETE removes a profile whose alignment is missing (REQ-521.7
   NorthRoadCommand(st, log);
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   Submit(st, "ALIGNMENTDELETE Road", log);
-  REQUIRE(st.profiles.size() == 1);
+  REQUIRE(st.drawing.profiles.size() == 1);
   Submit(st, "PROFILEDELETE Design", log);
-  CHECK(st.profiles.empty());
+  CHECK(st.drawing.profiles.empty());
   CHECK(LogHas(log, "profile \"Design\" deleted"));
 }
 
@@ -761,7 +761,7 @@ TEST_CASE("PROFILEPVI refuses a non-finite elevation typed at the command line a
   Submit(st, "CREATEDESIGNPROFILE Road, Design", log);
   Submit(st, "PROFILEPVI Design, 0+00, nan", log);
   CHECK(LogHas(log, "No PVI was changed"));
-  CHECK(st.profiles[0].points.empty());
+  CHECK(st.drawing.profiles[0].points.empty());
 }
 
 // ---- council round 6 (REQ-521): an overflowing station span, a NaN station, a stale PVI past a shortened alignment ----
@@ -792,12 +792,12 @@ TEST_CASE("PROFILEDELPVI removes a PVI left beyond a shortened alignment (REQ-52
   AppCommandState back = Drawing();
   std::vector<std::string> loadLog;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, doc.dump(), loadLog));
-  REQUIRE(back.profiles.size() == 1);
-  REQUIRE(back.profiles[0].points.size() == 3);
+  REQUIRE(back.drawing.profiles.size() == 1);
+  REQUIRE(back.drawing.profiles[0].points.size() == 3);
   std::vector<std::string> delLog;
   Submit(back, "PROFILEDELPVI Design, 6+00", delLog);
   CHECK(LogHas(delLog, "removed"));
-  CHECK(back.profiles[0].points.size() == 2);
+  CHECK(back.drawing.profiles[0].points.size() == 2);
 }
 
 // ---- PR #1179 review (REQ-521): an overflowing grade difference, and no extrapolation past a tiny curve ----

@@ -113,7 +113,7 @@ void EditorWindow::ShowPoints(bool database) {
     auto append = [&](const SurveyPoint& point, const std::string& source, bool visible) {
       const int row = table->rowCount(); table->insertRow(row);
       QString group;
-      for (const auto& candidate : m_State.pointGroups) {
+      for (const auto& candidate : m_State.drawing.pointGroups) {
         if (!candidate.rule.empty() && PointMatchesRule(candidate.rule, ParseIdRanges(candidate.rule.idRangesText), point.id, point.description, point.rawDescription)) {
           group = QString::fromUtf8(candidate.name.c_str()); break;
         }
@@ -131,11 +131,11 @@ void EditorWindow::ShowPoints(bool database) {
     };
     if (database) {
       if (auto* db = ActiveProjectDb(m_State)) for (const auto& entry : db->points) {
-        const bool visible = std::any_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(),
+        const bool visible = std::any_of(m_State.drawing.surveyPoints.begin(), m_State.drawing.surveyPoints.end(),
             [&](const auto& point) { return point.id == entry.point.id; });
         append(entry.point, entry.sourceDrawing, visible);
       }
-    } else for (auto point : m_State.surveyPoints) {
+    } else for (auto point : m_State.drawing.surveyPoints) {
       point.easting = CadCoord::WorldXFromLocal(m_State, point.easting);
       point.northing = CadCoord::WorldYFromLocal(m_State, point.northing);
       append(point, {}, true);
@@ -158,7 +158,7 @@ void EditorWindow::ShowPoints(bool database) {
         if (entry.point.id == id) { point = entry.point; found = true; break; }
     } else {
       index = SurveyPointIndexForId(m_State, id);
-      if (index >= 0) { point = m_State.surveyPoints[index]; found = true; }
+      if (index >= 0) { point = m_State.drawing.surveyPoints[index]; found = true; }
     }
     bool valid = found && !PointsReadOnly(m_State);
     const auto text = cell->text();
@@ -166,8 +166,8 @@ void EditorWindow::ShowPoints(bool database) {
     else if (cell->column() <= 3) {
       bool parsed = false; const double number = text.toDouble(&parsed);
       valid &= parsed && std::isfinite(number);
-      if (cell->column() == 1) point.northing = database ? number : number - m_State.worldDocumentOriginY;
-      if (cell->column() == 2) point.easting = database ? number : number - m_State.worldDocumentOriginX;
+      if (cell->column() == 1) point.northing = database ? number : number - m_State.drawing.worldDocumentOriginY;
+      if (cell->column() == 2) point.easting = database ? number : number - m_State.drawing.worldDocumentOriginX;
       if (cell->column() == 3) point.elevation = number;
     } else if (cell->column() == 4) point.description = text.toUtf8().toStdString();
     else if (cell->column() == 5 && !database) { point.layer = text.trimmed().toUtf8().toStdString(); valid &= !point.layer.empty(); }
@@ -185,12 +185,12 @@ void EditorWindow::ShowPoints(bool database) {
         ResolveGridNumberConflict(m_State, question.clickedButton() == overwrite ? GridConflictAnswer::Overwrite : question.clickedButton() == renumber ? GridConflictAnswer::Renumber : GridConflictAnswer::Cancel, PointGridNow(), m_Log);
       } else valid = result.status == EditDatabasePointStatus::Applied;
     } else if (valid) {
-      valid = std::none_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(), [&](const auto& existing) { return existing.id == point.id && existing.id != id; });
+      valid = std::none_of(m_State.drawing.surveyPoints.begin(), m_State.drawing.surveyPoints.end(), [&](const auto& existing) { return existing.id == point.id && existing.id != id; });
       if (valid) {
         PushUndoSnapshot(m_State, "Edit survey point");
-        const int label = FindSurveyLabelAnnIndex(m_State, m_State.surveyPoints[index]);
-        m_State.surveyPoints[index] = point;
-        if (label >= 0) m_State.cadAnnotations[label].surveyPointLabelForId = point.id;
+        const int label = FindSurveyLabelAnnIndex(m_State, m_State.drawing.surveyPoints[index]);
+        m_State.drawing.surveyPoints[index] = point;
+        if (label >= 0) m_State.drawing.cadAnnotations[label].surveyPointLabelForId = point.id;
         if (static_cast<std::size_t>(index) < m_State.surveyPointIdBuffers.size()) m_State.surveyPointIdBuffers[index] = std::to_string(point.id);
         EnsureSurveyPointLabelMtext(m_State, index, &m_Log); BumpCadGpuCache(m_State);
       }

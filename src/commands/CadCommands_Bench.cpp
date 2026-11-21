@@ -67,18 +67,18 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   }
 
   AppCommandState::BenchRun& b = st.bench;
-  b.savedPolyVerts = st.userPolylineVerts;
-  b.savedPolyOffsets = st.userPolylineOffsets;
-  b.savedPolyClosed = st.userPolylineClosed;
-  b.savedPolyAttrs = st.userPolylineAttrs;
-  b.savedSurfaces = st.cadSurfaces;
-  b.savedSurfaceAttrs = st.cadSurfaceAttrs;
-  b.savedMeshes = st.cadMeshes;
-  b.savedMeshAttrs = st.cadMeshAttrs;
-  b.savedSolids = st.cadSolids;
-  b.savedSolidAttrs = st.cadSolidAttrs;
-  b.savedAlignments = st.alignments;
-  b.savedSampleLines = st.sampleLines;  // REQ-519
+  b.savedPolyVerts = st.drawing.userPolylineVerts;
+  b.savedPolyOffsets = st.drawing.userPolylineOffsets;
+  b.savedPolyClosed = st.drawing.userPolylineClosed;
+  b.savedPolyAttrs = st.drawing.userPolylineAttrs;
+  b.savedSurfaces = st.drawing.cadSurfaces;
+  b.savedSurfaceAttrs = st.drawing.cadSurfaceAttrs;
+  b.savedMeshes = st.drawing.cadMeshes;
+  b.savedMeshAttrs = st.drawing.cadMeshAttrs;
+  b.savedSolids = st.drawing.cadSolids;
+  b.savedSolidAttrs = st.drawing.cadSolidAttrs;
+  b.savedAlignments = st.drawing.alignments;
+  b.savedSampleLines = st.drawing.sampleLines;  // REQ-519
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -100,16 +100,16 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // real model looks like. This is also the profile that can catch the failure #120 names
     // directly: if the tessellation were being regenerated per frame, it would show up here and
     // nowhere else.
-    st.userPolylineVerts.clear();
-    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
-    st.userPolylineClosed.clear();
-    st.userPolylineAttrs.clear();
-    st.cadSurfaces.clear();
-    st.cadSurfaceAttrs.clear();
-    st.cadMeshes.clear();
-    st.cadMeshAttrs.clear();
-    st.cadSolids.clear();
-    st.cadSolidAttrs.clear();
+    st.drawing.userPolylineVerts.clear();
+    st.drawing.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+    st.drawing.userPolylineClosed.clear();
+    st.drawing.userPolylineAttrs.clear();
+    st.drawing.cadSurfaces.clear();
+    st.drawing.cadSurfaceAttrs.clear();
+    st.drawing.cadMeshes.clear();
+    st.drawing.cadMeshAttrs.clear();
+    st.drawing.cadSolids.clear();
+    st.drawing.cadSolidAttrs.clear();
     st.solidDisplayCache.clear();
     st.solidDisplayGeometry.solids.clear();
 
@@ -129,8 +129,8 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
           log.push_back(std::string("BENCH — solid scene failed to build: ") + brep::ProblemText(why));
           return false;
         }
-        st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-        st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+        st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+        st.drawing.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
         ++made;
       }
     }
@@ -139,7 +139,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // Count the triangles the profile will actually draw, so the report states a DENSITY rather than
     // an object count nobody can compare against REQ-100's other profiles.
     b.solidTriangleCount = 0;
-    for (const CadSolidPtr& sp : st.cadSolids) {
+    for (const CadSolidPtr& sp : st.drawing.cadSolids) {
       brep::Tessellation t;
       brep::Problem tw = brep::Problem::Ok;
       if (brep::Tessellate(*sp, kSolidChordToleranceFt, &t, &tw))
@@ -154,12 +154,12 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // Shaded-mesh profile (REQ-100 (b), density decided 2026-08-15). The line stores are emptied
     // for the same reason the surface profile empties them: the number has to be the mesh's cost
     // and nothing else. Surfaces are cleared too, so the two large profiles can never overlap.
-    st.userPolylineVerts.clear();
-    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
-    st.userPolylineClosed.clear();
-    st.userPolylineAttrs.clear();
-    st.cadSurfaces.clear();
-    st.cadSurfaceAttrs.clear();
+    st.drawing.userPolylineVerts.clear();
+    st.drawing.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+    st.drawing.userPolylineClosed.clear();
+    st.drawing.userPolylineAttrs.clear();
+    st.drawing.cadSurfaces.clear();
+    st.drawing.cadSurfaceAttrs.clear();
 
     auto mesh = std::make_shared<CadMesh>();
     b.meshTriangleCount =
@@ -174,8 +174,8 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     part.indexBegin = 0;
     part.indexCount = static_cast<int>(mesh->indices.size());
     mesh->parts.push_back(part);
-    st.cadMeshes.assign(1, std::move(mesh));
-    st.cadMeshAttrs.assign(1, MakeNewEntityAttrs(st));
+    st.drawing.cadMeshes.assign(1, std::move(mesh));
+    st.drawing.cadMeshAttrs.assign(1, MakeNewEntityAttrs(st));
 
     // The profile is *shaded* meshes. In 2D Wireframe the mesh is not drawn at all (TASK-041 §9),
     // so measuring in the user's current style would measure whatever they happened to be in.
@@ -186,10 +186,10 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // are emptied so the measurement is the surface's cost and nothing else. Triangle edges are
     // regenerated display geometry, which is exactly why this profile is not implied by the other
     // two and has to be measured on its own.
-    st.userPolylineVerts.clear();
-    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
-    st.userPolylineClosed.clear();
-    st.userPolylineAttrs.clear();
+    st.drawing.userPolylineVerts.clear();
+    st.drawing.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+    st.drawing.userPolylineClosed.clear();
+    st.drawing.userPolylineAttrs.clear();
 
     std::vector<float> ptsXyz;
     const int n = benchscene::BuildSurfacePointScene(b.surfacePointCount, &ptsXyz);
@@ -211,33 +211,33 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     bs.name = "BENCH surface";
     bs.tin = std::move(tin);
     b.surfaceTriangleCount = bs.triangleCount();
-    st.cadSurfaces.assign(1, std::move(bs));
-    st.cadSurfaceAttrs.assign(1, MakeNewEntityAttrs(st));
+    st.drawing.cadSurfaces.assign(1, std::move(bs));
+    st.drawing.cadSurfaceAttrs.assign(1, MakeNewEntityAttrs(st));
     b.segmentCount = b.surfaceTriangleCount * 3;  // triangulation edges, for the report
 
     // REQ-100 profile (c) is defined as a **contoured** surface, and until REQ-070 landed this case
     // measured an uncontoured one because contours did not exist. The bench surface carries no
     // styleName, so it resolves to "Standard" — which draws contours and the border — and the record
     // below states the interval, because a contour count is meaningless without it.
-    SurfaceStyles::EnsureStandard(st.surfaceStyles);
-    if (const SurfaceStyle* bstyle = SurfaceStyles::Resolve(st.surfaceStyles, std::string())) {
+    SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
+    if (const SurfaceStyle* bstyle = SurfaceStyles::Resolve(st.drawing.surfaceStyles, std::string())) {
       b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
       b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
     }
   } else if (b.alignmentCount > 0) {
     // REQ-495 acceptance 4: the alignments alone, so the number is their display cost and nothing else.
-    st.userPolylineVerts.clear();
-    st.userPolylineOffsets.clear();
-    st.userPolylineClosed.clear();
-    st.userPolylineAttrs.clear();
-    st.alignments = BenchAlignmentScene(b.alignmentCount, b.alignmentEntityCount, st.nextEntityId);
-    st.sampleLines.clear();  // REQ-519: the bench scene has no sample lines; the saved ones come back after the run
+    st.drawing.userPolylineVerts.clear();
+    st.drawing.userPolylineOffsets.clear();
+    st.drawing.userPolylineClosed.clear();
+    st.drawing.userPolylineAttrs.clear();
+    st.drawing.alignments = BenchAlignmentScene(b.alignmentCount, b.alignmentEntityCount, st.nextEntityId);
+    st.drawing.sampleLines.clear();  // REQ-519: the bench scene has no sample lines; the saved ones come back after the run
     st.nextEntityId += static_cast<std::uint64_t>(b.alignmentCount);
     b.segmentCount = 0;
   } else {
-    b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
-                                                   &st.userPolylineClosed);
-    st.userPolylineAttrs.assign(st.userPolylineClosed.size(), MakeNewEntityAttrs(st));
+    b.segmentCount = benchscene::BuildContourScene(segments, &st.drawing.userPolylineVerts, &st.drawing.userPolylineOffsets,
+                                                   &st.drawing.userPolylineClosed);
+    st.drawing.userPolylineAttrs.assign(st.drawing.userPolylineClosed.size(), MakeNewEntityAttrs(st));
   }
 
   // Frame the whole scene from a tilted view. The framing is computed from the geometry rather than
@@ -253,15 +253,15 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   const float* frameF = nullptr;
   const double* frameD = nullptr;
   size_t frameN = 0;
-  if (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0]) {
-    frameF = st.cadMeshes[0]->vertsXyz.data();
-    frameN = st.cadMeshes[0]->vertsXyz.size();
-  } else if (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin) {
-    frameD = st.cadSurfaces[0].tin->vertsXyz.data();
-    frameN = st.cadSurfaces[0].tin->vertsXyz.size();
+  if (b.meshTriangleCount > 0 && !st.drawing.cadMeshes.empty() && st.drawing.cadMeshes[0]) {
+    frameF = st.drawing.cadMeshes[0]->vertsXyz.data();
+    frameN = st.drawing.cadMeshes[0]->vertsXyz.size();
+  } else if (b.surfacePointCount > 0 && !st.drawing.cadSurfaces.empty() && st.drawing.cadSurfaces[0].tin) {
+    frameD = st.drawing.cadSurfaces[0].tin->vertsXyz.data();
+    frameN = st.drawing.cadSurfaces[0].tin->vertsXyz.size();
   } else {
-    frameD = st.userPolylineVerts.data();
-    frameN = st.userPolylineVerts.size();
+    frameD = st.drawing.userPolylineVerts.data();
+    frameN = st.drawing.userPolylineVerts.size();
   }
   const auto frameVertAt = [&](size_t i) -> double {
     return frameD ? frameD[i] : static_cast<double>(frameF[i]);
@@ -270,7 +270,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   // walk, and a sphere's two stored vertices would frame a line segment rather than a scene, putting
   // most of the geometry off screen and measuring a viewport with nothing in it.
   if (b.alignmentCount > 0) {
-    for (const alignment::Alignment& al : st.alignments) {
+    for (const alignment::Alignment& al : st.drawing.alignments) {
       alignment::Point2 lo, hi;
       if (!al.Bounds(&lo, &hi)) continue;
       mnX = std::min(mnX, lo.x);
@@ -282,7 +282,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     mxZ = std::max(mxZ, 0.0);
   }
   if (b.solidCount > 0) {
-    for (const CadSolidPtr& sp : st.cadSolids) {
+    for (const CadSolidPtr& sp : st.drawing.cadSolids) {
       if (!sp)
         continue;
       const brep::Bounds bb = brep::ComputeBounds(*sp);
@@ -378,18 +378,18 @@ bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vec
   }
 
   AppCommandState::BenchRun& b = st.bench;
-  b.savedPolyVerts = st.userPolylineVerts;
-  b.savedPolyOffsets = st.userPolylineOffsets;
-  b.savedPolyClosed = st.userPolylineClosed;
-  b.savedPolyAttrs = st.userPolylineAttrs;
-  b.savedSurfaces = st.cadSurfaces;
-  b.savedSurfaceAttrs = st.cadSurfaceAttrs;
-  b.savedMeshes = st.cadMeshes;
-  b.savedMeshAttrs = st.cadMeshAttrs;
-  b.savedSolids = st.cadSolids;
-  b.savedSolidAttrs = st.cadSolidAttrs;
-  b.savedAlignments = st.alignments;
-  b.savedSampleLines = st.sampleLines;  // REQ-519
+  b.savedPolyVerts = st.drawing.userPolylineVerts;
+  b.savedPolyOffsets = st.drawing.userPolylineOffsets;
+  b.savedPolyClosed = st.drawing.userPolylineClosed;
+  b.savedPolyAttrs = st.drawing.userPolylineAttrs;
+  b.savedSurfaces = st.drawing.cadSurfaces;
+  b.savedSurfaceAttrs = st.drawing.cadSurfaceAttrs;
+  b.savedMeshes = st.drawing.cadMeshes;
+  b.savedMeshAttrs = st.drawing.cadMeshAttrs;
+  b.savedSolids = st.drawing.cadSolids;
+  b.savedSolidAttrs = st.drawing.cadSolidAttrs;
+  b.savedAlignments = st.drawing.alignments;
+  b.savedSampleLines = st.drawing.sampleLines;  // REQ-519
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -403,16 +403,16 @@ bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vec
   // or restored (TASK-270 §14 ASSUMPTION): it is a real import of a real file the user pointed at
   // by path, kept in the drawing afterward like any `POINTCLOUDATTACH`, not synthetic geometry that
   // only exists for the measurement.
-  st.userPolylineVerts.clear();
-  st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
-  st.userPolylineClosed.clear();
-  st.userPolylineAttrs.clear();
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
-  st.cadMeshes.clear();
-  st.cadMeshAttrs.clear();
-  st.cadSolids.clear();
-  st.cadSolidAttrs.clear();
+  st.drawing.userPolylineVerts.clear();
+  st.drawing.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+  st.drawing.userPolylineClosed.clear();
+  st.drawing.userPolylineAttrs.clear();
+  st.drawing.cadSurfaces.clear();
+  st.drawing.cadSurfaceAttrs.clear();
+  st.drawing.cadMeshes.clear();
+  st.drawing.cadMeshAttrs.clear();
+  st.drawing.cadSolids.clear();
+  st.drawing.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
 
@@ -431,16 +431,16 @@ bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vec
   if (!StartPointCloudImportAsync(st, path, log)) {
     // Import refused to start (e.g. an unrelated import already running) — undo the clear so the
     // user's drawing is not left empty for a run that never happened.
-    st.userPolylineVerts = std::move(b.savedPolyVerts);
-    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
-    st.userPolylineClosed = std::move(b.savedPolyClosed);
-    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
-    st.cadSurfaces = std::move(b.savedSurfaces);
-    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
-    st.cadMeshes = std::move(b.savedMeshes);
-    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
-    st.cadSolids = std::move(b.savedSolids);
-    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    st.drawing.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.drawing.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.drawing.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.drawing.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.drawing.cadSurfaces = std::move(b.savedSurfaces);
+    st.drawing.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.drawing.cadMeshes = std::move(b.savedMeshes);
+    st.drawing.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.drawing.cadSolids = std::move(b.savedSolids);
+    st.drawing.cadSolidAttrs = std::move(b.savedSolidAttrs);
     b.pointCloudImportPending = false;
     b.pointCloudPath.clear();
     return false;
@@ -459,25 +459,25 @@ void InstallPointCloudBenchScene(AppCommandState& st, std::vector<std::string>& 
     return;
   b.pointCloudImportPending = false;
 
-  if (st.cadPointClouds.empty()) {
+  if (st.drawing.cadPointClouds.empty()) {
     // The import failed — TickPointCloudImport already logged why. Restore what was cleared.
     log.push_back("BENCH — point-cloud import failed; run aborted, drawing restored.");
-    st.userPolylineVerts = std::move(b.savedPolyVerts);
-    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
-    st.userPolylineClosed = std::move(b.savedPolyClosed);
-    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
-    st.cadSurfaces = std::move(b.savedSurfaces);
-    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
-    st.cadMeshes = std::move(b.savedMeshes);
-    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
-    st.cadSolids = std::move(b.savedSolids);
-    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    st.drawing.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.drawing.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.drawing.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.drawing.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.drawing.cadSurfaces = std::move(b.savedSurfaces);
+    st.drawing.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.drawing.cadMeshes = std::move(b.savedMeshes);
+    st.drawing.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.drawing.cadSolids = std::move(b.savedSolids);
+    st.drawing.cadSolidAttrs = std::move(b.savedSolidAttrs);
     b.pointCloudPath.clear();
     BumpCadGpuCache(st);
     return;
   }
 
-  const std::shared_ptr<const CadPointCloud>& cloud = st.cadPointClouds.back();
+  const std::shared_ptr<const CadPointCloud>& cloud = st.drawing.cadPointClouds.back();
   const pointcloud::Bounds& bb =
       cloud->octree.nodes.empty() ? pointcloud::Bounds{} : cloud->octree.nodes[0].bounds;
   const double cx = 0.5 * (bb.minX + bb.maxX);
@@ -526,18 +526,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   if (!b.active)
     return;
   if (b.sceneInstalled) {
-    st.userPolylineVerts = std::move(b.savedPolyVerts);
-    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
-    st.userPolylineClosed = std::move(b.savedPolyClosed);
-    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
-    st.cadSurfaces = std::move(b.savedSurfaces);
-    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
-    st.cadMeshes = std::move(b.savedMeshes);
-    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
-    st.cadSolids = std::move(b.savedSolids);
-    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
-    st.alignments = std::move(b.savedAlignments);
-    st.sampleLines = std::move(b.savedSampleLines);  // REQ-519
+    st.drawing.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.drawing.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.drawing.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.drawing.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.drawing.cadSurfaces = std::move(b.savedSurfaces);
+    st.drawing.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.drawing.cadMeshes = std::move(b.savedMeshes);
+    st.drawing.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.drawing.cadSolids = std::move(b.savedSolids);
+    st.drawing.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    st.drawing.alignments = std::move(b.savedAlignments);
+    st.drawing.sampleLines = std::move(b.savedSampleLines);  // REQ-519
     b.savedSampleLines.clear();
     b.savedAlignments.clear();
     st.viewportVisualStyle = b.savedVisualStyle;

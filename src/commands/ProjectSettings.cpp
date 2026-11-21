@@ -125,9 +125,9 @@ const ProjectSettings* ProjectSettingsForTab(const AppCommandState& st, int tabI
 void NoteUserPlotScale(AppCommandState& st) {
   const ProjectSettings* p = ProjectSettingsForTab(st, st.activeDrawingIdx);
   if (p && p->hasDefaults)
-    st.drawingSettings.SetOverridden(ProjectDefaultKey::PlotScale,
+    st.drawing.drawingSettings.SetOverridden(ProjectDefaultKey::PlotScale,
                                      DiffersFromProjectDefault(*p, ProjectDefaultKey::PlotScale,
-                                                               st.modelUnitsPerPlottedInch, st.drawingSettings));
+                                                               st.drawing.modelUnitsPerPlottedInch, st.drawing.drawingSettings));
 }
 
 void EnforceProjectSettings(AppCommandState& st, std::vector<std::string>& log) {
@@ -140,10 +140,10 @@ void EnforceProjectSettings(AppCommandState& st, std::vector<std::string>& log) 
     const bool active = i == st.activeDrawingIdx;
     if (!active && i >= static_cast<int>(st.documents.size()))
       continue;
-    int*             units = active ? &st.drawingInsUnits : &st.documents[static_cast<size_t>(i)].content.drawingInsUnits;
-    float*           scale = active ? &st.modelUnitsPerPlottedInch
+    int*             units = active ? &st.drawing.drawingInsUnits : &st.documents[static_cast<size_t>(i)].content.drawingInsUnits;
+    float*           scale = active ? &st.drawing.modelUnitsPerPlottedInch
                                     : &st.documents[static_cast<size_t>(i)].content.modelUnitsPerPlottedInch;
-    DrawingSettings* ds = active ? &st.drawingSettings : &st.documents[static_cast<size_t>(i)].content.drawingSettings;
+    DrawingSettings* ds = active ? &st.drawing.drawingSettings : &st.documents[static_cast<size_t>(i)].content.drawingSettings;
     const float      scaleBefore = *scale;
     const ProjectApplyResult r = ApplyProjectToDrawing(*p, units, scale, ds);
     if (!r.changed)

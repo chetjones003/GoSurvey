@@ -47,7 +47,7 @@ public:
 };
 
 int EditingDefinition(const AppCommandState& state) {
-  return CadBlockFindDef(state.blockDefs, state.blockEditorName);
+  return CadBlockFindDef(state.drawing.blockDefs, state.blockEditorName);
 }
 
 void RecordConnectionEdit(AppCommandState& state, const char* description) {
@@ -383,7 +383,7 @@ void EditorWindow::ShowConnectionModes() {
       status->setText("The block being edited no longer exists.");
       return;
     }
-    auto& definition = m_State.blockDefs[static_cast<size_t>(definitionIndex)];
+    auto& definition = m_State.drawing.blockDefs[static_cast<size_t>(definitionIndex)];
     const int pointIndex = points->currentRow();
     if (pointIndex < 0 || pointIndex >= static_cast<int>(definition.connections.size())) {
       status->setText(definition.connections.empty()
@@ -442,36 +442,36 @@ void EditorWindow::ShowConnectionModes() {
       table->setCellWidget(row, 6, remove);
       connect(target, &QComboBox::currentIndexChanged, dialog, [this, pointIndex, row](int index) {
         const int di = EditingDefinition(m_State);
-        if (di < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size()) ||
-            row >= static_cast<int>(m_State.blockDefs[di].connections[pointIndex].modes.size())) return;
+        if (di < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size()) ||
+            row >= static_cast<int>(m_State.drawing.blockDefs[di].connections[pointIndex].modes.size())) return;
         RecordConnectionEdit(m_State, "Edit connection mode target");
-        m_State.blockDefs[di].connections[pointIndex].modes[row].target = CadConnectionModeTarget(index);
+        m_State.drawing.blockDefs[di].connections[pointIndex].modes[row].target = CadConnectionModeTarget(index);
         Refresh();
       });
       connect(role, &QComboBox::currentIndexChanged, dialog, [this, pointIndex, row](int index) {
         const int di = EditingDefinition(m_State);
-        if (di < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size()) ||
-            row >= static_cast<int>(m_State.blockDefs[di].connections[pointIndex].modes.size())) return;
+        if (di < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size()) ||
+            row >= static_cast<int>(m_State.drawing.blockDefs[di].connections[pointIndex].modes.size())) return;
         RecordConnectionEdit(m_State, "Edit connection mode role");
-        m_State.blockDefs[di].connections[pointIndex].modes[row].role = CadBlockConnectionRole(index);
+        m_State.drawing.blockDefs[di].connections[pointIndex].modes[row].role = CadBlockConnectionRole(index);
         Refresh();
       });
       connect(isDefault, &QCheckBox::clicked, dialog, [this, pointIndex, row, viewState] {
         const int di = EditingDefinition(m_State);
-        if (di < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size()) ||
-            row >= static_cast<int>(m_State.blockDefs[di].connections[pointIndex].modes.size())) return;
+        if (di < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size()) ||
+            row >= static_cast<int>(m_State.drawing.blockDefs[di].connections[pointIndex].modes.size())) return;
         RecordConnectionEdit(m_State, "Set default connection mode");
-        auto& modes = m_State.blockDefs[di].connections[pointIndex].modes;
+        auto& modes = m_State.drawing.blockDefs[di].connections[pointIndex].modes;
         for (int i = 0; i < static_cast<int>(modes.size()); ++i) modes[static_cast<size_t>(i)].isDefault = (i == row);
         viewState->renderModes();
         Refresh();
       });
       connect(remove, &QPushButton::clicked, dialog, [this, pointIndex, row, viewState] {
         const int di = EditingDefinition(m_State);
-        if (di < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size()) ||
-            row >= static_cast<int>(m_State.blockDefs[di].connections[pointIndex].modes.size())) return;
+        if (di < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size()) ||
+            row >= static_cast<int>(m_State.drawing.blockDefs[di].connections[pointIndex].modes.size())) return;
         RecordConnectionEdit(m_State, "Remove connection mode");
-        auto& modes = m_State.blockDefs[di].connections[pointIndex].modes;
+        auto& modes = m_State.drawing.blockDefs[di].connections[pointIndex].modes;
         modes.erase(modes.begin() + row);
         if (!modes.empty() && std::none_of(modes.begin(), modes.end(), [](const auto& mode) { return mode.isDefault; }))
           modes.front().isDefault = true;
@@ -481,9 +481,9 @@ void EditorWindow::ShowConnectionModes() {
     }
     connect(table, &QTableWidget::cellChanged, dialog, [this, table, status, pointIndex](int row, int column) {
       const int di = EditingDefinition(m_State);
-      if (di < 0 || pointIndex < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size()) ||
-          row < 0 || row >= static_cast<int>(m_State.blockDefs[di].connections[pointIndex].modes.size())) return;
-      auto& mode = m_State.blockDefs[di].connections[pointIndex].modes[static_cast<size_t>(row)];
+      if (di < 0 || pointIndex < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size()) ||
+          row < 0 || row >= static_cast<int>(m_State.drawing.blockDefs[di].connections[pointIndex].modes.size())) return;
+      auto& mode = m_State.drawing.blockDefs[di].connections[pointIndex].modes[static_cast<size_t>(row)];
       const QString text = table->item(row, column)->text();
       if (column == 0) {
         if (text.trimmed().isEmpty()) {
@@ -524,8 +524,8 @@ void EditorWindow::ShowConnectionModes() {
     editorLayout->addWidget(add, 0, Qt::AlignLeft);
     connect(add, &QPushButton::clicked, dialog, [this, pointIndex, viewState, status] {
       const int di = EditingDefinition(m_State);
-      if (di < 0 || pointIndex < 0 || pointIndex >= static_cast<int>(m_State.blockDefs[di].connections.size())) return;
-      auto& connection = m_State.blockDefs[di].connections[pointIndex];
+      if (di < 0 || pointIndex < 0 || pointIndex >= static_cast<int>(m_State.drawing.blockDefs[di].connections.size())) return;
+      auto& connection = m_State.drawing.blockDefs[di].connections[pointIndex];
       RecordConnectionEdit(m_State, "Add connection mode");
       CadBlockConnectionMode mode;
       mode.name = NextModeName(connection);
@@ -543,7 +543,7 @@ void EditorWindow::ShowConnectionModes() {
     const int previousRow = points->currentRow();
     points->clear();
     if (di >= 0) {
-      const auto& connections = m_State.blockDefs[static_cast<size_t>(di)].connections;
+      const auto& connections = m_State.drawing.blockDefs[static_cast<size_t>(di)].connections;
       for (const auto& connection : connections) {
         QString label = QString::fromUtf8(connection.name.c_str());
         label += QString(" · %1 mode(s)").arg(connection.modes.size());

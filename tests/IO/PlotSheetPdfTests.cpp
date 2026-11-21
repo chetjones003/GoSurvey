@@ -53,7 +53,7 @@ Bounds PlotLineBounds(const plotsheet::Settings& settings, const std::string& ta
   L.centerPlot = settings.centerPlot;
   L.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f};
   L.paperLineAttrs.resize(1);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::filesystem::path path = std::filesystem::temp_directory_path() / ("gosurvey-plotsheet-" + tag + ".pdf");
   std::vector<std::string> log;
@@ -95,7 +95,7 @@ int PlotSurfaceSegmentCount(bool reducedLod, const std::string& tag) {
   viewport.modelCenterY = 50.0;
   viewport.scaleModelPerPaperIn = 50.f;
   layout.viewports.push_back(viewport);
-  st.paperLayouts.push_back(layout);
+  st.drawing.paperLayouts.push_back(layout);
 
   CadSurface surface;
   surface.name = "EG";
@@ -104,12 +104,12 @@ int PlotSurfaceSegmentCount(bool reducedLod, const std::string& tag) {
   tin->vertsXyz = {0.0, 0.0, 2.0, 100.0, 0.0, 12.0, 100.0, 100.0, 12.0, 0.0, 100.0, 2.0};
   tin->indices = {0, 1, 2, 0, 2, 3};
   surface.tin = std::move(tin);
-  st.cadSurfaces.push_back(std::move(surface));
-  st.cadSurfaceAttrs.push_back(EntityAttributes{});
-  st.cadSurfaceAttrs.back().linetype = "DASHED";
-  REQUIRE_FALSE(st.surfaceStyles.empty());
-  st.surfaceStyles.front().triangles.visible = true;
-  st.surfaceStyles.front().slopeArrowsOn = true;
+  st.drawing.cadSurfaces.push_back(std::move(surface));
+  st.drawing.cadSurfaceAttrs.push_back(EntityAttributes{});
+  st.drawing.cadSurfaceAttrs.back().linetype = "DASHED";
+  REQUIRE_FALSE(st.drawing.surfaceStyles.empty());
+  st.drawing.surfaceStyles.front().triangles.visible = true;
+  st.drawing.surfaceStyles.front().slopeArrowsOn = true;
   EnsureEntityIds(st);
 
   const auto path = std::filesystem::temp_directory_path() / ("gosurvey-surface-lod-" + tag + ".pdf");
@@ -302,7 +302,7 @@ TEST_CASE("A missing configured plot-style table fails before writing PDF (REQ-4
   layout.plotStyleTablePath = (std::filesystem::temp_directory_path() / "gosurvey-no-such-table.ctb").string();
   layout.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f};
   layout.paperLineAttrs.resize(1);
-  state.paperLayouts.push_back(layout);
+  state.drawing.paperLayouts.push_back(layout);
   const auto output = std::filesystem::temp_directory_path() / "gosurvey-req485-invalid.pdf";
   std::vector<std::string> log;
   CHECK_FALSE(PlotLayoutsToPdf(state, {0}, output.string().c_str(), log));
@@ -329,7 +329,7 @@ TEST_CASE("STB styles apply to both pages of a vector PDF batch (REQ-485)", "[pl
     EntityAttributes attr;
     attr.plotStyleName = style;
     layout.paperLineAttrs.push_back(attr);
-    state.paperLayouts.push_back(layout);
+    state.drawing.paperLayouts.push_back(layout);
   }
   const auto output = std::filesystem::temp_directory_path() / "gosurvey-req485-batch.pdf";
   std::vector<std::string> log;
@@ -369,7 +369,7 @@ TEST_CASE("Fit ignores sheet lines on a non-plottable layer (REQ-445 c, measured
   hidden.on = true;
   hidden.frozen = false;
   hidden.plottable = false;
-  st.drawingLayerTable.push_back(hidden);
+  st.drawing.drawingLayerTable.push_back(hidden);
 
   PaperLayout L;
   L.name = "Sheet";
@@ -381,7 +381,7 @@ TEST_CASE("Fit ignores sheet lines on a non-plottable layer (REQ-445 c, measured
   L.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f, 1.f, 7.f, 0.f, 9.f, 7.f, 0.f};
   L.paperLineAttrs.resize(2);
   L.paperLineAttrs[1].layer = "Hidden";
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "hidden-layer");
   REQUIRE(!paths.empty());
@@ -415,7 +415,7 @@ TEST_CASE("Fit includes a polyline bulge that bows past its end points (REQ-445 
   L.paperPolyVertsBulge = {1.f, 0.f};
   L.paperPolyClosed = {0};
   L.paperPolyAttrs.resize(1);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "bulge");
   REQUIRE(!paths.empty());
@@ -446,7 +446,7 @@ TEST_CASE("Page Setup plot ratio scales native text in the PDF (REQ-445 d, measu
     text.insY = 1.f;
     text.plottedHeightInches = 0.5f;
     L.paperTexts.push_back(text);
-    st.paperLayouts.push_back(L);
+    st.drawing.paperLayouts.push_back(L);
     const std::vector<Bounds> objs = PlotObjectBounds(st, FPDF_PAGEOBJ_TEXT, tag);
     REQUIRE(!objs.empty());
     return objs.front();
@@ -476,7 +476,7 @@ TEST_CASE("Fit measures an arc as sheet content (REQ-445 c, measured)", "[plot][
   arc.startRad = 3.14159265f;
   arc.sweepRad = 3.14159265f;
   L.paperArcs.push_back(arc);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "arc-fit");
   REQUIRE(!paths.empty());
@@ -503,10 +503,10 @@ TEST_CASE("Closed-polyline viewport boundary clips plotted model strokes as vect
   viewport.scaleModelPerPaperIn = 1.f;
   viewport.clipBoundary = {{2.f, 2.f, 0.f}, {12.f, 2.f, 0.f}, {5.f, 10.f, 0.f}};
   layout.viewports.push_back(viewport);
-  st.paperLayouts.push_back(layout);
+  st.drawing.paperLayouts.push_back(layout);
   // This horizontal model line maps to paper x=[0,14], y=4; the triangle intersects it at x=3.25..10.75.
-  st.userLinesFlat = {-7.f, -2.f, 0.f, 7.f, -2.f, 0.f};
-  st.userLineAttrs.resize(1);
+  st.drawing.userLinesFlat = {-7.f, -2.f, 0.f, 7.f, -2.f, 0.f};
+  st.drawing.userLineAttrs.resize(1);
   const auto points = PlotPathPoints(st, "req480-viewport-clip");
   bool clippedLineFound = false;
   for (size_t i = 0; i + 1 < points.size(); ++i) {
@@ -536,9 +536,9 @@ TEST_CASE("Two-vertex bulge viewport clips plotted model strokes to its curved b
   // Two semicircles form a circle centred at (4,4), with radius 2 inches.
   viewport.clipBoundary = {{2.f, 4.f, 1.f}, {6.f, 4.f, 1.f}};
   layout.viewports.push_back(viewport);
-  st.paperLayouts.push_back(layout);
-  st.userLinesFlat = {-7.f, -1.5f, 0.f, 7.f, -1.5f, 0.f};
-  st.userLineAttrs.resize(1);
+  st.drawing.paperLayouts.push_back(layout);
+  st.drawing.userLinesFlat = {-7.f, -1.5f, 0.f, 7.f, -1.5f, 0.f};
+  st.drawing.userLineAttrs.resize(1);
 
   const auto points = PlotPathPoints(st, "req490-two-bulge-clip");
   float minX = std::numeric_limits<float>::infinity();
@@ -578,10 +578,10 @@ TEST_CASE("PDF viewport and filled-region RGB packing preserves the blue channel
   EntityAttributes fillAttrs;
   fillAttrs.color = "#0000FF";
   layout.paperFilledRegionAttrs.push_back(fillAttrs);
-  st.paperLayouts.push_back(layout);
-  st.userLinesFlat = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.userLineAttrs.resize(1);
-  st.userLineAttrs[0].color = "#0000FF";
+  st.drawing.paperLayouts.push_back(layout);
+  st.drawing.userLinesFlat = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.drawing.userLineAttrs.resize(1);
+  st.drawing.userLineAttrs[0].color = "#0000FF";
 
   const auto path = std::filesystem::temp_directory_path() / "gosurvey-req485-blue-channel.pdf";
   std::vector<std::string> log;
@@ -625,14 +625,14 @@ TEST_CASE("Off and hide-plot viewports emit no model content to PDF (REQ-482)", 
   viewport.modelCenterY = 0.0;
   viewport.scaleModelPerPaperIn = 1.f;
   layout.viewports.push_back(viewport);
-  state.paperLayouts.push_back(layout);
-  state.userLinesFlat = {-2.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  state.userLineAttrs.resize(1);
+  state.drawing.paperLayouts.push_back(layout);
+  state.drawing.userLinesFlat = {-2.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  state.drawing.userLineAttrs.resize(1);
 
   CHECK_FALSE(PlotPathPoints(state, "req482-viewport-on").empty());
-  state.paperLayouts[0].viewports[0].hidePlot = true;
+  state.drawing.paperLayouts[0].viewports[0].hidePlot = true;
   CHECK(PlotPathPoints(state, "req482-viewport-hide-plot").empty());
-  state.paperLayouts[0].viewports[0].hidePlot = false;
-  state.paperLayouts[0].viewports[0].on = false;
+  state.drawing.paperLayouts[0].viewports[0].hidePlot = false;
+  state.drawing.paperLayouts[0].viewports[0].on = false;
   CHECK(PlotPathPoints(state, "req482-viewport-off").empty());
 }

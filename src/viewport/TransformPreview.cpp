@@ -153,9 +153,9 @@ void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllip
 // chord of the tessellation is a segment with its own Z, as a committed polyline's is.
 template <class F>
 void appendSplinePreview(std::vector<float>* out, const AppCommandState& cmd, int index, const F& f) {
-  if (index < 0 || static_cast<size_t>(index) >= cmd.cadSplines.size())
+  if (index < 0 || static_cast<size_t>(index) >= cmd.drawing.cadSplines.size())
     return;
-  CadSpline s = cmd.cadSplines[static_cast<size_t>(index)];
+  CadSpline s = cmd.drawing.cadSplines[static_cast<size_t>(index)];
   spline::MapPoints(&s, f);
   std::vector<ray3d::Vec3> pts;
   spline::Tessellate(s, kSplineSampleTolerance, &pts);
@@ -173,26 +173,26 @@ void appendSplinePreview(std::vector<float>* out, const AppCommandState& cmd, in
 // depth (REQ-057/058). A highlight or hover stroke drawn at a fixed Z would sit on the datum while
 // the polyline itself sat at elevation, showing the object twice in an orbited view.
 void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState& cmd, int pi) {
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
     return;
-  const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
   const bool closed =
-      static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
   auto emit = [&](int a, int b) {
     const size_t A = static_cast<size_t>(a), B = static_cast<size_t>(b);
-    const float za = cmd.vertex(A).z;
+    const float za = cmd.drawing.vertex(A).z;
     // REQ-316 / ADR-047: a curved segment is traced as an arc, not a chord, so the selection /
     // hover highlight follows the shape the renderer drew.
     const float bulge =
-        static_cast<size_t>(a) < cmd.userPolylineVertsBulge.size() ? cmd.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
+        static_cast<size_t>(a) < cmd.drawing.userPolylineVertsBulge.size() ? cmd.drawing.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
     if (bulge == 0.f) {
-      out->push_back(cmd.vertex(A).x);
-      out->push_back(cmd.vertex(A).y);
+      out->push_back(cmd.drawing.vertex(A).x);
+      out->push_back(cmd.drawing.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.vertex(B).x);
-      out->push_back(cmd.vertex(B).y);
-      out->push_back(cmd.vertex(B).z);
+      out->push_back(cmd.drawing.vertex(B).x);
+      out->push_back(cmd.drawing.vertex(B).y);
+      out->push_back(cmd.drawing.vertex(B).z);
       return;
     }
     // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — the same construction
@@ -201,32 +201,32 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     // of a flat approximation sitting somewhere else entirely (a real report: a joined polyline's
     // tilted arc segment never lit up yellow when the polyline was selected).
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    if (A + 2 < cmd.userPolylineVertsNormal.size()) {
-      nx = cmd.userPolylineVertsNormal[A];
-      ny = cmd.userPolylineVertsNormal[A + 1];
-      nz = cmd.userPolylineVertsNormal[A + 2];
+    if (A + 2 < cmd.drawing.userPolylineVertsNormal.size()) {
+      nx = cmd.drawing.userPolylineVertsNormal[A];
+      ny = cmd.drawing.userPolylineVertsNormal[A + 1];
+      nz = cmd.drawing.userPolylineVertsNormal[A + 2];
     }
     const bool flat = IsFlatNormal(nx, ny, nz);
     ucs::Ucs plane{};
     BulgeArcSpan arc{};
     if (flat) {
-      arc = BulgeArc(cmd.vertex(A).x, cmd.vertex(A).y, cmd.vertex(B).x,
-                     cmd.vertex(B).y, static_cast<double>(bulge));
-    } else if (ucs::FromNormal(ray3d::Vec3{cmd.vertex(A).x, cmd.vertex(A).y, za},
+      arc = BulgeArc(cmd.drawing.vertex(A).x, cmd.drawing.vertex(A).y, cmd.drawing.vertex(B).x,
+                     cmd.drawing.vertex(B).y, static_cast<double>(bulge));
+    } else if (ucs::FromNormal(ray3d::Vec3{cmd.drawing.vertex(A).x, cmd.drawing.vertex(A).y, za},
                                ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                            static_cast<double>(nz)},
                                &plane)) {
       const ucs::Point2D p1Local = ucs::WorldToPlane(
-          plane, ray3d::Vec3{cmd.vertex(B).x, cmd.vertex(B).y, cmd.vertex(B).z});
+          plane, ray3d::Vec3{cmd.drawing.vertex(B).x, cmd.drawing.vertex(B).y, cmd.drawing.vertex(B).z});
       arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
     }
     if (!arc.valid) {
-      out->push_back(cmd.vertex(A).x);
-      out->push_back(cmd.vertex(A).y);
+      out->push_back(cmd.drawing.vertex(A).x);
+      out->push_back(cmd.drawing.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.vertex(B).x);
-      out->push_back(cmd.vertex(B).y);
-      out->push_back(cmd.vertex(B).z);
+      out->push_back(cmd.drawing.vertex(B).x);
+      out->push_back(cmd.drawing.vertex(B).y);
+      out->push_back(cmd.drawing.vertex(B).z);
       return;
     }
     constexpr double kPi = 3.14159265358979323846;
@@ -278,25 +278,25 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
 /// right. REQ-087.
 template <class Xf>
 void appendFeatureLineStrip(std::vector<float>* out, const AppCommandState& cmd, int fi, Xf&& xf) {
-  if (fi < 0 || static_cast<size_t>(fi + 1) >= cmd.featureLineOffsets.size())
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= cmd.drawing.featureLineOffsets.size())
     return;
-  const int v0 = cmd.featureLineOffsets[static_cast<size_t>(fi)];
-  const int v1 = cmd.featureLineOffsets[static_cast<size_t>(fi + 1)];
-  if (v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > cmd.featureLineVerts.size())
+  const int v0 = cmd.drawing.featureLineOffsets[static_cast<size_t>(fi)];
+  const int v1 = cmd.drawing.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > cmd.drawing.featureLineVerts.size())
     return;
-  const bool closed = static_cast<size_t>(fi) < cmd.featureLineClosed.size() &&
-                      cmd.featureLineClosed[static_cast<size_t>(fi)];
+  const bool closed = static_cast<size_t>(fi) < cmd.drawing.featureLineClosed.size() &&
+                      cmd.drawing.featureLineClosed[static_cast<size_t>(fi)];
 
   auto emit = [&](int a, int b) {
     const int idx[2] = {a, b};
     for (int k = 0; k < 2; ++k) {
       const size_t base = static_cast<size_t>(idx[k]) * 3;
-      float x = cmd.featureLineVerts[base];
-      float y = cmd.featureLineVerts[base + 1];
+      float x = cmd.drawing.featureLineVerts[base];
+      float y = cmd.drawing.featureLineVerts[base + 1];
       xf(&x, &y);
       out->push_back(x);
       out->push_back(y);
-      out->push_back(cmd.featureLineVerts[base + 2]);
+      out->push_back(cmd.drawing.featureLineVerts[base + 2]);
     }
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
@@ -347,9 +347,9 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= cmd.lineCount())
+    if (li >= cmd.drawing.lineCount())
       return;
-    const CadLineRecord seg = cmd.line(li);
+    const CadLineRecord seg = cmd.drawing.line(li);
     // Both points already lie on the segment, so the removed material is simply the span between
     // them — no ordering needed.
     appendPreviewSegment(out, p1.x, p1.y, p2.x, p2.y, seg.z0);
@@ -357,13 +357,13 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
   }
   case SelectedEntity::Type::Circle: {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= cmd.circleCount())
+    if (ci >= cmd.drawing.circleCount())
       return;
     CadArc removed{};
-    removed.cx = cmd.circle(ci).cx;
-    removed.cy = cmd.circle(ci).cy;
-    removed.z = cmd.circle(ci).cz;
-    removed.r = cmd.circle(ci).r;
+    removed.cx = cmd.drawing.circle(ci).cx;
+    removed.cy = cmd.drawing.circle(ci).cy;
+    removed.z = cmd.drawing.circle(ci).cz;
+    removed.r = cmd.drawing.circle(ci).r;
     removed.startRad = p1.theta;
     float sweep = std::fmod(p2.theta - p1.theta, kTwoPi);
     if (sweep < 0.f)
@@ -373,9 +373,9 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
     return;
   }
   case SelectedEntity::Type::Arc: {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.userArcs.size())
       return;
-    const CadArc& src = cmd.userArcs[static_cast<size_t>(e.index)];
+    const CadArc& src = cmd.drawing.userArcs[static_cast<size_t>(e.index)];
     CadArc removed = src;
     if (std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f) {
       // A full sweep is a closed loop: it follows the Circle rule, not the arc-parameter one.
@@ -396,17 +396,17 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
   }
   case SelectedEntity::Type::Polyline: {
     const int pi = e.index;
-    if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
       return;
-    const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
     const int n = v1 - v0;
-    if (n < 2 || static_cast<size_t>(v1 - 1) * 3 + 1 >= cmd.userPolylineVerts.size())
+    if (n < 2 || static_cast<size_t>(v1 - 1) * 3 + 1 >= cmd.drawing.userPolylineVerts.size())
       return;
-    auto vx = [&](int i) { return cmd.vertex(static_cast<size_t>(v0 + i)).x; };
-    auto vy = [&](int i) { return cmd.vertex(static_cast<size_t>(v0 + i)).y; };
-    const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
-                        cmd.userPolylineClosed[static_cast<size_t>(pi)] != 0u;
+    auto vx = [&](int i) { return cmd.drawing.vertex(static_cast<size_t>(v0 + i)).x; };
+    auto vy = [&](int i) { return cmd.drawing.vertex(static_cast<size_t>(v0 + i)).y; };
+    const bool closed = static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() &&
+                        cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)] != 0u;
     constexpr float kZ = 0.f;  // ReplacePolylineVerts writes z 0; the preview matches it
 
     std::vector<std::pair<float, float>> span;
@@ -540,9 +540,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.lineCount())
+        if (li >= cmd.drawing.lineCount())
           continue;
-        const CadLineRecord seg = cmd.line(li);
+        const CadLineRecord seg = cmd.drawing.line(li);
         for (int i = 0; i < 2; ++i) {
           prevLines->push_back(LineEndComp(seg, i, 0) + dx);
           prevLines->push_back(LineEndComp(seg, i, 1) + dy);
@@ -550,21 +550,21 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.circleCount())
+        if (ci >= cmd.drawing.circleCount())
           continue;
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
-        appendPreviewCircle(prevLines, prevCircles, cmd.circle(ci).cx + dx,
-                            cmd.circle(ci).cy + dy,
-                            cmd.circle(ci).cz,  // z rides along unchanged
-                            cmd.circle(ci).r, cnx, cny, cnz);
+        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
+        appendPreviewCircle(prevLines, prevCircles, cmd.drawing.circle(ci).cx + dx,
+                            cmd.drawing.circle(ci).cy + dy,
+                            cmd.drawing.circle(ci).cz,  // z rides along unchanged
+                            cmd.drawing.circle(ci).r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userArcs.size())
+        if (k >= cmd.drawing.userArcs.size())
           continue;
-        CadArc a = cmd.userArcs[k];
+        CadArc a = cmd.drawing.userArcs[k];
         a.cx += dx;
         a.cy += dy;
         appendArcPolylineStrip(prevLines, a.z, a, 48);
@@ -572,35 +572,35 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userEllipses.size())
+        if (k >= cmd.drawing.userEllipses.size())
           continue;
-        CadEllipse el = cmd.userEllipses[k];
+        CadEllipse el = cmd.drawing.userEllipses[k];
         el.cx += dx;
         el.cy += dy;
         appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
           continue;
-        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
         const bool closed =
-            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).x + dx);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).y + dy);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).x + dx);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).y + dy);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).x + dx);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).y + dy);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x + dx);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y + dy);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).x + dx);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).y + dy);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).x + dx);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).y + dy);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x + dx);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y + dy);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).x + dx);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).y + dy);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -629,9 +629,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t li = static_cast<size_t>(e.index);
-          if (li >= cmd.lineCount())
+          if (li >= cmd.drawing.lineCount())
             continue;
-          const CadLineRecord seg = cmd.line(li);
+          const CadLineRecord seg = cmd.drawing.line(li);
           for (int i = 0; i < 2; ++i) {
             prevLines->push_back(LineEndComp(seg, i, 0) + dx);
             prevLines->push_back(LineEndComp(seg, i, 1) + dy);
@@ -639,20 +639,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t ci = static_cast<size_t>(e.index);
-          if (ci >= cmd.circleCount())
+          if (ci >= cmd.drawing.circleCount())
             continue;
           float cnx = kFlatNormalX;
           float cny = kFlatNormalY;
           float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
-          appendPreviewCircle(prevLines, prevCircles, cmd.circle(ci).cx + dx,
-                              cmd.circle(ci).cy + dy, cmd.circle(ci).cz + dz,
-                              cmd.circle(ci).r, cnx, cny, cnz);
+          CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
+          appendPreviewCircle(prevLines, prevCircles, cmd.drawing.circle(ci).cx + dx,
+                              cmd.drawing.circle(ci).cy + dy, cmd.drawing.circle(ci).cz + dz,
+                              cmd.drawing.circle(ci).r, cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.userArcs.size())
+          if (k >= cmd.drawing.userArcs.size())
             continue;
-          CadArc a = cmd.userArcs[k];
+          CadArc a = cmd.drawing.userArcs[k];
           a.cx += dx;
           a.cy += dy;
           a.z += dz;
@@ -661,36 +661,36 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z + dz}; });
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.userEllipses.size())
+          if (k >= cmd.drawing.userEllipses.size())
             continue;
-          CadEllipse el = cmd.userEllipses[k];
+          CadEllipse el = cmd.drawing.userEllipses[k];
           el.cx += dx;
           el.cy += dy;
           el.z += dz;
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
-          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
             continue;
-          const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-          const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-          const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
-                              cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+          const bool closed = static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() &&
+                              cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).x + dx);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).y + dy);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z + dz);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).x + dx);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).y + dy);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z + dz);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).x + dx);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).y + dy);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z + dz);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x + dx);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y + dy);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z + dz);
           }
           if (closed && v1 - v0 >= 2) {
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).x + dx);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).y + dy);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z + dz);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).x + dx);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).y + dy);
-            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z + dz);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x + dx);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y + dy);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z + dz);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).x + dx);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).y + dy);
+            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z + dz);
           }
         }
       }
@@ -725,9 +725,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t li = static_cast<size_t>(e.index);
-          if (li >= cmd.lineCount())
+          if (li >= cmd.drawing.lineCount())
             continue;
-          const CadLineRecord seg = cmd.line(li);
+          const CadLineRecord seg = cmd.drawing.line(li);
           for (int i = 0; i < 2; ++i) {
             const ray3d::Vec3 p =
                 rp(LineEndComp(seg, i, 0), LineEndComp(seg, i, 1), LineEndComp(seg, i, 2));
@@ -737,22 +737,22 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t ci = static_cast<size_t>(e.index);
-          if (ci >= cmd.circleCount())
+          if (ci >= cmd.drawing.circleCount())
             continue;
-          const ray3d::Vec3 c = rp(cmd.circle(ci).cx, cmd.circle(ci).cy, cmd.circle(ci).cz);
+          const ray3d::Vec3 c = rp(cmd.drawing.circle(ci).cx, cmd.drawing.circle(ci).cy, cmd.drawing.circle(ci).cz);
           float cnx = kFlatNormalX;
           float cny = kFlatNormalY;
           float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
+          CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
           const ray3d::Vec3 n = rv(cnx, cny, cnz);  // the plane turns with the circle (REQ-312/328)
           appendPreviewCircle(prevLines, prevCircles, static_cast<float>(c.x), static_cast<float>(c.y),
-                              static_cast<float>(c.z), cmd.circle(ci).r, static_cast<float>(n.x),
+                              static_cast<float>(c.z), cmd.drawing.circle(ci).r, static_cast<float>(n.x),
                               static_cast<float>(n.y), static_cast<float>(n.z));
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.userArcs.size())
+          if (k >= cmd.drawing.userArcs.size())
             continue;
-          CadArc a = cmd.userArcs[k];
+          CadArc a = cmd.drawing.userArcs[k];
           // The same steps the commit takes (`RotateSelectionAboutAxis`): rotate the start point
           // and centre as points, the plane normal as a direction, then re-anchor the sweep onto
           // where the start point actually landed.
@@ -775,9 +775,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           if (!axisIsWorldZ)
             continue;  // refused at commit under a tilted axis — omit from the ghost too
           const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.userEllipses.size())
+          if (k >= cmd.drawing.userEllipses.size())
             continue;
-          CadEllipse el = cmd.userEllipses[k];
+          CadEllipse el = cmd.drawing.userEllipses[k];
           // Same rp/rv the other types use, not a hand-rolled 2D rotation: a CadEllipse is flat in
           // world XY, and for a world-Z-parallel axis (either sign) rp leaves its Z alone and rv
           // turns the major-axis vector the correct way — matching the commit and every sibling in
@@ -792,16 +792,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
-          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
             continue;
-          const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-          const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-          const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
-                              cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+          const bool closed = static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() &&
+                              cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
           const auto pushVert = [&](int idx) {
-            const ray3d::Vec3 p = rp(cmd.vertex(static_cast<size_t>(idx)).x,
-                                     cmd.vertex(static_cast<size_t>(idx)).y,
-                                     cmd.vertex(static_cast<size_t>(idx)).z);
+            const ray3d::Vec3 p = rp(cmd.drawing.vertex(static_cast<size_t>(idx)).x,
+                                     cmd.drawing.vertex(static_cast<size_t>(idx)).y,
+                                     cmd.drawing.vertex(static_cast<size_t>(idx)).z);
             prevLines->push_back(static_cast<float>(p.x));
             prevLines->push_back(static_cast<float>(p.y));
             prevLines->push_back(static_cast<float>(p.z));
@@ -912,9 +912,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.lineCount())
+        if (li >= cmd.drawing.lineCount())
           continue;
-        const CadLineRecord seg = cmd.line(li);
+        const CadLineRecord seg = cmd.drawing.line(li);
         for (int i = 0; i < 2; ++i) {
           float x = LineEndComp(seg, i, 0), y = LineEndComp(seg, i, 1);
           if (inBox(x, y)) { x += dx; y += dy; }
@@ -924,43 +924,43 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.circleCount())
+        if (ci >= cmd.drawing.circleCount())
           continue;
-        float cx = cmd.circle(ci).cx, cy = cmd.circle(ci).cy;
+        float cx = cmd.drawing.circle(ci).cx, cy = cmd.drawing.circle(ci).cy;
         if (inBox(cx, cy)) { cx += dx; cy += dy; }
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
-        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.circle(ci).cz,
-                            cmd.circle(ci).r, cnx, cny, cnz);
+        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
+        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.drawing.circle(ci).cz,
+                            cmd.drawing.circle(ci).r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userArcs.size())
+        if (k >= cmd.drawing.userArcs.size())
           continue;
-        CadArc a = cmd.userArcs[k];
+        CadArc a = cmd.drawing.userArcs[k];
         std::vector<std::string> scratch;  // preview never surfaces refusal reasons to the log
         StretchOneArc(a, mnX, mxX, mnY, mxY, dx, dy, scratch);
         appendArcPolylineStrip(prevLines, a.z, a, 48);
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userEllipses.size())
+        if (k >= cmd.drawing.userEllipses.size())
           continue;
-        CadEllipse el = cmd.userEllipses[k];
+        CadEllipse el = cmd.drawing.userEllipses[k];
         if (inBox(el.cx, el.cy)) { el.cx += dx; el.cy += dy; }
         appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
           continue;
-        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
         const bool closed =
-            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
         auto vert = [&](int vi, float* ox, float* oy, float* oz) {
-          *ox = cmd.vertex(static_cast<size_t>(vi)).x;
-          *oy = cmd.vertex(static_cast<size_t>(vi)).y;
-          *oz = cmd.vertex(static_cast<size_t>(vi)).z;
+          *ox = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
+          *oy = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
+          *oz = cmd.drawing.vertex(static_cast<size_t>(vi)).z;
           if (inBox(*ox, *oy)) { *ox += dx; *oy += dy; }
         };
         for (int vi = v0; vi + 1 < v1; ++vi) {
@@ -1081,9 +1081,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.lineCount())
+        if (li >= cmd.drawing.lineCount())
           continue;
-        const CadLineRecord seg = cmd.line(li);
+        const CadLineRecord seg = cmd.drawing.line(li);
         for (int i = 0; i < 2; ++i) {
           float x = LineEndComp(seg, i, 0);
           float y = LineEndComp(seg, i, 1);
@@ -1094,25 +1094,25 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.circleCount())
+        if (ci >= cmd.drawing.circleCount())
           continue;
-        float x = cmd.circle(ci).cx;
-        float y = cmd.circle(ci).cy;
-        float r = cmd.circle(ci).r;
+        float x = cmd.drawing.circle(ci).cx;
+        float y = cmd.drawing.circle(ci).cy;
+        float r = cmd.drawing.circle(ci).r;
         scalePreviewPt(bx, by, sc, &x, &y);
         r *= sc;
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
+        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
         appendPreviewCircle(prevLines, prevCircles, x, y,
-                            cmd.circle(ci).cz,  // SCALE is planar here - z unscaled
+                            cmd.drawing.circle(ci).cz,  // SCALE is planar here - z unscaled
                             r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userArcs.size())
+        if (k >= cmd.drawing.userArcs.size())
           continue;
-        CadArc a = cmd.userArcs[k];
+        CadArc a = cmd.drawing.userArcs[k];
         scalePreviewPt(bx, by, sc, &a.cx, &a.cy);
         a.r *= sc;
         appendArcPolylineStrip(prevLines, a.z, a, 48);
@@ -1120,9 +1120,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; scalePreviewPt(bx, by, sc, &x, &y); return spline::Vec3{x, y, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userEllipses.size())
+        if (k >= cmd.drawing.userEllipses.size())
           continue;
-        CadEllipse el = cmd.userEllipses[k];
+        CadEllipse el = cmd.drawing.userEllipses[k];
         float mx = el.cx + el.majVx;
         float my = el.cy + el.majVy;
         scalePreviewPt(bx, by, sc, &el.cx, &el.cy);
@@ -1132,39 +1132,39 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
           continue;
-        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
         const bool closed =
-            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          float x0 = cmd.vertex(static_cast<size_t>(vi)).x;
-          float y0 = cmd.vertex(static_cast<size_t>(vi)).y;
-          float x1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
-          float y1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
+          float x0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
+          float y0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
+          float x1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
+          float y1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
           scalePreviewPt(bx, by, sc, &x0, &y0);
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          float x0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
-          float y0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
-          float x1 = cmd.vertex(static_cast<size_t>(v0)).x;
-          float y1 = cmd.vertex(static_cast<size_t>(v0)).y;
+          float x0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
+          float y0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
+          float x1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
+          float y1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
           scalePreviewPt(bx, by, sc, &x0, &y0);
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -1191,9 +1191,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.lineCount())
+        if (li >= cmd.drawing.lineCount())
           continue;
-        const CadLineRecord seg = cmd.line(li);
+        const CadLineRecord seg = cmd.drawing.line(li);
         for (int i = 0; i < 2; ++i) {
           float x = LineEndComp(seg, i, 0);
           float y = LineEndComp(seg, i, 1);
@@ -1204,24 +1204,24 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.circleCount())
+        if (ci >= cmd.drawing.circleCount())
           continue;
-        float x = cmd.circle(ci).cx;
-        float y = cmd.circle(ci).cy;
+        float x = cmd.drawing.circle(ci).cx;
+        float y = cmd.drawing.circle(ci).cy;
         mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
+        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
         ReflectNormalAcrossLine(x0, y0, x1, y1, &cnx, &cny);  // the plane is mirrored too (REQ-312)
-        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.circle(ci).cz,
-                            cmd.circle(ci).r,  // radius preserved (isometry)
+        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.drawing.circle(ci).cz,
+                            cmd.drawing.circle(ci).r,  // radius preserved (isometry)
                             cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userArcs.size())
+        if (k >= cmd.drawing.userArcs.size())
           continue;
-        CadArc a = cmd.userArcs[k];
+        CadArc a = cmd.drawing.userArcs[k];
         // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
         // (CadCommands.cpp's DuplicateCadSelectionReflected) — a reflection reverses handedness.
         ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
@@ -1241,9 +1241,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; mirrorPreviewPt(x0, y0, x1, y1, &x, &y); return spline::Vec3{x, y, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.userEllipses.size())
+        if (k >= cmd.drawing.userEllipses.size())
           continue;
-        CadEllipse el = cmd.userEllipses[k];
+        CadEllipse el = cmd.drawing.userEllipses[k];
         float mx = el.cx + el.majVx;
         float my = el.cy + el.majVy;
         mirrorPreviewPt(x0, y0, x1, y1, &el.cx, &el.cy);
@@ -1253,39 +1253,39 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
           continue;
-        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
         const bool closed =
-            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          float px0 = cmd.vertex(static_cast<size_t>(vi)).x;
-          float py0 = cmd.vertex(static_cast<size_t>(vi)).y;
-          float px1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
-          float py1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
+          float px0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
+          float py0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
+          float px1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
+          float py1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
           mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
           mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
           prevLines->push_back(px0);
           prevLines->push_back(py0);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
           prevLines->push_back(px1);
           prevLines->push_back(py1);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          float px0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
-          float py0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
-          float px1 = cmd.vertex(static_cast<size_t>(v0)).x;
-          float py1 = cmd.vertex(static_cast<size_t>(v0)).y;
+          float px0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
+          float py0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
+          float px1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
+          float py1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
           mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
           mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
           prevLines->push_back(px0);
           prevLines->push_back(py0);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
           prevLines->push_back(px1);
           prevLines->push_back(py1);
-          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
+          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -1302,9 +1302,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const bool nearFirst = cmd.lengthenPendingNearFirst;
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
-      if (li >= cmd.lineCount())
+      if (li >= cmd.drawing.lineCount())
         return;
-      const CadLineRecord seg = cmd.line(li);
+      const CadLineRecord seg = cmd.drawing.line(li);
       const float x0 = static_cast<float>(seg.x0), y0 = static_cast<float>(seg.y0), z0 = static_cast<float>(seg.z0);
       const float x1 = static_cast<float>(seg.x1), y1 = static_cast<float>(seg.y1), z1 = static_cast<float>(seg.z1);
       const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0, fixedZ = nearFirst ? z1 : z0;
@@ -1325,20 +1325,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     }
     if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
         return;
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       if (v1 - v0 < 2)
         return;
       const int movingVi = nearFirst ? v0 : (v1 - 1);
       const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
       const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
-      if (mIdx >= cmd.vertexCount() || fIdx >= cmd.vertexCount())
+      if (mIdx >= cmd.drawing.vertexCount() || fIdx >= cmd.drawing.vertexCount())
         return;
-      const float fx = cmd.vertex(fIdx).x, fy = cmd.vertex(fIdx).y;
-      const float mz = cmd.vertex(mIdx).z;
-      const float mx = cmd.vertex(mIdx).x, my = cmd.vertex(mIdx).y;
+      const float fx = cmd.drawing.vertex(fIdx).x, fy = cmd.drawing.vertex(fIdx).y;
+      const float mz = cmd.drawing.vertex(mIdx).z;
+      const float mx = cmd.drawing.vertex(mIdx).x, my = cmd.drawing.vertex(mIdx).y;
       const float segLen = std::hypot(mx - fx, my - fy);
       if (segLen < 1e-9f)
         return;
@@ -1346,16 +1346,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       const float proj = std::max((curX - fx) * ux + (curY - fy) * uy, 1e-6f);
       prevLines->push_back(fx);
       prevLines->push_back(fy);
-      prevLines->push_back(cmd.vertex(fIdx).z);
+      prevLines->push_back(cmd.drawing.vertex(fIdx).z);
       prevLines->push_back(fx + ux * proj);
       prevLines->push_back(fy + uy * proj);
       prevLines->push_back(mz);
       return;
     }
     if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.drawing.userArcs.size())
         return;
-      CadArc a = cmd.userArcs[static_cast<size_t>(e.index)];
+      CadArc a = cmd.drawing.userArcs[static_cast<size_t>(e.index)];
       if (a.r < 1e-6f)
         return;
       const float pickAngle = std::atan2(curY - a.cy, curX - a.cx);
@@ -1390,9 +1390,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   for (const auto& e : cmd.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
-      if (li >= cmd.lineCount())
+      if (li >= cmd.drawing.lineCount())
         continue;
-      const CadLineRecord seg = cmd.line(li);
+      const CadLineRecord seg = cmd.drawing.line(li);
       for (int i = 0; i < 2; ++i) {
         float x = LineEndComp(seg, i, 0);
         float y = LineEndComp(seg, i, 1);
@@ -1403,24 +1403,24 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-      if (ci >= cmd.circleCount())
+      if (ci >= cmd.drawing.circleCount())
         continue;
-      float x = cmd.circle(ci).cx;
-      float y = cmd.circle(ci).cy;
+      float x = cmd.drawing.circle(ci).cx;
+      float y = cmd.drawing.circle(ci).cy;
       rotatePreviewPt(bx, by, theta, &x, &y);
       float cnx = kFlatNormalX;
       float cny = kFlatNormalY;
       float cnz = kFlatNormalZ;
-      CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
+      CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
       RotateNormalAboutZ(theta, &cnx, &cny);  // rotation is about the Z axis, and so is the normal's
       appendPreviewCircle(prevLines, prevCircles, x, y,
-                          cmd.circle(ci).cz,  // rotation is about the Z axis
-                          cmd.circle(ci).r, cnx, cny, cnz);
+                          cmd.drawing.circle(ci).cz,  // rotation is about the Z axis
+                          cmd.drawing.circle(ci).r, cnx, cny, cnz);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.userArcs.size())
+      if (k >= cmd.drawing.userArcs.size())
         continue;
-      CadArc a = cmd.userArcs[k];
+      CadArc a = cmd.drawing.userArcs[k];
       rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
       a.startRad += theta;
       appendArcPolylineStrip(prevLines, a.z, a, 48);
@@ -1428,9 +1428,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; rotatePreviewPt(bx, by, theta, &x, &y); return spline::Vec3{x, y, v.z}; });
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.userEllipses.size())
+      if (k >= cmd.drawing.userEllipses.size())
         continue;
-      CadEllipse el = cmd.userEllipses[k];
+      CadEllipse el = cmd.drawing.userEllipses[k];
       float mx = el.cx + el.majVx;
       float my = el.cy + el.majVy;
       rotatePreviewPt(bx, by, theta, &el.cx, &el.cy);
@@ -1440,39 +1440,39 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       appendEllipsePolylineStrip(prevLines, el.z, el, 56);
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
-      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
         continue;
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       const bool closed =
-          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        float x0 = cmd.vertex(static_cast<size_t>(vi)).x;
-        float y0 = cmd.vertex(static_cast<size_t>(vi)).y;
-        float x1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
-        float y1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
+        float x0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
+        float y0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
+        float x1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
+        float y1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
         rotatePreviewPt(bx, by, theta, &x0, &y0);
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
+        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
+        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
       }
       if (closed && v1 - v0 >= 2) {
-        float x0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
-        float y0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
-        float x1 = cmd.vertex(static_cast<size_t>(v0)).x;
-        float y1 = cmd.vertex(static_cast<size_t>(v0)).y;
+        float x0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
+        float y0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
+        float x1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
+        float y1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
         rotatePreviewPt(bx, by, theta, &x0, &y0);
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
+        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
+        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
       }
     }
   }
@@ -1494,9 +1494,9 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
                                   std::vector<LineVert>* hlLines, std::vector<float>* hlCircles) {
   if (e.type == SelectedEntity::Type::LineSeg) {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= cmd.lineCount())
+    if (li >= cmd.drawing.lineCount())
       return;
-    const CadLineRecord seg = cmd.line(li);
+    const CadLineRecord seg = cmd.drawing.line(li);
     for (int i = 0; i < 2; ++i) {
       hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 0)));
       hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 1)));
@@ -1507,23 +1507,23 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
     const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-    if (ci >= cmd.circleCount())
+    if (ci >= cmd.drawing.circleCount())
       return;
     // Through the same emitter the previews use, so a selected tilted circle is highlighted on the
     // plane it is drawn on rather than ringed flat beside itself (REQ-312).
     float cnx = kFlatNormalX;
     float cny = kFlatNormalY;
     float cnz = kFlatNormalZ;
-    CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
+    CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
     std::vector<float> strip;
-    appendPreviewCircle(&strip, hlCircles, cmd.circle(ci).cx, cmd.circle(ci).cy,
-                        cmd.circle(ci).cz, cmd.circle(ci).r, cnx, cny, cnz);
+    appendPreviewCircle(&strip, hlCircles, cmd.drawing.circle(ci).cx, cmd.drawing.circle(ci).cy,
+                        cmd.drawing.circle(ci).cz, cmd.drawing.circle(ci).r, cnx, cny, cnz);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Alignment) {  // REQ-480: highlight the exact geometry, sampled for display
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.alignments.size() || cmd.alignments[k].Empty())
+    if (k >= cmd.drawing.alignments.size() || cmd.drawing.alignments[k].Empty())
       return;
-    const std::vector<alignment::Point2> pts = cmd.alignments[k].SampleForDisplay(0.01);
+    const std::vector<alignment::Point2> pts = cmd.drawing.alignments[k].SampleForDisplay(0.01);
     for (size_t i = 1; i < pts.size(); ++i) {
       hlLines->push_back(static_cast<float>(pts[i - 1].x));
       hlLines->push_back(static_cast<float>(pts[i - 1].y));
@@ -1534,10 +1534,10 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.userArcs.size())
+    if (k >= cmd.drawing.userArcs.size())
       return;
     std::vector<float> strip;
-    appendArcPolylineStrip(&strip, cmd.userArcs[k].z, cmd.userArcs[k], 48);  // arc plane, not a flat depth
+    appendArcPolylineStrip(&strip, cmd.drawing.userArcs[k].z, cmd.drawing.userArcs[k], 48);  // arc plane, not a flat depth
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
     std::vector<float> strip;
@@ -1545,10 +1545,10 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Ellipse) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.userEllipses.size())
+    if (k >= cmd.drawing.userEllipses.size())
       return;
     std::vector<float> strip;
-    appendEllipsePolylineStrip(&strip, cmd.userEllipses[k].z, cmd.userEllipses[k], 56);
+    appendEllipsePolylineStrip(&strip, cmd.drawing.userEllipses[k].z, cmd.drawing.userEllipses[k], 56);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Polyline) {
     std::vector<float> strip;
@@ -1585,9 +1585,9 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // into chords there already, and this function is on the per-frame path (the Surface branch
     // above records the same reasoning for the same reason).
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.cadSolids.size() || !cmd.cadSolids[k])
+    if (k >= cmd.drawing.cadSolids.size() || !cmd.drawing.cadSolids[k])
       return;
-    const CadSolidPtr& sp = cmd.cadSolids[k];
+    const CadSolidPtr& sp = cmd.drawing.cadSolids[k];
     for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
       if (t.key.lock() != sp)
         continue;
@@ -1619,14 +1619,14 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // ordinary case) and its solids' own edges (from the tessellation cache, same as the Solid
     // branch), so every block ref gets a highlight regardless of what its content is made of.
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.cadBlockRefs.size())
+    if (k >= cmd.drawing.cadBlockRefs.size())
       return;
-    const CadBlockRef& ref = cmd.cadBlockRefs[k];
+    const CadBlockRef& ref = cmd.drawing.cadBlockRefs[k];
     EntityAttributes dummy{};
-    if (k < cmd.cadBlockRefAttrs.size())
-      dummy = cmd.cadBlockRefAttrs[k];
+    if (k < cmd.drawing.cadBlockRefAttrs.size())
+      dummy = cmd.drawing.cadBlockRefAttrs[k];
     std::vector<CadBlockWorldSeg> segs;
-    CadBlockCollectWorldLines(cmd.blockDefs, ref, dummy, &segs);
+    CadBlockCollectWorldLines(cmd.drawing.blockDefs, ref, dummy, &segs);
     for (const CadBlockWorldSeg& s : segs) {
       hlLines->push_back(static_cast<LineVert>(s.x0));
       hlLines->push_back(static_cast<LineVert>(s.y0));
@@ -1641,7 +1641,7 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // RebuildBlockRefWorldSolids. Walk the edges directly instead — the same chord-count-24-per-arc
     // approach PickClosestCadEntity's own BlockRef case already uses for exactly this reason.
     std::vector<CadBlockWorldSolid> blockSolids;
-    CadBlockCollectWorldSolids(cmd.blockDefs, ref, dummy, &blockSolids);
+    CadBlockCollectWorldSolids(cmd.drawing.blockDefs, ref, dummy, &blockSolids);
     for (const CadBlockWorldSolid& ws : blockSolids) {
       if (!ws.solid)
         continue;
@@ -1662,9 +1662,9 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.cadFilledRegions.size())
+    if (k >= cmd.drawing.cadFilledRegions.size())
       return;
-    const CadFilledRegion& fr = cmd.cadFilledRegions[k];
+    const CadFilledRegion& fr = cmd.drawing.cadFilledRegions[k];
     // Outline every loop (outer + holes) as closed line-segment pairs (GL_LINES) so the selection/hover
     // highlight traces the hatch boundary on top of the fill (REQ-042).
     for (size_t loop = 0; loop < fr.loopStart.size(); ++loop) {
@@ -1787,9 +1787,9 @@ void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject
                              std::vector<float>* faceTris, std::vector<float>* faceEdges,
                              std::vector<float>* lines) {
   {
-    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.cadSolids.size())
+    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.drawing.cadSolids.size())
       return;
-    const CadSolidPtr& sp = cmd.cadSolids[static_cast<size_t>(s.solidIndex)];
+    const CadSolidPtr& sp = cmd.drawing.cadSolids[static_cast<size_t>(s.solidIndex)];
     // The reference expires rather than re-binds (ADR-049): if the solid it names is not the solid
     // it came from, an edit has replaced it and this index no longer means what it meant. Draw
     // nothing rather than highlight a face the user never picked. `ExpireSubObjectSelection` sweeps

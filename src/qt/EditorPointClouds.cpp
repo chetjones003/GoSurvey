@@ -220,7 +220,7 @@ void EditorWindow::ShowPointCloudAttach() {
 
 void EditorWindow::ShowPointCloudExport(int formatIndex) {
   if (m_ModalOpen) return;
-  if (m_State.activeDrawingIdx == 0 || m_State.cadPointClouds.empty()) {
+  if (m_State.activeDrawingIdx == 0 || m_State.drawing.cadPointClouds.empty()) {
     QMessageBox::information(this, "Export Point Cloud", "The drawing has no point clouds. Attach one first.");
     return;
   }
@@ -286,12 +286,12 @@ void EditorWindow::ShowPointCloudExport(int formatIndex) {
   // The folder of the first cloud that will be exported, else Documents.
   auto defaultFolder = [&] {
     for (const auto& item : m_State.selection)
-      if (item.type == SelectedEntity::Type::PointCloud && item.index >= 0 && item.index < static_cast<int>(m_State.cadPointClouds.size())) {
-        const QFileInfo source(QString::fromUtf8(m_State.cadPointClouds[static_cast<std::size_t>(item.index)]->sourcePath.c_str()));
+      if (item.type == SelectedEntity::Type::PointCloud && item.index >= 0 && item.index < static_cast<int>(m_State.drawing.cadPointClouds.size())) {
+        const QFileInfo source(QString::fromUtf8(m_State.drawing.cadPointClouds[static_cast<std::size_t>(item.index)]->sourcePath.c_str()));
         if (source.dir().exists()) return source.absolutePath();
         break;
       }
-    const QFileInfo source(QString::fromUtf8(m_State.cadPointClouds.front()->sourcePath.c_str()));
+    const QFileInfo source(QString::fromUtf8(m_State.drawing.cadPointClouds.front()->sourcePath.c_str()));
     return source.dir().exists() ? source.absolutePath() : QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
   };
   const QString folder = defaultFolder();

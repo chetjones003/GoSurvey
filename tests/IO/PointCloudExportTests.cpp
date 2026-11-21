@@ -33,8 +33,8 @@ void AddCloud(AppCommandState& st, std::vector<double> xyz, const char* source, 
   cloud->pointsXyz = std::move(xyz);
   cloud->sourcePath = source;
   cloud->totalPointCount = total;
-  st.cadPointClouds.push_back(cloud);
-  st.cadPointCloudAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPointClouds.push_back(cloud);
+  st.drawing.cadPointCloudAttrs.push_back(EntityAttributes{});
 }
 
 void Select(AppCommandState& st, int index) {

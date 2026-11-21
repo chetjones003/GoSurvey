@@ -31,14 +31,14 @@ AppCommandState PaperDrawing() {
   L.name = "Sheet";
   L.paperLines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
   L.paperCircles = {1.f, 1.f, 0.5f};
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
   st.activeSpaceIndex = 0;
   st.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, 0});
   st.selectedPaperEntities.push_back({PaperEntityRef::Type::Circle, 0});
   return st;
 }
 
-PaperLayout& Sheet(AppCommandState& st) { return st.paperLayouts[0]; }
+PaperLayout& Sheet(AppCommandState& st) { return st.drawing.paperLayouts[0]; }
 
 }  // namespace
 

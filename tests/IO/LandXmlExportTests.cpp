@@ -102,16 +102,16 @@ CadSurface MakeSquareSurface(const char* name) {
 /// A feature line appended to the CSR store the way the FEATURELINE command does.
 void AddFeatureLine(AppCommandState& st, const std::vector<double>& xyz, bool closed, const char* name,
                     const char* description = "") {
-  if (st.featureLineOffsets.empty()) st.featureLineOffsets.push_back(0);
+  if (st.drawing.featureLineOffsets.empty()) st.drawing.featureLineOffsets.push_back(0);
   const int vertices = static_cast<int>(xyz.size() / 3);
-  st.featureLineVerts.insert(st.featureLineVerts.end(), xyz.begin(), xyz.end());
-  st.featureLineElevPt.insert(st.featureLineElevPt.end(), static_cast<size_t>(vertices), uint8_t{0});
-  st.featureLineOffsets.push_back(st.featureLineOffsets.back() + vertices);
-  st.featureLineClosed.push_back(closed ? 1 : 0);
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), xyz.begin(), xyz.end());
+  st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), static_cast<size_t>(vertices), uint8_t{0});
+  st.drawing.featureLineOffsets.push_back(st.drawing.featureLineOffsets.back() + vertices);
+  st.drawing.featureLineClosed.push_back(closed ? 1 : 0);
   CadFeatureLineInfo info;
   info.name = name;
   info.description = description;
-  st.featureLineInfo.push_back(info);
+  st.drawing.featureLineInfo.push_back(info);
 }
 
 }  // namespace
@@ -120,11 +120,11 @@ TEST_CASE("LandXML exports every survey point in world NEZ with its number, desc
           "[landxml][issue1002]") {
   ScratchDir dir("points");
   AppCommandState st;
-  st.worldDocumentOriginX = 2196000;
-  st.worldDocumentOriginY = 1400000;
-  st.surveyPoints = {MakePoint(42, 0.000125, 12.25, 98.125, "Control & <benchmark> \"north\" 'x'"),
+  st.drawing.worldDocumentOriginX = 2196000;
+  st.drawing.worldDocumentOriginY = 1400000;
+  st.drawing.surveyPoints = {MakePoint(42, 0.000125, 12.25, 98.125, "Control & <benchmark> \"north\" 'x'"),
                      MakePoint(43, -5.5, 12.25, 98.125, "Tree")};
-  st.surveyPoints[0].rawDescription = "CP1";
+  st.drawing.surveyPoints[0].rawDescription = "CP1";
 
   const auto written = Export(st, dir, "points.xml");
   REQUIRE(written->ok);
@@ -157,17 +157,17 @@ TEST_CASE("LandXML coordinates keep full double precision without locale formatt
           "[landxml][issue1002]") {
   ScratchDir dir("precision");
   AppCommandState st;
-  st.worldDocumentOriginX = 6123456.789012345;
-  st.worldDocumentOriginY = 1987654.321098765;
+  st.drawing.worldDocumentOriginX = 6123456.789012345;
+  st.drawing.worldDocumentOriginY = 1987654.321098765;
   const double x = 123.456789012, y = -45.678901234, z = 0.1;
-  st.surveyPoints = {MakePoint(1, x, y, z)};
+  st.drawing.surveyPoints = {MakePoint(1, x, y, z)};
 
   const auto written = Export(st, dir, "precision.xml");
   REQUIRE(written->ok);
   const auto coordinates = Numbers(written->root().child("CgPoints").child("CgPoint").text().get());
   REQUIRE(coordinates.size() == 3);
-  CHECK(coordinates[0] == y + st.worldDocumentOriginY);
-  CHECK(coordinates[1] == x + st.worldDocumentOriginX);
+  CHECK(coordinates[0] == y + st.drawing.worldDocumentOriginY);
+  CHECK(coordinates[1] == x + st.drawing.worldDocumentOriginX);
   CHECK(coordinates[2] == z);
   CHECK(std::string(written->root().child("CgPoints").child("CgPoint").text().get()).find('e') == std::string::npos);
 }
@@ -189,9 +189,9 @@ TEST_CASE("LandXML declares the drawing unit and foot definition", "[landxml][is
   ScratchDir dir("units");
   for (const Row& row : rows) {
     AppCommandState st;
-    st.drawingInsUnits = row.insUnits;
-    st.drawingSettings.footDefinition = row.foot;
-    st.surveyPoints = {MakePoint(1, 1, 2, 3)};
+    st.drawing.drawingInsUnits = row.insUnits;
+    st.drawing.drawingSettings.footDefinition = row.foot;
+    st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
     const auto written = Export(st, dir, "units.xml");
     REQUIRE(written->ok);
     INFO("INSUNITS " << row.insUnits << " -> " << row.system << " " << row.linear);
@@ -209,8 +209,8 @@ TEST_CASE("LandXML declares the drawing unit and foot definition", "[landxml][is
 TEST_CASE("LandXML does not invent a unit for a unitless drawing", "[landxml][issue1002][units]") {
   ScratchDir dir("unitless");
   AppCommandState st;
-  st.drawingInsUnits = 0;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.drawingInsUnits = 0;
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
   const auto written = Export(st, dir, "unitless.xml");
   REQUIRE(written->ok);
   CHECK_FALSE(written->root().child("Units"));
@@ -220,11 +220,11 @@ TEST_CASE("LandXML does not invent a unit for a unitless drawing", "[landxml][is
 TEST_CASE("LandXML exports a built TIN surface with 1-based ids and its name", "[landxml][issue1002][surface]") {
   ScratchDir dir("surface");
   AppCommandState st;
-  st.worldDocumentOriginX = 1000;
-  st.worldDocumentOriginY = 5000;
+  st.drawing.worldDocumentOriginX = 1000;
+  st.drawing.worldDocumentOriginY = 5000;
   CadSurface surface = MakeSquareSurface("Existing <Ground> & \"Fill\"");
   surface.description = "Topo 2026";
-  st.cadSurfaces.push_back(surface);
+  st.drawing.cadSurfaces.push_back(surface);
 
   const auto written = Export(st, dir, "surface.xml");
   REQUIRE(written->ok);
@@ -257,17 +257,17 @@ TEST_CASE("LandXML exports a built TIN surface with 1-based ids and its name", "
 TEST_CASE("LandXML names a surface it cannot export and still writes the rest", "[landxml][issue1002][surface]") {
   ScratchDir dir("surface-skips");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
-  st.cadSurfaces.push_back(MakeSquareSurface("Good"));
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.cadSurfaces.push_back(MakeSquareSurface("Good"));
   CadSurface unbuilt;
   unbuilt.name = "Unbuilt";
-  st.cadSurfaces.push_back(unbuilt);
+  st.drawing.cadSurfaces.push_back(unbuilt);
   CadSurface grid = MakeSquareSurface("GridSurface");
   grid.kind = SurfaceKind::Grid;
-  st.cadSurfaces.push_back(grid);
+  st.drawing.cadSurfaces.push_back(grid);
   CadSurface broken = MakeSquareSurface("Broken");
   const_cast<CadTin&>(*broken.tin).indices[2] = 99;  // refers to a vertex that does not exist
-  st.cadSurfaces.push_back(broken);
+  st.drawing.cadSurfaces.push_back(broken);
 
   const auto written = Export(st, dir, "skips.xml");
   REQUIRE(written->ok);
@@ -283,7 +283,7 @@ TEST_CASE("LandXML names a surface it cannot export and still writes the rest", 
 TEST_CASE("LandXML exports a drawing without any surfaces", "[landxml][issue1002][surface]") {
   ScratchDir dir("no-surfaces");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
   const auto written = Export(st, dir, "no-surfaces.xml");
   REQUIRE(written->ok);
   CHECK_FALSE(written->root().child("Surfaces"));
@@ -294,8 +294,8 @@ TEST_CASE("LandXML exports feature lines as one Line per segment with 3D ends an
           "[landxml][issue1002][featureline]") {
   ScratchDir dir("featurelines");
   AppCommandState st;
-  st.worldDocumentOriginX = 100;
-  st.worldDocumentOriginY = 200;
+  st.drawing.worldDocumentOriginX = 100;
+  st.drawing.worldDocumentOriginY = 200;
   AddFeatureLine(st, {0, 0, 5, 10, 0, 6, 10, 10, 7}, false, "Top of <curb>", "Back & face");
   AddFeatureLine(st, {0, 0, 1, 4, 0, 2, 4, 3, 3}, true, "Pond rim");
   AddFeatureLine(st, {7, 7, 7}, false, "Lonely");  // one vertex: not a line
@@ -331,8 +331,8 @@ TEST_CASE("LandXML exports feature lines as one Line per segment with 3D ends an
 TEST_CASE("LandXML exports points, a surface and a feature line together", "[landxml][issue1002]") {
   ScratchDir dir("all");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
-  st.cadSurfaces.push_back(MakeSquareSurface("EG"));
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.cadSurfaces.push_back(MakeSquareSurface("EG"));
   AddFeatureLine(st, {0, 0, 0, 1, 1, 1}, false, "FL");
   const auto written = Export(st, dir, "all.xml");
   REQUIRE(written->ok);
@@ -358,7 +358,7 @@ TEST_CASE("LandXML refuses an empty drawing and leaves an existing file alone", 
   // An unbuilt surface alone is not exportable data either.
   CadSurface unbuilt;
   unbuilt.name = "Unbuilt";
-  st.cadSurfaces.push_back(unbuilt);
+  st.drawing.cadSurfaces.push_back(unbuilt);
   log.clear();
   CHECK_FALSE(ExportLandXmlFile(st, target.u8string().c_str(), log));
   CHECK(LogMentions(log, "nothing to export"));
@@ -372,7 +372,7 @@ TEST_CASE("LandXML replaces characters XML cannot hold instead of writing an unr
   description += '\x01';        // control character: not allowed in XML 1.0
   description += "\xFF\xFE";    // not UTF-8
   description += "caf\xC3\xA9"; // valid UTF-8 must survive
-  st.surveyPoints = {MakePoint(1, 1, 2, 3, description.c_str())};
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3, description.c_str())};
   const auto written = Export(st, dir, "sanitize.xml");
   REQUIRE(written->ok);
   const std::string read = written->root().child("CgPoints").child("CgPoint").attribute("desc").value();
@@ -383,7 +383,7 @@ TEST_CASE("LandXML replaces characters XML cannot hold instead of writing an unr
 TEST_CASE("LandXML skips non-finite points and warns about repeated point numbers", "[landxml][issue1002]") {
   ScratchDir dir("odd-points");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3), MakePoint(2, std::numeric_limits<double>::quiet_NaN(), 2, 3),
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3), MakePoint(2, std::numeric_limits<double>::quiet_NaN(), 2, 3),
                      MakePoint(1, 5, 6, 7)};
   const auto written = Export(st, dir, "odd.xml");
   REQUIRE(written->ok);
@@ -395,7 +395,7 @@ TEST_CASE("LandXML skips non-finite points and warns about repeated point number
 TEST_CASE("LandXML reports a failed write and leaves no partial file", "[landxml][issue1002]") {
   ScratchDir dir("write-failure");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
 
   std::vector<std::string> log;
   const fs::path missingFolder = dir.path / "no-such-folder" / "out.xml";
@@ -420,7 +420,7 @@ TEST_CASE("LandXML reports a failed write and leaves no partial file", "[landxml
 TEST_CASE("LandXML overwrites a previous export and accepts a non-ASCII path", "[landxml][issue1002]") {
   ScratchDir dir("overwrite");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(1, 1, 2, 3)};
+  st.drawing.surveyPoints = {MakePoint(1, 1, 2, 3)};
   const fs::path target = dir.path / fs::u8path("s\xC3\xA9" "ance \xC3\xBC" "ber.xml");
   { std::ofstream(target) << "old"; }
   std::vector<std::string> log;
@@ -433,7 +433,7 @@ TEST_CASE("LandXML overwrites a previous export and accepts a non-ASCII path", "
 TEST_CASE("EXPORTLANDXML writes the file named on the command line", "[landxml][issue1002][command]") {
   ScratchDir dir("command");
   AppCommandState st;
-  st.surveyPoints = {MakePoint(7, 1, 2, 3, "Spot")};
+  st.drawing.surveyPoints = {MakePoint(7, 1, 2, 3, "Spot")};
   const fs::path target = dir.path / "a folder" / "site plan.xml";
   fs::create_directories(target.parent_path());
 
@@ -463,13 +463,13 @@ TEST_CASE("LandXML exports a real built surface from the demo drawing", "[landxm
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, demo.u8string().c_str(), log));
   REQUIRE(CreateSurfaceFromPointGroups(st, "Test EG", {"Existing Ground"}, log) >= 0);
-  REQUIRE(st.cadSurfaces.back().tin);
-  const CadTin& tin = *st.cadSurfaces.back().tin;
+  REQUIRE(st.drawing.cadSurfaces.back().tin);
+  const CadTin& tin = *st.drawing.cadSurfaces.back().tin;
   REQUIRE(tin.triangleCount() > 0);
 
   const auto written = Export(st, dir, "demo.xml");
   REQUIRE(written->ok);
-  CHECK(CountChildren(written->root().child("CgPoints"), "CgPoint") == static_cast<int>(st.surveyPoints.size()));
+  CHECK(CountChildren(written->root().child("CgPoints"), "CgPoint") == static_cast<int>(st.drawing.surveyPoints.size()));
   pugi::xml_node surface;
   for (auto node : written->root().child("Surfaces").children("Surface"))
     if (std::string(node.attribute("name").value()) == "Test EG") surface = node;
@@ -480,7 +480,7 @@ TEST_CASE("LandXML exports a real built surface from the demo drawing", "[landxm
   // First vertex in world coordinates, northing first.
   const auto first = Numbers(definition.child("Pnts").child("P").text().get());
   REQUIRE(first.size() == 3);
-  CHECK(first[0] == tin.vertsXyz[1] + st.worldDocumentOriginY);
-  CHECK(first[1] == tin.vertsXyz[0] + st.worldDocumentOriginX);
+  CHECK(first[0] == tin.vertsXyz[1] + st.drawing.worldDocumentOriginY);
+  CHECK(first[1] == tin.vertsXyz[0] + st.drawing.worldDocumentOriginX);
   CHECK(first[2] == tin.vertsXyz[2]);
 }

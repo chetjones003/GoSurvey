@@ -69,8 +69,8 @@ void CommitCadPointToActiveSpace(AppCommandState& st, const CadPoint& p) {
     L->paperPointAttrs.push_back(MakeNewEntityAttrs(st));
     return;
   }
-  st.cadPoints.push_back(p);
-  st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.cadPoints.push_back(p);
+  st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
 }
 
 struct PathSample {
@@ -207,28 +207,28 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= st.lineCount())
+    if (li >= st.drawing.lineCount())
       return false;
-    const CadLineRecord ln = st.line(li);
+    const CadLineRecord ln = st.drawing.line(li);
     FillLinePath({ln.x0, ln.y0, ln.z0}, {ln.x1, ln.y1, ln.z1}, pickX, pickY, out);
     return true;
   }
   if (e.type == T::Polyline) {
-    if (e.index < 0 || static_cast<size_t>(e.index) + 1 >= st.userPolylineOffsets.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) + 1 >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(e.index) + 1];
-    const bool closed = static_cast<size_t>(e.index) < st.userPolylineClosed.size() &&
-                        st.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
-    FillPolyPath(st.userPolylineVerts, st.userPolylineVertsBulge, v0, v1, closed, out);
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(e.index) + 1];
+    const bool closed = static_cast<size_t>(e.index) < st.drawing.userPolylineClosed.size() &&
+                        st.drawing.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
+    FillPolyPath(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, v0, v1, closed, out);
     ReverseOpenPathIfPickNearerEnd(out, pickX, pickY);
     return out->pts.size() >= 2;
   }
   if (e.type == T::Circle) {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return false;
-    const CadCircleRecord c = st.circle(ci);
+    const CadCircleRecord c = st.drawing.circle(ci);
     FillCirclePath(c.cx, c.cy, c.cz, c.r, pickX, pickY, out);
     return !out->pts.empty();
   }
@@ -381,9 +381,9 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= st.lineCount())
+    if (li >= st.drawing.lineCount())
       return;
-    const CadLineRecord ln = st.line(li);
+    const CadLineRecord ln = st.drawing.line(li);
     char buf[256];
     std::snprintf(buf, sizeof(buf), "LINE  layer %s  model  (%s,%s) to (%s,%s)", layer.c_str(),
                   FormatLinear(ln.x0, prec).c_str(),
@@ -395,9 +395,9 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
   }
   if (e.type == T::Circle) {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return;
-    const CadCircleRecord c = st.circle(ci);
+    const CadCircleRecord c = st.drawing.circle(ci);
     char buf[192];
     std::snprintf(buf, sizeof(buf), "CIRCLE  layer %s  model  center (%s,%s)  radius %s", layer.c_str(),
                   FormatLinear(c.cx, prec).c_str(),
@@ -407,14 +407,14 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Polyline) {
-    ListPolylineCsr(layer, "model", st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed, e.index, prec,
+    ListPolylineCsr(layer, "model", st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed, e.index, prec,
                     log);
     return;
   }
   if (e.type == T::Alignment) {  // REQ-480
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.alignments.size())
       return;
-    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    const alignment::Alignment& al = st.drawing.alignments[static_cast<size_t>(e.index)];
     char buf[256];
     std::snprintf(buf, sizeof(buf), "ALIGNMENT  Name: %s  Layer: %s  Entities: %zu  Length: %s", al.name.c_str(),
                   layer.c_str(), al.Entities().size(), FormatLinear(al.Length(), prec).c_str());
@@ -422,15 +422,15 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Spline) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSplines.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadSplines.size())
       return;
-    ListSplineEntity(layer, "model", st.cadSplines[static_cast<size_t>(e.index)], log);
+    ListSplineEntity(layer, "model", st.drawing.cadSplines[static_cast<size_t>(e.index)], log);
     return;
   }
   if (e.type == T::Point) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPoints.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadPoints.size())
       return;
-    const CadPoint& p = st.cadPoints[static_cast<size_t>(e.index)];
+    const CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
     char buf[192];
     std::snprintf(buf, sizeof(buf), "POINT  layer %s  model  (%s,%s,%s)", layer.c_str(),
                   FormatLinear(p.x, prec).c_str(), FormatLinear(p.y, prec).c_str(),
@@ -439,9 +439,9 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Multileader) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMultileaders.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadMultileaders.size())
       return;
-    ListLeaderEntity(layer, "model", st.cadMultileaders[static_cast<size_t>(e.index)], prec, log);
+    ListLeaderEntity(layer, "model", st.drawing.cadMultileaders[static_cast<size_t>(e.index)], prec, log);
     return;
   }
   log.push_back("LIST — " + layer + "  model  type " + std::to_string(static_cast<int>(e.type)));
@@ -513,7 +513,7 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
   }
   PushUndoSnapshot(st, "LEADER");
   CadMultileader ml;
-  ml.annotative = st.activeMultileaderStyle.annotativeDefault;
+  ml.annotative = st.drawing.activeMultileaderStyle.annotativeDefault;
   ml.splinePath = st.leaderPathStyle == AppCommandState::LeaderPathStyle::Spline;
   ml.showArrow = st.leaderShowArrow;
   std::vector<spline::Vec3> pathPts = st.leaderDraftPoints;
@@ -534,10 +534,10 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
   }
   const spline::Vec3& land = st.leaderDraftPoints.back();
   if (st.leaderAnnotation == AppCommandState::LeaderAnnotation::Mtext) {
-    const float plotH = std::max(st.activeMultileaderStyle.textSizeInches, 0.01f);
+    const float plotH = std::max(st.drawing.activeMultileaderStyle.textSizeInches, 0.01f);
     const float unit = ActivePaperGeometryTarget(st) != nullptr
                            ? 1.f
-                           : std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+                           : std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
     CadAnnotation& a = ml.label;
     a.kind = CadAnnotation::Kind::Mtext;
     a.plottedHeightInches = plotH;
@@ -555,8 +555,8 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
     L->paperMultileaders.push_back(std::move(ml));
     L->paperMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    st.cadMultileaders.push_back(std::move(ml));
-    st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.cadMultileaders.push_back(std::move(ml));
+    st.drawing.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
   st.leaderDraftPoints.clear();
@@ -592,39 +592,39 @@ int ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std:
     return hit.index;
   if (hit.type == T::LineSeg) {
     const size_t li = static_cast<size_t>(hit.index);
-    if (li >= st.lineCount())
+    if (li >= st.drawing.lineCount())
       return -1;
     PushUndoSnapshot(st, "PEDIT convert");
-    const CadLineRecord ln = st.line(li);
-    const int idx = AppendOpenPolyline2(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed,
-                                        st.userPolylineAttrs, st.userPolylineVertsBulge, ln.x0,
+    const CadLineRecord ln = st.drawing.line(li);
+    const int idx = AppendOpenPolyline2(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed,
+                                        st.drawing.userPolylineAttrs, st.drawing.userPolylineVertsBulge, ln.x0,
                                         ln.y0, ln.z0, ln.x1,
                                         ln.y1, ln.z1, 0.f, MakeNewEntityAttrs(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    st.eraseLine(li);
-    if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + hit.index);
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+    st.drawing.eraseLine(li);
+    if (static_cast<size_t>(hit.index) < st.drawing.userLineAttrs.size())
+      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + hit.index);
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted line to polyline.");
     return idx;
   }
   if (hit.type == T::Arc) {
-    if (static_cast<size_t>(hit.index) >= st.userArcs.size())
+    if (static_cast<size_t>(hit.index) >= st.drawing.userArcs.size())
       return -1;
-    const CadArc a = st.userArcs[static_cast<size_t>(hit.index)];
+    const CadArc a = st.drawing.userArcs[static_cast<size_t>(hit.index)];
     PushUndoSnapshot(st, "PEDIT convert");
     const double x0 = a.cx + a.r * std::cos(a.startRad);
     const double y0 = a.cy + a.r * std::sin(a.startRad);
     const double x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
     const double y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
     const float bg = static_cast<float>(std::tan(static_cast<double>(a.sweepRad) / 4.0));
-    const int idx = AppendOpenPolyline2(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed,
-                                        st.userPolylineAttrs, st.userPolylineVertsBulge, x0, y0, a.z, x1, y1, a.z, bg,
+    const int idx = AppendOpenPolyline2(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed,
+                                        st.drawing.userPolylineAttrs, st.drawing.userPolylineVertsBulge, x0, y0, a.z, x1, y1, a.z, bg,
                                         MakeNewEntityAttrs(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    st.userArcs.erase(st.userArcs.begin() + hit.index);
-    if (static_cast<size_t>(hit.index) < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + hit.index);
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + hit.index);
+    if (static_cast<size_t>(hit.index) < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + hit.index);
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted arc to polyline.");
     return idx;
@@ -681,7 +681,7 @@ bool PeditHasPoly(const AppCommandState& st) {
     const PaperLayout* L = ActivePaperGeometryTarget(st);
     return L && st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < L->paperPolyOffsets.size();
   }
-  return st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < st.userPolylineOffsets.size();
+  return st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < st.drawing.userPolylineOffsets.size();
 }
 
 void PeditCloseOpen(AppCommandState& st, bool close, std::vector<std::string>& log) {
@@ -694,7 +694,7 @@ void PeditCloseOpen(AppCommandState& st, bool close, std::vector<std::string>& l
       return;
     L->paperPolyClosed[static_cast<size_t>(st.peditIndex)] = close ? 1u : 0u;
   } else {
-    st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] = close ? 1u : 0u;
+    st.drawing.userPolylineClosed[static_cast<size_t>(st.peditIndex)] = close ? 1u : 0u;
   }
   BumpCadGpuCache(st);
   log.push_back(close ? "PEDIT — closed." : "PEDIT — opened.");
@@ -733,10 +733,10 @@ void PeditReverse(AppCommandState& st, std::vector<std::string>& log) {
     reverseRange(L->paperPolyVerts, v0, v1);
     ReverseBulgeRange(L->paperPolyVertsBulge, v0, v1);
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-    reverseRange(st.userPolylineVerts, v0, v1);
-    ReverseBulgeRange(st.userPolylineVertsBulge, v0, v1);
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
+    reverseRange(st.drawing.userPolylineVerts, v0, v1);
+    ReverseBulgeRange(st.drawing.userPolylineVertsBulge, v0, v1);
   }
   BumpCadGpuCache(st);
   log.push_back("PEDIT — reversed.");
@@ -759,14 +759,14 @@ void PeditSetBulges(AppCommandState& st, float value, const char* undo, const ch
     for (int i = v0; i < last; ++i)
       L->paperPolyVertsBulge[static_cast<size_t>(i)] = value;
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-    const bool closed = static_cast<size_t>(st.peditIndex) < st.userPolylineClosed.size() &&
-                        st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] != 0;
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+    const bool closed = static_cast<size_t>(st.peditIndex) < st.drawing.userPolylineClosed.size() &&
+                        st.drawing.userPolylineClosed[static_cast<size_t>(st.peditIndex)] != 0;
     const int last = closed ? v1 : v1 - 1;
     for (int i = v0; i < last; ++i)
-      st.userPolylineVertsBulge[static_cast<size_t>(i)] = value;
+      st.drawing.userPolylineVertsBulge[static_cast<size_t>(i)] = value;
   }
   BumpCadGpuCache(st);
   log.push_back(done);
@@ -816,8 +816,8 @@ void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
       return;
     densify(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, st.peditIndex);
   } else {
-    densify(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, st.peditIndex);
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    densify(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineVertsBulge, st.peditIndex);
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
   log.push_back("PEDIT — spline densified.");
@@ -833,8 +833,8 @@ int PeditVertexCount(const AppCommandState& st) {
   }
   if (!PeditHasPoly(st))
     return 0;
-  return st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1] -
-         st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+  return st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1] -
+         st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
 }
 
 void PeditMoveVertex(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
@@ -854,11 +854,11 @@ void PeditMoveVertex(AppCommandState& st, double x, double y, std::vector<std::s
       L->paperPolyVerts[b + 1] = static_cast<float>(y);
     }
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
     const size_t b = static_cast<size_t>(v0 + vi);
-    if (b < st.vertexCount()) {
-      st.vertexComponent(b, CadVertexComponent::X) = x;
-      st.vertexComponent(b, CadVertexComponent::Y) = y;
+    if (b < st.drawing.vertexCount()) {
+      st.drawing.vertexComponent(b, CadVertexComponent::X) = x;
+      st.drawing.vertexComponent(b, CadVertexComponent::Y) = y;
     }
   }
   BumpCadGpuCache(st);
@@ -889,8 +889,8 @@ void PeditInsertVertex(AppCommandState& st, double x, double y, std::vector<std:
       return;
     insertAt(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, 0.0);
   } else {
-    insertAt(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, CadCommitElevation(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    insertAt(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineVertsBulge, CadCommitElevation(st));
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
   st.peditVertex = vi + 1;
@@ -899,27 +899,27 @@ void PeditInsertVertex(AppCommandState& st, double x, double y, std::vector<std:
 }
 
 void EraseModelPolyline(AppCommandState& st, int pi) {
-  if (pi < 0 || static_cast<size_t>(pi) + 1 >= st.userPolylineOffsets.size())
+  if (pi < 0 || static_cast<size_t>(pi) + 1 >= st.drawing.userPolylineOffsets.size())
     return;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
-  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
-  if (st.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
-    st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + v0, st.userPolylineVertsBulge.begin() + v1);
-  if (st.userPolylineVertsNormal.size() >= static_cast<size_t>(v1) * 3)
-    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+  st.drawing.userPolylineVerts.erase(st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (st.drawing.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
+    st.drawing.userPolylineVertsBulge.erase(st.drawing.userPolylineVertsBulge.begin() + v0, st.drawing.userPolylineVertsBulge.begin() + v1);
+  if (st.drawing.userPolylineVertsNormal.size() >= static_cast<size_t>(v1) * 3)
+    st.drawing.userPolylineVertsNormal.erase(st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                                     st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
   const int nv = v1 - v0;
-  st.userPolylineOffsets.erase(st.userPolylineOffsets.begin() + (pi + 1));
-  for (size_t k = static_cast<size_t>(pi) + 1; k < st.userPolylineOffsets.size(); ++k)
-    st.userPolylineOffsets[k] -= nv;
-  if (st.userPolylineOffsets.size() == 1)
-    st.userPolylineOffsets.clear();
-  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-    st.userPolylineClosed.erase(st.userPolylineClosed.begin() + pi);
-  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-    st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + pi);
+  st.drawing.userPolylineOffsets.erase(st.drawing.userPolylineOffsets.begin() + (pi + 1));
+  for (size_t k = static_cast<size_t>(pi) + 1; k < st.drawing.userPolylineOffsets.size(); ++k)
+    st.drawing.userPolylineOffsets[k] -= nv;
+  if (st.drawing.userPolylineOffsets.size() == 1)
+    st.drawing.userPolylineOffsets.clear();
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+    st.drawing.userPolylineClosed.erase(st.drawing.userPolylineClosed.begin() + pi);
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+    st.drawing.userPolylineAttrs.erase(st.drawing.userPolylineAttrs.begin() + pi);
 }
 
 void ErasePaperPoly(PaperLayout& L, int pi) {
@@ -1062,29 +1062,29 @@ void PeditJoinIndex(AppCommandState& st, int other, std::vector<std::string>& lo
       --keepAfter;
     st.peditIndex = keepAfter;
   } else {
-    if (other < 0 || static_cast<size_t>(other) + 1 >= st.userPolylineOffsets.size())
+    if (other < 0 || static_cast<size_t>(other) + 1 >= st.drawing.userPolylineOffsets.size())
       return;
-    if (st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] || st.userPolylineClosed[static_cast<size_t>(other)]) {
+    if (st.drawing.userPolylineClosed[static_cast<size_t>(st.peditIndex)] || st.drawing.userPolylineClosed[static_cast<size_t>(other)]) {
       log.push_back("PEDIT — cannot join a closed polyline.");
       return;
     }
-    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)],
-         st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
-    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(other)],
-         st.userPolylineOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
+    load(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex)],
+         st.drawing.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
+    load(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets[static_cast<size_t>(other)],
+         st.drawing.userPolylineOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
     if (!JoinVertexLists(&keepPts, &keepBg, otherPts, otherBg)) {
       log.push_back("PEDIT — objects do not touch.");
       return;
     }
     PushUndoSnapshot(st, "PEDIT Join");
     const int keep = st.peditIndex;
-    ReplacePolyRange(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets, keep, keepPts, keepBg);
+    ReplacePolyRange(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets, keep, keepPts, keepBg);
     int keepAfter = keep;
     EraseModelPolyline(st, other);
     if (other < keepAfter)
       --keepAfter;
     st.peditIndex = keepAfter;
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
   st.peditPhase = AppCommandState::PeditPhase::WaitOption;
@@ -1178,9 +1178,9 @@ bool AreaFromPicked(const AppCommandState& st, const SelectedEntity& e, double* 
   using T = SelectedEntity::Type;
   if (e.type == T::Circle) {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.circleCount())
+    if (ci >= st.drawing.circleCount())
       return false;
-    const double r = st.circle(ci).r;
+    const double r = st.drawing.circle(ci).r;
     if (!(r > 0.0))
       return false;
     *area = kPi * r * r;
@@ -1468,7 +1468,7 @@ bool TryPickPolylineForPedit(AppCommandState& st, double wx, double wy, int* idx
   *idx = -1;
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back("PEDIT — nothing at that point.");
       return false;
     }
@@ -1519,7 +1519,7 @@ bool HandleMeasureObjectPick(AppCommandState& st, double wx, double wy, std::vec
   st.measurePickY = wy;
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point." : "DIVIDE — nothing at that point.");
       return true;
     }
@@ -1547,7 +1547,7 @@ bool HandleMeasureObjectPick(AppCommandState& st, double wx, double wy, std::vec
 bool HandleListPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs))
+    if (PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs))
       ListPaperEntity(st, *L, hit, log);
     else
       log.push_back("LIST — nothing at that point.");
@@ -1565,7 +1565,7 @@ bool HandleListPick(AppCommandState& st, double wx, double wy, std::vector<std::
 bool HandleAreaObjectPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back("AREA — nothing at that point.");
       return true;
     }
@@ -1686,7 +1686,7 @@ void StartListCommand(AppCommandState& st, std::vector<std::string>& log) {
 void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string t = StringUtil::trimCopy(args);
   if (t.empty()) {
-    log.push_back("PDMODE = " + std::to_string(st.pdMode) + " (0/1/2/3/4 + 32 circle / 64 square).");
+    log.push_back("PDMODE = " + std::to_string(st.drawing.pdMode) + " (0/1/2/3/4 + 32 circle / 64 square).");
     return;
   }
   int v = 0;
@@ -1695,16 +1695,16 @@ void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vec
     return;
   }
   PushUndoSnapshot(st, "PDMODE");
-  st.pdMode = v;
+  st.drawing.pdMode = v;
   BumpCadGpuCache(st);
-  log.push_back("PDMODE = " + std::to_string(st.pdMode) + ".");
+  log.push_back("PDMODE = " + std::to_string(st.drawing.pdMode) + ".");
 }
 
 void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string t = StringUtil::trimCopy(args);
   if (t.empty()) {
     char buf[80];
-    std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g (0 = 5%% of view).", st.pdSize);
+    std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g (0 = 5%% of view).", st.drawing.pdSize);
     log.push_back(buf);
     return;
   }
@@ -1714,10 +1714,10 @@ void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vec
     return;
   }
   PushUndoSnapshot(st, "PDSIZE");
-  st.pdSize = v;
+  st.drawing.pdSize = v;
   BumpCadGpuCache(st);
   char buf[80];
-  std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g.", st.pdSize);
+  std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g.", st.drawing.pdSize);
   log.push_back(buf);
 }
 
@@ -1754,7 +1754,7 @@ void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.tablePendingStyle.clear();
   st.tablePendingCols = 3;
   st.tablePendingRows = 2;
-  if (const CadTableStyle* standard = CadTableFindStyle(st.tableStyles, "Standard")) {
+  if (const CadTableStyle* standard = CadTableFindStyle(st.drawing.tableStyles, "Standard")) {
     st.tablePendingColumnWidthInches = standard->columnWidthInches;
     st.tablePendingRowHeightInches = standard->rowHeightInches;
   }
@@ -1771,7 +1771,7 @@ void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
 bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
   if (st.tableStage == 0) {
     const std::string name = line.empty() ? std::string("Standard") : line;
-    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, name);
     if (!s || s->point) {
       log.push_back("TABLE — no data table style named \"" + name + "\". Type Standard or press Enter.");
       return true;
@@ -1806,7 +1806,7 @@ bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<s
 }
 
 void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.tablePendingStyle);
+  const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, st.tablePendingStyle);
   if (!s) {
     EndTableCommand(st);
     return;
@@ -1815,15 +1815,15 @@ void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::s
   CadTableStyle sizing = *s;
   sizing.columnWidthInches = st.tablePendingColumnWidthInches;
   sizing.rowHeightInches = st.tablePendingRowHeightInches;
-  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.modelUnitsPerPlottedInch);
+  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.drawing.modelUnitsPerPlottedInch);
   t.insX = static_cast<float>(wx);
   t.insY = static_cast<float>(wy);
   t.insZ = static_cast<float>(CadCommitElevation(st));
   if (const TextStyle* ts = ActiveTextStyle(st))
     t.fontFamily = ts->fontFamily;
   PushUndoSnapshot(st, "TABLE");
-  st.cadTables.push_back(std::move(t));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  st.drawing.cadTables.push_back(std::move(t));
+  AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
   log.push_back("TABLE inserted: " + std::to_string(st.tablePendingCols) + " x " +
@@ -1845,7 +1845,7 @@ void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& lo
 
 bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
                                   std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, styleName);
+  const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, styleName);
   if (!s || !s->point) {
     log.push_back("ADDPOINTTABLE — no point table style named \"" + styleName + "\".");
     return false;
@@ -1854,7 +1854,7 @@ bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleN
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   std::vector<int> present;
   for (int id : ids) {
-    for (const SurveyPoint& p : st.surveyPoints) {
+    for (const SurveyPoint& p : st.drawing.surveyPoints) {
       if (p.id == id) {
         present.push_back(id);
         break;
@@ -1877,7 +1877,7 @@ bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleN
 bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
   if (st.pointTableStage == 0) {
     const std::string name = line.empty() ? std::string("NameNEZD") : line;
-    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, name);
     if (!s || !s->point) {
       log.push_back("ADDPOINTTABLE — no point table style named \"" + name + "\". Type NameNEZD or press Enter.");
       return true;
@@ -1890,10 +1890,10 @@ bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vec
   if (st.pointTableStage == 1) {
     std::vector<int> ids;
     if (line.empty()) {
-      for (const SurveyPoint& p : st.surveyPoints)
+      for (const SurveyPoint& p : st.drawing.surveyPoints)
         ids.push_back(p.id);
     } else if (const int g = FindPointGroupIndex(st, line); g >= 0) {
-      ids = ResolvePointGroup(st, st.pointGroups[static_cast<size_t>(g)], &log);
+      ids = ResolvePointGroup(st, st.drawing.pointGroups[static_cast<size_t>(g)], &log);
     } else {
       std::vector<std::string> bad;
       const std::vector<PointIdRange> ranges = ParseIdRanges(line, &bad);
@@ -1901,7 +1901,7 @@ bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vec
         log.push_back("ADDPOINTTABLE — cannot read \"" + bad.front() + "\". Type numbers such as 1-5,8.");
         return true;
       }
-      for (const SurveyPoint& p : st.surveyPoints) {
+      for (const SurveyPoint& p : st.drawing.surveyPoints) {
         if (IdInRanges(ranges, p.id))
           ids.push_back(p.id);
       }
@@ -1914,14 +1914,14 @@ bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vec
 }
 
 void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.pointTableStyle);
+  const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, st.pointTableStyle);
   if (!s) {
     EndTableCommand(st);
     return;
   }
   std::vector<CadTablePointRow> rows;
   for (int id : st.pointTableIds) {
-    for (const SurveyPoint& p : st.surveyPoints) {
+    for (const SurveyPoint& p : st.drawing.surveyPoints) {
       if (p.id != id)
         continue;
       CadTablePointRow r;
@@ -1954,7 +1954,7 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
                                          rows.begin() + static_cast<std::ptrdiff_t>(first + count));
     CadTable table;
     const int tableRows = static_cast<int>(count) + 1 + (mergedTitle ? 1 : 0);
-    CadTableApplyStyleSize(&table, *s, tableRows, cols, st.modelUnitsPerPlottedInch);
+    CadTableApplyStyleSize(&table, *s, tableRows, cols, st.drawing.modelUnitsPerPlottedInch);
     table.cells = CadPointTableCells(*s, subset, st.displayLinearPrecision);
     table.surveyPointDataRows = true;
     if (mergedTitle) {
@@ -1974,10 +1974,10 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
         table.columnWeights.clear();
         for (double width : s->columnWidths) table.columnWeights.push_back(static_cast<float>(width));
       } else {
-        CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+        CadTableFitColumnWeightsFromContent(&table, st.drawing.modelUnitsPerPlottedInch);
       }
     } else {
-      CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+      CadTableFitColumnWeightsFromContent(&table, st.drawing.modelUnitsPerPlottedInch);
     }
     const std::size_t stackLimit = static_cast<std::size_t>(std::max(1, st.pointTableMaxStack));
     const std::size_t stack = chunk / stackLimit;
@@ -1996,9 +1996,9 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
   }
   PushUndoSnapshot(st, "ADDPOINTTABLE");
   for (CadTable& table : tables) {
-    st.cadTables.push_back(std::move(table));
-    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
-    if (!st.pointTableLayer.empty()) st.cadTableAttrs.back().layer = st.pointTableLayer;
+    st.drawing.cadTables.push_back(std::move(table));
+    AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+    if (!st.pointTableLayer.empty()) st.drawing.cadTableAttrs.back().layer = st.pointTableLayer;
   }
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
@@ -2087,9 +2087,9 @@ const char* DataExtractTypeName(const SelectedEntity& e, const AppCommandState& 
     case T::Multileader: return "MLEADER";
     case T::FilledRegion: return "HATCH";
     case T::Annotation: {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadAnnotations.size())
         return "ANNOTATION";
-      switch (st.cadAnnotations[static_cast<size_t>(e.index)].kind) {
+      switch (st.drawing.cadAnnotations[static_cast<size_t>(e.index)].kind) {
         case CadAnnotation::Kind::Text:      return "TEXT";
         case CadAnnotation::Kind::Mtext:     return "MTEXT";
         case CadAnnotation::Kind::DimAligned:
@@ -2111,8 +2111,8 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
   r.layer = (at && !at->layer.empty()) ? at->layer : "0";
   if (e.type == T::LineSeg) {
     const size_t li = static_cast<size_t>(e.index);
-    if (li < st.lineCount()) {
-      const CadLineRecord ln = st.line(li);
+    if (li < st.drawing.lineCount()) {
+      const CadLineRecord ln = st.drawing.line(li);
       r.hasPoint = true;
       r.x = ln.x0;
       r.y = ln.y0;
@@ -2120,34 +2120,34 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
     }
   } else if (e.type == T::Circle) {
     const size_t ci = static_cast<size_t>(e.index);
-    if (ci < st.circleCount()) {
-      const CadCircleRecord c = st.circle(ci);
+    if (ci < st.drawing.circleCount()) {
+      const CadCircleRecord c = st.drawing.circle(ci);
       r.hasPoint = true;
       r.x = c.cx;
       r.y = c.cy;
       r.z = c.cz;
     }
   } else if (e.type == T::Polyline) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.userPolylineOffsets.size()) {
-      const size_t v = static_cast<size_t>(st.userPolylineOffsets[static_cast<size_t>(e.index)]);
-      if (v < st.vertexCount()) {
+    if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.drawing.userPolylineOffsets.size()) {
+      const size_t v = static_cast<size_t>(st.drawing.userPolylineOffsets[static_cast<size_t>(e.index)]);
+      if (v < st.drawing.vertexCount()) {
         r.hasPoint = true;
-        r.x = st.vertex(v).x;
-        r.y = st.vertex(v).y;
-        r.z = st.vertex(v).z;
+        r.x = st.drawing.vertex(v).x;
+        r.y = st.drawing.vertex(v).y;
+        r.z = st.drawing.vertex(v).z;
       }
     }
   } else if (e.type == T::Point) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadPoints.size()) {
-      const CadPoint& p = st.cadPoints[static_cast<size_t>(e.index)];
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadPoints.size()) {
+      const CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
       r.hasPoint = true;
       r.x = p.x;
       r.y = p.y;
       r.z = p.z;
     }
   } else if (e.type == T::Annotation) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
-      const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(e.index)];
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadAnnotations.size()) {
+      const CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(e.index)];
       r.hasPoint = true;
       r.x = a.insX;
       r.y = a.insY;

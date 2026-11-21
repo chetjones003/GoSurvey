@@ -136,7 +136,7 @@ void RequireSameAlignment(const alignment::Alignment& a, const alignment::Alignm
 /// World coordinates of a station, so drawings with different document origins compare on the ground.
 alignment::Point2 WorldAt(const AppCommandState& st, const alignment::Alignment& a, double station) {
   const alignment::Point2 p = a.GetPointAtStation(station);
-  return {p.x + st.worldDocumentOriginX, p.y + st.worldDocumentOriginY};
+  return {p.x + st.drawing.worldDocumentOriginX, p.y + st.drawing.worldDocumentOriginY};
 }
 
 struct TaggedCounts {
@@ -188,18 +188,18 @@ TEST_CASE("Alignments survive a DWG save and reopen with every stored value", "[
     const AppCommandState st = RichRoad(spirals);
     // Spiral offsets are refused (REQ-488), so only the curve road has its linked offset.
     const size_t count = spirals ? 1 : 2;
-    REQUIRE(st.alignments.size() == count);
-    REQUIRE(st.alignments[0].Entities().size() == (spirals ? 13u : 7u));  // 4 tangents, 3 curves (+ 6 spirals)
-    REQUIRE(st.alignments[0].type == alignment::AlignmentType::Rail);
-    REQUIRE(st.alignments[0].layer == "C-ROAD");
-    REQUIRE(st.alignments[0].style == "Haul");
-    REQUIRE(st.alignments[0].labelSet == "Major");
-    REQUIRE(st.alignments[0].checkSetName == "Haul Checks");
-    REQUIRE(st.alignments[0].equations.size() == 1);
-    REQUIRE(st.alignments[0].designSpeeds.size() == 1);
-    REQUIRE(st.alignments[0].stationLabels.size() == 1);
-    REQUIRE(st.alignments[0].Entities()[0].locks != 0);
-    if (!spirals) REQUIRE(st.alignments[1].parentId == st.alignments[0].id);
+    REQUIRE(st.drawing.alignments.size() == count);
+    REQUIRE(st.drawing.alignments[0].Entities().size() == (spirals ? 13u : 7u));  // 4 tangents, 3 curves (+ 6 spirals)
+    REQUIRE(st.drawing.alignments[0].type == alignment::AlignmentType::Rail);
+    REQUIRE(st.drawing.alignments[0].layer == "C-ROAD");
+    REQUIRE(st.drawing.alignments[0].style == "Haul");
+    REQUIRE(st.drawing.alignments[0].labelSet == "Major");
+    REQUIRE(st.drawing.alignments[0].checkSetName == "Haul Checks");
+    REQUIRE(st.drawing.alignments[0].equations.size() == 1);
+    REQUIRE(st.drawing.alignments[0].designSpeeds.size() == 1);
+    REQUIRE(st.drawing.alignments[0].stationLabels.size() == 1);
+    REQUIRE(st.drawing.alignments[0].Entities()[0].locks != 0);
+    if (!spirals) REQUIRE(st.drawing.alignments[1].parentId == st.drawing.alignments[0].id);
 
     ScratchDir dir(spirals ? "roundtrip-spirals" : "roundtrip");
     const std::string path = (dir.path / "road.dwg").string();
@@ -207,19 +207,19 @@ TEST_CASE("Alignments survive a DWG save and reopen with every stored value", "[
     REQUIRE(SaveDrawingDocument(st, path.c_str(), log));
     AppCommandState back = Drawing();
     REQUIRE(OpenDrawingDocument(back, path.c_str(), log));
-    REQUIRE(back.alignments.size() == count);
-    for (size_t i = 0; i < count; ++i) RequireSameAlignment(st.alignments[i], back.alignments[i]);
+    REQUIRE(back.drawing.alignments.size() == count);
+    for (size_t i = 0; i < count; ++i) RequireSameAlignment(st.drawing.alignments[i], back.drawing.alignments[i]);
     for (double station : {500.0, 812.5, 1400.0, 1900.0}) {  // on the ground, whatever the document origin
-      const alignment::Point2 p = WorldAt(st, st.alignments[0], station);
-      const alignment::Point2 q = WorldAt(back, back.alignments[0], station);
+      const alignment::Point2 p = WorldAt(st, st.drawing.alignments[0], station);
+      const alignment::Point2 q = WorldAt(back, back.drawing.alignments[0], station);
       CHECK(std::fabs(p.x - q.x) <= 1e-9);
       CHECK(std::fabs(p.y - q.y) <= 1e-9);
     }
-    CHECK(std::fabs(back.alignments[0].Length() - st.alignments[0].Length()) <= 1e-9);
+    CHECK(std::fabs(back.drawing.alignments[0].Length() - st.drawing.alignments[0].Length()) <= 1e-9);
     // The trailer is authoritative: the interchange entities are not read as a second copy.
-    CHECK(back.userLinesFlat.empty());
-    CHECK(back.userArcs.empty());
-    CHECK(back.userPolylineVerts.empty());
+    CHECK(back.drawing.userLinesFlat.empty());
+    CHECK(back.drawing.userArcs.empty());
+    CHECK(back.drawing.userPolylineVerts.empty());
   }
 }
 
@@ -245,7 +245,7 @@ TEST_CASE("Spiral polyline vertices are exact and their chords stay within the e
   const std::string path = (dir.path / "road.dwg").string();
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, path.c_str(), log));
-  const alignment::Alignment& road = st.alignments[0];
+  const alignment::Alignment& road = st.drawing.alignments[0];
   Dwg_Data dwg{};
   REQUIRE(dwg_read_file(path.c_str(), &dwg) < DWG_ERR_CRITICAL);
   int checked = 0;
@@ -255,11 +255,11 @@ TEST_CASE("Spiral polyline vertices are exact and their chords stay within the e
     if (o.fixedtype != DWG_TYPE_LWPOLYLINE || o.tio.entity == nullptr) continue;
     const Dwg_Entity_LWPOLYLINE* p = o.tio.entity->tio.LWPOLYLINE;
     for (BITCODE_BL v = 0; v < p->num_points; ++v) {
-      const double x = p->points[v].x - st.worldDocumentOriginX, y = p->points[v].y - st.worldDocumentOriginY;
+      const double x = p->points[v].x - st.drawing.worldDocumentOriginX, y = p->points[v].y - st.drawing.worldDocumentOriginY;
       worstVertex = std::max(worstVertex, std::fabs(road.GetStationOffset(x, y).offset));
       if (v + 1 == p->num_points) break;
-      const double mx = 0.5 * (p->points[v].x + p->points[v + 1].x) - st.worldDocumentOriginX;
-      const double my = 0.5 * (p->points[v].y + p->points[v + 1].y) - st.worldDocumentOriginY;
+      const double mx = 0.5 * (p->points[v].x + p->points[v + 1].x) - st.drawing.worldDocumentOriginX;
+      const double my = 0.5 * (p->points[v].y + p->points[v + 1].y) - st.drawing.worldDocumentOriginY;
       worstChord = std::max(worstChord, std::fabs(road.GetStationOffset(mx, my).offset));
     }
     ++checked;
@@ -272,7 +272,7 @@ TEST_CASE("Spiral polyline vertices are exact and their chords stay within the e
 
 TEST_CASE("Station and offset on a spiral are exact, not the nearest grid sample", "[req484][req496][alignment]") {
   const AppCommandState st = RichRoad(true);
-  const alignment::Alignment& road = st.alignments[0];
+  const alignment::Alignment& road = st.drawing.alignments[0];
   REQUIRE(road.Entities()[1].kind == alignment::EntityKind::Spiral);
   const double s0 = road.EntityStartStation(1);
   for (int k = 0; k <= 48; ++k) {
@@ -290,11 +290,11 @@ TEST_CASE("A state-plane polyline reads back from a DWG at full precision", "[re
   AppCommandState st = Drawing();
   for (int k = 0; k < 40; ++k) {  // neighbours share their high bytes, so most vertices are written as patches
     const double t = 0.37 * static_cast<double>(k);
-    for (double v : {6500000.0 + t * 1.013, 2100000.0 + t * t * 0.0071, 0.0}) st.userPolylineVerts.push_back(v);
+    for (double v : {6500000.0 + t * 1.013, 2100000.0 + t * t * 0.0071, 0.0}) st.drawing.userPolylineVerts.push_back(v);
   }
-  st.userPolylineOffsets = {0, 40};
-  st.userPolylineClosed = {0};
-  st.userPolylineAttrs = {EntityAttributes{}};
+  st.drawing.userPolylineOffsets = {0, 40};
+  st.drawing.userPolylineClosed = {0};
+  st.drawing.userPolylineAttrs = {EntityAttributes{}};
   ScratchDir dir("polyline-precision");
   const std::string path = (dir.path / "pl.dwg").string();
   std::vector<std::string> log;
@@ -308,8 +308,8 @@ TEST_CASE("A state-plane polyline reads back from a DWG at full precision", "[re
     const Dwg_Entity_LWPOLYLINE* p = o.tio.entity->tio.LWPOLYLINE;
     REQUIRE(p->num_points == 40);
     for (BITCODE_BL v = 0; v < p->num_points; ++v) {
-      CHECK(p->points[v].x == st.userPolylineVerts[v * 3] + st.worldDocumentOriginX);
-      CHECK(p->points[v].y == st.userPolylineVerts[v * 3 + 1] + st.worldDocumentOriginY);
+      CHECK(p->points[v].x == st.drawing.userPolylineVerts[v * 3] + st.drawing.worldDocumentOriginX);
+      CHECK(p->points[v].y == st.drawing.userPolylineVerts[v * 3 + 1] + st.drawing.worldDocumentOriginY);
     }
     ++polylines;
   }
@@ -319,8 +319,8 @@ TEST_CASE("A state-plane polyline reads back from a DWG at full precision", "[re
 
 TEST_CASE("A DWG without GoSurvey's data reads the alignment back from its entities", "[req496][req485][alignment][dwg]") {
   AppCommandState st = RichRoad(false);
-  st.alignments.resize(1);  // the road only: four tangents and three curves
-  REQUIRE(st.alignments[0].Entities().size() == 7);
+  st.drawing.alignments.resize(1);  // the road only: four tangents and three curves
+  REQUIRE(st.drawing.alignments[0].Entities().size() == 7);
   ScratchDir dir("foreign");
   const std::string path = (dir.path / "road.dwg").string();
   std::vector<std::string> log;
@@ -329,9 +329,9 @@ TEST_CASE("A DWG without GoSurvey's data reads the alignment back from its entit
   AppCommandState in = Drawing();
   std::vector<std::string> readLog;
   REQUIRE(ImportLibreCadFile(in, path.c_str(), readLog, false));
-  REQUIRE(in.alignments.size() == 1);
-  const alignment::Alignment& a = st.alignments[0];
-  const alignment::Alignment& b = in.alignments[0];
+  REQUIRE(in.drawing.alignments.size() == 1);
+  const alignment::Alignment& a = st.drawing.alignments[0];
+  const alignment::Alignment& b = in.drawing.alignments[0];
   CHECK(b.name == "Main Road");
   CHECK(b.layer == "C-ROAD");
   CHECK(b.startingStation == Catch::Approx(500.0).margin(1e-9));
@@ -346,14 +346,14 @@ TEST_CASE("A DWG without GoSurvey's data reads the alignment back from its entit
   CHECK(std::fabs(p0.x - q0.x) <= 1e-6);
   CHECK(std::fabs(p0.y - q0.y) <= 1e-6);
   CHECK(LogHas(readLog, "alignment \"Main Road\" rebuilt"));
-  CHECK(in.userLinesFlat.empty());  // read as the alignment, not also as linework
-  CHECK(in.userArcs.empty());
+  CHECK(in.drawing.userLinesFlat.empty());  // read as the alignment, not also as linework
+  CHECK(in.drawing.userArcs.empty());
 }
 
 TEST_CASE("Spirals in a DWG without GoSurvey's data come back as tangents, and the log says so",
           "[req496][alignment][dwg]") {
   AppCommandState st = RichRoad(true);
-  st.alignments.resize(1);
+  st.drawing.alignments.resize(1);
   ScratchDir dir("foreign-spiral");
   const std::string path = (dir.path / "road.dwg").string();
   std::vector<std::string> log;
@@ -361,17 +361,17 @@ TEST_CASE("Spirals in a DWG without GoSurvey's data come back as tangents, and t
   AppCommandState in = Drawing();
   std::vector<std::string> readLog;
   REQUIRE(ImportLibreCadFile(in, path.c_str(), readLog, false));
-  REQUIRE(in.alignments.size() == 1);
-  CHECK(in.alignments[0].Length() == Catch::Approx(st.alignments[0].Length()).margin(0.01));
+  REQUIRE(in.drawing.alignments.size() == 1);
+  CHECK(in.drawing.alignments[0].Length() == Catch::Approx(st.drawing.alignments[0].Length()).margin(0.01));
   CHECK(LogHas(readLog, "spirals were read as tangents"));
 }
 
 TEST_CASE("Tagged entities that do not chain stay lines and arcs, with the reason", "[req496][alignment][dwg]") {
   AppCommandState st = RichRoad(false);
-  st.alignments.resize(1);
-  alignment::Alignment far = st.alignments[0];
+  st.drawing.alignments.resize(1);
+  alignment::Alignment far = st.drawing.alignments[0];
   far.Translate(5000.0, 0.0);  // same name, not connected: the conversion refuses the gap
-  st.alignments.push_back(far);
+  st.drawing.alignments.push_back(far);
   ScratchDir dir("foreign-gap");
   const std::string path = (dir.path / "road.dwg").string();
   std::vector<std::string> log;
@@ -379,10 +379,10 @@ TEST_CASE("Tagged entities that do not chain stay lines and arcs, with the reaso
   AppCommandState in = Drawing();
   std::vector<std::string> readLog;
   REQUIRE(ImportLibreCadFile(in, path.c_str(), readLog, false));
-  CHECK(in.alignments.empty());
+  CHECK(in.drawing.alignments.empty());
   CHECK(LogHas(readLog, "could not be rebuilt"));
-  CHECK(in.userLinesFlat.size() == 8 * 6);  // 4 tangents x 2 copies, 6 values each
-  CHECK(in.userArcs.size() == 6);
+  CHECK(in.drawing.userLinesFlat.size() == 8 * 6);  // 4 tangents x 2 copies, 6 values each
+  CHECK(in.drawing.userArcs.size() == 6);
 }
 
 TEST_CASE("A drawing saved before alignments re-saves with the same data", "[req496][alignment][dwg]") {
@@ -390,7 +390,7 @@ TEST_CASE("A drawing saved before alignments re-saves with the same data", "[req
   AppCommandState st = Drawing();
   std::vector<std::string> log;
   REQUIRE(OpenDrawingDocument(st, source.c_str(), log));
-  CHECK(st.alignments.empty());
+  CHECK(st.drawing.alignments.empty());
   ScratchDir dir("legacy");
   const std::string path = (dir.path / "font-demo.dwg").string();
   REQUIRE(SaveDrawingDocument(st, path.c_str(), log));
@@ -425,8 +425,8 @@ TEST_CASE("A Civil 3D alignment imports as an editable alignment on Civil 3D's g
   std::vector<std::string> log;
   REQUIRE(ImportLibreCadFile(in, (base + ".dwg").c_str(), log, false));
   INFO([&] { std::string all; for (const std::string& l : log) all += l + "\n"; return all; }());
-  REQUIRE(in.alignments.size() == 1);
-  const alignment::Alignment& a = in.alignments[0];
+  REQUIRE(in.drawing.alignments.size() == 1);
+  const alignment::Alignment& a = in.drawing.alignments[0];
   CHECK(a.name == ref["name"].get<std::string>());
   CHECK(a.startingStation == ref["startingStation"].get<double>());
   REQUIRE(a.Entities().size() == 9);  // T, spiral-curve-spiral, T, curve, T, curve, T
@@ -465,8 +465,8 @@ TEST_CASE("Civil 3D station equations keep their direction", "[req496][alignment
   std::vector<std::string> log;
   REQUIRE(ImportLibreCadFile(in, (std::string(GOSURVEY_SAMPLES_DIR) + "/civil3d-alignment-equations.dwg").c_str(),
                              log, false));
-  REQUIRE(in.alignments.size() == 1);
-  const alignment::Alignment& a = in.alignments[0];
+  REQUIRE(in.drawing.alignments.size() == 1);
+  const alignment::Alignment& a = in.drawing.alignments[0];
   REQUIRE(a.equations.size() == 2);
   CHECK(a.equations[0].rawBack == 1234.5);
   CHECK(a.equations[0].ahead == 1345.25);
@@ -579,10 +579,10 @@ TEST_CASE("Read alignment DWGs saved by AutoCAD", "[.alignment-acad-read]") {
   std::vector<std::string> log;
   REQUIRE(OpenDrawingDocument(in, path.c_str(), log));
   for (const std::string& line : log) WARN(line);
-  REQUIRE(in.alignments.size() == 2);
+  REQUIRE(in.drawing.alignments.size() == 2);
   const AppCommandState st = RichRoad(false);
   for (size_t i = 0; i < 2; ++i) {
-    CHECK(in.alignments[i].Entities().size() == st.alignments[i].Entities().size());
-    CHECK(in.alignments[i].Length() == Catch::Approx(st.alignments[i].Length()).margin(1e-6));
+    CHECK(in.drawing.alignments[i].Entities().size() == st.drawing.alignments[i].Entities().size());
+    CHECK(in.drawing.alignments[i].Length() == Catch::Approx(st.drawing.alignments[i].Length()).margin(1e-6));
   }
 }

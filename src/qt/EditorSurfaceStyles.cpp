@@ -56,17 +56,17 @@ struct ComponentWidgets {
 
 void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitle) {
   if (findChild<QDialog*>("surfaceStyleDialog")) return;
-  SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
+  SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
   const bool outerModal = m_ModalOpen;
   m_ModalOpen = true;
 
-  const std::vector<SurfaceStyle> baseline = m_State.surfaceStyles;
+  const std::vector<SurfaceStyle> baseline = m_State.drawing.surfaceStyles;
   std::vector<std::string> baselineRefs;
-  baselineRefs.reserve(m_State.cadSurfaces.size());
-  for (const CadSurface& surface : m_State.cadSurfaces) baselineRefs.push_back(surface.styleName);
+  baselineRefs.reserve(m_State.drawing.cadSurfaces.size());
+  for (const CadSurface& surface : m_State.drawing.cadSurfaces) baselineRefs.push_back(surface.styleName);
   bool dirty = false;
   int selected = 0;
-  const char* unit = CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits);  // issue #832
+  const char* unit = CadDrawingInsUnitsAbbrev(m_State.drawing.drawingInsUnits);  // issue #832
   const QString unitText = QString::fromUtf8(unit);
 
   QDialog dialog(this);
@@ -115,7 +115,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
   root->addLayout(buttons);
   surfaceui::StyleDialog(&dialog);
 
-  const auto current = [&]() -> SurfaceStyle& { return m_State.surfaceStyles[static_cast<size_t>(selected)]; };
+  const auto current = [&]() -> SurfaceStyle& { return m_State.drawing.surfaceStyles[static_cast<size_t>(selected)]; };
   std::vector<std::function<void()>> reloaders;  // widgets that mirror the selected style
   const auto reloadAll = [&] {
     for (const auto& reload : reloaders) reload();
@@ -128,7 +128,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     reloadAll();
   };
   const auto usage = [&](const std::string& name) {
-    return SurfaceStyles::CountSurfacesResolvingTo(m_State.cadSurfaces, m_State.surfaceStyles, name);
+    return SurfaceStyles::CountSurfacesResolvingTo(m_State.drawing.cadSurfaces, m_State.drawing.surfaceStyles, name);
   };
 
   // --- component rows ---------------------------------------------------------------------------
@@ -440,7 +440,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
   const auto fillList = [&] {
     const QSignalBlocker blocker(list);
     list->clear();
-    for (const SurfaceStyle& style : m_State.surfaceStyles) {
+    for (const SurfaceStyle& style : m_State.drawing.surfaceStyles) {
       list->addItem(Q(style.name));
       QListWidgetItem* item = list->item(list->count() - 1);
       const int used = usage(style.name);
@@ -485,7 +485,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
   });
 
   QObject::connect(list, &QListWidget::currentRowChanged, &dialog, [&](int row) {
-    if (row < 0 || row >= static_cast<int>(m_State.surfaceStyles.size())) return;
+    if (row < 0 || row >= static_cast<int>(m_State.drawing.surfaceStyles.size())) return;
     selected = row;
     status->clear();
     reloadAll();  // the interval fields are re-seeded from the style: an unfinished pair is dropped
@@ -557,7 +557,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     layout->addLayout(row);
     const auto validate = [&] {
       const std::string trimmed = surfedit::TrimStyleName(S(name->text()));
-      const bool taken = !trimmed.empty() && SurfaceStyles::Find(m_State.surfaceStyles, trimmed) != nullptr;
+      const bool taken = !trimmed.empty() && SurfaceStyles::Find(m_State.drawing.surfaceStyles, trimmed) != nullptr;
       duplicate->setText(taken ? "A style with that name already exists." : QString());
       accept->setEnabled(!trimmed.empty() && !taken);
     };
@@ -568,7 +568,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     if (entry.exec() != QDialog::Accepted) return;
     if (surfedit::AddStyle(m_State, static_cast<size_t>(selected), S(name->text()), m_Log, false)) {
       dirty = true;
-      selected = static_cast<int>(m_State.surfaceStyles.size()) - 1;
+      selected = static_cast<int>(m_State.drawing.surfaceStyles.size()) - 1;
       fillList();
       reloadAll();
     }
@@ -576,15 +576,15 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
   QObject::connect(deleteStyle, &QPushButton::clicked, &dialog, [&] {
     if (!surfedit::DeleteStyle(m_State, static_cast<size_t>(selected), m_Log, false)) return;
     dirty = true;
-    selected = std::min(selected, static_cast<int>(m_State.surfaceStyles.size()) - 1);
+    selected = std::min(selected, static_cast<int>(m_State.drawing.surfaceStyles.size()) - 1);
     BumpCadGpuCache(m_State);
     fillList();
     reloadAll();
   });
 
   const auto restoreBaseline = [&] {
-    m_State.surfaceStyles = baseline;
-    for (size_t i = 0; i < baselineRefs.size() && i < m_State.cadSurfaces.size(); ++i) m_State.cadSurfaces[i].styleName = baselineRefs[i];
+    m_State.drawing.surfaceStyles = baseline;
+    for (size_t i = 0; i < baselineRefs.size() && i < m_State.drawing.cadSurfaces.size(); ++i) m_State.drawing.cadSurfaces[i].styleName = baselineRefs[i];
     BumpCadGpuCache(m_State);
     for (const std::string& styleName : baselineRefs) RefreshSurfaceLegendTablesForStyle(m_State, styleName);
   };
@@ -593,14 +593,14 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     if (dirty) {
       // One undo step for the whole session: rewind to the state the window opened with, snapshot
       // it, then put the edited styles back.
-      const std::vector<SurfaceStyle> edited = m_State.surfaceStyles;
+      const std::vector<SurfaceStyle> edited = m_State.drawing.surfaceStyles;
       std::vector<std::string> editedRefs;
-      editedRefs.reserve(m_State.cadSurfaces.size());
-      for (const CadSurface& surface : m_State.cadSurfaces) editedRefs.push_back(surface.styleName);
+      editedRefs.reserve(m_State.drawing.cadSurfaces.size());
+      for (const CadSurface& surface : m_State.drawing.cadSurfaces) editedRefs.push_back(surface.styleName);
       restoreBaseline();
       PushUndoSnapshot(m_State, "Edit surface styles");
-      m_State.surfaceStyles = edited;
-      for (size_t i = 0; i < editedRefs.size() && i < m_State.cadSurfaces.size(); ++i) m_State.cadSurfaces[i].styleName = editedRefs[i];
+      m_State.drawing.surfaceStyles = edited;
+      for (size_t i = 0; i < editedRefs.size() && i < m_State.drawing.cadSurfaces.size(); ++i) m_State.drawing.cadSurfaces[i].styleName = editedRefs[i];
       BumpCadGpuCache(m_State);
       for (const std::string& styleName : editedRefs) RefreshSurfaceLegendTablesForStyle(m_State, styleName);
     }
@@ -612,8 +612,8 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     m_Viewport->update();
   });
 
-  for (int i = 0; i < static_cast<int>(m_State.surfaceStyles.size()); ++i)
-    if (Q(m_State.surfaceStyles[static_cast<size_t>(i)].name) == focusName) selected = i;
+  for (int i = 0; i < static_cast<int>(m_State.drawing.surfaceStyles.size()); ++i)
+    if (Q(m_State.drawing.surfaceStyles[static_cast<size_t>(i)].name) == focusName) selected = i;
   fillList();
   reloadAll();
   dialog.exec();

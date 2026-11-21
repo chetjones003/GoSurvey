@@ -46,7 +46,7 @@ std::string ApplyPrintfFormatInt(std::string_view fmt, long value) {
 
 const SurveyPoint* FindSurveyPointById(const AppCommandState& st, int pointId) {
   assert(pointId > 0);
-  for (const SurveyPoint& p : st.surveyPoints) {
+  for (const SurveyPoint& p : st.drawing.surveyPoints) {
     if (p.id == pointId)
       return &p;
   }
@@ -55,12 +55,12 @@ const SurveyPoint* FindSurveyPointById(const AppCommandState& st, int pointId) {
 
 double PolylineSignedAreaPlan(const AppCommandState& st, int pi) {
   assert(pi >= 0);
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.drawing.userPolylineOffsets.size())
     return 0.0;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-  const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
-                      st.userPolylineClosed[static_cast<size_t>(pi)] != 0;
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const bool closed = static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() &&
+                      st.drawing.userPolylineClosed[static_cast<size_t>(pi)] != 0;
   if (!closed || (v1 - v0) < 3)
     return 0.0;
   double area = 0.0;
@@ -70,14 +70,14 @@ double PolylineSignedAreaPlan(const AppCommandState& st, int pi) {
     const int vb = (s == nvert - 1) ? v0 : v0 + s + 1;
     const size_t A = static_cast<size_t>(va);
     const size_t B = static_cast<size_t>(vb);
-    if (B >= st.vertexCount())
+    if (B >= st.drawing.vertexCount())
       break;
-    const double x0 = st.vertex(A).x;
-    const double y0 = st.vertex(A).y;
-    const double x1 = st.vertex(B).x;
-    const double y1 = st.vertex(B).y;
-    const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
-                            ? st.userPolylineVertsBulge[static_cast<size_t>(va)]
+    const double x0 = st.drawing.vertex(A).x;
+    const double y0 = st.drawing.vertex(A).y;
+    const double x1 = st.drawing.vertex(B).x;
+    const double y1 = st.drawing.vertex(B).y;
+    const float bulge = static_cast<size_t>(va) < st.drawing.userPolylineVertsBulge.size()
+                            ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(va)]
                             : 0.f;
     if (std::fabs(static_cast<double>(bulge)) < 1e-12) {
       area += 0.5 * (x0 * y1 - x1 * y0);
@@ -95,12 +95,12 @@ double PolylineSignedAreaPlan(const AppCommandState& st, int pi) {
 }
 
 double PolylinePathLength(const AppCommandState& st, int pi) {
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.drawing.userPolylineOffsets.size())
     return 0.0;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-  const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
-                      st.userPolylineClosed[static_cast<size_t>(pi)] != 0;
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const bool closed = static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() &&
+                      st.drawing.userPolylineClosed[static_cast<size_t>(pi)] != 0;
   const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
   double total = 0.0;
   for (int s = 0; s < nseg; ++s) {
@@ -108,22 +108,22 @@ double PolylinePathLength(const AppCommandState& st, int pi) {
     const int vb = (s == (v1 - v0) - 1) ? v0 : v0 + s + 1;
     const size_t A = static_cast<size_t>(va);
     const size_t B = static_cast<size_t>(vb);
-    if (B >= st.vertexCount())
+    if (B >= st.drawing.vertexCount())
       break;
-    const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
-                            ? st.userPolylineVertsBulge[static_cast<size_t>(va)]
+    const float bulge = static_cast<size_t>(va) < st.drawing.userPolylineVertsBulge.size()
+                            ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(va)]
                             : 0.f;
-    total += BulgeSegmentLength(st.vertex(A).x, st.vertex(A).y,
-                                st.vertex(B).x, st.vertex(B).y,
+    total += BulgeSegmentLength(st.drawing.vertex(A).x, st.drawing.vertex(A).y,
+                                st.drawing.vertex(B).x, st.drawing.vertex(B).y,
                                 static_cast<double>(bulge));
   }
   return total;
 }
 
 double CircleAreaPlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
+  if (ci < 0 || static_cast<size_t>(ci) >= st.drawing.circleCount())
     return 0.0;
-  const double r = st.circle(static_cast<size_t>(ci)).r;
+  const double r = st.drawing.circle(static_cast<size_t>(ci)).r;
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;
@@ -131,9 +131,9 @@ double CircleAreaPlan(const AppCommandState& st, int ci) {
 }
 
 double CircleCircumferencePlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
+  if (ci < 0 || static_cast<size_t>(ci) >= st.drawing.circleCount())
     return 0.0;
-  const double r = st.circle(static_cast<size_t>(ci)).r;
+  const double r = st.drawing.circle(static_cast<size_t>(ci)).r;
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;
@@ -468,8 +468,8 @@ CadFieldContext CadFieldContextFromState(const AppCommandState& st) {
   CadFieldContext ctx;
   ctx.drawingPath = st.activeDocFilePath;
   if (st.activeSpaceIndex >= 0 &&
-      static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
-    ctx.activeLayoutTabName = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name;
+      static_cast<size_t>(st.activeSpaceIndex) < st.drawing.paperLayouts.size())
+    ctx.activeLayoutTabName = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name;
   else
     ctx.activeLayoutTabName = "Model";
   return ctx;

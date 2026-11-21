@@ -46,22 +46,22 @@ AppCommandState GoodDrawing() {
   AppCommandState st;
 
   // One line: two XYZ endpoints (stride 6).
-  st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
-  st.userLineAttrs.resize(1);
-  st.userLineAttrs[0].id = 1;
+  st.drawing.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  st.drawing.userLineAttrs.resize(1);
+  st.drawing.userLineAttrs[0].id = 1;
 
   // One circle: cx, cy, z, r (stride 4).
-  st.userCirclesCxCyZR = {50.f, 25.f, 0.f, 10.f};
-  st.userCircleAttrs.resize(1);
-  st.userCircleAttrs[0].id = 2;
-  st.userCircleNormals = {0.f, 0.f, 1.f};   // world +Z, the flat plane (REQ-312)
+  st.drawing.userCirclesCxCyZR = {50.f, 25.f, 0.f, 10.f};
+  st.drawing.userCircleAttrs.resize(1);
+  st.drawing.userCircleAttrs[0].id = 2;
+  st.drawing.userCircleNormals = {0.f, 0.f, 1.f};   // world +Z, the flat plane (REQ-312)
 
   // One polyline, CSR: 3 vertices, offsets {0, 3}.
-  st.userPolylineVerts = {0.f, 100.f, 0.f, 50.f, 150.f, 0.f, 100.f, 100.f, 0.f};
-  st.userPolylineOffsets = {0, 3};
-  st.userPolylineClosed = {0};
-  st.userPolylineAttrs.resize(1);
-  st.userPolylineAttrs[0].id = 3;
+  st.drawing.userPolylineVerts = {0.f, 100.f, 0.f, 50.f, 150.f, 0.f, 100.f, 100.f, 0.f};
+  st.drawing.userPolylineOffsets = {0, 3};
+  st.drawing.userPolylineClosed = {0};
+  st.drawing.userPolylineAttrs.resize(1);
+  st.drawing.userPolylineAttrs[0].id = 3;
 
   st.nextEntityId = 4;  // past every id above
   return st;
@@ -95,37 +95,37 @@ TEST_CASE("A well-formed drawing violates nothing", "[docinvariants]") {
 
 TEST_CASE("flat-strides fires on a partial line vertex", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userLinesFlat.push_back(1.f);  // 7 floats: not a whole stride-6 segment
+  st.drawing.userLinesFlat.push_back(1.f);  // 7 floats: not a whole stride-6 segment
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
 TEST_CASE("flat-strides fires on a partial circle record", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userCirclesCxCyZR.push_back(1.f);  // 5 floats against stride 4
+  st.drawing.userCirclesCxCyZR.push_back(1.f);  // 5 floats against stride 4
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
 TEST_CASE("flat-strides fires on a partial polyline vertex", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVerts.push_back(1.f);  // 10 floats against stride 3
+  st.drawing.userPolylineVerts.push_back(1.f);  // 10 floats against stride 3
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
 TEST_CASE("flat-strides fires on a partial circle normal", "[docinvariants][req312]") {
   AppCommandState st = GoodDrawing();
-  st.userCircleNormals.push_back(1.f);  // 4 floats against stride 3
+  st.drawing.userCircleNormals.push_back(1.f);  // 4 floats against stride 3
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
 TEST_CASE("polyline-bulge accepts an empty bulge array", "[docinvariants][req316]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVertsBulge.clear();  // empty = every segment straight (the pre-ADR-047 default)
+  st.drawing.userPolylineVertsBulge.clear();  // empty = every segment straight (the pre-ADR-047 default)
   REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineBulge));
 }
 
 TEST_CASE("polyline-bulge accepts one finite entry per vertex", "[docinvariants][req316]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVertsBulge = {0.f, 0.4142f, 0.f};  // 3 verts, one arc segment
+  st.drawing.userPolylineVertsBulge = {0.f, 0.4142f, 0.f};  // 3 verts, one arc segment
   REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineBulge));
 }
 
@@ -134,13 +134,13 @@ TEST_CASE("polyline-bulge fires on a short bulge array", "[docinvariants][req316
   // the polyline has. The missing tail would read as "straight", so arcs vanish with the polyline
   // still looking right in plan view (ADR-035 (a), applied to bulge).
   AppCommandState st = GoodDrawing();
-  st.userPolylineVertsBulge = {0.f, 0.5f};  // 2 entries against 3 vertices
+  st.drawing.userPolylineVertsBulge = {0.f, 0.5f};  // 2 entries against 3 vertices
   REQUIRE(Contains(Fired(st), docinv::kPolylineBulge));
 }
 
 TEST_CASE("polyline-bulge fires on a non-finite bulge", "[docinvariants][req316]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVertsBulge = {0.f, std::numeric_limits<float>::infinity(), 0.f};
+  st.drawing.userPolylineVertsBulge = {0.f, std::numeric_limits<float>::infinity(), 0.f};
   REQUIRE(Contains(Fired(st), docinv::kPolylineBulge));
 }
 
@@ -148,15 +148,15 @@ TEST_CASE("attr-counts fires when a circle has no plane normal", "[docinvariants
   // The desync the REQ-312 side-car exists to make loud: an appended circle whose normal was not
   // appended with it. Unreported, that circle would silently take its NEIGHBOUR's plane.
   AppCommandState st = GoodDrawing();
-  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), {0.f, 0.f, 0.f, 5.f});
-  st.userCircleAttrs.resize(2);
+  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), {0.f, 0.f, 0.f, 5.f});
+  st.drawing.userCircleAttrs.resize(2);
   REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
 TEST_CASE("attr-counts fires when a normal outlives its circle", "[docinvariants][req312]") {
   // The other direction: an erase that dropped the quad but not the side-car entry.
   AppCommandState st = GoodDrawing();
-  PushCircleNormal(st.userCircleNormals);
+  PushCircleNormal(st.drawing.userCircleNormals);
   REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
@@ -166,13 +166,13 @@ TEST_CASE("attr-counts fires when a normal outlives its circle", "[docinvariants
 
 TEST_CASE("finite-coords fires on a NaN line coordinate", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userLinesFlat[3] = std::numeric_limits<float>::quiet_NaN();
+  st.drawing.userLinesFlat[3] = std::numeric_limits<float>::quiet_NaN();
   REQUIRE(Contains(Fired(st), docinv::kFiniteCoords));
 }
 
 TEST_CASE("finite-coords fires on an infinite circle radius", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userCirclesCxCyZR[3] = std::numeric_limits<float>::infinity();
+  st.drawing.userCirclesCxCyZR[3] = std::numeric_limits<float>::infinity();
   REQUIRE(Contains(Fired(st), docinv::kFiniteCoords));
 }
 
@@ -180,9 +180,9 @@ TEST_CASE("finite-coords fires on a NaN annotation insertion point", "[docinvari
   AppCommandState st = GoodDrawing();
   CadAnnotation a;
   a.insX = std::numeric_limits<float>::quiet_NaN();
-  st.cadAnnotations.push_back(a);
-  st.cadAnnotationAttrs.resize(1);
-  st.cadAnnotationAttrs[0].id = 10;
+  st.drawing.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotationAttrs.resize(1);
+  st.drawing.cadAnnotationAttrs[0].id = 10;
   st.nextEntityId = 11;
   REQUIRE(Contains(Fired(st), docinv::kFiniteCoords));
 }
@@ -192,7 +192,7 @@ TEST_CASE("finite-coords fires on a NaN annotation insertion point", "[docinvari
 // every real Texas state-plane drawing as corrupt.
 TEST_CASE("finite-coords accepts large state-plane magnitudes", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userLinesFlat[0] = 1.e12f;
+  st.drawing.userLinesFlat[0] = 1.e12f;
   REQUIRE_FALSE(Contains(Fired(st), docinv::kFiniteCoords));
 }
 
@@ -202,7 +202,7 @@ TEST_CASE("finite-coords accepts large state-plane magnitudes", "[docinvariants]
 
 TEST_CASE("entity-ids fires when two entities share an id", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userCircleAttrs[0].id = st.userLineAttrs[0].id;  // collision across stores
+  st.drawing.userCircleAttrs[0].id = st.drawing.userLineAttrs[0].id;  // collision across stores
   REQUIRE(Contains(Fired(st), docinv::kEntityIds));
 }
 
@@ -217,8 +217,8 @@ TEST_CASE("entity-ids fires when nextEntityId would reuse a live id", "[docinvar
 // report a finding on every freshly drawn entity.
 TEST_CASE("entity-ids tolerates unassigned ids", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userLineAttrs[0].id = 0;
-  st.userCircleAttrs[0].id = 0;
+  st.drawing.userLineAttrs[0].id = 0;
+  st.drawing.userCircleAttrs[0].id = 0;
   REQUIRE_FALSE(Contains(Fired(st), docinv::kEntityIds));
 }
 
@@ -229,13 +229,13 @@ TEST_CASE("entity-ids tolerates unassigned ids", "[docinvariants]") {
 TEST_CASE("attr-counts fires when a geometry array outruns its attributes", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
   // A second line's worth of floats, with no matching attribute row.
-  st.userLinesFlat.insert(st.userLinesFlat.end(), {0.f, 0.f, 0.f, 1.f, 1.f, 0.f});
+  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), {0.f, 0.f, 0.f, 1.f, 1.f, 0.f});
   REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
 TEST_CASE("attr-counts fires when a polyline has no closed-flag", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineClosed.clear();
+  st.drawing.userPolylineClosed.clear();
   REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
@@ -245,10 +245,10 @@ TEST_CASE("attr-counts fires when a polyline has no closed-flag", "[docinvariant
 
 TEST_CASE("polyline-offsets fires when offsets run backwards", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineOffsets = {0, 3, 1};
-  st.userPolylineClosed = {0, 0};
-  st.userPolylineAttrs.resize(2);
-  st.userPolylineAttrs[1].id = 5;
+  st.drawing.userPolylineOffsets = {0, 3, 1};
+  st.drawing.userPolylineClosed = {0, 0};
+  st.drawing.userPolylineAttrs.resize(2);
+  st.drawing.userPolylineAttrs[1].id = 5;
   st.nextEntityId = 6;
   REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
@@ -256,13 +256,13 @@ TEST_CASE("polyline-offsets fires when offsets run backwards", "[docinvariants]"
 TEST_CASE("polyline-offsets fires when the last offset misses the vertex count",
           "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineOffsets = {0, 2};  // 3 vertices are stored, so the last polyline reads short
+  st.drawing.userPolylineOffsets = {0, 2};  // 3 vertices are stored, so the last polyline reads short
   REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
 
 TEST_CASE("polyline-offsets fires when the array does not start at zero", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineOffsets = {1, 3};
+  st.drawing.userPolylineOffsets = {1, 3};
   REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
 
@@ -273,10 +273,10 @@ TEST_CASE("polyline-offsets fires when the array does not start at zero", "[doci
 // fires rather than being covered by accident.
 TEST_CASE("polyline-offsets fires on a single-entry table", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVerts.clear();  // zero polylines...
-  st.userPolylineOffsets = {0};  // ...but the table still claims to exist
-  st.userPolylineClosed.clear();
-  st.userPolylineAttrs.clear();
+  st.drawing.userPolylineVerts.clear();  // zero polylines...
+  st.drawing.userPolylineOffsets = {0};  // ...but the table still claims to exist
+  st.drawing.userPolylineClosed.clear();
+  st.drawing.userPolylineAttrs.clear();
   REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
 
@@ -284,10 +284,10 @@ TEST_CASE("polyline-offsets fires on a single-entry table", "[docinvariants]") {
 // vertices is how zero polylines is legitimately spelled, so it must stay silent.
 TEST_CASE("polyline-offsets stays silent on an empty table", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userPolylineVerts.clear();
-  st.userPolylineOffsets.clear();
-  st.userPolylineClosed.clear();
-  st.userPolylineAttrs.clear();
+  st.drawing.userPolylineVerts.clear();
+  st.drawing.userPolylineOffsets.clear();
+  st.drawing.userPolylineClosed.clear();
+  st.drawing.userPolylineAttrs.clear();
   REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
 
@@ -314,10 +314,10 @@ TEST_CASE("selection-in-range fires after the selected entity is erased", "[doci
   st.selection.push_back(SelectedEntity{SelectedEntity::Type::Polyline, 0});
   REQUIRE(Fired(st).empty());  // valid before the erase
 
-  st.userPolylineOffsets.clear();
-  st.userPolylineVerts.clear();
-  st.userPolylineClosed.clear();
-  st.userPolylineAttrs.clear();
+  st.drawing.userPolylineOffsets.clear();
+  st.drawing.userPolylineVerts.clear();
+  st.drawing.userPolylineClosed.clear();
+  st.drawing.userPolylineAttrs.clear();
   REQUIRE(Contains(Fired(st), docinv::kSelectionInRange));
 }
 
@@ -325,9 +325,9 @@ TEST_CASE("selection-in-range accepts a valid block reference", "[docinvariants]
   AppCommandState st = GoodDrawing();
   CadBlockRef r;
   r.defName = "TREE";
-  st.cadBlockRefs.push_back(r);
-  st.cadBlockRefAttrs.resize(1);
-  st.cadBlockRefAttrs[0].id = 40;
+  st.drawing.cadBlockRefs.push_back(r);
+  st.drawing.cadBlockRefAttrs.resize(1);
+  st.drawing.cadBlockRefAttrs[0].id = 40;
   st.nextEntityId = 41;
   st.selection.push_back(SelectedEntity{SelectedEntity::Type::BlockRef, 0});
   REQUIRE(Fired(st).empty());
@@ -348,9 +348,9 @@ TEST_CASE("region-loops fires on a loop start past the vertex count", "[docinvar
   CadFilledRegion fr;
   fr.vertsXyz = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f};  // 3 vertices
   fr.loopStart = {0, 9};                                        // 9 is a float index, not a vertex
-  st.cadFilledRegions.push_back(fr);
-  st.cadFilledRegionAttrs.resize(1);
-  st.cadFilledRegionAttrs[0].id = 20;
+  st.drawing.cadFilledRegions.push_back(fr);
+  st.drawing.cadFilledRegionAttrs.resize(1);
+  st.drawing.cadFilledRegionAttrs[0].id = 20;
   st.nextEntityId = 21;
   REQUIRE(Contains(Fired(st), docinv::kRegionLoops));
 }
@@ -360,9 +360,9 @@ TEST_CASE("region-loops fires when the first loop does not start at zero", "[doc
   CadFilledRegion fr;
   fr.vertsXyz = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f};
   fr.loopStart = {1};
-  st.cadFilledRegions.push_back(fr);
-  st.cadFilledRegionAttrs.resize(1);
-  st.cadFilledRegionAttrs[0].id = 20;
+  st.drawing.cadFilledRegions.push_back(fr);
+  st.drawing.cadFilledRegionAttrs.resize(1);
+  st.drawing.cadFilledRegionAttrs[0].id = 20;
   st.nextEntityId = 21;
   REQUIRE(Contains(Fired(st), docinv::kRegionLoops));
 }
@@ -377,14 +377,14 @@ TEST_CASE("survey-label-links fires when a label claims a different point", "[do
   SurveyPoint p;
   p.id = 101;
   p.labelMtextAnnId = 30;
-  st.surveyPoints.push_back(p);
+  st.drawing.surveyPoints.push_back(p);
 
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Mtext;
   a.surveyPointLabelForId = 999;  // disagrees with the point that points at it
-  st.cadAnnotations.push_back(a);
-  st.cadAnnotationAttrs.resize(1);
-  st.cadAnnotationAttrs[0].id = 30;
+  st.drawing.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotationAttrs.resize(1);
+  st.drawing.cadAnnotationAttrs[0].id = 30;
   st.nextEntityId = 31;
 
   REQUIRE(Contains(Fired(st), docinv::kSurveyLabelLinks));
@@ -397,7 +397,7 @@ TEST_CASE("survey-label-links accepts an id that resolves to nothing", "[docinva
   SurveyPoint p;
   p.id = 101;
   p.labelMtextAnnId = 12345;  // no annotation carries this id — the label was erased
-  st.surveyPoints.push_back(p);
+  st.drawing.surveyPoints.push_back(p);
   REQUIRE_FALSE(Contains(Fired(st), docinv::kSurveyLabelLinks));
 }
 
@@ -407,14 +407,14 @@ TEST_CASE("survey-label-links accepts a consistent point/label pair", "[docinvar
   SurveyPoint p;
   p.id = 101;
   p.labelMtextAnnId = 30;
-  st.surveyPoints.push_back(p);
+  st.drawing.surveyPoints.push_back(p);
 
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Mtext;
   a.surveyPointLabelForId = 101;
-  st.cadAnnotations.push_back(a);
-  st.cadAnnotationAttrs.resize(1);
-  st.cadAnnotationAttrs[0].id = 30;
+  st.drawing.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotationAttrs.resize(1);
+  st.drawing.cadAnnotationAttrs[0].id = 30;
   st.nextEntityId = 31;
 
   REQUIRE(Fired(st).empty());
@@ -426,7 +426,7 @@ TEST_CASE("survey-label-links accepts a consistent point/label pair", "[docinvar
 
 TEST_CASE("FormatInvariantViolations names the invariant and the specifics", "[docinvariants]") {
   AppCommandState st = GoodDrawing();
-  st.userLinesFlat.push_back(1.f);
+  st.drawing.userLinesFlat.push_back(1.f);
 
   std::vector<InvariantViolation> v;
   CheckDocumentInvariants(CaptureDocumentDiagnosticSnapshot(st), &v);
@@ -451,13 +451,13 @@ namespace {
 /// A minimal, VALID one-feature-line drawing, so each fixture below breaks exactly one rule.
 AppCommandState FeatureLineDrawing() {
   AppCommandState st = GoodDrawing();
-  st.featureLineVerts = {0.f, 0.f, 10.f, 10.f, 0.f, 11.f, 20.f, 0.f, 12.f};  // 3 vertices
-  st.featureLineOffsets = {0, 3};
-  st.featureLineClosed = {0};
-  st.featureLineElevPt = {0, 1, 0};
-  st.featureLineInfo.resize(1);
-  st.featureLineAttrs.resize(1);
-  st.featureLineAttrs[0].id = 900;
+  st.drawing.featureLineVerts = {0.f, 0.f, 10.f, 10.f, 0.f, 11.f, 20.f, 0.f, 12.f};  // 3 vertices
+  st.drawing.featureLineOffsets = {0, 3};
+  st.drawing.featureLineClosed = {0};
+  st.drawing.featureLineElevPt = {0, 1, 0};
+  st.drawing.featureLineInfo.resize(1);
+  st.drawing.featureLineAttrs.resize(1);
+  st.drawing.featureLineAttrs[0].id = 900;
   st.nextEntityId = 901;
   return st;
 }
@@ -470,38 +470,38 @@ TEST_CASE("a valid feature line trips nothing", "[docinvariants]") {
 
 TEST_CASE("feature-line-offsets fires when the elevation-point flags are short", "[docinvariants]") {
   AppCommandState st = FeatureLineDrawing();
-  st.featureLineElevPt = {0, 1};  // 3 vertices, 2 flags — the third silently reads as a PI
+  st.drawing.featureLineElevPt = {0, 1};  // 3 vertices, 2 flags — the third silently reads as a PI
   REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
 }
 
 TEST_CASE("feature-line-offsets fires when the last offset misses the vertex count",
           "[docinvariants]") {
   AppCommandState st = FeatureLineDrawing();
-  st.featureLineOffsets = {0, 2};  // 3 vertices stored, so the line reads short
+  st.drawing.featureLineOffsets = {0, 2};  // 3 vertices stored, so the line reads short
   REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
 }
 
 TEST_CASE("feature-line-offsets fires on a single-entry table", "[docinvariants]") {
   AppCommandState st = FeatureLineDrawing();
-  st.featureLineOffsets = {0};  // zero feature lines is spelled EMPTY, not {0}
-  st.featureLineVerts.clear();
-  st.featureLineElevPt.clear();
-  st.featureLineClosed.clear();
-  st.featureLineInfo.clear();
-  st.featureLineAttrs.clear();
+  st.drawing.featureLineOffsets = {0};  // zero feature lines is spelled EMPTY, not {0}
+  st.drawing.featureLineVerts.clear();
+  st.drawing.featureLineElevPt.clear();
+  st.drawing.featureLineClosed.clear();
+  st.drawing.featureLineInfo.clear();
+  st.drawing.featureLineAttrs.clear();
   REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
 }
 
 TEST_CASE("flat-strides fires on a feature line vertex array that is not a whole number of XYZ",
           "[docinvariants]") {
   AppCommandState st = FeatureLineDrawing();
-  st.featureLineVerts.push_back(1.f);  // 10 floats is not a multiple of 3
+  st.drawing.featureLineVerts.push_back(1.f);  // 10 floats is not a multiple of 3
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
 TEST_CASE("attr-counts fires when a feature line has no info row", "[docinvariants]") {
   AppCommandState st = FeatureLineDrawing();
-  st.featureLineInfo.clear();
+  st.drawing.featureLineInfo.clear();
   REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
@@ -509,16 +509,16 @@ TEST_CASE("entity-ids fires when a feature line reuses a polyline's id", "[docin
   // A surface references a breakline by stable id (REQ-069/076), so a collision between stores
   // would silently point a surface at the wrong entity.
   AppCommandState st = FeatureLineDrawing();
-  REQUIRE(!st.userPolylineAttrs.empty());
-  st.featureLineAttrs[0].id = st.userPolylineAttrs[0].id;
+  REQUIRE(!st.drawing.userPolylineAttrs.empty());
+  st.drawing.featureLineAttrs[0].id = st.drawing.userPolylineAttrs[0].id;
   REQUIRE(Contains(Fired(st), docinv::kEntityIds));
 }
 
 TEST_CASE("Document diagnostic capture owns the data it checks", "[docinvariants][snapshot]") {
   auto st = GoodDrawing();
   const auto snapshot = CaptureDocumentDiagnosticSnapshot(st);
-  st.userLinesFlat[0] = std::numeric_limits<double>::quiet_NaN();
-  st.userLineAttrs[0].id = st.nextEntityId;
+  st.drawing.userLinesFlat[0] = std::numeric_limits<double>::quiet_NaN();
+  st.drawing.userLineAttrs[0].id = st.nextEntityId;
   std::vector<InvariantViolation> captured;
   CheckDocumentInvariants(snapshot, &captured);
   CHECK(captured.empty());

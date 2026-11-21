@@ -46,31 +46,31 @@ std::string SourceKey(const AppCommandState& st, const AppCommandState::ProjectS
 
 /// The drawing's point group named by its rules, or null (a missing group matches nothing).
 const PointGroupRule* RuleGroupOf(const AppCommandState& st) {
-  if (st.pointVisibility.group.empty())
+  if (st.drawing.pointVisibility.group.empty())
     return nullptr;
-  const int gi = FindPointGroupIndex(st, st.pointVisibility.group);
-  return gi >= 0 ? &st.pointGroups[static_cast<size_t>(gi)].rule : nullptr;
+  const int gi = FindPointGroupIndex(st, st.drawing.pointVisibility.group);
+  return gi >= 0 ? &st.drawing.pointGroups[static_cast<size_t>(gi)].rule : nullptr;
 }
 
 /// Makes the tab's points exactly what the database holds AND the drawing's rules show (REQ-377).
 /// Points that are no longer shown go (with their label MTEXT); new and changed ones get their label
 /// rebuilt; everything else keeps its label link.
 void Pull(AppCommandState& st, Tab& tab, const projpts::Db& db) {
-  const double ox = st.worldDocumentOriginX;
-  const double oy = st.worldDocumentOriginY;
-  const std::vector<const projpts::Entry*> shown = projpts::Visible(st.pointVisibility, RuleGroupOf(st), db);
+  const double ox = st.drawing.worldDocumentOriginX;
+  const double oy = st.drawing.worldDocumentOriginY;
+  const std::vector<const projpts::Entry*> shown = projpts::Visible(st.drawing.pointVisibility, RuleGroupOf(st), db);
   std::unordered_map<int, size_t> inDb;
   inDb.reserve(shown.size());
   for (size_t i = 0; i < shown.size(); ++i)
     inDb[shown[i]->point.id] = i;
 
-  for (size_t i = st.surveyPoints.size(); i-- > 0;)
-    if (!inDb.count(st.surveyPoints[i].id))
+  for (size_t i = st.drawing.surveyPoints.size(); i-- > 0;)
+    if (!inDb.count(st.drawing.surveyPoints[i].id))
       RemoveSurveyPointAt(st, i);
 
   std::unordered_map<int, const SurveyPoint*> old;
-  old.reserve(st.surveyPoints.size());
-  for (const SurveyPoint& p : st.surveyPoints)
+  old.reserve(st.drawing.surveyPoints.size());
+  for (const SurveyPoint& p : st.drawing.surveyPoints)
     old[p.id] = &p;
 
   std::vector<SurveyPoint> next;
@@ -99,17 +99,17 @@ void Pull(AppCommandState& st, Tab& tab, const projpts::Db& db) {
     }
     next.push_back(std::move(p));
   }
-  st.surveyPoints = std::move(next);
+  st.drawing.surveyPoints = std::move(next);
   st.surveyPointIdBuffers.clear();
   st.selectedSurveyPointIndices.clear();
   for (const size_t i : relabel)
     EnsureSurveyPointLabelMtext(st, i, nullptr);
   for (const projpts::Entry& e : db.points)  // a number hidden in this drawing is still taken (REQ-376 clause 4)
     maxId = std::max(maxId, e.point.id);
-  st.createPointsNextId = std::max(st.createPointsNextId, maxId + 1);
+  st.drawing.createPointsNextId = std::max(st.drawing.createPointsNextId, maxId + 1);
   tab.pointsBaseWorld = std::move(base);
   tab.pointsRevision = db.revision;
-  tab.pointsRulesApplied = st.pointVisibility;
+  tab.pointsRulesApplied = st.drawing.pointVisibility;
   BumpCadGpuCache(st);
 }
 
@@ -189,10 +189,10 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
   projpts::Db& db = *s->points;
 
   if (tab.pointsMode == Tab::PointsMode::Unattached) {
-    if (!st.surveyPoints.empty()) {
+    if (!st.drawing.surveyPoints.empty()) {
       tab.pointsMode = Tab::PointsMode::Detached;
       log.push_back("Project " + s->project.name + " - \"" + tab.name + "\" holds " +
-                    std::to_string(st.surveyPoints.size()) +
+                    std::to_string(st.drawing.surveyPoints.size()) +
                     " point(s) of its own. They stay in the drawing and are not shared with the project; "
                     "Add Drawing to Project merges them.");
       return;
@@ -202,15 +202,15 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
     return;
   }
 
-  const double ox = st.worldDocumentOriginX;
-  const double oy = st.worldDocumentOriginY;
-  if (!projpts::EqualsWorld(st.surveyPoints, ox, oy, tab.pointsBaseWorld)) {
+  const double ox = st.drawing.worldDocumentOriginX;
+  const double oy = st.drawing.worldDocumentOriginY;
+  if (!projpts::EqualsWorld(st.drawing.surveyPoints, ox, oy, tab.pointsBaseWorld)) {
     if (s->readOnly) {
       log.push_back("Project " + s->project.name + " is open read-only; the point change was undone.");
       Pull(st, tab, db);
       return;
     }
-    std::vector<SurveyPoint> cur = projpts::ToWorld(st.surveyPoints, ox, oy);
+    std::vector<SurveyPoint> cur = projpts::ToWorld(st.drawing.surveyPoints, ox, oy);
     auto& ask = st.pointEditPrompt;
     using Answer = AppCommandState::PointEditPrompt::Answer;
 
@@ -241,15 +241,15 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
         return;
       }
       if (ask.conflictAnswer == Answer::Renumber) {
-        int next = NextFreePointNumber(db, cur, st.createPointsNextId - 1);
+        int next = NextFreePointNumber(db, cur, st.drawing.createPointsNextId - 1);
         for (const int oldId : risks.conflicts) {
           const int j = SurveyPointIndexForId(st, oldId);
           if (j < 0)
             continue;
-          for (CadAnnotation& a : st.cadAnnotations)
+          for (CadAnnotation& a : st.drawing.cadAnnotations)
             if (a.surveyPointLabelForId == oldId)
               a.surveyPointLabelForId = next;
-          st.surveyPoints[static_cast<size_t>(j)].id = next;
+          st.drawing.surveyPoints[static_cast<size_t>(j)].id = next;
           cur[static_cast<size_t>(j)].id = next;
           EnsureSurveyPointLabelMtext(st, static_cast<size_t>(j), nullptr);
           log.push_back("Project " + s->project.name + " - point number " + std::to_string(oldId) +
@@ -257,7 +257,7 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
           ++next;
         }
         st.surveyPointIdBuffers.clear();
-        st.createPointsNextId = std::max(st.createPointsNextId, next);
+        st.drawing.createPointsNextId = std::max(st.drawing.createPointsNextId, next);
       }
       // Proceed = overwrite: ApplyChanges replaces the database's point and says so in the log.
     }
@@ -304,37 +304,37 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
       forDb.insert(forDb.end(), keptForDb.begin(), keptForDb.end());
       projpts::ApplyChanges(&db, tab.pointsBaseWorld, forDb, SourceKey(st, *s, idx), now, &log);
       for (const int id : hideIds)
-        projpts::AddId(&st.pointVisibility.hidden, id);
+        projpts::AddId(&st.drawing.pointVisibility.hidden, id);
       BumpCadGpuCache(st);  // the rules are part of the drawing: it now has unsaved changes
       log.push_back("Project " + s->project.name + " - " + std::to_string(hideIds.size()) +
                     " point(s) hidden in this drawing only; other drawings still show them.");
     }
     // REQ-377 clause 2: a point that appears in this drawing is shown here from now on, whatever the
     // filters say. Points the user removed from view are not touched (they were deleted).
-    const bool rulesInSync = tab.pointsRulesApplied == st.pointVisibility;
+    const bool rulesInSync = tab.pointsRulesApplied == st.drawing.pointVisibility;
     // Issue #725: a number the user hid here and then created again (Overwrite, or a point that was
     // hidden and re-added) is a deliberate later action. Left in `hidden` it would win over the pin
     // (REQ-377: hidden beats pinned) and the point would vanish the next time the view is rebuilt,
     // e.g. when the drawing is reopened.
     bool unhid = false;
     for (const int id : freshIds)
-      if (projpts::HasId(st.pointVisibility.hidden, id)) {
-        projpts::RemoveId(&st.pointVisibility.hidden, id);
+      if (projpts::HasId(st.drawing.pointVisibility.hidden, id)) {
+        projpts::RemoveId(&st.drawing.pointVisibility.hidden, id);
         unhid = true;
       }
     if (unhid)
       BumpCadGpuCache(st);  // the rules are part of the drawing: it now has unsaved changes
     for (const int id : freshIds)
-      projpts::AddId(&st.pointVisibility.shown, id);
+      projpts::AddId(&st.drawing.pointVisibility.shown, id);
     if (rulesInSync)
-      tab.pointsRulesApplied = st.pointVisibility;  // pinning a point changes nothing on screen
+      tab.pointsRulesApplied = st.drawing.pointVisibility;  // pinning a point changes nothing on screen
     tab.pointsBaseWorld = std::move(cur);
     if (upToDate)
       tab.pointsRevision = db.revision;
   } else if (st.pointEditPrompt.active) {
     st.pointEditPrompt = {};  // the edit that raised the question is gone (undone, or the drawing was reloaded)
   }
-  if (tab.pointsRevision != db.revision || tab.pointsRulesApplied != st.pointVisibility)
+  if (tab.pointsRevision != db.revision || tab.pointsRulesApplied != st.drawing.pointVisibility)
     Pull(st, tab, db);
 }
 
@@ -355,7 +355,7 @@ ProjectPointCounts CountProjectPoints(AppCommandState& st) {
   if (!db)
     return c;
   c.total = db->points.size();
-  c.hidden = projpts::HiddenCount(st.pointVisibility, RuleGroupOf(st), *db);
+  c.hidden = projpts::HiddenCount(st.drawing.pointVisibility, RuleGroupOf(st), *db);
   c.shown = c.total - c.hidden;
   return c;
 }
@@ -423,10 +423,10 @@ int SelectDatabasePoints(AppCommandState& st, const std::vector<int>& pointNumbe
   st.selectedSurveyPointIndices.clear();
   std::unordered_set<int> want(pointNumbers.begin(), pointNumbers.end());
   std::unordered_set<int> found;
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
-    if (want.count(st.surveyPoints[i].id)) {
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i)
+    if (want.count(st.drawing.surveyPoints[i].id)) {
       st.selectedSurveyPointIndices.push_back(static_cast<int>(i));
-      found.insert(st.surveyPoints[i].id);
+      found.insert(st.drawing.surveyPoints[i].id);
     }
   int refused = 0;
   for (const int id : pointNumbers)
@@ -482,8 +482,8 @@ int HideSelectedPointsHere(AppCommandState& st) {
     return 0;
   int n = 0;
   for (const int idx : st.selectedSurveyPointIndices)
-    if (idx >= 0 && idx < static_cast<int>(st.surveyPoints.size())) {
-      projpts::AddId(&st.pointVisibility.hidden, st.surveyPoints[static_cast<size_t>(idx)].id);
+    if (idx >= 0 && idx < static_cast<int>(st.drawing.surveyPoints.size())) {
+      projpts::AddId(&st.drawing.pointVisibility.hidden, st.drawing.surveyPoints[static_cast<size_t>(idx)].id);
       ++n;
     }
   if (n > 0)

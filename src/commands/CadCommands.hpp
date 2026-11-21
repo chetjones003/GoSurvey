@@ -731,7 +731,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx);
 /// Copy \p cmd.documents[idx] back into the active fields of \p cmd.  Cancels any in-progress command.
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx);
 
-/// Active text style (REQ-044): the entry in \c st.textStyles named by \c st.activeTextStyleName, falling
+/// Active text style (REQ-044): the entry in \c st.drawing.textStyles named by \c st.drawing.activeTextStyleName, falling
 /// back to "Standard"; nullptr only if the table is somehow empty. Used by the dropdown and the create path.
 const TextStyle* ActiveTextStyle(const AppCommandState& st);
 /// Set the active text style and sync the new-text default height to it, so newly drawn TEXT/MTEXT adopt
@@ -891,7 +891,7 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
 void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log);
 
 // --- Page setups (named, drawing-wide) ---
-/// Ensure a built-in "Standard" page setup exists in cmd.savedPageSetups.
+/// Ensure a built-in "Standard" page setup exists in cmd.drawing.savedPageSetups.
 void EnsureStandardPageSetup(AppCommandState& cmd);
 /// Copy a PageSetup's paper-size/orientation/plot fields into a layout (Set Current).
 void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
@@ -973,7 +973,11 @@ struct UnsavedProject {
   std::vector<std::string> drawings;
 };
 
-struct AppCommandState : DrawingContent {
+struct AppCommandState {
+  /// The drawing's saved content (ADR-0010, amended): formerly inherited, now a member so every
+  /// access says `drawing.`.
+  DrawingContent drawing;
+
   /// Seeds the tables a live drawing always has. `DrawingContent` leaves them empty because undo
   /// frames and stored tabs started empty before ADR-0010 (issue #1557 phase 1a is a pure move).
   ///
@@ -987,12 +991,12 @@ struct AppCommandState : DrawingContent {
   /// style (REQ-044 / ADR-020) and surface style (REQ-070 / ADR-036 (d)) had the same defect and
   /// have the same fix; the alignment style and label tables follow the same rule.
   AppCommandState() {
-    drawingLayerTable = DefaultDrawingLayerTable();
-    textStyles = TextStyles::DefaultTextStyles();
-    surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
-    alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
-    alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
-    alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();
+    drawing.drawingLayerTable = DefaultDrawingLayerTable();
+    drawing.textStyles = TextStyles::DefaultTextStyles();
+    drawing.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+    drawing.alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+    drawing.alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+    drawing.alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();
   }
 
   enum class Kind : std::uint8_t {
@@ -2867,7 +2871,7 @@ struct AppCommandState : DrawingContent {
   /// for a single tracked job).
   ///
   /// The worker thread touches ONLY this struct's own fields (plus read-only source/cache paths) —
-  /// never `AppCommandState` directly. Committing the result into `st.cadPointClouds` (undo
+  /// never `AppCommandState` directly. Committing the result into `st.drawing.cadPointClouds` (undo
   /// snapshot, entity id assignment, GPU-cache bump) happens on the main thread, in
   /// `TickPointCloudImport`, once `done` is observed — the same "worker computes, main thread
   /// applies" split `SurfaceRebuildAsync`/`TinBuildResult` already uses.
@@ -4800,7 +4804,7 @@ GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingContent, userPolylineVerts);
 #undef GOSURVEY_STATIC_ASSERT_DOUBLE_STORE
 
 inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
-  return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;
+  return st.drawing.defaultPlottedTextHeightInches * st.drawing.modelUnitsPerPlottedInch;
 }
 
 /// REQ-316 / ADR-047: call `fn(seg, midX, midY, midZ)` for every ARC segment of polyline `pi`, with
@@ -4809,33 +4813,33 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
 /// four grip sites (model + floating-viewport, draw + grab) so they cannot disagree.
 template <class F>
 inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& fn) {
-  const int np = st.userPolylineOffsets.size() > 0 ? static_cast<int>(st.userPolylineOffsets.size() - 1) : 0;
+  const int np = st.drawing.userPolylineOffsets.size() > 0 ? static_cast<int>(st.drawing.userPolylineOffsets.size() - 1) : 0;
   if (pi < 0 || pi >= np)
     return;
-  const int v0 = st.userPolylineOffsets[static_cast<std::size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi) + 1];
-  const bool closed = static_cast<std::size_t>(pi) < st.userPolylineClosed.size() &&
-                      st.userPolylineClosed[static_cast<std::size_t>(pi)];
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<std::size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<std::size_t>(pi) + 1];
+  const bool closed = static_cast<std::size_t>(pi) < st.drawing.userPolylineClosed.size() &&
+                      st.drawing.userPolylineClosed[static_cast<std::size_t>(pi)];
   const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
   for (int s = 0; s < nseg; ++s) {
     const int va = v0 + s;
     const int vb = (s == (v1 - v0) - 1) ? v0 : v0 + s + 1;  // wrap on the closing segment
-    if (static_cast<std::size_t>(vb) * 3 + 2 >= st.userPolylineVerts.size())
+    if (static_cast<std::size_t>(vb) * 3 + 2 >= st.drawing.userPolylineVerts.size())
       break;
-    const float bulge = static_cast<std::size_t>(va) < st.userPolylineVertsBulge.size()
-                            ? st.userPolylineVertsBulge[static_cast<std::size_t>(va)]
+    const float bulge = static_cast<std::size_t>(va) < st.drawing.userPolylineVertsBulge.size()
+                            ? st.drawing.userPolylineVertsBulge[static_cast<std::size_t>(va)]
                             : 0.f;
     if (bulge == 0.f)
       continue;
     const std::size_t A = static_cast<std::size_t>(va), B = static_cast<std::size_t>(vb);
-    const BulgeArcSpan arc = BulgeArc(st.vertex(A).x, st.vertex(A).y,
-                                      st.vertex(B).x, st.vertex(B).y,
+    const BulgeArcSpan arc = BulgeArc(st.drawing.vertex(A).x, st.drawing.vertex(A).y,
+                                      st.drawing.vertex(B).x, st.drawing.vertex(B).y,
                                       static_cast<double>(bulge));
     if (!arc.valid)
       continue;
     const double mid = arc.startAngle + arc.sweep * 0.5;
     fn(s, static_cast<float>(arc.cx + arc.radius * std::cos(mid)),
-       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.vertex(A).z);
+       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.drawing.vertex(A).z);
   }
 }
 
@@ -4890,7 +4894,7 @@ inline std::string CadVisibleLayerForNewEntity(const AppCommandState& st, const 
     return layer;
   if (CadLayerAllowsViewportDisplay(st, "0"))
     return "0";
-  for (const CadLayerRow& row : st.drawingLayerTable) {
+  for (const CadLayerRow& row : st.drawing.drawingLayerTable) {
     if (CadLayerAllowsViewportDisplay(st, row.name))
       return row.name;
   }
@@ -4900,12 +4904,12 @@ inline std::string CadVisibleLayerForNewEntity(const AppCommandState& st, const 
 inline const DimensionStyle& CadDimensionStyleForAnnotation(const AppCommandState& st,
                                                               const CadAnnotation& ann) {
   if (!ann.dimensionStyleName.empty()) {
-    for (const DimensionStyle& style : st.dimensionStyles) {
+    for (const DimensionStyle& style : st.drawing.dimensionStyles) {
       if (style.name == ann.dimensionStyleName)
         return style;
     }
   }
-  return st.activeDimensionStyle;
+  return st.drawing.activeDimensionStyle;
 }
 
 /// Duration of a ViewCube orientation change, in seconds. Short enough not to feel sluggish, long
@@ -5008,8 +5012,8 @@ inline const ucs::Ucs& CadDrawingScopedUcs(const AppCommandState& st) {
 /// basis, so the axes pass through untouched.
 inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
   ucs::Ucs u = st.activeUcs;
-  u.origin.x -= st.worldDocumentOriginX;
-  u.origin.y -= st.worldDocumentOriginY;
+  u.origin.x -= st.drawing.worldDocumentOriginX;
+  u.origin.y -= st.drawing.worldDocumentOriginY;
   return u;
 }
 
@@ -5587,7 +5591,7 @@ void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, 
 /// into a run or is placed as a free INSERT.
 [[nodiscard]] bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx);
 
-/// REQ-350 (f) — splice the NAMED library part into `st.cadPipeRuns[runIdx]` at the point nearest
+/// REQ-350 (f) — splice the NAMED library part into `st.drawing.cadPipeRuns[runIdx]` at the point nearest
 /// \p pick: exactly what `PIPEFIT <part type>` does after its catalog lookup, including the
 /// engagement cutback, the run splitting into two pieces, and one undo step. Named rather than
 /// looked up by type because the palette has already chosen a specific part, and the catalog lookup
@@ -5920,7 +5924,7 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
                                 std::vector<std::string>& log);
 
 /// Call once per frame (main.cpp, beside \ref TickSurfaceRebuilds). Reaps a completed point-cloud
-/// import — on success, commits the resulting `CadPointCloud` into `st.cadPointClouds` (undo
+/// import — on success, commits the resulting `CadPointCloud` into `st.drawing.cadPointClouds` (undo
 /// snapshot, entity id, GPU-cache bump) exactly as the old synchronous `ImportPointCloudE57` did;
 /// on failure or cancellation, logs the reason and commits nothing. A no-op while no import is in
 /// flight or the in-flight one has not finished yet.
@@ -6049,9 +6053,9 @@ inline void RestoreMtextGripOriginal(AppCommandState& st) {
   if (!st.mtextGripMoveActive)
     return;
   const int aix = st.mtextGripAnnotationIndex;
-  if (aix < 0 || static_cast<size_t>(aix) >= st.cadAnnotations.size())
+  if (aix < 0 || static_cast<size_t>(aix) >= st.drawing.cadAnnotations.size())
     return;
-  CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(aix)];
+  CadAnnotation& ann = st.drawing.cadAnnotations[static_cast<size_t>(aix)];
   if (ann.kind != CadAnnotation::Kind::Mtext)
     return;
   ann.boxMinX = st.mtextGripOrigBoxMinX;
@@ -6110,27 +6114,27 @@ inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
     return nullptr;
   if (st.mtextRichEditorMarkerIndex >= 0) {  // a Position Marker's own label (REQ-359 item 3)
     const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
-    return mi < st.cadPositionMarkers.size() ? &st.cadPositionMarkers[mi].label : nullptr;
+    return mi < st.drawing.cadPositionMarkers.size() ? &st.drawing.cadPositionMarkers[mi].label : nullptr;
   }
   if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
     const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
-    return li < st.cadMultileaders.size() ? &st.cadMultileaders[li].label : nullptr;
+    return li < st.drawing.cadMultileaders.size() ? &st.drawing.cadMultileaders[li].label : nullptr;
   }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
   if (st.mtextRichEditorPaper) {
     if (st.mtextRichEditorPaperLayout < 0 ||
-        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.paperLayouts.size())
+        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.drawing.paperLayouts.size())
       return nullptr;
-    PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
+    PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
     if (static_cast<size_t>(ix) >= L.paperTexts.size())
       return nullptr;
     return &L.paperTexts[static_cast<size_t>(ix)];
   }
-  if (static_cast<size_t>(ix) >= st.cadAnnotations.size())
+  if (static_cast<size_t>(ix) >= st.drawing.cadAnnotations.size())
     return nullptr;
-  return &st.cadAnnotations[static_cast<size_t>(ix)];
+  return &st.drawing.cadAnnotations[static_cast<size_t>(ix)];
 }
 
 /// The attributes parallel to \ref MtextRichEditorTargetAnnotation — the entity colour/layer/linetype row
@@ -6141,27 +6145,27 @@ inline EntityAttributes* MtextRichEditorTargetAttrs(AppCommandState& st) {
     return nullptr;
   if (st.mtextRichEditorMarkerIndex >= 0) {  // REQ-359: the marker's row
     const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
-    return mi < st.cadPositionMarkerAttrs.size() ? &st.cadPositionMarkerAttrs[mi] : nullptr;
+    return mi < st.drawing.cadPositionMarkerAttrs.size() ? &st.drawing.cadPositionMarkerAttrs[mi] : nullptr;
   }
   if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
     const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
-    return li < st.cadMultileaderAttrs.size() ? &st.cadMultileaderAttrs[li] : nullptr;
+    return li < st.drawing.cadMultileaderAttrs.size() ? &st.drawing.cadMultileaderAttrs[li] : nullptr;
   }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
   if (st.mtextRichEditorPaper) {
     if (st.mtextRichEditorPaperLayout < 0 ||
-        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.paperLayouts.size())
+        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.drawing.paperLayouts.size())
       return nullptr;
-    PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
+    PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
     if (static_cast<size_t>(ix) >= L.paperTextAttrs.size())
       return nullptr;
     return &L.paperTextAttrs[static_cast<size_t>(ix)];
   }
-  if (static_cast<size_t>(ix) >= st.cadAnnotationAttrs.size())
+  if (static_cast<size_t>(ix) >= st.drawing.cadAnnotationAttrs.size())
     return nullptr;
-  return &st.cadAnnotationAttrs[static_cast<size_t>(ix)];
+  return &st.drawing.cadAnnotationAttrs[static_cast<size_t>(ix)];
 }
 
 
@@ -6192,59 +6196,59 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
   const int idx = st.entityGripEntityIndex;
   switch (st.entityGripType) {
   case SelectedEntity::Type::LineSeg: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.lineCount())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.lineCount())
       return;
-    CadLineRecord ln = st.line(static_cast<size_t>(idx));
+    CadLineRecord ln = st.drawing.line(static_cast<size_t>(idx));
     ln.x0 = st.entityGripOrigX0;
     ln.y0 = st.entityGripOrigY0;
     ln.x1 = st.entityGripOrigX1;
     ln.y1 = st.entityGripOrigY1;
-    st.setLine(static_cast<size_t>(idx), ln);
+    st.drawing.setLine(static_cast<size_t>(idx), ln);
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.circleCount())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.circleCount())
       return;
-    CadCircleRecord cr = st.circle(static_cast<size_t>(idx));
+    CadCircleRecord cr = st.drawing.circle(static_cast<size_t>(idx));
     cr.cx = st.entityGripOrigCx;
     cr.cy = st.entityGripOrigCy;
     cr.r = st.entityGripOrigR;  // cz is Z — a grip drag does not change it
-    st.setCircle(static_cast<size_t>(idx), cr);
+    st.drawing.setCircle(static_cast<size_t>(idx), cr);
     break;
   }
   case SelectedEntity::Type::Spline: {  // REQ-443
-    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadSplines.size())
       return;
-    st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
+    st.drawing.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
     break;
   }
   case SelectedEntity::Type::Alignment: {  // REQ-487.1
-    if (idx < 0 || static_cast<size_t>(idx) >= st.alignments.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.alignments.size())
       return;
-    st.alignments[static_cast<size_t>(idx)] = st.entityGripOrigAlignment;
+    st.drawing.alignments[static_cast<size_t>(idx)] = st.entityGripOrigAlignment;
     std::vector<std::string> quiet;
     RefreshAlignmentOffsets(st, quiet);  // the linked offsets followed the drag; put them back with it
     break;
   }
   case SelectedEntity::Type::Polyline: {
     if (st.entityGripOrigPolyBulgeVi >= 0) {  // REQ-316 / ADR-047: an arc-segment bulge grip
-      if (static_cast<size_t>(st.entityGripOrigPolyBulgeVi) < st.userPolylineVertsBulge.size())
-        st.userPolylineVertsBulge[static_cast<size_t>(st.entityGripOrigPolyBulgeVi)] = st.entityGripOrigPolyBulge;
+      if (static_cast<size_t>(st.entityGripOrigPolyBulgeVi) < st.drawing.userPolylineVertsBulge.size())
+        st.drawing.userPolylineVertsBulge[static_cast<size_t>(st.entityGripOrigPolyBulgeVi)] = st.entityGripOrigPolyBulge;
       break;
     }
     if (st.entityGripOrigPolylineXIdx < 0)
       return;
     const size_t vIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
-    if (vIdx >= st.vertexCount())
+    if (vIdx >= st.drawing.vertexCount())
       return;
-    st.vertexComponent(vIdx, CadVertexComponent::X) = st.entityGripOrigPolyVertX;
-    st.vertexComponent(vIdx, CadVertexComponent::Y) = st.entityGripOrigPolyVertY;
+    st.drawing.vertexComponent(vIdx, CadVertexComponent::X) = st.entityGripOrigPolyVertX;
+    st.drawing.vertexComponent(vIdx, CadVertexComponent::Y) = st.entityGripOrigPolyVertY;
     break;
   }
   case SelectedEntity::Type::Arc: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.userArcs.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.userArcs.size())
       return;
-    CadArc& a = st.userArcs[static_cast<size_t>(idx)];
+    CadArc& a = st.drawing.userArcs[static_cast<size_t>(idx)];
     a.cx = st.entityGripOrigCx;
     a.cy = st.entityGripOrigCy;
     a.r = st.entityGripOrigR;
@@ -6253,9 +6257,9 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Ellipse: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.userEllipses.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.userEllipses.size())
       return;
-    CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
+    CadEllipse& el = st.drawing.userEllipses[static_cast<size_t>(idx)];
     el.cx = st.entityGripOrigEllCx;
     el.cy = st.entityGripOrigEllCy;
     el.majVx = st.entityGripOrigEllMajVx;
@@ -6264,9 +6268,9 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::BlockRef: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.cadBlockRefs.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadBlockRefs.size())
       return;
-    CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(idx)];
+    CadBlockRef& r = st.drawing.cadBlockRefs[static_cast<size_t>(idx)];
     CadBlockParamSet(&r, "DistNeg", st.entityGripOrigX0);
     CadBlockParamSet(&r, "DistPos", st.entityGripOrigY0);
     CadBlockParamSet(&r, "SheetOff", st.entityGripOrigX1);
@@ -6411,8 +6415,8 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 /// Build the angle-display settings (REQ-021) from the live UNITS state.
 /// The style tables and plot scale an alignment's labels are placed with (REQ-492.5).
 [[nodiscard]] inline AlignmentLabelSets::LabelContext CadAlignmentLabelContext(const AppCommandState& st) {
-  return AlignmentLabelSets::LabelContext{st.alignmentLabelSets, st.alignmentStyles, st.alignmentLabelStyles,
-                                          st.drawingInsUnits, static_cast<double>(st.modelUnitsPerPlottedInch)};
+  return AlignmentLabelSets::LabelContext{st.drawing.alignmentLabelSets, st.drawing.alignmentStyles, st.drawing.alignmentLabelStyles,
+                                          st.drawing.drawingInsUnits, static_cast<double>(st.drawing.modelUnitsPerPlottedInch)};
 }
 
 [[nodiscard]] inline AngleDisplaySettings CadAngleDisplaySettings(const AppCommandState& st) {
@@ -7105,7 +7109,7 @@ struct DrawingTransformFactors {
 // --- Geolocation tab (REQ-359, GitHub issue #582 increment 3; CadCommands_Geo.cpp) ------------------
 /// The contextual Geolocation tab is shown exactly while the active drawing is geolocated (item 1).
 [[nodiscard]] inline bool GeolocationRibbonTabVisible(const AppCommandState& st) {
-  return st.drawingSettings.Geolocated();
+  return st.drawing.drawingSettings.Geolocated();
 }
 /// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.

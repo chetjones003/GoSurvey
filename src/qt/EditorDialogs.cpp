@@ -746,7 +746,7 @@ void EditorWindow::ShowSurveyPointDisplay() {
   auto* labelForm = new QFormLayout(labels);
   markerForm->setVerticalSpacing(12); labelForm->setVerticalSpacing(12);
   auto updateLabels = [this](bool reposition) {
-    for (std::size_t i = 0; i < m_State.surveyPoints.size(); ++i) {
+    for (std::size_t i = 0; i < m_State.drawing.surveyPoints.size(); ++i) {
       if (reposition) RepositionSurveyLabelMtextForPoint(m_State, i);
       else EnsureSurveyPointLabelMtext(m_State, i, nullptr);
     }
@@ -837,16 +837,16 @@ void EditorWindow::ShowFeatureLineElevations() {
     EnsureEntityIds(m_State);
     const QSignalBlocker blocker(feature);
     feature->clear();
-    for (size_t i = 0; i + 1 < m_State.featureLineOffsets.size(); ++i) {
-      const QString label = i < m_State.featureLineInfo.size() && !m_State.featureLineInfo[i].name.empty()
-          ? QString::fromUtf8(m_State.featureLineInfo[i].name.c_str()) : QString("Feature line %1").arg(i + 1);
-      feature->addItem(label, QVariant::fromValue<qulonglong>(m_State.featureLineAttrs[i].id));
+    for (size_t i = 0; i + 1 < m_State.drawing.featureLineOffsets.size(); ++i) {
+      const QString label = i < m_State.drawing.featureLineInfo.size() && !m_State.drawing.featureLineInfo[i].name.empty()
+          ? QString::fromUtf8(m_State.drawing.featureLineInfo[i].name.c_str()) : QString("Feature line %1").arg(i + 1);
+      feature->addItem(label, QVariant::fromValue<qulonglong>(m_State.drawing.featureLineAttrs[i].id));
     }
     feature->setCurrentIndex(feature->findData(QVariant::fromValue<qulonglong>(preferredId)));
   };
   const std::uint64_t preferredFeatureId = m_State.featureLineElevIndex >= 0 &&
-      static_cast<size_t>(m_State.featureLineElevIndex) < m_State.featureLineAttrs.size()
-      ? m_State.featureLineAttrs[static_cast<size_t>(m_State.featureLineElevIndex)].id : 0;
+      static_cast<size_t>(m_State.featureLineElevIndex) < m_State.drawing.featureLineAttrs.size()
+      ? m_State.drawing.featureLineAttrs[static_cast<size_t>(m_State.featureLineElevIndex)].id : 0;
   refreshFeatureLines(preferredFeatureId);
   layout->addWidget(feature);
   auto* table = new QTableWidget(dialog); table->setObjectName("featureLineElevationsTable");
@@ -864,7 +864,7 @@ void EditorWindow::ShowFeatureLineElevations() {
   auto fill = [this, feature, table, status]() {
     table->setProperty("documentGeneration", QVariant::fromValue<qulonglong>(m_DocumentGeneration));
     table->setProperty("cadGpuRevision", m_State.cadGpuRevision);
-    const int fi = FindEntityIndexById(m_State.featureLineAttrs, feature->currentData().toULongLong());
+    const int fi = FindEntityIndexById(m_State.drawing.featureLineAttrs, feature->currentData().toULongLong());
     std::vector<FeatureLineElevRow> rows;
     if (!BuildFeatureLineElevTable(m_State, fi, &rows)) { table->setRowCount(0); status->setText("This feature line needs at least two points."); return; }
     const QSignalBlocker blockTable(table);
@@ -896,7 +896,7 @@ void EditorWindow::ShowFeatureLineElevations() {
   };
   QObject::connect(feature, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [this, feature, fill](int i) {
     if (i >= 0) {
-      m_State.featureLineElevIndex = FindEntityIndexById(m_State.featureLineAttrs, feature->currentData().toULongLong());
+      m_State.featureLineElevIndex = FindEntityIndexById(m_State.drawing.featureLineAttrs, feature->currentData().toULongLong());
       fill();
     }
   });
@@ -904,7 +904,7 @@ void EditorWindow::ShowFeatureLineElevations() {
     if (!item || item->column() == 0 || item->column() == 2) return;
     if (!ensureCurrent()) return;
     bool ok = false; const double value = item->text().toDouble(&ok);
-    const int featureIndex = FindEntityIndexById(m_State.featureLineAttrs,
+    const int featureIndex = FindEntityIndexById(m_State.drawing.featureLineAttrs,
         table->parentWidget()->findChild<QComboBox*>("featureLineElevationsFeature")->currentData().toULongLong());
     if (featureIndex < 0) { status->setText("Select a feature line before editing."); return; }
     const int fl = featureIndex + 1;
@@ -931,7 +931,7 @@ void EditorWindow::ShowFeatureLineElevations() {
     if (!ensureCurrent()) return;
     bool ok = false; const double delta = QInputDialog::getDouble(this, "Raise / lower elevations", "Elevation change", 0.0, -1.0e9, 1.0e9, 3, &ok);
     if (!ok || !ensureCurrent()) return;
-    const int featureIndex = FindEntityIndexById(m_State.featureLineAttrs, feature->currentData().toULongLong());
+    const int featureIndex = FindEntityIndexById(m_State.drawing.featureLineAttrs, feature->currentData().toULongLong());
     const bool changed = featureIndex >= 0 && RaiseFeatureLineElevations(m_State, featureIndex + 1, static_cast<float>(delta), m_Log);
     if (changed) Refresh();
     fill();
@@ -946,7 +946,7 @@ void EditorWindow::ShowFeatureLineElevations() {
     if (!stationOk) return;
     const double elevation = QInputDialog::getDouble(this, "Insert elevation point", "Elevation", 0.0, -1.0e9, 1.0e9, 3, &elevationOk);
     if (!elevationOk || !ensureCurrent()) return;
-    const int featureIndex = FindEntityIndexById(m_State.featureLineAttrs, feature->currentData().toULongLong());
+    const int featureIndex = FindEntityIndexById(m_State.drawing.featureLineAttrs, feature->currentData().toULongLong());
     const bool changed = featureIndex >= 0 && std::isfinite(elevation) &&
         elevation >= std::numeric_limits<float>::lowest() && elevation <= std::numeric_limits<float>::max() &&
         InsertFeatureLineElevationPoint(m_State, featureIndex + 1, station, static_cast<float>(elevation), m_Log);
@@ -963,7 +963,7 @@ void EditorWindow::ShowFeatureLineElevations() {
     const int row = table->currentRow();
     if (row < 0 || !table->item(row, 1)) { status->setText("Select an elevation point to delete."); return; }
     const int point = table->item(row, 1)->data(Qt::UserRole).toInt();
-    const int featureIndex = FindEntityIndexById(m_State.featureLineAttrs, feature->currentData().toULongLong());
+    const int featureIndex = FindEntityIndexById(m_State.drawing.featureLineAttrs, feature->currentData().toULongLong());
     const bool changed = featureIndex >= 0 && DeleteFeatureLineElevationPoint(m_State, featureIndex + 1, point, m_Log);
     if (changed) Refresh();
     fill();
@@ -1121,7 +1121,7 @@ void EditorWindow::ServiceUiRequests() {
     auto* styleForm = new QFormLayout;
     auto* style = new QComboBox(&dialog);
     style->setObjectName("insertTableStyle");
-    for (const CadTableStyle& candidate : m_State.tableStyles)
+    for (const CadTableStyle& candidate : m_State.drawing.tableStyles)
       if (!candidate.point) style->addItem(QString::fromUtf8(candidate.name.c_str()));
     const int selectedStyle = style->findText(QString::fromUtf8(m_State.tablePendingStyle.c_str()));
     if (selectedStyle >= 0) style->setCurrentIndex(selectedStyle);
@@ -1180,7 +1180,7 @@ void EditorWindow::ServiceUiRequests() {
     rowHeight->setRange(0.001, 100000.0);
     rowHeight->setDecimals(4);
     auto updateDimensions = [&] {
-      if (const CadTableStyle* candidate = CadTableFindStyle(m_State.tableStyles,
+      if (const CadTableStyle* candidate = CadTableFindStyle(m_State.drawing.tableStyles,
                                                              style->currentText().toUtf8().toStdString())) {
         columnWidth->setValue(candidate->columnWidthInches);
         rowHeight->setValue(candidate->rowHeightInches);
@@ -1275,22 +1275,22 @@ void EditorWindow::ServiceUiRequests() {
     m_ModalOpen = true;
     const auto editStyle = [this](DimensionStyle* style, bool create) {
       QStringList names;
-      for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+      for (const auto& text : m_State.drawing.textStyles) names << QString::fromUtf8(text.name.c_str());
       return EditDimensionStyleDialog(this, style, create, names);
     };
-    if (m_State.dimensionStyles.empty()) m_State.dimensionStyles = DimensionStyles::DefaultStyles();
+    if (m_State.drawing.dimensionStyles.empty()) m_State.drawing.dimensionStyles = DimensionStyles::DefaultStyles();
     StyleManagerSpec spec;
     spec.objectName = "dimensionStyleManager"; spec.title = "Dimension Style Manager";
     spec.currentCaption = "Current dimension style: ";
     spec.listObjectName = "dimensionStyleList"; spec.previewObjectName = "dimensionStylePreview"; spec.buttonPrefix = "dimensionStyle";
-    spec.names = [this] { QStringList out; for (const auto& style : m_State.dimensionStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
-    spec.current = [this] { return QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()); };
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.drawing.dimensionStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.drawing.activeDimensionStyle.name.c_str()); };
     spec.preview = [this](const QString& name, QSize size, qreal dpr) {
-      const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      const DimensionStyle* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, name.toUtf8().toStdString());
       return style ? DimStylePreviewPixmap(*style, size, dpr) : QPixmap();
     };
     spec.describe = [this](const QString& name) {
-      const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      const DimensionStyle* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, name.toUtf8().toStdString());
       if (!style) return QString();
       return QString("Arrowheads: %1, %2 in\nText: %3, %4 in\nDimension line: %5 · Extension lines: %6")
           .arg(DimArrowTypeName(style->arrowType)).arg(style->arrowSizeInches, 0, 'f', 3)
@@ -1299,35 +1299,35 @@ void EditorWindow::ServiceUiRequests() {
           .arg(QString::fromUtf8(style->dimLineColor.c_str())).arg(QString::fromUtf8(style->extLineColor.c_str()));
     };
     spec.setCurrent = [this](const QString& name) {
-      if (const auto* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString())) {
-        PushUndoSnapshot(m_State, "DIMSTY current"); m_State.activeDimensionStyle = *style;
+      if (const auto* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, name.toUtf8().toStdString())) {
+        PushUndoSnapshot(m_State, "DIMSTY current"); m_State.drawing.activeDimensionStyle = *style;
       }
     };
     spec.create = [this, editStyle]() {
       bool ok = false;
       const QString n = QInputDialog::getText(this, "New Dimension Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
       if (!ok || n.isEmpty()) return false;
-      if (DimensionStyles::Find(m_State.dimensionStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
-      DimensionStyle copy = m_State.activeDimensionStyle; copy.name = n.toUtf8().toStdString();
+      if (DimensionStyles::Find(m_State.drawing.dimensionStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
+      DimensionStyle copy = m_State.drawing.activeDimensionStyle; copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
       // The editor lets the name be changed: check again so two styles never share a name.
-      if (DimensionStyles::Find(m_State.dimensionStyles, copy.name)) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
-      PushUndoSnapshot(m_State, "DIMSTY new"); m_State.dimensionStyles.push_back(copy); return true;
+      if (DimensionStyles::Find(m_State.drawing.dimensionStyles, copy.name)) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "DIMSTY new"); m_State.drawing.dimensionStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
       const std::string n = name.toUtf8().toStdString();
-      auto it = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
-      if (it == m_State.dimensionStyles.end()) return false;
+      auto it = std::find_if(m_State.drawing.dimensionStyles.begin(), m_State.drawing.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
+      if (it == m_State.drawing.dimensionStyles.end()) return false;
       DimensionStyle edited = *it;
       if (!editStyle(&edited, false)) return false;
       PushUndoSnapshot(m_State, "DIMSTY modify");
-      it = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
-      if (it != m_State.dimensionStyles.end()) *it = edited;
-      if (m_State.activeDimensionStyle.name == n) m_State.activeDimensionStyle = edited;
+      it = std::find_if(m_State.drawing.dimensionStyles.begin(), m_State.drawing.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
+      if (it != m_State.drawing.dimensionStyles.end()) *it = edited;
+      if (m_State.drawing.activeDimensionStyle.name == n) m_State.drawing.activeDimensionStyle = edited;
       return true;
     };
     spec.overrideStyle = [this, editStyle](const QString& name) {
-      const auto* original = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      const auto* original = DimensionStyles::Find(m_State.drawing.dimensionStyles, name.toUtf8().toStdString());
       if (!original) return false;
       DimensionStyle edited = *original;
       if (!editStyle(&edited, false)) return false;
@@ -1336,14 +1336,14 @@ void EditorWindow::ServiceUiRequests() {
       const std::string base = StyleProperty(original->props, "overrideOf", original->name);
       edited.name = base + " (Overrides)"; edited.props["overrideOf"] = base;
       PushUndoSnapshot(m_State, "DIMSTY override");
-      auto found = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(),
+      auto found = std::find_if(m_State.drawing.dimensionStyles.begin(), m_State.drawing.dimensionStyles.end(),
           [&](const auto& item) { return item.name == edited.name; });
-      if (found == m_State.dimensionStyles.end()) m_State.dimensionStyles.push_back(edited); else *found = edited;
-      m_State.activeDimensionStyle = edited; return true;
+      if (found == m_State.drawing.dimensionStyles.end()) m_State.drawing.dimensionStyles.push_back(edited); else *found = edited;
+      m_State.drawing.activeDimensionStyle = edited; return true;
     };
     spec.properties = [this](const QString& name) {
       QMap<QString, QString> values;
-      const auto* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      const auto* style = DimensionStyles::Find(m_State.drawing.dimensionStyles, name.toUtf8().toStdString());
       if (!style) return values;
       for (const auto& [key, value] : style->props) values.insert(QString::fromStdString(key), QString::fromStdString(value));
       values["Text style"] = QString::fromStdString(style->textFont);
@@ -1364,25 +1364,25 @@ void EditorWindow::ServiceUiRequests() {
   if (m_State.showMleaderStyleDialog) {
     m_State.showMleaderStyleDialog = false;
     m_ModalOpen = true;
-    if (m_State.multileaderStyles.empty()) m_State.multileaderStyles = MultileaderStyles::DefaultStyles();
+    if (m_State.drawing.multileaderStyles.empty()) m_State.drawing.multileaderStyles = MultileaderStyles::DefaultStyles();
     // The settings form for one multileader style.
     const auto editStyle = [this](MultileaderStyle* style, bool create) {
       QStringList names;
-      for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+      for (const auto& text : m_State.drawing.textStyles) names << QString::fromUtf8(text.name.c_str());
       return EditMultileaderStyleDialog(this, style, create, names);
     };
     StyleManagerSpec spec;
     spec.objectName = "mleaderStyleDialog"; spec.title = "Multileader Style Manager";
     spec.currentCaption = "Current multileader style: ";
     spec.listObjectName = "mleaderStyleList"; spec.previewObjectName = "mleaderStylePreview"; spec.buttonPrefix = "mleaderStyle";
-    spec.names = [this] { QStringList out; for (const auto& style : m_State.multileaderStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
-    spec.current = [this] { return QString::fromUtf8(m_State.activeMultileaderStyle.name.c_str()); };
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.drawing.multileaderStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.drawing.activeMultileaderStyle.name.c_str()); };
     spec.preview = [this](const QString& name, QSize size, qreal dpr) {
-      const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString());
+      const MultileaderStyle* style = MultileaderStyles::Find(m_State.drawing.multileaderStyles, name.toUtf8().toStdString());
       return style ? MleaderStylePreviewPixmap(*style, name, size, dpr) : QPixmap();
     };
     spec.describe = [this](const QString& name) {
-      const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString());
+      const MultileaderStyle* style = MultileaderStyles::Find(m_State.drawing.multileaderStyles, name.toUtf8().toStdString());
       if (!style) return QString();
       return QString("Text: %1 in%2\nArrowhead: %3 in · Landing gap: %4 in\n%5")
           .arg(style->textSizeInches, 0, 'f', 3)
@@ -1391,30 +1391,30 @@ void EditorWindow::ServiceUiRequests() {
           .arg(style->annotativeDefault ? "Annotative by default" : "Not annotative");
     };
     spec.setCurrent = [this](const QString& name) {
-      if (const auto* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString())) {
-        PushUndoSnapshot(m_State, "MSTY current"); m_State.activeMultileaderStyle = *style;
+      if (const auto* style = MultileaderStyles::Find(m_State.drawing.multileaderStyles, name.toUtf8().toStdString())) {
+        PushUndoSnapshot(m_State, "MSTY current"); m_State.drawing.activeMultileaderStyle = *style;
       }
     };
     spec.create = [this, editStyle]() {
       bool ok = false;
       const QString n = QInputDialog::getText(this, "New Multileader Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
       if (!ok || n.isEmpty()) return false;
-      if (MultileaderStyles::Find(m_State.multileaderStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
-      MultileaderStyle copy = m_State.activeMultileaderStyle; copy.name = n.toUtf8().toStdString();
+      if (MultileaderStyles::Find(m_State.drawing.multileaderStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
+      MultileaderStyle copy = m_State.drawing.activeMultileaderStyle; copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
-      if (MultileaderStyles::Find(m_State.multileaderStyles, copy.name)) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
-      PushUndoSnapshot(m_State, "MSTY new"); m_State.multileaderStyles.push_back(copy); return true;
+      if (MultileaderStyles::Find(m_State.drawing.multileaderStyles, copy.name)) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "MSTY new"); m_State.drawing.multileaderStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
       const std::string n = name.toUtf8().toStdString();
-      auto it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
-      if (it == m_State.multileaderStyles.end()) return false;
+      auto it = std::find_if(m_State.drawing.multileaderStyles.begin(), m_State.drawing.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
+      if (it == m_State.drawing.multileaderStyles.end()) return false;
       MultileaderStyle edited = *it;
       if (!editStyle(&edited, false)) return false;
       PushUndoSnapshot(m_State, "MSTY modify");
-      it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
-      if (it != m_State.multileaderStyles.end()) *it = edited;
-      if (m_State.activeMultileaderStyle.name == n) m_State.activeMultileaderStyle = edited;
+      it = std::find_if(m_State.drawing.multileaderStyles.begin(), m_State.drawing.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
+      if (it != m_State.drawing.multileaderStyles.end()) *it = edited;
+      if (m_State.drawing.activeMultileaderStyle.name == n) m_State.drawing.activeMultileaderStyle = edited;
       return true;
     };
     RunStyleManager(this, spec);
@@ -1425,8 +1425,8 @@ void EditorWindow::ServiceUiRequests() {
   if (m_State.showTextStyleManagerWindow) {
     m_State.showTextStyleManagerWindow = false;
     m_ModalOpen = true;
-    TextStyles::EnsureStandard(m_State.textStyles);
-    if (m_State.activeTextStyleName.empty()) m_State.activeTextStyleName = TextStyles::kStandardName;
+    TextStyles::EnsureStandard(m_State.drawing.textStyles);
+    if (m_State.drawing.activeTextStyleName.empty()) m_State.drawing.activeTextStyleName = TextStyles::kStandardName;
     const auto editStyle = [this](TextStyle* style, bool create) {
       return EditTextStyleDialog(this, style, create);
     };
@@ -1434,42 +1434,42 @@ void EditorWindow::ServiceUiRequests() {
     spec.objectName = "textStyleManager"; spec.title = "Text Style Manager";
     spec.currentCaption = "Current text style: ";
     spec.listObjectName = "textStyleList"; spec.previewObjectName = "textStylePreview"; spec.buttonPrefix = "textStyle";
-    spec.names = [this] { QStringList out; for (const auto& style : m_State.textStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
-    spec.current = [this] { return QString::fromUtf8(m_State.activeTextStyleName.c_str()); };
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.drawing.textStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.drawing.activeTextStyleName.c_str()); };
     spec.preview = [this](const QString& name, QSize size, qreal dpr) {
-      const TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      const TextStyle* style = TextStyles::Find(m_State.drawing.textStyles, name.toUtf8().toStdString());
       return style ? TextStylePreviewPixmap(*style, size, dpr) : QPixmap();
     };
     spec.describe = [this](const QString& name) {
-      const TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      const TextStyle* style = TextStyles::Find(m_State.drawing.textStyles, name.toUtf8().toStdString());
       if (!style) return QString();
       return QString("Font: %1%2%3\nHeight: %4 in · Width factor: %5 · Oblique: %6°")
           .arg(style->fontFamily.empty() ? QString("Standard") : QString::fromUtf8(style->fontFamily.c_str()))
           .arg(style->bold ? ", bold" : "").arg(style->italic ? ", italic" : "")
           .arg(style->heightInches, 0, 'f', 3).arg(style->widthFactor, 0, 'f', 2).arg(style->obliqueDeg, 0, 'f', 1);
     };
-    spec.setCurrent = [this](const QString& name) { PushUndoSnapshot(m_State, "STYLE current"); m_State.activeTextStyleName = name.toUtf8().toStdString(); };
+    spec.setCurrent = [this](const QString& name) { PushUndoSnapshot(m_State, "STYLE current"); m_State.drawing.activeTextStyleName = name.toUtf8().toStdString(); };
     spec.create = [this, editStyle]() {
       bool ok = false;
       const QString n = QInputDialog::getText(this, "New Text Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
       if (!ok || n.isEmpty()) return false;
-      if (TextStyles::Find(m_State.textStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
-      const TextStyle* base = TextStyles::Find(m_State.textStyles, m_State.activeTextStyleName);
-      if (!base) base = TextStyles::Find(m_State.textStyles, TextStyles::kStandardName);
+      if (TextStyles::Find(m_State.drawing.textStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
+      const TextStyle* base = TextStyles::Find(m_State.drawing.textStyles, m_State.drawing.activeTextStyleName);
+      if (!base) base = TextStyles::Find(m_State.drawing.textStyles, TextStyles::kStandardName);
       TextStyle copy = base ? *base : TextStyle{};
       copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
-      if (TextStyles::Find(m_State.textStyles, copy.name)) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
-      PushUndoSnapshot(m_State, "STYLE new"); m_State.textStyles.push_back(copy); return true;
+      if (TextStyles::Find(m_State.drawing.textStyles, copy.name)) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "STYLE new"); m_State.drawing.textStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
-      TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      TextStyle* style = TextStyles::Find(m_State.drawing.textStyles, name.toUtf8().toStdString());
       if (!style) return false;
       TextStyle edited = *style;
       if (!editStyle(&edited, false)) return false;
       PushUndoSnapshot(m_State, "STYLE modify");
       // The dialog ran a nested event loop and the undo snapshot touched the state: look the style up again.
-      if (TextStyle* current = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString())) *current = edited;
+      if (TextStyle* current = TextStyles::Find(m_State.drawing.textStyles, name.toUtf8().toStdString())) *current = edited;
       return true;
     };
     RunStyleManager(this, spec);
@@ -1642,7 +1642,7 @@ void EditorWindow::ShowViewManager() {
     const QSignalBlocker blockViews(views);
     const QSignalBlocker blockUcs(ucsList);
     views->clear();
-    for (const auto& view : m_State.namedViews) {
+    for (const auto& view : m_State.drawing.namedViews) {
       const QString name = QString::fromUtf8(view.name.c_str());
       const bool isCurrent = active && active->name == view.name;
       const QString projection = view.projection == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
@@ -1662,7 +1662,7 @@ void EditorWindow::ShowViewManager() {
 
     const QString selectedUcs = ucsList->currentItem() ? ucsList->currentItem()->data(Qt::UserRole).toString() : QString();
     ucsList->clear();
-    for (const auto& named : m_State.ucsNamed) {
+    for (const auto& named : m_State.drawing.ucsNamed) {
       const QString name = QString::fromUtf8(named.name.c_str());
       const bool isCurrent = ucs::FramesMatch(named.frame, m_State.activeUcs);
       auto* item = new QListWidgetItem(QString("%1%2\n%3")
@@ -1676,7 +1676,7 @@ void EditorWindow::ShowViewManager() {
     const bool onViews = tabs->currentIndex() == 0;
     const bool hasSelection = onViews ? views->currentItem() != nullptr : ucsList->currentItem() != nullptr;
     const bool currentUcsSelected = !onViews && ucsList->currentRow() >= 0 &&
-        ucs::FramesMatch(m_State.activeUcs, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].frame);
+        ucs::FramesMatch(m_State.activeUcs, m_State.drawing.ucsNamed[static_cast<size_t>(ucsList->currentRow())].frame);
     restore->setEnabled(hasSelection && (onViews || !currentUcsSelected));
     update->setVisible(onViews);
     save->setVisible(onViews);
@@ -1692,27 +1692,27 @@ void EditorWindow::ShowViewManager() {
   connect(tabs, &QTabWidget::currentChanged, &dialog, [&] { refresh(); });
   connect(restore, &QPushButton::clicked, &dialog, [&] {
     if (tabs->currentIndex() == 0 && views->currentRow() >= 0) {
-      const auto selected = m_State.namedViews[static_cast<size_t>(views->currentRow())];
+      const auto selected = m_State.drawing.namedViews[static_cast<size_t>(views->currentRow())];
       RestoreNamedView(m_State, selected, m_Log);
     } else if (tabs->currentIndex() == 1 && ucsList->currentRow() >= 0) {
-      RestoreNamedUcs(m_State, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
+      RestoreNamedUcs(m_State, m_State.drawing.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
     }
     Refresh();
     refresh();
   });
   connect(update, &QPushButton::clicked, &dialog, [&] {
     if (views->currentRow() < 0) return;
-    const auto name = m_State.namedViews[static_cast<size_t>(views->currentRow())].name;
+    const auto name = m_State.drawing.namedViews[static_cast<size_t>(views->currentRow())].name;
     ProcessViewCommandLine(m_State, "S " + name, m_Log);
     Refresh();
     refresh();
   });
   connect(remove, &QPushButton::clicked, &dialog, [&] {
     if (tabs->currentIndex() == 0 && views->currentRow() >= 0) {
-      const auto name = m_State.namedViews[static_cast<size_t>(views->currentRow())].name;
+      const auto name = m_State.drawing.namedViews[static_cast<size_t>(views->currentRow())].name;
       ProcessViewCommandLine(m_State, "D " + name, m_Log);
     } else if (tabs->currentIndex() == 1 && ucsList->currentRow() >= 0) {
-      DeleteNamedUcs(m_State, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
+      DeleteNamedUcs(m_State, m_State.drawing.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
     }
     Refresh();
     refresh();
@@ -1762,13 +1762,13 @@ void EditorWindow::ShowCreatePoints() {
   auto* save = new QPushButton("Save points JSON…", dialog);
   auto* load = new QPushButton("Load points JSON…", dialog);
   files->addWidget(save); files->addWidget(load); layout->addRow(files);
-  connect(number, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.createPointsNextId = n; });
-  connect(layer, &QLineEdit::textEdited, dialog, [this](const QString& s) { m_State.createPointsOpts.layer = s.trimmed().toUtf8().toStdString(); });
-  connect(description, &QPlainTextEdit::textChanged, dialog, [this, description] { m_State.createPointsOpts.defaultDescription = description->toPlainText().toUtf8().toStdString(); });
-  connect(elevation, &QDoubleSpinBox::valueChanged, dialog, [this](double z) { m_State.createPointsOpts.defaultElevation = static_cast<float>(z); });
-  connect(duplicates, &QComboBox::currentIndexChanged, dialog, [this](int index) { m_State.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy(index); });
-  connect(sequential, &QCheckBox::toggled, dialog, [this](bool enabled) { m_State.createPointsOpts.sequentialNumbering = enabled; });
-  connect(step, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.createPointsOpts.pointNumberOffset = n; });
+  connect(number, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.drawing.createPointsNextId = n; });
+  connect(layer, &QLineEdit::textEdited, dialog, [this](const QString& s) { m_State.drawing.createPointsOpts.layer = s.trimmed().toUtf8().toStdString(); });
+  connect(description, &QPlainTextEdit::textChanged, dialog, [this, description] { m_State.drawing.createPointsOpts.defaultDescription = description->toPlainText().toUtf8().toStdString(); });
+  connect(elevation, &QDoubleSpinBox::valueChanged, dialog, [this](double z) { m_State.drawing.createPointsOpts.defaultElevation = static_cast<float>(z); });
+  connect(duplicates, &QComboBox::currentIndexChanged, dialog, [this](int index) { m_State.drawing.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy(index); });
+  connect(sequential, &QCheckBox::toggled, dialog, [this](bool enabled) { m_State.drawing.createPointsOpts.sequentialNumbering = enabled; });
+  connect(step, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.drawing.createPointsOpts.pointNumberOffset = n; });
   connect(save, &QPushButton::clicked, dialog, [this, dialog] {
     const auto path = QFileDialog::getSaveFileName(dialog, "Save survey points", {}, "Survey points (*.json)");
     if (!path.isEmpty()) { SaveSurveyPointsToJsonFile(m_State, path.toUtf8().constData(), m_Log); Refresh(); }
@@ -1786,12 +1786,12 @@ void EditorWindow::ShowCreatePoints() {
   auto* timer = new QTimer(dialog);
   auto sync = [=] {
     if (!m_State.showCreatePointsWindow || m_State.activeDrawingIdx <= 0) { dialog->close(); return; }
-    const auto& opts = m_State.createPointsOpts;
+    const auto& opts = m_State.drawing.createPointsOpts;
     const QSignalBlocker a(number), b(layer), c(description), d(elevation), e(duplicates), f(sequential), g(step);
-    if (!number->hasFocus()) number->setValue(m_State.createPointsNextId);
-    const auto& objectLayer = m_State.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint);
+    if (!number->hasFocus()) number->setValue(m_State.drawing.createPointsNextId);
+    const auto& objectLayer = m_State.drawing.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint);
     layer->setEnabled(!objectLayer.locked);
-    if (!layer->hasFocus()) layer->setText(QString::fromUtf8((objectLayer.locked || opts.layer.empty() ? ResolveObjectLayer(m_State.drawingSettings, ObjectLayerKind::SurveyPoint, {}) : opts.layer).c_str()));
+    if (!layer->hasFocus()) layer->setText(QString::fromUtf8((objectLayer.locked || opts.layer.empty() ? ResolveObjectLayer(m_State.drawing.drawingSettings, ObjectLayerKind::SurveyPoint, {}) : opts.layer).c_str()));
     if (!description->hasFocus()) description->setPlainText(QString::fromUtf8(opts.defaultDescription.c_str()));
     if (!elevation->hasFocus()) elevation->setValue(opts.defaultElevation);
     duplicates->setCurrentIndex(int(opts.duplicatePolicy));
@@ -1838,7 +1838,7 @@ void EditorWindow::ShowQuickSelect() {
     value->clear();
     if (property->currentData().toInt() == 0) {
       SyncDrawingLayerTableWithGeometry(m_State);
-      for (const auto& layer : m_State.drawingLayerTable) value->addItem(QString::fromUtf8(layer.name.c_str()));
+      for (const auto& layer : m_State.drawing.drawingLayerTable) value->addItem(QString::fromUtf8(layer.name.c_str()));
     } else if (property->currentData().toInt() == 1) value->addItems({"ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"});
     else if (property->currentData().toInt() == 4) value->addItems({"Yes", "No"});
     value->setEditText(previousValue);
@@ -1916,8 +1916,8 @@ void EditorWindow::ShowUnits() {
   dialog->setWindowTitle("Drawing Settings - " + QString::fromUtf8(m_State.drawingTabs[m_State.activeDrawingIdx].name.c_str()));
   dialog->setWindowModality(Qt::WindowModal);
   dialog->resize(970, 650);
-  DrawingSettings staged = m_State.drawingSettings;
-  int stagedUnits = m_State.drawingInsUnits;
+  DrawingSettings staged = m_State.drawing.drawingSettings;
+  int stagedUnits = m_State.drawing.drawingInsUnits;
   auto* root = new QVBoxLayout(dialog);
   auto* body = new QHBoxLayout;
   auto* navigation = new QListWidget(dialog);
@@ -1941,7 +1941,7 @@ void EditorWindow::ShowUnits() {
   foot->addItems({"US Survey Foot", "International Foot"}); foot->setCurrentIndex(static_cast<int>(staged.footDefinition));
   auto* scale = new QComboBox(unitsPage); scale->setObjectName("drawingScaleChoice");
   auto* customScale = new QDoubleSpinBox(unitsPage); customScale->setObjectName("drawingCustomScale");
-  customScale->setRange(0.000001, 1.e9); customScale->setDecimals(6); customScale->setValue(m_State.modelUnitsPerPlottedInch);
+  customScale->setRange(0.000001, 1.e9); customScale->setDecimals(6); customScale->setValue(m_State.drawing.modelUnitsPerPlottedInch);
   auto fillScales = [scale, customScale](int insUnits, float current) {
     const QSignalBlocker blocker(scale); scale->clear();
     const auto choices = PlotScaleChoicesFor(insUnits);
@@ -1951,7 +1951,7 @@ void EditorWindow::ShowUnits() {
     scale->setCurrentIndex(choice >= 0 ? choice : scale->count() - 1);
     customScale->setValue(current); customScale->setEnabled(choice < 0);
   };
-  fillScales(stagedUnits, m_State.modelUnitsPerPlottedInch);
+  fillScales(stagedUnits, m_State.drawing.modelUnitsPerPlottedInch);
   connect(units, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, fillScales](int) {
     stagedUnits = units->currentData().toInt(); fillScales(stagedUnits, static_cast<float>(customScale->value()));
   });
@@ -2097,7 +2097,7 @@ void EditorWindow::ShowUnits() {
     const auto& row = staged.objectLayers[static_cast<size_t>(i)];
     layersTable->setItem(i, 0, new QTableWidgetItem(layerNames[i])); layersTable->item(i,0)->setFlags(Qt::ItemIsEnabled);
     auto* layer = new QComboBox(layersTable); layer->setEditable(true); layer->setInsertPolicy(QComboBox::NoInsert);
-    for (const auto& entry : m_State.drawingLayerTable) layer->addItem(QString::fromUtf8(entry.name.c_str()));
+    for (const auto& entry : m_State.drawing.drawingLayerTable) layer->addItem(QString::fromUtf8(entry.name.c_str()));
     layer->setCurrentText(QString::fromUtf8(row.layer.c_str()));
     layerFields[static_cast<size_t>(i)] = layer; layersTable->setCellWidget(i, 1, layer);
     auto* cell = new QWidget(layersTable); auto* h = new QHBoxLayout(cell); h->setContentsMargins(0,0,0,0);
@@ -2194,12 +2194,12 @@ void EditorWindow::ShowTableStyles() {
   spec.objectName = "tableStyleManager"; spec.title = "Table Style";
   spec.currentCaption = "Current table style: ";
   spec.listObjectName = "tableStyleList"; spec.previewObjectName = "tableStylePreview"; spec.buttonPrefix = "tableStyle";
-  spec.names = [this] { QStringList names; for (const auto& style : m_State.tableStyles) names << QString::fromUtf8(style.name.c_str()); return names; };
+  spec.names = [this] { QStringList names; for (const auto& style : m_State.drawing.tableStyles) names << QString::fromUtf8(style.name.c_str()); return names; };
   spec.current = [this] { return QString::fromUtf8(m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle.c_str()); };
   spec.preview = [this](const QString& name, QSize size, qreal dpr) {
     QPixmap pixmap(size * dpr); pixmap.setDevicePixelRatio(dpr); pixmap.fill(QColor("#202830"));
     QPainter painter(&pixmap);
-    const auto* style = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    const auto* style = CadTableFindStyle(m_State.drawing.tableStyles, name.toUtf8().toStdString());
     if (!style) return pixmap;
     painter.setPen(QColor("#d9e0e5"));
     const QRectF frame(15, 15, size.width() - 30, size.height() - 30);
@@ -2212,12 +2212,12 @@ void EditorWindow::ShowTableStyles() {
     return pixmap;
   };
   spec.describe = [this](const QString& name) {
-    const auto* style = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    const auto* style = CadTableFindStyle(m_State.drawing.tableStyles, name.toUtf8().toStdString());
     return style ? QString("%1\nText height: %2 · Column width: %3 · Row height: %4")
         .arg(name).arg(style->textHeightInches).arg(style->columnWidthInches).arg(style->rowHeightInches) : QString();
   };
   const auto edit = [this](CadTableStyle* style, bool create) {
-    QStringList names; for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+    QStringList names; for (const auto& text : m_State.drawing.textStyles) names << QString::fromUtf8(text.name.c_str());
     return EditTableStyleDialog(this, style, create, names);
   };
   spec.setCurrent = [this](const QString& name) { PushUndoSnapshot(m_State, "TABLESTYLE current"); m_State.tablePendingStyle = name.toUtf8().toStdString(); };
@@ -2225,65 +2225,65 @@ void EditorWindow::ShowTableStyles() {
     bool ok = false;
     const QString name = QInputDialog::getText(this, "New Table Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
     if (!ok || name.isEmpty()) return false;
-    if (CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString())) {
+    if (CadTableFindStyle(m_State.drawing.tableStyles, name.toUtf8().toStdString())) {
       QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
     }
-    const auto* current = CadTableFindStyle(m_State.tableStyles, m_State.tablePendingStyle);
+    const auto* current = CadTableFindStyle(m_State.drawing.tableStyles, m_State.tablePendingStyle);
     CadTableStyle style = current ? *current : CadTableBuiltinStyles().front();
     style.name = name.toUtf8().toStdString();
     if (!edit(&style, true)) return false;
-    if (CadTableFindStyle(m_State.tableStyles, style.name)) { QMessageBox::warning(this, "Table Style", "That style name already exists."); return false; }
-    PushUndoSnapshot(m_State, "TABLESTYLE new"); m_State.tableStyles.push_back(std::move(style)); return true;
+    if (CadTableFindStyle(m_State.drawing.tableStyles, style.name)) { QMessageBox::warning(this, "Table Style", "That style name already exists."); return false; }
+    PushUndoSnapshot(m_State, "TABLESTYLE new"); m_State.drawing.tableStyles.push_back(std::move(style)); return true;
   };
   spec.modify = [this, edit](const QString& name) {
     const std::string key = name.toUtf8().toStdString();
-    const auto* original = CadTableFindStyle(m_State.tableStyles, key);
+    const auto* original = CadTableFindStyle(m_State.drawing.tableStyles, key);
     if (!original) return false;
     CadTableStyle style = *original;
     if (!edit(&style, false)) return false;
     PushUndoSnapshot(m_State, "TABLESTYLE modify");
-    auto found = std::find_if(m_State.tableStyles.begin(), m_State.tableStyles.end(), [&](const auto& item) { return item.name == key; });
-    if (found != m_State.tableStyles.end()) *found = std::move(style);
+    auto found = std::find_if(m_State.drawing.tableStyles.begin(), m_State.drawing.tableStyles.end(), [&](const auto& item) { return item.name == key; });
+    if (found != m_State.drawing.tableStyles.end()) *found = std::move(style);
     return true;
   };
   spec.copy = [this](const QString& name) {
-    const auto* original = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    const auto* original = CadTableFindStyle(m_State.drawing.tableStyles, name.toUtf8().toStdString());
     if (!original) return false;
     bool ok = false;
     const QString newName = QInputDialog::getText(this, "Copy Table Style", "Name:", QLineEdit::Normal, name + " Copy", &ok).trimmed();
     if (!ok || newName.isEmpty()) return false;
-    if (CadTableFindStyle(m_State.tableStyles, newName.toUtf8().toStdString())) {
+    if (CadTableFindStyle(m_State.drawing.tableStyles, newName.toUtf8().toStdString())) {
       QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
     }
     CadTableStyle copy = *original; copy.name = newName.toUtf8().toStdString();
-    PushUndoSnapshot(m_State, "TABLESTYLE copy"); m_State.tableStyles.push_back(std::move(copy)); return true;
+    PushUndoSnapshot(m_State, "TABLESTYLE copy"); m_State.drawing.tableStyles.push_back(std::move(copy)); return true;
   };
   spec.rename = [this](const QString& name) {
-    const auto* original = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    const auto* original = CadTableFindStyle(m_State.drawing.tableStyles, name.toUtf8().toStdString());
     if (!original) return false;
     bool ok = false;
     const QString newName = QInputDialog::getText(this, "Rename Table Style", "Name:", QLineEdit::Normal, name, &ok).trimmed();
     if (!ok || newName.isEmpty() || newName == name) return false;
-    if (const auto* other = CadTableFindStyle(m_State.tableStyles, newName.toUtf8().toStdString()); other && other != original) {
+    if (const auto* other = CadTableFindStyle(m_State.drawing.tableStyles, newName.toUtf8().toStdString()); other && other != original) {
       QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
     }
     const std::string oldKey = original->name, newKey = newName.toUtf8().toStdString();
     PushUndoSnapshot(m_State, "TABLESTYLE rename");
-    for (auto& style : m_State.tableStyles) if (style.name == oldKey) style.name = newKey;
-    for (auto& table : m_State.cadTables) if (CadTableNameEquals(table.styleName, oldKey)) table.styleName = newKey;
+    for (auto& style : m_State.drawing.tableStyles) if (style.name == oldKey) style.name = newKey;
+    for (auto& table : m_State.drawing.cadTables) if (CadTableNameEquals(table.styleName, oldKey)) table.styleName = newKey;
     if (CadTableNameEquals(m_State.tablePendingStyle, oldKey)) m_State.tablePendingStyle = newKey;
     return true;
   };
   spec.remove = [this](const QString& name) {
     const std::string key = name.toUtf8().toStdString();
     if (CadTableNameEquals(key, "Standard") || CadTableNameEquals(key, m_State.tablePendingStyle) ||
-        std::any_of(m_State.cadTables.begin(), m_State.cadTables.end(), [&](const auto& table) { return CadTableNameEquals(table.styleName, key); })) {
+        std::any_of(m_State.drawing.cadTables.begin(), m_State.drawing.cadTables.end(), [&](const auto& table) { return CadTableNameEquals(table.styleName, key); })) {
       QMessageBox::information(this, "Table Style", "This style is current, Standard, or used by a table. Reassign its tables and choose another current style before deleting it.");
       return false;
     }
     PushUndoSnapshot(m_State, "TABLESTYLE delete");
-    m_State.tableStyles.erase(std::remove_if(m_State.tableStyles.begin(), m_State.tableStyles.end(),
-        [&](const auto& style) { return CadTableNameEquals(style.name, key); }), m_State.tableStyles.end());
+    m_State.drawing.tableStyles.erase(std::remove_if(m_State.drawing.tableStyles.begin(), m_State.drawing.tableStyles.end(),
+        [&](const auto& style) { return CadTableNameEquals(style.name, key); }), m_State.drawing.tableStyles.end());
     return true;
   };
   RunStyleManager(this, spec);

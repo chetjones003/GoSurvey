@@ -29,7 +29,7 @@ Outcome Store(AppCommandState& st, T& slot, T next, const char* undoLabel, std::
 Outcome SetLineField(AppCommandState& st, int lineIndex, LineField field, double value) {
   if (!std::isfinite(value))
     return NotFinite();
-  if (lineIndex < 0 || static_cast<size_t>(lineIndex) >= st.lineCount())
+  if (lineIndex < 0 || static_cast<size_t>(lineIndex) >= st.drawing.lineCount())
     return Rejected("That line no longer exists.");
   using F = LineField;
   using C = CadLineComponent;
@@ -38,47 +38,47 @@ Outcome SetLineField(AppCommandState& st, int lineIndex, LineField field, double
   // X/Y are typed in WORLD coordinates and stored LOCAL (REQ-101); Z is absolute (ADR-025 D2).
   const bool isX = slot == C::X0 || slot == C::X1;
   const bool isY = slot == C::Y0 || slot == C::Y1;
-  const double origin = isX ? st.worldDocumentOriginX : isY ? st.worldDocumentOriginY : 0.0;
+  const double origin = isX ? st.drawing.worldDocumentOriginX : isY ? st.drawing.worldDocumentOriginY : 0.0;
   const char* label = isX ? "Edit line X" : isY ? "Edit line Y" : "Edit line Z";
-  return Store(st, st.lineComponent(static_cast<size_t>(lineIndex), slot), value - origin, label);
+  return Store(st, st.drawing.lineComponent(static_cast<size_t>(lineIndex), slot), value - origin, label);
 }
 
 Outcome SetCircleField(AppCommandState& st, int circleIndex, CircleField field, double value) {
   if (!std::isfinite(value))
     return NotFinite();
-  if (circleIndex < 0 || static_cast<size_t>(circleIndex) >= st.circleCount())
+  if (circleIndex < 0 || static_cast<size_t>(circleIndex) >= st.drawing.circleCount())
     return Rejected("That circle no longer exists.");
   const size_t k = static_cast<size_t>(circleIndex);
   using F = CircleField;
   switch (field) {
   case F::CenterX:
-    return Store(st, st.circleComponent(k, CadCircleComponent::X), value - st.worldDocumentOriginX, "Edit circle X");
+    return Store(st, st.drawing.circleComponent(k, CadCircleComponent::X), value - st.drawing.worldDocumentOriginX, "Edit circle X");
   case F::CenterY:
-    return Store(st, st.circleComponent(k, CadCircleComponent::Y), value - st.worldDocumentOriginY, "Edit circle Y");
+    return Store(st, st.drawing.circleComponent(k, CadCircleComponent::Y), value - st.drawing.worldDocumentOriginY, "Edit circle Y");
   case F::CenterZ:
-    return Store(st, st.circleComponent(k, CadCircleComponent::Z), value, "Edit circle Z");
+    return Store(st, st.drawing.circleComponent(k, CadCircleComponent::Z), value, "Edit circle Z");
   case F::Radius:
     break;
   }
   // The 0.7.4 panel floors a typed radius rather than refusing it; keep the outcome but say so.
   if (value >= kMinCircleRadius)
-    return Store(st, st.circleComponent(k, CadCircleComponent::Radius), value, "Edit circle radius");
-  return Store(st, st.circleComponent(k, CadCircleComponent::Radius), kMinCircleRadius, "Edit circle radius",
+    return Store(st, st.drawing.circleComponent(k, CadCircleComponent::Radius), value, "Edit circle radius");
+  return Store(st, st.drawing.circleComponent(k, CadCircleComponent::Radius), kMinCircleRadius, "Edit circle radius",
                "A radius must be positive; it was set to the minimum, 0.000001.");
 }
 
 Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field, double value) {
   if (!std::isfinite(value))
     return NotFinite();
-  if (annotationIndex < 0 || static_cast<size_t>(annotationIndex) >= st.cadAnnotations.size())
+  if (annotationIndex < 0 || static_cast<size_t>(annotationIndex) >= st.drawing.cadAnnotations.size())
     return Rejected("That text no longer exists.");
-  CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(annotationIndex)];
+  CadAnnotation& ann = st.drawing.cadAnnotations[static_cast<size_t>(annotationIndex)];
   const bool isText = ann.kind == CadAnnotation::Kind::Text;
   const bool isMtext = ann.kind == CadAnnotation::Kind::Mtext;
   using F = TextField;
   switch (field) {
   case F::InsertionX: {
-    const float next = static_cast<float>(value - st.worldDocumentOriginX);
+    const float next = static_cast<float>(value - st.drawing.worldDocumentOriginX);
     if (next == ann.insX)
       return {};
     PushUndoSnapshot(st, "Edit text X");
@@ -91,7 +91,7 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
     return {Result::Applied, {}};
   }
   case F::InsertionY: {
-    const float next = static_cast<float>(value - st.worldDocumentOriginY);
+    const float next = static_cast<float>(value - st.drawing.worldDocumentOriginY);
     if (next == ann.insY)
       return {};
     PushUndoSnapshot(st, "Edit text Y");
@@ -140,9 +140,9 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
 }
 
 Outcome SetTextContent(AppCommandState& st, int annotationIndex, const std::string& text) {
-  if (annotationIndex < 0 || static_cast<size_t>(annotationIndex) >= st.cadAnnotations.size())
+  if (annotationIndex < 0 || static_cast<size_t>(annotationIndex) >= st.drawing.cadAnnotations.size())
     return Rejected("That text no longer exists.");
-  CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(annotationIndex)];
+  CadAnnotation& ann = st.drawing.cadAnnotations[static_cast<size_t>(annotationIndex)];
   if (ann.kind == CadAnnotation::Kind::Table)
     return Rejected("A table's text is edited cell by cell.");
   return Store(st, ann.text, text, "Edit text");

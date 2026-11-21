@@ -172,10 +172,10 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   }
   if (hasDimensionDraft) {
     CadDimStrokeParams params;
-    params.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
-    params.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+    params.modelUnitsPerPlottedInch = cmd.drawing.modelUnitsPerPlottedInch;
+    params.arrowSizeInches = cmd.drawing.activeDimensionStyle.arrowSizeInches;
     params.arrowScale = cmd.viewportDimArrowScale;
-    params.arrowType = cmd.activeDimensionStyle.arrowType;
+    params.arrowType = cmd.drawing.activeDimensionStyle.arrowType;
     CadDimWorldStrokes strokes;
     if (CadDimBuildWorldStrokes(dimensionDraft, params, &strokes)) {
       for (const auto& s : strokes.segs)
@@ -453,8 +453,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     if (cmd.mleaderPhase == MLp::WaitLanding)
       PushRubberSegViewRel(rubberLines, cmd.mleaderTipX, cmd.mleaderTipY, curXf, curYf, 0., 0., cmd.mleaderTipZ,
                            zc);
-    else if (cmd.mleaderPhase == MLp::WaitLabel && cmd.cadMultileaders.size() > 0) {
-      const CadMultileader& ml = cmd.cadMultileaders.back();
+    else if (cmd.mleaderPhase == MLp::WaitLabel && cmd.drawing.cadMultileaders.size() > 0) {
+      const CadMultileader& ml = cmd.drawing.cadMultileaders.back();
       if (ml.pathXyz.size() >= 6)
         PushRubberSegViewRel(rubberLines, ml.pathXyz[0], ml.pathXyz[1], ml.pathXyz[3], ml.pathXyz[4], 0., 0.,
                              ml.pathXyz[2], ml.pathXyz[5]);

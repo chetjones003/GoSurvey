@@ -176,7 +176,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     return;
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
-  const int count = static_cast<int>(st.pdfAttachments.size());
+  const int count = static_cast<int>(st.drawing.pdfAttachments.size());
   if (st.active == K::Move || st.active == K::Copy) {
     if (st.modifyPhase != MP::NeedDestination)
       return;
@@ -185,7 +185,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
-      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
       ghost.insertX += dx;
       ghost.insertY += dy;
       ghosts->push_back(ghost);
@@ -202,7 +202,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
-      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
       RotatePdfInsertAroundBase(bx, by, theta, &ghost.insertX, &ghost.insertY);
       ghost.rotationDeg += theta * kPdfRadToDeg;
       ghosts->push_back(ghost);
@@ -220,7 +220,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
-      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
       ScalePdfInsertAroundBase(bx, by, sc, &ghost.insertX, &ghost.insertY);
       ghost.scale = std::max(ghost.scale * sc, 1e-9f);
       ghosts->push_back(ghost);
@@ -252,8 +252,8 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
         [projectUid](const auto& project) { return project.uid == projectUid && project.readOnly; });
     if (readOnly) return;
     const size_t li = static_cast<size_t>(entityIndex);
-    if (li >= m_State.lineCount()) return;
-    const CadLineRecord seg = m_State.line(li);
+    if (li >= m_State.drawing.lineCount()) return;
+    const CadLineRecord seg = m_State.drawing.line(li);
     const float gx = static_cast<float>(which == 0 ? seg.x0 : seg.x1);
     const float gy = static_cast<float>(which == 0 ? seg.y0 : seg.y1);
     m_State.gripMenuPendingEntityIndex = entityIndex;
@@ -270,7 +270,7 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
           m_State.entityGripEntityIndex != entityIndex) return;
       m_State.entityGripLengthenMode = alongLine;
       if (alongLine) {
-        const CadLineRecord seg = m_State.line(static_cast<size_t>(entityIndex));
+        const CadLineRecord seg = m_State.drawing.line(static_cast<size_t>(entityIndex));
         const bool startGrip = m_State.entityGripWhich == 0;
         const float dx = static_cast<float>(startGrip ? seg.x0 - seg.x1 : seg.x1 - seg.x0);
         const float dy = static_cast<float>(startGrip ? seg.y0 - seg.y1 : seg.y1 - seg.y0);
@@ -297,9 +297,9 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   connect(&m_ViewAnimTimer, &QTimer::timeout, this, [this] { StepViewAnimation(); });
   m_MapTimer.setInterval(100);
   connect(&m_MapTimer, &QTimer::timeout, this, [this] {
-    const bool needed = m_State.drawingSettings.Geolocated() &&
-        (m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
-         !m_State.drawingSettings.capturedAreas.empty() ||
+    const bool needed = m_State.drawing.drawingSettings.Geolocated() &&
+        (m_State.drawing.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
+         !m_State.drawing.drawingSettings.capturedAreas.empty() ||
          m_State.active == AppCommandState::Kind::GeoCaptureArea);
     if (!needed) { m_MapTimer.stop(); return; }
     update();
@@ -543,8 +543,8 @@ bool EditorViewport::CancelGripEdit() {
   } else if (m_State.mtextGripMoveActive) {
     AbortMtextGripInteraction(m_State);
   } else if (m_State.dimGripMoveActive) {
-    if (m_State.dimGripAnnotationIndex >= 0 && static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.cadAnnotations.size()) {
-      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
+    if (m_State.dimGripAnnotationIndex >= 0 && static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
@@ -627,7 +627,7 @@ void EditorViewport::paintGL() {
   ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
       static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
-      m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
+      m_State.activeSpaceIndex < static_cast<int>(m_State.drawing.paperLayouts.size()) && !InFloatingModelSpace(m_State);
   const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
   if (useResizePreview) {
     m_Renderer->BlitRenderedFrame(defaultFramebufferObject(), w, h);
@@ -689,33 +689,33 @@ void EditorViewport::paintGL() {
     RefreshSolidDisplayGeometry(m_State);
     RefreshSurfaceDisplayGeometry(m_State);
     CadExtendedGeometryInput ext;
-    ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
-    ext.circleNormals = &m_State.userCircleNormals;
-    ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
-    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
-    ext.alignments = &m_State.alignments;
-    ext.viewFrameGroups = &m_State.viewFrameGroups;
-    ext.sampleLines = &m_State.sampleLines;
-    ext.alignmentStyles = &m_State.alignmentStyles;
-    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
-    ext.pdMode = m_State.pdMode;
-    ext.pdSize = m_State.pdSize;
-    ext.polylineVerts = &m_State.userPolylineVerts;
-    ext.polylineOffsets = &m_State.userPolylineOffsets;
-    ext.polylineClosed = &m_State.userPolylineClosed;
-    ext.polylineAttrs = &m_State.userPolylineAttrs;
-    ext.polylineBulge = &m_State.userPolylineVertsBulge;
-    ext.polylineNormal = &m_State.userPolylineVertsNormal;
-    ext.drawingLayers = &m_State.drawingLayerTable;
-    ext.featureLineVerts = &m_State.featureLineVerts;
-    ext.featureLineOffsets = &m_State.featureLineOffsets;
-    ext.featureLineClosed = &m_State.featureLineClosed;
-    ext.featureLineAttrs = &m_State.featureLineAttrs;
+    ext.arcs = &m_State.drawing.userArcs; ext.arcAttrs = &m_State.drawing.userArcAttrs;
+    ext.circleNormals = &m_State.drawing.userCircleNormals;
+    ext.ellipses = &m_State.drawing.userEllipses; ext.ellAttrs = &m_State.drawing.userEllAttrs;
+    ext.splines = &m_State.drawing.cadSplines; ext.splineAttrs = &m_State.drawing.cadSplineAttrs;
+    ext.alignments = &m_State.drawing.alignments;
+    ext.viewFrameGroups = &m_State.drawing.viewFrameGroups;
+    ext.sampleLines = &m_State.drawing.sampleLines;
+    ext.alignmentStyles = &m_State.drawing.alignmentStyles;
+    ext.points = &m_State.drawing.cadPoints; ext.pointAttrs = &m_State.drawing.cadPointAttrs;
+    ext.pdMode = m_State.drawing.pdMode;
+    ext.pdSize = m_State.drawing.pdSize;
+    ext.polylineVerts = &m_State.drawing.userPolylineVerts;
+    ext.polylineOffsets = &m_State.drawing.userPolylineOffsets;
+    ext.polylineClosed = &m_State.drawing.userPolylineClosed;
+    ext.polylineAttrs = &m_State.drawing.userPolylineAttrs;
+    ext.polylineBulge = &m_State.drawing.userPolylineVertsBulge;
+    ext.polylineNormal = &m_State.drawing.userPolylineVertsNormal;
+    ext.drawingLayers = &m_State.drawing.drawingLayerTable;
+    ext.featureLineVerts = &m_State.drawing.featureLineVerts;
+    ext.featureLineOffsets = &m_State.drawing.featureLineOffsets;
+    ext.featureLineClosed = &m_State.drawing.featureLineClosed;
+    ext.featureLineAttrs = &m_State.drawing.featureLineAttrs;
     ext.hiddenEntityIds = &m_State.hiddenEntityIds;
-    ext.blockDefs = &m_State.blockDefs;
-    ext.blockRefs = &m_State.cadBlockRefs;
-    ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
-    ext.annotationScales = &m_State.annotationScales;
+    ext.blockDefs = &m_State.drawing.blockDefs;
+    ext.blockRefs = &m_State.drawing.cadBlockRefs;
+    ext.blockRefAttrs = &m_State.drawing.cadBlockRefAttrs;
+    ext.annotationScales = &m_State.drawing.annotationScales;
     ext.currentAnnotationScaleIndex = m_State.currentAnnotationScaleIndex;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
@@ -744,9 +744,9 @@ void EditorViewport::paintGL() {
       tuning.sectionPlaneGripHover = -1;
       tuning.sectionPlaneGripDrag = -1;
     }
-    if (m_State.drawingSettings.Geolocated() &&
-        (m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
-         !m_State.drawingSettings.capturedAreas.empty() ||
+    if (m_State.drawing.drawingSettings.Geolocated() &&
+        (m_State.drawing.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
+         !m_State.drawing.drawingSettings.capturedAreas.empty() ||
          m_State.active == AppCommandState::Kind::GeoCaptureArea))
       m_MapTimer.start();
     m_OnlineMap->Update(m_State, m_State.activeSpaceIndex == kModelSpaceIndex, camera, w, h, m_Log);
@@ -756,15 +756,15 @@ void EditorViewport::paintGL() {
       m_RasterDrapeCache.clear();
       m_RasterDrapeRevision = m_State.cadGpuCacheRevision;
       m_RasterDrapeRenderRevision = m_RenderRevision;
-      for (const CadRasterImage& image : m_State.cadRasterImages) {
+      for (const CadRasterImage& image : m_State.drawing.cadRasterImages) {
         if (image.surfaceId == 0 || image.id == 0 || image.width <= 0.f || image.height <= 0.f) continue;
         const CadLayerRow* imageLayer = FindDrawingLayerRowCi(m_State, image.layer);
         if (imageLayer && (!imageLayer->on || imageLayer->frozen)) continue;
-        const auto surfaceIt = std::find_if(m_State.cadSurfaceAttrs.begin(), m_State.cadSurfaceAttrs.end(),
+        const auto surfaceIt = std::find_if(m_State.drawing.cadSurfaceAttrs.begin(), m_State.drawing.cadSurfaceAttrs.end(),
             [&](const EntityAttributes& attr) { return attr.id == image.surfaceId; });
-        if (surfaceIt == m_State.cadSurfaceAttrs.end()) continue;
-        const size_t surfaceIndex = static_cast<size_t>(surfaceIt - m_State.cadSurfaceAttrs.begin());
-        if (surfaceIndex >= m_State.cadSurfaces.size() || !m_State.cadSurfaces[surfaceIndex].tin) continue;
+        if (surfaceIt == m_State.drawing.cadSurfaceAttrs.end()) continue;
+        const size_t surfaceIndex = static_cast<size_t>(surfaceIt - m_State.drawing.cadSurfaceAttrs.begin());
+        if (surfaceIndex >= m_State.drawing.cadSurfaces.size() || !m_State.drawing.cadSurfaces[surfaceIndex].tin) continue;
         unsigned int texture = 0;
         const auto cachedTexture = m_RasterTextures.find(image.path);
         if (cachedTexture != m_RasterTextures.end()) texture = cachedTexture->second;
@@ -786,7 +786,7 @@ void EditorViewport::paintGL() {
         RasterDrapeCache cache;
         cache.imageId = image.id;
         cache.texture = texture;
-        const CadTin& tin = *m_State.cadSurfaces[surfaceIndex].tin;
+        const CadTin& tin = *m_State.drawing.cadSurfaces[surfaceIndex].tin;
         const double c = std::cos(image.rotationRad), s = std::sin(image.rotationRad);
         struct ClipVertex { double u, v, z; };
         auto clip = [&](std::vector<ClipVertex> polygon, int edge) {
@@ -843,7 +843,7 @@ void EditorViewport::paintGL() {
     tuning.mapTiles = &m_RenderTiles;
     m_Renderer->SetSize(w, h);
     std::vector<PdfAttachment> pdfForRender;
-    const std::vector<PdfAttachment>* pdfAttachments = &m_State.pdfAttachments;
+    const std::vector<PdfAttachment>* pdfAttachments = &m_State.drawing.pdfAttachments;
     const bool placingPdf = m_State.active == AppCommandState::Kind::PdfAttach &&
         m_State.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
         m_State.pdfAttachPreviewReady;
@@ -854,8 +854,8 @@ void EditorViewport::paintGL() {
           return e.type == SelectedEntity::Type::PdfUnderlay;
         });
     if (placingPdf || modifyingPdf) {
-      pdfForRender.reserve(m_State.pdfAttachments.size() * 2 + 1);
-      for (const auto& attachment : m_State.pdfAttachments)
+      pdfForRender.reserve(m_State.drawing.pdfAttachments.size() * 2 + 1);
+      for (const auto& attachment : m_State.drawing.pdfAttachments)
         pdfForRender.push_back(PdfRenderCopy(attachment));
       if (placingPdf) {
         PdfAttachment ghost = PdfRenderCopy(m_State.pdfAttachPreview);
@@ -869,15 +869,15 @@ void EditorViewport::paintGL() {
                                    &pdfForRender);
       pdfAttachments = &pdfForRender;
     }
-    m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
+    m_Renderer->RenderScene(camera, w, h, m_State.drawing.userLinesFlat, m_State.drawing.userCirclesCxCyZR,
         m_State.cadGpuCacheRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
         &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
-        &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
-        pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
-        &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
+        &m_State.drawing.userLineAttrs, &m_State.drawing.userCircleAttrs, &ext, m_Grid, &m_State.drawing.drawingLayerTable, tuning,
+        pdfAttachments, -1, &m_State.drawing.cadFilledRegions, &m_State.drawing.cadFilledRegionAttrs,
+        &m_State.drawing.cadMeshes, &m_State.drawing.cadMeshAttrs, &m_State.solidDisplayGeometry,
         &m_State.surfaceDisplayGeometry, nullptr, &trimRemovalLines, nullptr, nullptr, &subObjectOverlay,
         gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
-        &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
+        &m_State.drawing.cadPointClouds, &m_State.drawing.cadPointCloudAttrs, &m_State.pointCloudDisplay);
     const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
                                 !m_State.pendingThumbnailPath.empty();
     if (capturePending) {
@@ -909,7 +909,7 @@ void EditorViewport::paintGL() {
   } else if (m_Ready && paperSpace) {
     // Render each layout viewport with the same CAD renderer as model space, then composite its
     // color texture into the widget's framebuffer. QPainter draws the paper entities afterward.
-    const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+    const auto& layout = m_State.drawing.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
     glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
     glViewport(0, 0, w, h);
     glClearColor(0.09f, 0.105f, 0.12f, 1.f);
@@ -921,31 +921,31 @@ void EditorViewport::paintGL() {
       return QPointF(sx, sy);
     };
     CadExtendedGeometryInput ext;
-    ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
-    ext.circleNormals = &m_State.userCircleNormals;
-    ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
-    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
-    ext.alignments = &m_State.alignments;
-    ext.viewFrameGroups = &m_State.viewFrameGroups;
-    ext.sampleLines = &m_State.sampleLines;
-    ext.alignmentStyles = &m_State.alignmentStyles;
-    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
-    ext.pdMode = m_State.pdMode;
-    ext.pdSize = m_State.pdSize;
-    ext.polylineVerts = &m_State.userPolylineVerts;
-    ext.polylineOffsets = &m_State.userPolylineOffsets;
-    ext.polylineClosed = &m_State.userPolylineClosed;
-    ext.polylineAttrs = &m_State.userPolylineAttrs;
-    ext.polylineBulge = &m_State.userPolylineVertsBulge;
-    ext.polylineNormal = &m_State.userPolylineVertsNormal;
-    ext.drawingLayers = &m_State.drawingLayerTable;
-    ext.featureLineVerts = &m_State.featureLineVerts;
-    ext.featureLineOffsets = &m_State.featureLineOffsets;
-    ext.featureLineClosed = &m_State.featureLineClosed;
-    ext.featureLineAttrs = &m_State.featureLineAttrs;
-    ext.blockDefs = &m_State.blockDefs;
-    ext.blockRefs = &m_State.cadBlockRefs;
-    ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
+    ext.arcs = &m_State.drawing.userArcs; ext.arcAttrs = &m_State.drawing.userArcAttrs;
+    ext.circleNormals = &m_State.drawing.userCircleNormals;
+    ext.ellipses = &m_State.drawing.userEllipses; ext.ellAttrs = &m_State.drawing.userEllAttrs;
+    ext.splines = &m_State.drawing.cadSplines; ext.splineAttrs = &m_State.drawing.cadSplineAttrs;
+    ext.alignments = &m_State.drawing.alignments;
+    ext.viewFrameGroups = &m_State.drawing.viewFrameGroups;
+    ext.sampleLines = &m_State.drawing.sampleLines;
+    ext.alignmentStyles = &m_State.drawing.alignmentStyles;
+    ext.points = &m_State.drawing.cadPoints; ext.pointAttrs = &m_State.drawing.cadPointAttrs;
+    ext.pdMode = m_State.drawing.pdMode;
+    ext.pdSize = m_State.drawing.pdSize;
+    ext.polylineVerts = &m_State.drawing.userPolylineVerts;
+    ext.polylineOffsets = &m_State.drawing.userPolylineOffsets;
+    ext.polylineClosed = &m_State.drawing.userPolylineClosed;
+    ext.polylineAttrs = &m_State.drawing.userPolylineAttrs;
+    ext.polylineBulge = &m_State.drawing.userPolylineVertsBulge;
+    ext.polylineNormal = &m_State.drawing.userPolylineVertsNormal;
+    ext.drawingLayers = &m_State.drawing.drawingLayerTable;
+    ext.featureLineVerts = &m_State.drawing.featureLineVerts;
+    ext.featureLineOffsets = &m_State.drawing.featureLineOffsets;
+    ext.featureLineClosed = &m_State.drawing.featureLineClosed;
+    ext.featureLineAttrs = &m_State.drawing.featureLineAttrs;
+    ext.blockDefs = &m_State.drawing.blockDefs;
+    ext.blockRefs = &m_State.drawing.cadBlockRefs;
+    ext.blockRefAttrs = &m_State.drawing.cadBlockRefAttrs;
     for (const auto& viewport : layout.viewports) {
       if (!viewport.on) continue;  // REQ-482: leave the paper frame, but do not render model contents.
       const QPointF q0 = paperPoint(viewport.paperXIn, viewport.paperYIn);
@@ -958,8 +958,8 @@ void EditorViewport::paintGL() {
       const int top = std::clamp(qRound((height() - rectPx.top()) * devicePixelRatioF()), 0, h);
       const int viewW = right - left, viewH = top - bottom;
       if (viewW <= 0 || viewH <= 0) continue;
-      Camera camera = Camera::Plan(viewport.modelCenterX - m_State.worldDocumentOriginX,
-          viewport.modelCenterY - m_State.worldDocumentOriginY,
+      Camera camera = Camera::Plan(viewport.modelCenterX - m_State.drawing.worldDocumentOriginX,
+          viewport.modelCenterY - m_State.drawing.worldDocumentOriginY,
           viewport.safeScale() * viewport.paperHIn * 0.5f);
       camera.azimuthDeg = viewport.camAzimuthDeg;
       camera.elevationDeg = viewport.camElevationDeg;
@@ -972,13 +972,13 @@ void EditorViewport::paintGL() {
       tuning.visualStyle = viewport.visualStyle;
       ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);
-      m_Renderer->RenderScene(camera, viewW, viewH, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
+      m_Renderer->RenderScene(camera, viewW, viewH, m_State.drawing.userLinesFlat, m_State.drawing.userCirclesCxCyZR,
           m_State.cadGpuCacheRevision + m_RenderRevision, {}, nullptr, 6.f, nullptr, nullptr, nullptr, nullptr,
-          nullptr, nullptr, nullptr, &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, false,
-          &m_State.drawingLayerTable, tuning, &m_State.pdfAttachments, -1, &m_State.cadFilledRegions,
-          &m_State.cadFilledRegionAttrs, &m_State.cadMeshes, &m_State.cadMeshAttrs,
+          nullptr, nullptr, nullptr, &m_State.drawing.userLineAttrs, &m_State.drawing.userCircleAttrs, &ext, false,
+          &m_State.drawing.drawingLayerTable, tuning, &m_State.drawing.pdfAttachments, -1, &m_State.drawing.cadFilledRegions,
+          &m_State.drawing.cadFilledRegionAttrs, &m_State.drawing.cadMeshes, &m_State.drawing.cadMeshAttrs,
           &m_State.solidDisplayGeometry, &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr,
-          nullptr, nullptr, nullptr, &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
+          nullptr, nullptr, nullptr, &m_State.drawing.cadPointClouds, &m_State.drawing.cadPointCloudAttrs, &m_State.pointCloudDisplay);
       GLuint readFbo = 0;
       glGenFramebuffers(1, &readFbo);
       glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo);
@@ -1016,7 +1016,7 @@ void EditorViewport::paintGL() {
   QPainter painter(this);
   const Camera overlayCamera = CadViewCamera(m_State);
   if (paperSpace) {
-    const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+    const auto& layout = m_State.drawing.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
     auto project = [&](double x, double y) {
       float sx = 0, sy = 0;
       overlayCamera.WorldToScreen(x, y, 0, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
@@ -1133,12 +1133,12 @@ void EditorViewport::paintGL() {
     }
     {
       const double viewH = std::max(1.0, static_cast<double>(layout.sheetHeightIn()));
-      const double halfSize = CadPointMarkerSize(m_State.pdSize, viewH);
+      const double halfSize = CadPointMarkerSize(m_State.drawing.pdSize, viewH);
       std::vector<CadPointStroke> strokes;
       for (std::size_t pi = 0; pi < layout.paperPoints.size(); ++pi) {
         const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Point, static_cast<int>(pi));
         painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
-        CadPointDisplayStrokes(layout.paperPoints[pi], m_State.pdMode, halfSize, &strokes);
+        CadPointDisplayStrokes(layout.paperPoints[pi], m_State.drawing.pdMode, halfSize, &strokes);
         for (const CadPointStroke& s : strokes)
           painter.drawLine(project(s.x0, s.y0), project(s.x1, s.y1));
       }
@@ -1213,7 +1213,7 @@ void EditorViewport::paintGL() {
       }
     }
     for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
-      const float arrowIn = std::max(m_State.activeMultileaderStyle.arrowSizeInches, 0.01f);
+      const float arrowIn = std::max(m_State.drawing.activeMultileaderStyle.arrowSizeInches, 0.01f);
       auto drawPath = [&](const std::vector<float>& pts) {
         for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
           painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
@@ -1279,12 +1279,12 @@ void EditorViewport::paintGL() {
       auto modelProject = [&](double x, double y) {
         float paperX = 0.f, paperY = 0.f;
         // Through the viewport's camera (REQ-518 rotated sheets): plan views take the same path as before.
-        ModelToPaperInThroughCamera(viewport, x + m_State.worldDocumentOriginX,
-            y + m_State.worldDocumentOriginY, 0.0, &paperX, &paperY);
+        ModelToPaperInThroughCamera(viewport, x + m_State.drawing.worldDocumentOriginX,
+            y + m_State.drawing.worldDocumentOriginY, 0.0, &paperX, &paperY);
         return project(paperX, paperY);
       };
       painter.setPen(QPen(QColor("#394d5a"), 1));
-      for (const auto& table : m_State.cadTables) {
+      for (const auto& table : m_State.drawing.cadTables) {
         QPointF corners[4];
         for (int c = 0; c < 4; ++c) {
           float x = 0.f, y = 0.f;
@@ -1341,8 +1341,8 @@ void EditorViewport::paintGL() {
       std::vector<int> gripShapes;
       switch (selected.type) {
         case SelectedEntity::Type::LineSeg: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.lineCount()) {
-            const CadLineRecord seg = m_State.line(static_cast<std::size_t>(selected.index));
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.lineCount()) {
+            const CadLineRecord seg = m_State.drawing.line(static_cast<std::size_t>(selected.index));
             grips.push_back({seg.x0, seg.y0, seg.z0});
             grips.push_back({seg.x1, seg.y1, seg.z1});
           }
@@ -1350,21 +1350,21 @@ void EditorViewport::paintGL() {
         }
         case SelectedEntity::Type::Circle: {
           const std::size_t ci = static_cast<std::size_t>(selected.index);
-          if (selected.index >= 0 && ci < m_State.circleCount()) {
-            const CadCircleRecord c = m_State.circle(ci);
+          if (selected.index >= 0 && ci < m_State.drawing.circleCount()) {
+            const CadCircleRecord c = m_State.drawing.circle(ci);
             grips.push_back({c.cx, c.cy, c.cz});
             grips.push_back({c.cx + c.r, c.cy, c.cz});
           }
           break;
         }
         case SelectedEntity::Type::Polyline: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index + 1) < m_State.userPolylineOffsets.size()) {
-            const int first = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index)];
-            const int last = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index + 1)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index + 1) < m_State.drawing.userPolylineOffsets.size()) {
+            const int first = m_State.drawing.userPolylineOffsets[static_cast<std::size_t>(selected.index)];
+            const int last = m_State.drawing.userPolylineOffsets[static_cast<std::size_t>(selected.index + 1)];
             for (int vertex = first; vertex < last; ++vertex) {
               const std::size_t k = static_cast<std::size_t>(vertex);
-              if (k < m_State.vertexCount())
-                grips.push_back({m_State.vertex(k).x, m_State.vertex(k).y, m_State.vertex(k).z});
+              if (k < m_State.drawing.vertexCount())
+                grips.push_back({m_State.drawing.vertex(k).x, m_State.drawing.vertex(k).y, m_State.drawing.vertex(k).z});
             }
             CadForEachPolylineArcMidGrip(m_State, selected.index,
                 [&](int, float x, float y, float z) { grips.push_back({x, y, z}); });
@@ -1372,8 +1372,8 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Arc: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.userArcs.size()) {
-            const CadArc& arc = m_State.userArcs[static_cast<std::size_t>(selected.index)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.userArcs.size()) {
+            const CadArc& arc = m_State.drawing.userArcs[static_cast<std::size_t>(selected.index)];
             const double end = arc.startRad + arc.sweepRad;
             grips.push_back({arc.cx, arc.cy, arc.z});
             grips.push_back({arc.cx + arc.r * std::cos(arc.startRad), arc.cy + arc.r * std::sin(arc.startRad), arc.z});
@@ -1382,8 +1382,8 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Ellipse: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.userEllipses.size()) {
-            const CadEllipse& ellipse = m_State.userEllipses[static_cast<std::size_t>(selected.index)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.userEllipses.size()) {
+            const CadEllipse& ellipse = m_State.drawing.userEllipses[static_cast<std::size_t>(selected.index)];
             if (EllipseHasGrips(ellipse)) {
               ray3d::Vec3 points[3]; EllipseGripPoints(ellipse, points);
               grips.assign(std::begin(points), std::end(points));
@@ -1392,8 +1392,8 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Spline: {  // REQ-443: fit points, or control vertices for a CV spline
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadSplines.size()) {
-            const CadSpline& sp = m_State.cadSplines[static_cast<std::size_t>(selected.index)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadSplines.size()) {
+            const CadSpline& sp = m_State.drawing.cadSplines[static_cast<std::size_t>(selected.index)];
             for (std::size_t i = 0; i < spline::EditablePointCount(sp); ++i) {
               const spline::Vec3 v = spline::EditablePoint(sp, i);
               grips.push_back({v.x, v.y, v.z});
@@ -1402,15 +1402,15 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Point: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadPoints.size()) {
-            const CadPoint& p = m_State.cadPoints[static_cast<std::size_t>(selected.index)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadPoints.size()) {
+            const CadPoint& p = m_State.drawing.cadPoints[static_cast<std::size_t>(selected.index)];
             grips.push_back({p.x, p.y, p.z});
           }
           break;
         }
         case SelectedEntity::Type::Alignment: {  // REQ-487.1
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
-            for (const alignment::Grip& g : alignment::GripPoints(m_State.alignments[static_cast<std::size_t>(selected.index)])) {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.alignments.size()) {
+            for (const alignment::Grip& g : alignment::GripPoints(m_State.drawing.alignments[static_cast<std::size_t>(selected.index)])) {
               grips.push_back({g.point.x, g.point.y, 0.0});
               gripIds.push_back(g.which);
               using GK = alignment::GripKind;
@@ -1422,11 +1422,11 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::BlockRef: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadBlockRefs.size()) {
-            const auto& ref = m_State.cadBlockRefs[static_cast<std::size_t>(selected.index)];
-            const int defIndex = CadBlockFindDef(m_State.blockDefs, ref.defName);
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadBlockRefs.size()) {
+            const auto& ref = m_State.drawing.cadBlockRefs[static_cast<std::size_t>(selected.index)];
+            const int defIndex = CadBlockFindDef(m_State.drawing.blockDefs, ref.defName);
             if (defIndex >= 0) {
-              const auto& def = m_State.blockDefs[static_cast<std::size_t>(defIndex)];
+              const auto& def = m_State.drawing.blockDefs[static_cast<std::size_t>(defIndex)];
               for (int grip = 0; grip < CadBlockDynGripCount(def); ++grip) {
                 float x = 0.f, y = 0.f, z = 0.f;
                 if (CadBlockDynGripShownOnInsert(grip) && CadBlockDynGripWorld(def, ref, grip, &x, &y, &z))
@@ -1437,8 +1437,8 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Annotation: {
-          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadAnnotations.size()) {
-            const CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(selected.index)];
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadAnnotations.size()) {
+            const CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(selected.index)];
             if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
               grips = {{ann.boxMinX, ann.boxMinY, 0}, {ann.boxMaxX, ann.boxMinY, 0},
                        {ann.boxMaxX, ann.boxMaxY, 0}, {ann.boxMinX, ann.boxMaxY, 0}};
@@ -1458,9 +1458,9 @@ void EditorViewport::paintGL() {
         default: break;
       }
       if (selected.type == SelectedEntity::Type::Alignment && selected.index >= 0 &&
-          static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
+          static_cast<std::size_t>(selected.index) < m_State.drawing.alignments.size()) {
         // Like Civil 3D: dashed tangent extensions from each Free curve's PC and PT to its PI.
-        const alignment::Alignment& al = m_State.alignments[static_cast<std::size_t>(selected.index)];
+        const alignment::Alignment& al = m_State.drawing.alignments[static_cast<std::size_t>(selected.index)];
         painter.setPen(QPen(QColor("#3b82f6"), 1, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
         for (std::size_t e = 0; e < al.Entities().size(); ++e) {
@@ -1524,8 +1524,8 @@ void EditorViewport::paintGL() {
   const auto inputPrompt = CadDynInputPromptFor(m_State);
   const bool pipeCompass = m_State.active == AppCommandState::Kind::PipeRun && m_State.pipeRunCompassOn;
   if (!paperSpace && inputPrompt.haveBase && (m_State.polarMode || pipeCompass)) {
-    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.worldDocumentOriginX,
-        inputPrompt.baseWorld.y - m_State.worldDocumentOriginY, inputPrompt.baseWorld.z};
+    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.drawing.worldDocumentOriginX,
+        inputPrompt.baseWorld.y - m_State.drawing.worldDocumentOriginY, inputPrompt.baseWorld.z};
     float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y), z = static_cast<float>(m_Cursor.z);
     if (pipeCompass) ApplyPipeRunCompassFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
         &x, &y, true, static_cast<float>(anchor.z), z, &z);
@@ -1543,8 +1543,8 @@ void EditorViewport::paintGL() {
       painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
     }
   } else if (!paperSpace && inputPrompt.haveBase && m_State.orthoMode) {
-    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.worldDocumentOriginX,
-        inputPrompt.baseWorld.y - m_State.worldDocumentOriginY, inputPrompt.baseWorld.z};
+    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.drawing.worldDocumentOriginX,
+        inputPrompt.baseWorld.y - m_State.drawing.worldDocumentOriginY, inputPrompt.baseWorld.z};
     float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y), z = static_cast<float>(m_Cursor.z);
     ApplyOrthoConstrainFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y), &x, &y,
                                   true, static_cast<float>(anchor.z), z, &z);
@@ -1656,8 +1656,8 @@ void EditorViewport::CommitPendingIdleSelectionClick(Qt::KeyboardModifiers modif
       m_State.selection.push_back(hit.entity);
     }
   } else if (hit.family == ViewportPickFamily::Annotation && hit.entity.index >= 0 &&
-             static_cast<std::size_t>(hit.entity.index) < m_State.cadAnnotations.size()) {
-    const CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(hit.entity.index)];
+             static_cast<std::size_t>(hit.entity.index) < m_State.drawing.cadAnnotations.size()) {
+    const CadAnnotation& annotation = m_State.drawing.cadAnnotations[static_cast<std::size_t>(hit.entity.index)];
     const bool linked = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId >= 0;
     if (modifiers & Qt::ShiftModifier) {
       auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [&](const SelectedEntity& entry) {
@@ -1850,8 +1850,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         m_State.selection.front().type == SelectedEntity::Type::Annotation &&
         !(event->modifiers() & Qt::ShiftModifier) && !projectReadOnly()) {
       const int annotationIndex = m_State.selection.front().index;
-      if (annotationIndex >= 0 && static_cast<std::size_t>(annotationIndex) < m_State.cadAnnotations.size()) {
-        CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(annotationIndex)];
+      if (annotationIndex >= 0 && static_cast<std::size_t>(annotationIndex) < m_State.drawing.cadAnnotations.size()) {
+        CadAnnotation& annotation = m_State.drawing.cadAnnotations[static_cast<std::size_t>(annotationIndex)];
         auto screenDistanceSq = [&](double x, double y) {
           float sx = 0.f, sy = 0.f;
           camera.WorldToScreen(x, y, 0.f, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
@@ -1935,8 +1935,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (m_State.showCreatePointsWindow && m_State.active == AppCommandState::Kind::None) {
       int hit = -1;
       double nearest = 100.0;
-      for (std::size_t i = 0; i < m_State.surveyPoints.size(); ++i) {
-        const auto& point = m_State.surveyPoints[i];
+      for (std::size_t i = 0; i < m_State.drawing.surveyPoints.size(); ++i) {
+        const auto& point = m_State.drawing.surveyPoints[i];
         float x = 0, y = 0;
         camera.WorldToScreen(point.easting, point.northing, point.elevation,
             static_cast<float>(width()), static_cast<float>(height()), &x, &y);
@@ -1952,7 +1952,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         const bool readOnly = std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
             [uid](const auto& project) { return project.uid == uid && project.readOnly; });
         if (readOnly) m_Log.push_back("CREATEPOINTS: the project is read-only; no point placed.");
-        else TryPlaceSurveyPoint(m_State, m_Cursor.x, m_Cursor.y, m_State.createPointsOpts.defaultElevation, m_Log);
+        else TryPlaceSurveyPoint(m_State, m_Cursor.x, m_Cursor.y, m_State.drawing.createPointsOpts.defaultElevation, m_Log);
       }
     } else if ((event->modifiers() & Qt::ControlModifier) && m_State.activeSpaceIndex == kModelSpaceIndex) {
       solidpick::Tolerance tolerance{};
@@ -2056,11 +2056,11 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
             const EntityAttributes* attr = nullptr;
             const auto index = static_cast<std::size_t>(candidate.entity.index);
             switch (candidate.entity.type) {
-              case SelectedEntity::Type::LineSeg: if (index < m_State.userLineAttrs.size()) attr = &m_State.userLineAttrs[index]; break;
-              case SelectedEntity::Type::Circle: if (index < m_State.userCircleAttrs.size()) attr = &m_State.userCircleAttrs[index]; break;
-              case SelectedEntity::Type::Polyline: if (index < m_State.userPolylineAttrs.size()) attr = &m_State.userPolylineAttrs[index]; break;
-              case SelectedEntity::Type::Arc: if (index < m_State.userArcAttrs.size()) attr = &m_State.userArcAttrs[index]; break;
-              case SelectedEntity::Type::Ellipse: if (index < m_State.userEllAttrs.size()) attr = &m_State.userEllAttrs[index]; break;
+              case SelectedEntity::Type::LineSeg: if (index < m_State.drawing.userLineAttrs.size()) attr = &m_State.drawing.userLineAttrs[index]; break;
+              case SelectedEntity::Type::Circle: if (index < m_State.drawing.userCircleAttrs.size()) attr = &m_State.drawing.userCircleAttrs[index]; break;
+              case SelectedEntity::Type::Polyline: if (index < m_State.drawing.userPolylineAttrs.size()) attr = &m_State.drawing.userPolylineAttrs[index]; break;
+              case SelectedEntity::Type::Arc: if (index < m_State.drawing.userArcAttrs.size()) attr = &m_State.drawing.userArcAttrs[index]; break;
+              case SelectedEntity::Type::Ellipse: if (index < m_State.drawing.userEllAttrs.size()) attr = &m_State.drawing.userEllAttrs[index]; break;
               default: break;
             }
             if (attr) {
@@ -2124,11 +2124,11 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
     mousePressEvent(event);
     return;
   }
-  if (m_State.activeSpaceIndex >= 0 && m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
+  if (m_State.activeSpaceIndex >= 0 && m_State.activeSpaceIndex < static_cast<int>(m_State.drawing.paperLayouts.size()) &&
       !InFloatingModelSpace(m_State)) {
     ray3d::Vec3 point;
     if (WorldPoint(event->position(), point)) {
-      auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+      auto& layout = m_State.drawing.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
       for (auto& annotation : layout.paperTexts) {
         if (annotation.kind != CadAnnotation::Kind::Table || annotation.tableCols <= 0) continue;
         std::vector<CadTableCellRect> cells;
@@ -2169,15 +2169,15 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
   if (m_State.activeSpaceIndex == kModelSpaceIndex) {
     const float wx = static_cast<float>(m_Cursor.x);
     const float wy = static_cast<float>(m_Cursor.y);
-    for (int ti = static_cast<int>(m_State.cadTables.size()) - 1; ti >= 0; --ti) {
-      const CadTable& table = m_State.cadTables[static_cast<std::size_t>(ti)];
-      if (!m_State.hiddenEntityIds.empty() && static_cast<std::size_t>(ti) < m_State.cadTableAttrs.size() &&
-          CadEntityIdHidden(&m_State.hiddenEntityIds, m_State.cadTableAttrs[static_cast<std::size_t>(ti)].id))
+    for (int ti = static_cast<int>(m_State.drawing.cadTables.size()) - 1; ti >= 0; --ti) {
+      const CadTable& table = m_State.drawing.cadTables[static_cast<std::size_t>(ti)];
+      if (!m_State.hiddenEntityIds.empty() && static_cast<std::size_t>(ti) < m_State.drawing.cadTableAttrs.size() &&
+          CadEntityIdHidden(&m_State.hiddenEntityIds, m_State.drawing.cadTableAttrs[static_cast<std::size_t>(ti)].id))
         continue;  // a hidden table cannot be picked or edited
       const int cell = CadTableCellAtWorld(table, wx, wy);
       if (cell < 0)
         continue;
-      if (CadTableCellIsSurveyPointData(m_State.tableStyles, table, cell)) {
+      if (CadTableCellIsSurveyPointData(m_State.drawing.tableStyles, table, cell)) {
         QMessageBox::information(this, "Point table",
                                  "Point table values come from survey points and cannot be edited here.");
         event->accept();
@@ -2265,10 +2265,10 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const Camera camera = CadViewCamera(m_State);
     const bool paperTrimHover = m_State.active == AppCommandState::Kind::Trim &&
         m_State.activeSpaceIndex >= 0 &&
-        m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
+        m_State.activeSpaceIndex < static_cast<int>(m_State.drawing.paperLayouts.size()) &&
         !InFloatingModelSpace(m_State);
     if (paperTrimHover) {
-      const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+      const auto& layout = m_State.drawing.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
       m_State.paperHoverValid = PickPaperEntityAt(layout, static_cast<float>(m_Cursor.x),
           static_cast<float>(m_Cursor.y), camera.orthoHalfH * 8.f /
               static_cast<float>(std::max(1, height())), &m_State.paperHover);
@@ -2309,8 +2309,8 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       for (const SelectedEntity& selected : m_State.selection) {
         if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0) continue;
         const size_t li = static_cast<size_t>(selected.index);
-        if (li >= m_State.lineCount()) continue;
-        const CadLineRecord seg = m_State.line(li);
+        if (li >= m_State.drawing.lineCount()) continue;
+        const CadLineRecord seg = m_State.drawing.line(li);
         for (int which = 0; which < 2; ++which) {
           const double gx = which == 0 ? seg.x0 : seg.x1;
           const double gy = which == 0 ? seg.y0 : seg.y1;
@@ -2423,8 +2423,8 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       ApplyAlignmentLabelDrag(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y));
     }
     if (m_State.mtextGripMoveActive && m_State.mtextGripAnnotationIndex >= 0 &&
-        static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.cadAnnotations.size()) {
-      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
+        static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
       if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
         const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
@@ -2440,8 +2440,8 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
     }
     if (m_State.dimGripMoveActive && m_State.dimGripAnnotationIndex >= 0 &&
-        static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.cadAnnotations.size()) {
-      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
+        static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
       const float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y);
       switch (m_State.dimGripWhich) {
@@ -2484,12 +2484,12 @@ void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.dimGripMoveActive) ClearDimGripInteraction(m_State);
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.mtextGripMoveActive) {
     const int index = m_State.mtextGripAnnotationIndex;
-    if (index >= 0 && static_cast<std::size_t>(index) < m_State.cadAnnotations.size()) {
-      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(index)];
+    if (index >= 0 && static_cast<std::size_t>(index) < m_State.drawing.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(index)];
       if (ann.surveyPointLabelForId >= 0 && m_State.mtextGripCorner == 4) {
         const int pointIndex = SurveyPointIndexForId(m_State, ann.surveyPointLabelForId);
         if (pointIndex >= 0) {
-          const SurveyPoint& point = m_State.surveyPoints[static_cast<std::size_t>(pointIndex)];
+          const SurveyPoint& point = m_State.drawing.surveyPoints[static_cast<std::size_t>(pointIndex)];
           ann.surveyLabelUserOffsetEast = static_cast<float>(ann.boxMinX - point.easting);
           ann.surveyLabelUserOffsetNorth = static_cast<float>(.5 * (ann.boxMinY + ann.boxMaxY) - point.northing);
           ann.surveyLabelHasUserOffset = true;

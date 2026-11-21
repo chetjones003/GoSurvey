@@ -352,18 +352,18 @@ TEST_CASE("SPLINE typed workflow commits degree-three curves and preserves an in
   REQUIRE(state.active == AppCommandState::Kind::Spline);
   submit("CV");
   submit("0,0"); submit("5,5"); submit("10,0"); submit("END");
-  CHECK(state.cadSplines.empty());
+  CHECK(state.drawing.cadSplines.empty());
   REQUIRE(state.splineDraftPoints.size() == 3);
   CHECK(std::any_of(log.begin(), log.end(), [](const std::string& line) { return line.find("four") != std::string::npos; }));
   submit("15,5"); submit("END");
   REQUIRE(state.active == AppCommandState::Kind::None);
-  REQUIRE(state.cadSplines.size() == 1);
-  CHECK(state.cadSplines.front().degree == 3);
-  CHECK_FALSE(state.cadSplines.front().isFit());
+  REQUIRE(state.drawing.cadSplines.size() == 1);
+  CHECK(state.drawing.cadSplines.front().degree == 3);
+  CHECK_FALSE(state.drawing.cadSplines.front().isFit());
 
   submit("UNDO");
-  CHECK(state.cadSplines.empty());
+  CHECK(state.drawing.cadSplines.empty());
   submit("REDO");
-  REQUIRE(state.cadSplines.size() == 1);
-  CHECK(state.cadSplines.front().degree == 3);
+  REQUIRE(state.drawing.cadSplines.size() == 1);
+  CHECK(state.drawing.cadSplines.front().degree == 3);
 }
