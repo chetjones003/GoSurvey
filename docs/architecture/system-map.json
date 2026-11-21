@@ -3729,10 +3729,10 @@
       "note": "Refers to solidpick::Kind, an Interaction policy type. Coupling recorded in auditFindings."
     },
     {
-      "path": "src/commands/CadLayerRow.hpp",
+      "path": "src/document/include/GoSurvey/Document/CadLayerRow.hpp",
       "lines": [
         7,
-        20
+        27
       ],
       "system": "Document",
       "concern": "layer table row",
@@ -4402,29 +4402,61 @@
       ]
     },
     {
-      "path": "src/commands/DimensionStyle.hpp",
+      "path": "src/document/include/GoSurvey/Document/DimensionStyle.hpp",
       "lines": [
-        1,
-        221
+        9,
+        106
       ],
       "system": "Document",
       "concern": "dimension style library",
       "symbols": [
         "DimensionStyle",
-        "DimensionStyles"
+        "DimensionStyles::Default",
+        "DimensionStyles::DefaultStyles",
+        "DimensionStyles::Find"
       ],
       "note": "Dimension text formatting uses Core number formatting."
     },
     {
-      "path": "src/commands/MultileaderStyle.hpp",
+      "path": "src/document/include/GoSurvey/Document/MultileaderStyle.hpp",
       "lines": [
-        1,
-        55
+        9,
+        40
       ],
       "system": "Document",
       "concern": "multileader style library",
       "symbols": [
-        "MultileaderStyle"
+        "MultileaderStyle",
+        "MultileaderStyles::Default",
+        "MultileaderStyles::DefaultStyles",
+        "MultileaderStyles::Find"
+      ]
+    },
+    {
+      "path": "src/commands/DimensionStyle.hpp",
+      "lines": [
+        25,
+        125
+      ],
+      "system": "Commands",
+      "concern": "dimension annotation operations and linear formatting",
+      "symbols": [
+        "DimensionStyles::BakeTextOntoDimension",
+        "DimensionStyles::FormatLinearDimBase",
+        "DimensionStyles::FormatLinearDim"
+      ],
+      "note": "The DimensionStyle value type and named style lookup belong to Document. Commands retains annotation mutation and formatting policy."
+    },
+    {
+      "path": "src/commands/MultileaderStyle.hpp",
+      "lines": [
+        10,
+        16
+      ],
+      "system": "Commands",
+      "concern": "baking a multileader style onto annotation content",
+      "symbols": [
+        "MultileaderStyles::BakeOntoMultileaderLabel"
       ]
     },
     {
@@ -13403,6 +13435,29 @@
       ],
       "note": "Existing numerical integration extracted without changing step count, arithmetic, or output convention. Survey retains entity/radius policy.",
       "ownershipKind": "whole"
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1489,
+        1527
+      ],
+      "system": "IO",
+      "concern": "imported DWG light and sun records",
+      "symbols": [
+        "CadDwgImportedLight",
+        "CadDwgImportedLightListEntry",
+        "CadDwgImportedLightList",
+        "CadDwgImportedSun"
+      ],
+      "note": "Raw imported DWG light and sun records are retained for DWG round-trip; they are import/export data, not renderer lighting.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Terrain",
+        "PointCloud",
+        "Renderer"
+      ]
     }
   ],
   "auditedEntries": {

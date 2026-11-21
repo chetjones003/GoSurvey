@@ -4,6 +4,10 @@
 /// Header-only so Catch2 can cover transforms, nesting, and cycle detection without GL.
 
 #include "CadEntities.hpp"
+#include <GoSurvey/Document/CadLayerRow.hpp>
+#include <GoSurvey/Document/DimensionStyle.hpp>
+#include <GoSurvey/Document/MultileaderStyle.hpp>
+#include <GoSurvey/Document/cadtablestyle.hpp>
 #include <GoSurvey/Document/CadSolidPtr.hpp>
 #include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
@@ -443,6 +447,47 @@ struct CadBlockRef {
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
+};
+
+/// Drawing-only CAD entity collections, layered on the block-capable entity store. These values
+/// travel with drawing content, undo frames, and tabs; keeping them out of CadEntityStore prevents
+/// BEDIT from capturing drawing-only kinds into block definitions.
+struct CadDrawingEntityStore : CadEntityStore {
+  /// Plane normal per polyline vertex, parallel to `userPolylineVerts` (stride 3). Consulted only
+  /// for the segment leaving a vertex with a nonzero bulge; world +Z is the legacy default.
+  std::vector<float> userPolylineVertsNormal;
+  /// HATCH fills represented by closed boundary loops; SOLID or a named pattern controls display.
+  std::vector<CadFilledRegion> cadFilledRegions;
+  std::vector<EntityAttributes> cadFilledRegionAttrs;
+  /// Drawing TABLE entities and their named styles.
+  std::vector<CadTable> cadTables;
+  std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
+  /// Geolocation labels, multileaders and 3D NURBS spline entities.
+  std::vector<CadPositionMarker> cadPositionMarkers;
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;
+  std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;
+  std::vector<EntityAttributes> cadSplineAttrs;
+  /// CAD POINT entities and their drawing-wide AutoCAD display settings.
+  std::vector<CadPoint> cadPoints;
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
+  /// Pipe-run paths and network membership metadata; derived swept solids remain transient.
+  std::vector<CadPipeRun> cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadPipingSystem> cadPipingSystems;
+  /// Definitions and placed references share the Document-owned block tables.
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef> cadBlockRefs;
+  std::vector<EntityAttributes> cadBlockRefAttrs;
+  /// Layer and named style tables owned by the drawing. Current selections stay with DrawingContent.
+  std::vector<CadLayerRow> drawingLayerTable;
+  std::vector<TextStyle> textStyles;
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
 };
 
 /// Scales an insert uniformly about its insertion point for annotative display through \p vp.
