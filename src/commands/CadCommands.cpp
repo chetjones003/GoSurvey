@@ -4376,26 +4376,6 @@ void TickVolumeDashboard(AppCommandState& st) {
 
 namespace {
 
-/// Splits `a, b, c` into trimmed fields.
-///
-/// Commas rather than spaces because surface names and point-group names routinely contain them
-/// ("Existing Ground", "Ground + Curb") — the same problem DESIGNATEBOUNDARY solves by reading its
-/// kind off the END of the line, which does not generalise to a variable-length group list. Empty
-/// fields are kept rather than skipped so the caller can reject them by name instead of silently
-/// building from a shorter list than the user typed.
-std::vector<std::string> SplitCommaFields(const std::string& s) {
-  std::vector<std::string> out;
-  size_t start = 0;
-  for (;;) {
-    const size_t comma = s.find(',', start);
-    const size_t len = (comma == std::string::npos) ? std::string::npos : comma - start;
-    out.push_back(StringUtil::trimCopy(s.substr(start, len)));
-    if (comma == std::string::npos)
-      break;
-    start = comma + 1;
-  }
-  return out;
-}
 
 /// The full definition of every surface, one line each, plus a line per definition item.
 ///
