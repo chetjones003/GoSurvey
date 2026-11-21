@@ -37,7 +37,7 @@ TEST_CASE("DXF model-space drawing imports as a named block definition", "[issue
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
   REQUIRE(CadBlockFindDef(st.blockDefs, "MATCH_E") >= 0);
   const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(CadBlockFindDef(st.blockDefs, "MATCH_E"))];
-  CHECK(d.content.lines.size() >= 6);
+  CHECK(d.content.userLinesFlat.size() >= 6);
   REQUIRE_FALSE(d.attrDefs.empty());
   CHECK(d.attrDefs[0].tag == "EASTING");
   CHECK(st.cadBlockRefs.empty());
@@ -55,8 +55,8 @@ TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[
   CadBlockDefinition def;
   def.name = "HYDRANT";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.resize(1);
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
   CadBlockAttrDef ad;
   ad.tag = "ID";
@@ -76,7 +76,7 @@ TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[
   const int di = CadBlockFindDef(dest.blockDefs, "HYDRANT");
   REQUIRE(di >= 0);
   const CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
-  CHECK(d.content.lines.size() == 6);
+  CHECK(d.content.userLinesFlat.size() == 6);
   REQUIRE(d.attrDefs.size() == 1);
   CHECK(d.attrDefs[0].tag == "ID");
 }
@@ -281,7 +281,7 @@ TEST_CASE("CadBlockPlaceInsert places a BlockRef", "[issue124][block][insert]") 
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockXform xf;
   xf.x = 10.f;
@@ -298,7 +298,7 @@ TEST_CASE("CadBlockPlaceInsert explode writes primitives", "[issue124][block][in
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockXform xf;
   std::vector<std::string> log;
@@ -325,7 +325,7 @@ TEST_CASE("Insert dialog OK places when Specify On-screen is off", "[issue124][b
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
@@ -345,7 +345,7 @@ TEST_CASE("INSERT with attributes opens Edit Attributes after place", "[issue124
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "MH";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   CadBlockAttrDef ad;
   ad.tag = "ID";
   ad.prompt = "Point ID";
@@ -380,10 +380,10 @@ TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue12
   REQUIRE(di >= 0);
   const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
   CHECK(d.attrDefs.size() >= 2);
-  CHECK(d.content.texts.size() >= 2);
-  CHECK(d.content.lines.size() >= 12);
+  CHECK(d.content.cadAnnotations.size() >= 2);
+  CHECK(d.content.userLinesFlat.size() >= 12);
   bool sawRotatedMatch = false;
-  for (const CadAnnotation& t : d.content.texts) {
+  for (const CadAnnotation& t : d.content.cadAnnotations) {
     if (t.kind == CadAnnotation::Kind::Mtext && t.text.find("MATCH") != std::string::npos) {
       CHECK(t.rotationRad == Catch::Approx(1.5707963f).margin(0.05f));
       sawRotatedMatch = true;
@@ -391,13 +391,13 @@ TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue12
   }
   CHECK(sawRotatedMatch);
   bool sawDashed = false;
-  for (const EntityAttributes& a : d.content.lineAttrs) {
+  for (const EntityAttributes& a : d.content.userLineAttrs) {
     if (a.linetype == "DASHED")
       sawDashed = true;
   }
   CHECK(sawDashed);
   bool sawRomansMatch = false;
-  for (const CadAnnotation& t : d.content.texts) {
+  for (const CadAnnotation& t : d.content.cadAnnotations) {
     if (t.kind == CadAnnotation::Kind::Mtext && t.text.find("MATCH") != std::string::npos) {
       CHECK(t.fontFamily == "romans.shx");
       sawRomansMatch = true;
@@ -469,7 +469,7 @@ TEST_CASE("bundled matchline import upgrades a definition that has no attributes
   AppCommandState st;
   CadBlockDefinition stub;
   stub.name = "_matchline_NORTHING";
-  stub.content.lines = {0.f, -2.f, 0.f, 0.f, 2.f, 0.f};
+  stub.content.userLinesFlat = {0.f, -2.f, 0.f, 0.f, 2.f, 0.f};
   st.blockDefs.push_back(stub);
   namespace fs = std::filesystem;
   const fs::path dxf = fs::path(GOSURVEY_SAMPLES_DIR).parent_path() / "resources" / "blocks" / "_matchline_NORTHING.dxf";
@@ -546,8 +546,8 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "SOLFIT";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  def.content.solidAttrs.push_back(EntityAttributes{});
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolidAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(def);
 
   std::vector<std::string> log;
@@ -562,7 +562,7 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
   const int di = CadBlockFindDef(st.blockDefs, "SOLFIT");
   REQUIRE(di >= 0);
-  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
 
   std::istringstream bcloseArgs("save");
   REQUIRE(CadBlocksTryIdleCommand(st, "bclose", bcloseArgs, log));
@@ -603,7 +603,7 @@ TEST_CASE("Bundled fittings library imports SAT as block defs only", "[issue475]
   REQUIRE(CadBlocksImportLibraryEntry(st, entry, log));
   const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
   REQUIRE(di >= 0);
-  REQUIRE_FALSE(st.blockDefs[static_cast<size_t>(di)].content.solids.empty());
+  REQUIRE_FALSE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.empty());
   CHECK(st.cadSolids.empty());
 }
 
@@ -1195,8 +1195,8 @@ TEST_CASE("INSERT rotation is clockwise from north", "[issue124][block][rotation
   st.blockDefs.emplace_back();
   st.blockDefs[0].name = "ML";
   st.blockDefs[0].units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate rotation from unit scaling
-  st.blockDefs[0].content.lines = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // points NORTH (+Y)
-  st.blockDefs[0].content.lineAttrs.resize(1);
+  st.blockDefs[0].content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // points NORTH (+Y)
+  st.blockDefs[0].content.userLineAttrs.resize(1);
   st.blockDefs[0].content.lineVis.resize(1);
 
   auto dirAt = [&](const char* deg) {
@@ -1230,7 +1230,7 @@ TEST_CASE("INSERT rotation preview transform matches the committed insert", "[is
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1259,7 +1259,7 @@ TEST_CASE("INSERT scale preview transform matches the committed insert", "[issue
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1289,7 +1289,7 @@ TEST_CASE("INSERT preview emits a rotated block ghost into the rubber lines", "[
   CadBlockDefinition def;
   def.name = "TREE";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
-  def.content.lines = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // one segment pointing north
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // one segment pointing north
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1355,7 +1355,7 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
   // The block definition is kept (for a future 3D INSERT), carrying the same re-based solid.
   const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
   REQUIRE(di >= 0);
-  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
   CHECK(st.blockDefs[static_cast<size_t>(di)].units == CadDrawingInsUnitsName(st.drawingInsUnits));
 }
 
@@ -1403,7 +1403,7 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat during BEDIT lands in the block
   REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
   const int di = CadBlockFindDef(st.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
 }
 
 TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue475][block][insert][units]") {
@@ -1464,7 +1464,7 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
   CadBlockDefinition def;
   def.name = "TEST3D";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1558,7 +1558,7 @@ TEST_CASE("INSERT 3D scale preview uses true 3D distance", "[issue475][block][in
   CadBlockDefinition def;
   def.name = "POST";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1588,7 +1588,7 @@ TEST_CASE("INSERT dialog rotX and rotY apply on place", "[issue475][block][inser
   CadBlockDefinition def;
   def.name = "FIT";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
 
@@ -1616,7 +1616,7 @@ TEST_CASE("INSERT ghost rubber includes solid block wireframe edges", "[issue475
   CadBlockDefinition def;
   def.name = "SOLIDGHOST";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   st.blockDefs.push_back(def);
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "SOLIDGHOST");
 
@@ -1644,7 +1644,7 @@ TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block]
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "SOLIDBLK";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   st.blockDefs.push_back(def);
 
   CadBlockXform xf;
@@ -2274,7 +2274,7 @@ TEST_CASE("PickClosestCadEntity finds a block reference made entirely of solid g
 
   CadBlockDefinition def;
   def.name = "FIT";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   st.blockDefs.push_back(def);
 
   CadBlockRef r;
@@ -2454,7 +2454,7 @@ TEST_CASE("BLOCK Convert removes the source solid instead of duplicating it",
 
   const int di = CadBlockFindDef(st.blockDefs, "BOXBLOCK");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
   // The definition holds it, so the drawing must not still hold it too.
   CHECK(st.cadSolids.empty());
   CHECK(st.cadSolidAttrs.empty());
@@ -2488,8 +2488,8 @@ TEST_CASE("Bare WBLOCK opens the save dialog instead of printing usage", "[issue
   CadBlockDefinition def;
   def.name = "HYDRANT";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.resize(1);
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
   st.blockDefs.push_back(def);
 
@@ -2527,8 +2527,8 @@ TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it can
   CadBlockDefinition def;
   def.name = "HYDRANT";
   def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.resize(1);
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
   st.blockDefs.push_back(def);
 
@@ -2568,8 +2568,8 @@ TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
   def.name = "PALFIT";
   def.partType = CadPipePartType::Flange;
   def.nominalSize = "4in";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  def.content.solidAttrs.push_back(EntityAttributes{});
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolidAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(def);
 
   std::vector<std::string> log;
@@ -2777,7 +2777,7 @@ TEST_CASE("Every bundled fitting yields drawable geometry under its listed name"
     const CadBlockDefinition& def = scratch.blockDefs[static_cast<size_t>(di)];
 
     // Something to picture (and to place).
-    CHECK_FALSE(def.content.solids.empty());
+    CHECK_FALSE(def.content.cadSolids.empty());
 
     // Importing a library part for a PREVIEW must not drop loose geometry into the drawing — the
     // scratch state exists precisely so listing a part changes nothing the user owns.

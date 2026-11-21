@@ -244,9 +244,9 @@ TEST_CASE("FindBest snaps to a placed block instance's geometry", "[CadSnap][iss
   CadBlockDefinition def;
   def.name = "SQ";
   // A unit square (0,0)->(2,0)->(2,2)->(0,2) plus a circle centred at (1,1) r=0.5.
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f,
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f,
                        2.f, 0.f, 0.f, 2.f, 2.f, 0.f};
-  def.content.circles = {1.f, 1.f, 0.f, 0.5f};
+  def.content.userCirclesCxCyZR = {1.f, 1.f, 0.f, 0.5f};
   st.blockDefs.push_back(def);
 
   CadBlockRef r;
@@ -292,7 +292,7 @@ TEST_CASE("Block-instance snapping honours the snap toggles", "[CadSnap][issue12
 
   CadBlockDefinition def;
   def.name = "SQ";
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockRef r;
   r.defName = "SQ";
@@ -308,7 +308,7 @@ TEST_CASE("Block-instance snapping expands nested blocks", "[CadSnap][issue124][
 
   CadBlockDefinition leaf;
   leaf.name = "LEAF";
-  leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  leaf.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(leaf);
 
   CadBlockDefinition parent;

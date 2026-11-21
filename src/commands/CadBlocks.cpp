@@ -109,32 +109,32 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       const size_t k = static_cast<size_t>(e.index) * 6;
       if (k + 5 >= st.userLinesFlat.size())
         continue;
-      c->lines.push_back(st.userLinesFlat[k] - bx);
-      c->lines.push_back(st.userLinesFlat[k + 1] - by);
-      c->lines.push_back(st.userLinesFlat[k + 2] - bz);
-      c->lines.push_back(st.userLinesFlat[k + 3] - bx);
-      c->lines.push_back(st.userLinesFlat[k + 4] - by);
-      c->lines.push_back(st.userLinesFlat[k + 5] - bz);
+      c->userLinesFlat.push_back(st.userLinesFlat[k] - bx);
+      c->userLinesFlat.push_back(st.userLinesFlat[k + 1] - by);
+      c->userLinesFlat.push_back(st.userLinesFlat[k + 2] - bz);
+      c->userLinesFlat.push_back(st.userLinesFlat[k + 3] - bx);
+      c->userLinesFlat.push_back(st.userLinesFlat[k + 4] - by);
+      c->userLinesFlat.push_back(st.userLinesFlat[k + 5] - bz);
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.userLineAttrs.size())
         a = st.userLineAttrs[static_cast<size_t>(e.index)];
-      c->lineAttrs.push_back(a);
+      c->userLineAttrs.push_back(a);
       c->lineVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(e.index) * 4;
       if (k + 3 >= st.userCirclesCxCyZR.size())
         continue;
-      c->circles.push_back(st.userCirclesCxCyZR[k] - bx);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 1] - by);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 2] - bz);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 3]);
+      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k] - bx);
+      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1] - by);
+      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2] - bz);
+      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.userCircleAttrs.size())
         a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-      c->circleAttrs.push_back(a);
+      c->userCircleAttrs.push_back(a);
       float bnx = 0.f, bny = 0.f, bnz = 1.f;
       CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &bnx, &bny, &bnz);
-      PushCircleNormal(c->circleNormals, bnx, bny, bnz);
+      PushCircleNormal(c->userCircleNormals, bnx, bny, bnz);
       c->circleVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Annotation) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
@@ -143,22 +143,22 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       t.insX -= bx;
       t.insY -= by;
       t.insZ -= bz;
-      c->texts.push_back(std::move(t));
+      c->cadAnnotations.push_back(std::move(t));
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.cadAnnotationAttrs.size())
         a = st.cadAnnotationAttrs[static_cast<size_t>(e.index)];
-      c->textAttrs.push_back(a);
+      c->cadAnnotationAttrs.push_back(a);
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
         continue;
       CadArc a = st.userArcs[static_cast<size_t>(e.index)];
       a.cx -= bx;
       a.cy -= by;
-      c->arcs.push_back(a);
+      c->userArcs.push_back(a);
       EntityAttributes at{};
       if (static_cast<size_t>(e.index) < st.userArcAttrs.size())
         at = st.userArcAttrs[static_cast<size_t>(e.index)];
-      c->arcAttrs.push_back(at);
+      c->userArcAttrs.push_back(at);
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
         continue;
@@ -172,11 +172,11 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
     } else if (e.type == SelectedEntity::Type::Mesh) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMeshes.size())
         continue;
-      c->meshes.push_back(st.cadMeshes[static_cast<size_t>(e.index)]);
+      c->cadMeshes.push_back(st.cadMeshes[static_cast<size_t>(e.index)]);
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.cadMeshAttrs.size())
         a = st.cadMeshAttrs[static_cast<size_t>(e.index)];
-      c->meshAttrs.push_back(a);
+      c->cadMeshAttrs.push_back(a);
     } else if (e.type == SelectedEntity::Type::Solid) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSolids.size())
         continue;
@@ -186,40 +186,22 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       brep::Solid local =
           brep::Translate(*sp, brep::Vec3{-static_cast<double>(bx), -static_cast<double>(by),
                                            -static_cast<double>(bz)});
-      c->solids.push_back(std::make_shared<const brep::Solid>(std::move(local)));
+      c->cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(local)));
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.cadSolidAttrs.size())
         a = st.cadSolidAttrs[static_cast<size_t>(e.index)];
-      c->solidAttrs.push_back(a);
+      c->cadSolidAttrs.push_back(a);
     }
   }
 }
 
 void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
-  c->lines = st.userLinesFlat;
-  c->lineAttrs = st.userLineAttrs;
+  // The entity collections are one shared store (ADR-0010, #1557 phase 3): a single slice copy.
+  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
   c->lineVis.assign(st.userLineAttrs.size(), "");
-  c->circles = st.userCirclesCxCyZR;
-  c->circleAttrs = st.userCircleAttrs;
   c->circleVis.assign(st.userCircleAttrs.size(), "");
-  c->circleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->arcs = st.userArcs;
-  c->arcAttrs = st.userArcAttrs;
-  c->ellipses = st.userEllipses;
-  c->ellAttrs = st.userEllAttrs;
-  c->polyOffsets = st.userPolylineOffsets;
-  c->polyVerts = st.userPolylineVerts;
-  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  c->polyClosed = st.userPolylineClosed;
-  c->polyAttrs = st.userPolylineAttrs;
-  c->texts = st.cadAnnotations;
-  c->textAttrs = st.cadAnnotationAttrs;
-  c->meshes = st.cadMeshes;
-  c->meshAttrs = st.cadMeshAttrs;
-  c->solids = st.cadSolids;          // REQ-320 / ADR-051
-  c->solidAttrs = st.cadSolidAttrs;
+  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
   for (const CadBlockRef& r : st.cadBlockRefs) {
     CadBlockNested n;
     n.defName = r.defName;
@@ -234,34 +216,17 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
 /// Everything else in the model store is cleared so the viewport, picking and snapping see only
 /// the block (isolation, ADR-043 (b)).
 void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& c) {
-  st.userLinesFlat        = c.lines;
-  st.userLineAttrs        = c.lineAttrs;
-  st.userLineAttrs.resize(c.lines.size() / 6);
-  st.userCirclesCxCyZR    = c.circles;
-  st.userCircleAttrs      = c.circleAttrs;
-  st.userCircleAttrs.resize(c.circles.size() / 4);
-  st.userCircleNormals    = c.circleNormals;
-  EnsureCircleNormals(st.userCircleNormals, c.circles.size() / 4);
-  st.userArcs             = c.arcs;
-  st.userArcAttrs         = c.arcAttrs;
-  st.userArcAttrs.resize(c.arcs.size());
-  st.userEllipses         = c.ellipses;
-  st.userEllAttrs         = c.ellAttrs;
-  st.userEllAttrs.resize(c.ellipses.size());
-  st.userPolylineOffsets  = c.polyOffsets;
-  st.userPolylineVerts    = c.polyVerts;
-  st.userPolylineVertsBulge = c.polyVertsBulge;  // REQ-316 / ADR-047
+  // The block's entity store replaces the model's (ADR-0010, #1557 phase 3): a single slice copy,
+  // then the attribute arrays are padded to their entity counts as before.
+  static_cast<CadEntityStore&>(st) = static_cast<const CadEntityStore&>(c);
+  st.userLineAttrs.resize(st.userLinesFlat.size() / 6);
+  st.userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
+  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  st.userArcAttrs.resize(st.userArcs.size());
+  st.userEllAttrs.resize(st.userEllipses.size());
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // legacy block defs have none
-  st.userPolylineClosed   = c.polyClosed;
-  st.userPolylineAttrs    = c.polyAttrs;
-  st.cadAnnotations       = c.texts;
-  st.cadAnnotationAttrs   = c.textAttrs;
-  st.cadAnnotationAttrs.resize(c.texts.size());
-  st.cadMeshes            = c.meshes;
-  st.cadMeshAttrs         = c.meshAttrs;
+  st.cadAnnotationAttrs.resize(st.cadAnnotations.size());
   st.cadMeshAttrs.resize(st.cadMeshes.size());
-  st.cadSolids            = c.solids;
-  st.cadSolidAttrs        = c.solidAttrs;
   st.cadSolidAttrs.resize(st.cadSolids.size());
   // Hide everything that is not the block being edited.
   st.cadFilledRegions.clear();
@@ -304,36 +269,18 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
 /// are edited through their own commands, not this surface.
 void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
-  c->lines = st.userLinesFlat;
-  c->lineAttrs = st.userLineAttrs;
-  c->lineAttrs.resize(st.userLinesFlat.size() / 6);
+  // Same entity store copy as CadBlockCaptureDrawing, then the attribute arrays are padded.
+  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
+  c->userLineAttrs.resize(st.userLinesFlat.size() / 6);
   c->lineVis.assign(st.userLinesFlat.size() / 6, "");
-  c->circles = st.userCirclesCxCyZR;
-  c->circleAttrs = st.userCircleAttrs;
-  c->circleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
+  c->userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
   c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
-  c->circleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->arcs = st.userArcs;
-  c->arcAttrs = st.userArcAttrs;
-  c->arcAttrs.resize(st.userArcs.size());
-  c->ellipses = st.userEllipses;
-  c->ellAttrs = st.userEllAttrs;
-  c->ellAttrs.resize(st.userEllipses.size());
-  c->polyOffsets = st.userPolylineOffsets;
-  c->polyVerts = st.userPolylineVerts;
-  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  c->polyClosed = st.userPolylineClosed;
-  c->polyAttrs = st.userPolylineAttrs;
-  c->texts = st.cadAnnotations;
-  c->textAttrs = st.cadAnnotationAttrs;
-  c->textAttrs.resize(st.cadAnnotations.size());
-  c->meshes = st.cadMeshes;
-  c->meshAttrs = st.cadMeshAttrs;
-  c->meshAttrs.resize(st.cadMeshes.size());
-  c->solids = st.cadSolids;
-  c->solidAttrs = st.cadSolidAttrs;
-  c->solidAttrs.resize(st.cadSolids.size());
+  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  c->userArcAttrs.resize(st.userArcs.size());
+  c->userEllAttrs.resize(st.userEllipses.size());
+  c->cadAnnotationAttrs.resize(st.cadAnnotations.size());
+  c->cadMeshAttrs.resize(st.cadMeshes.size());
+  c->cadSolidAttrs.resize(st.cadSolids.size());
 }
 
 bool DrawingHasCaptureableGeometry(const AppCommandState& st) {
@@ -364,9 +311,9 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
     CadBlockDefinition& have = dest.blockDefs[static_cast<size_t>(i)];
     const bool upgradeMatchline =
         CadBlockNameIsMatchline(def.name) &&
-        (have.attrDefs.size() < def.attrDefs.size() || have.content.texts.size() < def.content.texts.size());
-    const bool upgradeSatSolid = !def.content.solids.empty() &&
-                                 (have.content.solids.empty() || have.units != def.units);
+        (have.attrDefs.size() < def.attrDefs.size() || have.content.cadAnnotations.size() < def.content.cadAnnotations.size());
+    const bool upgradeSatSolid = !def.content.cadSolids.empty() &&
+                                 (have.content.cadSolids.empty() || have.units != def.units);
     if (!upgradeMatchline && !upgradeSatSolid) {
       log.push_back("BLOCKIMPORT — skipped duplicate \"" + def.name + "\".");
       return 0;
@@ -753,7 +700,7 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
       st.cadBlockRefAttrs.pop_back();
     }
   }
-  if (!def.content.solids.empty() && !CadBlockXformScaleIsUniform(r.xf))
+  if (!def.content.cadSolids.empty() && !CadBlockXformScaleIsUniform(r.xf))
     log.push_back("INSERT — \"" + def.name +
                   "\" carries a 3D solid; non-uniform scale is not supported for solid blocks.");
   NoteRecent(st, r.defName);
@@ -3729,13 +3676,13 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       st.userLineAttrs.push_back(EntityAttributes{});
     } else {
       CadBlockContent& c = st.blockDefs[static_cast<size_t>(di)].content;
-      c.lines.push_back(x1);
-      c.lines.push_back(y1);
-      c.lines.push_back(0.f);
-      c.lines.push_back(x2);
-      c.lines.push_back(y2);
-      c.lines.push_back(0.f);
-      c.lineAttrs.push_back(EntityAttributes{});
+      c.userLinesFlat.push_back(x1);
+      c.userLinesFlat.push_back(y1);
+      c.userLinesFlat.push_back(0.f);
+      c.userLinesFlat.push_back(x2);
+      c.userLinesFlat.push_back(y2);
+      c.userLinesFlat.push_back(0.f);
+      c.userLineAttrs.push_back(EntityAttributes{});
       c.lineVis.push_back(f.size() >= 6 ? f[5] : std::string());
     }
     st.blockEditorDirty = true;

@@ -957,7 +957,7 @@ TEST_CASE("A hovered block reference made entirely of solid geometry draws a hig
 
   CadBlockDefinition def;
   def.name = "FIT";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   st.blockDefs.push_back(def);
 
   CadBlockRef r;

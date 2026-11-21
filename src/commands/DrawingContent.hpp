@@ -75,43 +75,14 @@ struct NamedView {
 /// the point visibility rules and the point-numbering state, so each one is undone and carried
 /// per tab. The defaults are the snapshot's and the document's; `AppCommandState`'s constructor
 /// seeds the tables a live drawing always has (layer "0", "Standard" styles).
-struct DrawingContent {
+struct DrawingContent : CadEntityStore {
   // --- Model-space entities ---------------------------------------------------------------------
 
-  /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
-  std::vector<double> userLinesFlat;
-  std::vector<EntityAttributes> userLineAttrs;
-  /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
-  /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
-  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
-  /// says otherwise (REQ-312), matching CadArc.
-  std::vector<double> userCirclesCxCyZR;
-  std::vector<EntityAttributes> userCircleAttrs;
-  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
-  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
-  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
-  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
-  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
-  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
-  std::vector<float> userCircleNormals;
-  std::vector<CadArc> userArcs;
-  std::vector<EntityAttributes> userArcAttrs;
-  std::vector<CadEllipse> userEllipses;
-  std::vector<EntityAttributes> userEllAttrs;
-  /// Each polyline: vertex indices [\ref userPolylineOffsets[i], \ref userPolylineOffsets[i+1]); XYZ triplets in
-  /// \ref userPolylineVerts.
-  std::vector<int> userPolylineOffsets;
-  std::vector<double> userPolylineVerts;
-  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
-  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
-  std::vector<float> userPolylineVertsBulge;
   /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
   /// (stride 3, parallel to userPolylineVerts). Consulted only when the paired bulge is non-zero;
   /// omitted from persistence when every entry is world +Z, the same additive/byte-identical-legacy
   /// rule REQ-312 used for userCircleNormals.
   std::vector<float> userPolylineVertsNormal;
-  std::vector<uint8_t> userPolylineClosed;
-  std::vector<EntityAttributes> userPolylineAttrs;
 
   /// Feature lines (REQ-087, ADR-035) — named 3D design linework, in their own store rather than
   /// the polyline arrays, so a feature line is never mistaken for a polyline at the type level.
@@ -133,36 +104,21 @@ struct DrawingContent {
   std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
-  std::vector<CadAnnotation> cadAnnotations;
-  std::vector<EntityAttributes> cadAnnotationAttrs;
   /// Solid-filled regions (ADR-011), imported from SOLID-fill HATCH; rendered filled in the overlay.
   std::vector<CadFilledRegion> cadFilledRegions;
   std::vector<EntityAttributes> cadFilledRegionAttrs;
 
-  /// Imported triangle meshes (REQ-063 / ADR-026). Reference geometry: nothing in the command layer
-  /// creates or edits one — REQ-065's glTF importer produces them and ERASE removes them.
-  ///
-  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
-  /// §11.5 as amended): a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
-  /// "Editing" a mesh means replacing the pointer; never write through it.
-  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
-  std::vector<EntityAttributes> cadMeshAttrs;
   /// Point clouds (REQ-171 / ADR-042). Reference geometry: nothing in the command layer creates or
   /// edits one — REQ-172's E57/PTS/PTX/LAS/LAZ importers produce them and ERASE removes them.
   ///
   /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
-  /// §11.5), exactly as \ref cadMeshes above.
+  /// §11.5), exactly as the meshes in \ref CadEntityStore.
   std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
   std::vector<EntityAttributes> cadPointCloudAttrs;
   /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
-  /// B-rep solids (REQ-313 / ADR-045). `shared_ptr<const>` for the same reason meshes are: an undo
-  /// snapshot shares the payload instead of copying it, and immutability is what makes that safe.
-  /// A solid is REPLACED, never written through.
-  std::vector<CadSolidPtr> cadSolids;
-  std::vector<EntityAttributes> cadSolidAttrs;
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;

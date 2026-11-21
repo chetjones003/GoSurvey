@@ -2422,22 +2422,22 @@ void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
       skipCounts["SPLINE"] += splineCount;
     }
     auto& content = def.content;
-    content.lines.assign(scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
-    content.lineAttrs = std::move(scratch.userLineAttrs);
-    content.circles.assign(scratch.userCirclesCxCyZR.begin(), scratch.userCirclesCxCyZR.end());
-    content.circleAttrs = std::move(scratch.userCircleAttrs);
-    content.circleNormals = std::move(scratch.userCircleNormals);
-    content.arcs = std::move(scratch.userArcs);
-    content.arcAttrs = std::move(scratch.userArcAttrs);
-    content.ellipses = std::move(scratch.userEllipses);
-    content.ellAttrs = std::move(scratch.userEllAttrs);
-    content.polyOffsets = std::move(scratch.userPolylineOffsets);
-    content.polyVerts = std::move(scratch.userPolylineVerts);
-    content.polyVertsBulge = std::move(scratch.userPolylineVertsBulge);
-    content.polyClosed = std::move(scratch.userPolylineClosed);
-    content.polyAttrs = std::move(scratch.userPolylineAttrs);
-    content.texts = std::move(scratch.cadAnnotations);
-    content.textAttrs = std::move(scratch.cadAnnotationAttrs);
+    content.userLinesFlat.assign(scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
+    content.userLineAttrs = std::move(scratch.userLineAttrs);
+    content.userCirclesCxCyZR.assign(scratch.userCirclesCxCyZR.begin(), scratch.userCirclesCxCyZR.end());
+    content.userCircleAttrs = std::move(scratch.userCircleAttrs);
+    content.userCircleNormals = std::move(scratch.userCircleNormals);
+    content.userArcs = std::move(scratch.userArcs);
+    content.userArcAttrs = std::move(scratch.userArcAttrs);
+    content.userEllipses = std::move(scratch.userEllipses);
+    content.userEllAttrs = std::move(scratch.userEllAttrs);
+    content.userPolylineOffsets = std::move(scratch.userPolylineOffsets);
+    content.userPolylineVerts = std::move(scratch.userPolylineVerts);
+    content.userPolylineVertsBulge = std::move(scratch.userPolylineVertsBulge);
+    content.userPolylineClosed = std::move(scratch.userPolylineClosed);
+    content.userPolylineAttrs = std::move(scratch.userPolylineAttrs);
+    content.cadAnnotations = std::move(scratch.cadAnnotations);
+    content.cadAnnotationAttrs = std::move(scratch.cadAnnotationAttrs);
     for (size_t refIndex = 0; refIndex < scratch.cadBlockRefs.size(); ++refIndex) {
       const CadBlockRef& ref = scratch.cadBlockRefs[refIndex];
       CadBlockNested nested;
@@ -3789,34 +3789,34 @@ std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
     for (double v : in)
       out->push_back(static_cast<float>(v));
   };
-  toFloat(src.lines, &block.paperLines);
-  block.paperLineAttrs = src.lineAttrs;
-  for (size_t i = 0; i + 3 < src.circles.size(); i += 4) {
+  toFloat(src.userLinesFlat, &block.paperLines);
+  block.paperLineAttrs = src.userLineAttrs;
+  for (size_t i = 0; i + 3 < src.userCirclesCxCyZR.size(); i += 4) {
     const size_t circleIndex = i / 4;
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    CircleNormalAt(src.circleNormals, circleIndex, &nx, &ny, &nz);
-    if (std::fabs(src.circles[i + 2]) > 1e-6 || !IsFlatNormal(nx, ny, nz)) {
+    CircleNormalAt(src.userCircleNormals, circleIndex, &nx, &ny, &nz);
+    if (std::fabs(src.userCirclesCxCyZR[i + 2]) > 1e-6 || !IsFlatNormal(nx, ny, nz)) {
       ++*unsupportedCount;  // Paper-space circle codec is planar; do not flatten elevated or tilted circles.
       continue;
     }
-    block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(src.circles[i]),
-                                                          static_cast<float>(src.circles[i + 1]),
-                                                          static_cast<float>(src.circles[i + 3])});
+    block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(src.userCirclesCxCyZR[i]),
+                                                          static_cast<float>(src.userCirclesCxCyZR[i + 1]),
+                                                          static_cast<float>(src.userCirclesCxCyZR[i + 3])});
     const size_t attrIndex = circleIndex;
-    block.paperCircleAttrs.push_back(attrIndex < src.circleAttrs.size() ? src.circleAttrs[attrIndex]
+    block.paperCircleAttrs.push_back(attrIndex < src.userCircleAttrs.size() ? src.userCircleAttrs[attrIndex]
                                                                        : EntityAttributes{});
   }
-  block.paperArcs = src.arcs;
-  block.paperArcAttrs = src.arcAttrs;
-  block.paperEllipses = src.ellipses;
-  block.paperEllAttrs = src.ellAttrs;
-  block.paperPolyOffsets = src.polyOffsets;
-  toFloat(src.polyVerts, &block.paperPolyVerts);
-  block.paperPolyVertsBulge = src.polyVertsBulge;
-  block.paperPolyClosed = src.polyClosed;
-  block.paperPolyAttrs = src.polyAttrs;
-  block.paperTexts = src.texts;
-  block.paperTextAttrs = src.textAttrs;
+  block.paperArcs = src.userArcs;
+  block.paperArcAttrs = src.userArcAttrs;
+  block.paperEllipses = src.userEllipses;
+  block.paperEllAttrs = src.userEllAttrs;
+  block.paperPolyOffsets = src.userPolylineOffsets;
+  toFloat(src.userPolylineVerts, &block.paperPolyVerts);
+  block.paperPolyVertsBulge = src.userPolylineVertsBulge;
+  block.paperPolyClosed = src.userPolylineClosed;
+  block.paperPolyAttrs = src.userPolylineAttrs;
+  block.paperTexts = src.cadAnnotations;
+  block.paperTextAttrs = src.cadAnnotationAttrs;
   block.paperBlockRefs.reserve(src.nested.size());
   for (const CadBlockNested& nested : src.nested) {
     const bool isAllowed = std::any_of(nestedBlockNames.begin(), nestedBlockNames.end(),
@@ -3839,8 +3839,8 @@ std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
                 return (p.code == 67 || p.code == 410) &&
                        (p.code != 410 || p.value.empty());
               }), pairs.end());
-  if (!src.meshes.empty() || !src.solids.empty())
-    *unsupportedCount += src.meshes.size() + src.solids.size();
+  if (!src.cadMeshes.empty() || !src.cadSolids.empty())
+    *unsupportedCount += src.cadMeshes.size() + src.cadSolids.size();
   *unsupportedCount += skippedNestedRefs;
   return pairs;
 }
@@ -3966,8 +3966,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   for (size_t di : dxfBlockDefIndices) {
     const CadBlockContent& content = st.blockDefs[di].content;
-    for (const auto* attrs : {&content.lineAttrs, &content.circleAttrs, &content.arcAttrs, &content.ellAttrs,
-                              &content.polyAttrs, &content.textAttrs})
+    for (const auto* attrs : {&content.userLineAttrs, &content.userCircleAttrs, &content.userArcAttrs, &content.userEllAttrs,
+                              &content.userPolylineAttrs, &content.cadAnnotationAttrs})
       for (const EntityAttributes& at : *attrs)
         addLayerName(at.layer);
     for (const CadBlockNested& nested : content.nested)
