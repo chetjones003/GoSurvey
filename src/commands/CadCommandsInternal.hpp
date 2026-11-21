@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "CadEntities.hpp"  // EntityAttributes
+#include "CadCommands.hpp"  // complete AppCommandState and the ParseStoragePointZ declaration
 #include <GoSurvey/Core/StringUtil.hpp>
 
 /// A duplicate is a NEW entity, so it takes the source's layer, colour and linetype but NOT its id.
