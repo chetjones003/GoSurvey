@@ -140,6 +140,18 @@ class SplitOnlyFixtureTests(unittest.TestCase):
 
         self.check()
 
+    def test_cmake_source_list_variable_addition_passes(self):
+        self.split_widget_into_family(OLD_CPP)
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "set(APP_SOURCES\n"
+            "  src/new/WidgetRun.cpp\n"
+            ")\n"
+        ))
+        self.commit("list the new source in the domain source variable")
+
+        self.check()
+
     def test_baseline_cap_decrease_passes(self):
         self.split_widget_into_family(OLD_CPP)
         self.write(BASELINE, json.dumps({"src/old/Widget.cpp": 40, "src/old/Other.cpp": 50}))
@@ -232,6 +244,19 @@ class SplitOnlyFixtureTests(unittest.TestCase):
             ")\n"
         ))
         self.commit("exclude the library from the default build")
+
+        with self.assertRaisesRegex(ValueError, "CMake source entry"):
+            self.check()
+
+    def test_added_shared_library_opener_fails(self):
+        self.split_widget_into_family(OLD_CPP)
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "add_library(shared_app SHARED\n"
+            "  src/new/WidgetRun.cpp\n"
+            ")\n"
+        ))
+        self.commit("build a shared library")
 
         with self.assertRaisesRegex(ValueError, "CMake source entry"):
             self.check()

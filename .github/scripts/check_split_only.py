@@ -22,6 +22,11 @@ FILE_SIZE_BASELINE = move_proof.FILE_SIZE_BASELINE
 CMAKE_FILE_NAMES = ("CMakeLists.txt",)
 CMAKE_FILE_SUFFIXES = (".cmake",)
 CMAKE_SOURCE_COMMANDS = {"target_sources", "add_library", "add_executable"}
+SOURCE_LIST_VARIABLE = re.compile(r"(SOURCES|FILES|HEADERS|RESOURCES|INCLUDES)$", re.IGNORECASE)
+CMAKE_OPENER = re.compile(
+    r"^\s*(?:set|add_library|add_executable|target_sources)\(\s*[\w.-]+"
+    r"(?:\s+(?:PRIVATE|PUBLIC|INTERFACE))?\s*$"
+)
 SOURCE_PATH_TOKEN = re.compile(r"\S+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)\b")
 INCLUDE_DIRECTIVE = re.compile(r"^\s*#\s*include\b")
 NAMESPACE_OPEN = re.compile(r"^\s*(?:inline\s+)?namespace\s*(?:[\w:]+\s*)?\{\s*(?://.*)?$")
@@ -77,15 +82,28 @@ def is_cmake_file(path):
 
 
 def is_cmake_source_entry(text_of_file, line_number, text):
-    """True when the line is a source path inside a target_sources or add_library/executable call."""
-    if not SOURCE_PATH_TOKEN.search(text):
+    """True when the line is a source path, or the bare opener, of a source-list statement.
+
+    The opener is the first line of a multi-line call, such as `set(APP_SOURCES` or
+    `add_library(app`. It is accepted only when it has no keyword after the target or variable.
+    """
+    is_source_path = bool(SOURCE_PATH_TOKEN.search(text))
+    is_opener = bool(CMAKE_OPENER.match(text))
+    is_closer = text.strip() == ")"
+    if not (is_source_path or is_opener or is_closer):
         return False
-    for name, _arguments, start, end in move_proof.cmake_statements(text_of_file):
-        if name not in CMAKE_SOURCE_COMMANDS:
+    for name, arguments, start, end in move_proof.cmake_statements(text_of_file):
+        if name == "set":
+            variable = move_proof.CMAKE_SOURCE_VARIABLE.match(arguments)
+            if not (variable and SOURCE_LIST_VARIABLE.search(variable.group(1))):
+                continue
+        elif name not in CMAKE_SOURCE_COMMANDS:
             continue
         first_line = text_of_file.count("\n", 0, start) + 1
         last_line = text_of_file.count("\n", 0, end) + 1
-        if first_line <= line_number <= last_line:
+        if not first_line <= line_number <= last_line:
+            continue
+        if is_source_path or line_number == first_line or (is_closer and line_number == last_line):
             return True
     return False
 
