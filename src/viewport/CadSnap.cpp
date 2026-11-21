@@ -1130,9 +1130,9 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   if (cmd.lineStoreWellFormed()) {
     for (size_t i = 0; i < cmd.lineCount(); ++i) {
       const CadLineRecord ln = cmd.line(i);
-      if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
+      if (isolatedOut(cmd.userLineAttrs, i)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
-          exclude.index == static_cast<int>(i / 6)) continue;
+          exclude.index == static_cast<int>(i)) continue;
       const float x0 = ln.x0;
       const float y0 = ln.y0;
       const float x1 = ln.x1;

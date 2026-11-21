@@ -120,10 +120,12 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   }
 
   // Lines
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    if (selective && !sLines.count(static_cast<int>(i / 6))) continue;
-    HelmertPt(a, b, tx, ty, &st.userLinesFlat[i],     &st.userLinesFlat[i + 1]);
-    HelmertPt(a, b, tx, ty, &st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
+  for (size_t li = 0; li < st.lineCount(); ++li) {
+    if (selective && !sLines.count(static_cast<int>(li))) continue;
+    CadLineRecord ln = st.line(li);
+    HelmertPt(a, b, tx, ty, &ln.x0, &ln.y0);
+    HelmertPt(a, b, tx, ty, &ln.x1, &ln.y1);
+    st.setLine(li, ln);
   }
 
   // Circles
