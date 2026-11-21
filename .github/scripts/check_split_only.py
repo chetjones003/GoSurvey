@@ -24,6 +24,8 @@ CMAKE_FILE_SUFFIXES = (".cmake",)
 CMAKE_SOURCE_COMMANDS = {"target_sources", "add_library", "add_executable"}
 SOURCE_PATH_TOKEN = re.compile(r"\S+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)\b")
 INCLUDE_DIRECTIVE = re.compile(r"^\s*#\s*include\b")
+NAMESPACE_OPEN = re.compile(r"^\s*(?:inline\s+)?namespace\s*(?:[\w:]+\s*)?\{\s*(?://.*)?$")
+NAMESPACE_CLOSE = re.compile(r"^\s*\}\s*//\s*namespace\b.*$")
 FORWARD_DECLARATION = re.compile(
     r"^\s*(?:template\s*<[^>]*>\s*)?"
     r"(?:(?:class|struct|union)\s+\w+|enum\s+(?:class\s+|struct\s+)?\w+(?:\s*:\s*[\w:\s]+)?)"
@@ -100,6 +102,8 @@ def is_allowed_addition(root, head_ref, path, line_number, text, head_texts):
         INCLUDE_DIRECTIVE.match(text)
         or FORWARD_DECLARATION.match(text)
         or is_function_declaration(text)
+        or NAMESPACE_OPEN.match(text)
+        or NAMESPACE_CLOSE.match(text)
     )
 
 

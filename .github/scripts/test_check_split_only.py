@@ -80,6 +80,25 @@ class SplitOnlyFixtureTests(unittest.TestCase):
 
         self.check()
 
+    def test_added_anonymous_namespace_wrapper_passes(self):
+        self.write("src/old/Widget.cpp", '#include "Widget.hpp"\n')
+        self.write("src/new/WidgetRun.cpp", (
+            '#include "Widget.hpp"\n'
+            "namespace {\n"
+            + OLD_CPP
+            + "} // namespace\n"
+        ))
+        self.commit("wrap the moved code in an anonymous namespace")
+
+        self.check()
+
+    def test_added_bare_closing_brace_fails(self):
+        self.split_widget_into_family(OLD_CPP + "}\n")
+        self.commit("add a bare closing brace")
+
+        with self.assertRaisesRegex(ValueError, "not an include"):
+            self.check()
+
     def test_added_function_prototype_passes(self):
         self.write("src/old/Widget.cpp", '#include "Widget.hpp"\n')
         self.write("src/new/WidgetRun.hpp", "void Widget_run(int counter);\n")
