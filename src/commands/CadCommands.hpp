@@ -571,38 +571,13 @@ struct CadClipboard {
   double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
   double basePtY = 0.0;
 
-  std::vector<double>            lines;
-  std::vector<EntityAttributes> lineAttrs;
-  /// Flat cx,cy,z,r quads (REQ-057 / ADR-025 (a)). A copy from paper space stores z = 0, and a
-  /// paste into paper space drops z — the sheet is 2D (ADR-025 (g)), so Z collapses at that
-  /// boundary rather than silently riding along.
-  std::vector<double>            circlesCxCyZR;
-  std::vector<EntityAttributes> circleAttrs;
-  /// Circle plane normals, 3 floats each (REQ-312). A paste into paper space flattens them back
-  /// to world +Z, the same boundary where z collapses -- the sheet is 2D (ADR-025 (g)).
-  std::vector<float>            circleNormals;
-  std::vector<CadArc>           arcs;
-  std::vector<EntityAttributes> arcAttrs;
-  std::vector<CadEllipse>       ellipses;
-  std::vector<EntityAttributes> ellAttrs;
-  std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
-  std::vector<EntityAttributes> splineAttrs;
-  std::vector<CadPoint>         points; ///< REQ-456 CAD POINT entities.
-  std::vector<EntityAttributes> pointAttrs;
-  std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
-  std::vector<double>            polyVerts;
-  std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
-  std::vector<uint8_t>          polyClosed;
-  std::vector<EntityAttributes> polyAttrs;
-  std::vector<CadAnnotation>    annotations;
-  std::vector<EntityAttributes> annotationAttrs;
-  std::vector<CadTable>         tables;
-  std::vector<EntityAttributes> tableAttrs;
-  std::vector<CadBlockRef>      blockRefs;
-  std::vector<EntityAttributes> blockRefAttrs;
-  std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
-  std::vector<EntityAttributes> filledRegionAttrs;
-  std::vector<SurveyPoint>       surveyPoints; ///< Selected model-space survey points (REQ-383 #782).
+  /// The copied entities, in the shape a drawing holds them (ADR-0010 / #1557 phase 2). Only the
+  /// entity fields are filled by a copy; the rest of \ref DrawingContent stays at its defaults and
+  /// is never read. A copy from paper space stores z = 0 in `userCirclesCxCyZR`, and a paste into
+  /// paper space drops z: the sheet is 2D (ADR-025 (g)), so Z collapses at that boundary.
+  /// `userCircleNormals` (REQ-312) flattens to world +Z at the same boundary. A copy does not carry
+  /// `userPolylineVertsNormal` (REQ-325) yet, so a pasted bulged segment on a tilted plane comes back flat.
+  DrawingContent content;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
@@ -617,9 +592,12 @@ struct CadClipboard {
   double      srcOriginX = 0.0, srcOriginY = 0.0;  ///< the source drawing's document origin: world = local + origin
 
   bool empty() const {
-    return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && splines.empty() && points.empty() && annotations.empty() && tables.empty() &&
-           blockRefs.empty() && filledRegions.empty() && surveyPoints.empty();
+    // Only the entity fields count: the non-entity fields of DrawingContent are never copied. Keep this
+    // list in step with the entity fields of DrawingContent, or a new kind will look empty.
+    return content.userLinesFlat.empty() && content.userCirclesCxCyZR.empty() && content.userArcs.empty() &&
+           content.userEllipses.empty() && (content.userPolylineOffsets.size() <= 1) && content.cadSplines.empty() &&
+           content.cadPoints.empty() && content.cadAnnotations.empty() && content.cadTables.empty() &&
+           content.cadBlockRefs.empty() && content.cadFilledRegions.empty() && content.surveyPoints.empty();
   }
 };
 

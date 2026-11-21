@@ -9455,7 +9455,7 @@ private Q_SLOTS:
     state.userLinesFlat = {0, 0, 0, 1, 1, 0};
     state.selection.push_back({SelectedEntity::Type::LineSeg, 0});
     auto* copy = Action(window, "Copy"); QVERIFY(copy); copy->trigger();
-    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    QCOMPARE(state.clipboard.content.userLinesFlat.size(), std::size_t(6));
     state.clipboard.srcProjectUid = 0; state.clipboard.srcZone.clear();
     state.clipboard.srcMetersPerUnit = 1.0; state.drawingSettings.zoneCode.clear(); state.drawingInsUnits = 2;
     QTimer::singleShot(0, &window, [&] {
@@ -9465,7 +9465,7 @@ private Q_SLOTS:
     });
     window.Submit("PASTECLIP");
     QCOMPARE(state.active, AppCommandState::Kind::Paste);
-    QVERIFY(state.clipboard.lines[3] > 3.28f); QVERIFY(state.clipboard.lines[3] < 3.29f);
+    QVERIFY(state.clipboard.content.userLinesFlat[3] > 3.28f); QVERIFY(state.clipboard.content.userLinesFlat[3] < 3.29f);
     QVERIFY(!state.pastePrompt.active); QVERIFY(!state.pasteWarningAnswered);
   }
 
@@ -12277,7 +12277,7 @@ private Q_SLOTS:
     std::vector<std::string> log;
     CutSelectionToClipboard(state, log);
     QVERIFY(state.userLinesFlat.empty());
-    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    QCOMPARE(state.clipboard.content.userLinesFlat.size(), std::size_t(6));
     QVERIFY(state.selection.empty());
     DoUndo(state, log);
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
@@ -12375,7 +12375,7 @@ private Q_SLOTS:
     state.clipboard = CadClipboard{};
     window.Refresh();
     QVERIFY(!pasteSpecial()->isEnabled());
-    state.clipboard.lines = {0, 0, 0, 1, 1, 0};
+    state.clipboard.content.userLinesFlat = {0, 0, 0, 1, 1, 0};
     window.Refresh();
     QVERIFY(pasteSpecial()->isEnabled());
     QVERIFY(hasItem("PASTEBLOCK"));
@@ -12388,9 +12388,9 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(0);
     if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
     auto& state = window.State();
-    state.clipboard.blockRefs.push_back(CadBlockRef{});
-    state.clipboard.blockRefAttrs.push_back(EntityAttributes{});
-    state.clipboard.blockRefAttrs.back().id = 42;  // the source's id: REQ-076 says the paste must not keep it
+    state.clipboard.content.cadBlockRefs.push_back(CadBlockRef{});
+    state.clipboard.content.cadBlockRefAttrs.push_back(EntityAttributes{});
+    state.clipboard.content.cadBlockRefAttrs.back().id = 42;  // the source's id: REQ-076 says the paste must not keep it
     state.activeSpaceIndex = kModelSpaceIndex;
     const auto modelBefore = state.cadBlockRefs.size();
     window.Submit("PASTEBLOCK");
@@ -12409,7 +12409,7 @@ private Q_SLOTS:
   void pasteBlockRefusesStaleLayoutIndex() {
     EditorWindow window; window.CreateDrawingFromTemplate(0);
     auto& state = window.State();
-    state.clipboard.blockRefs.push_back(CadBlockRef{});
+    state.clipboard.content.cadBlockRefs.push_back(CadBlockRef{});
     state.activeSpaceIndex = 7;
     const auto modelBefore = state.cadBlockRefs.size();
     window.Submit("PASTEBLOCK");
@@ -12421,7 +12421,7 @@ private Q_SLOTS:
   void pasteBlockRefusesCoordinateMismatch() {
     EditorWindow window; window.CreateDrawingFromTemplate(0);
     auto& state = window.State();
-    state.clipboard.blockRefs.push_back(CadBlockRef{});
+    state.clipboard.content.cadBlockRefs.push_back(CadBlockRef{});
     state.clipboard.srcZone = "TX83-CF";
     state.drawingSettings.zoneCode = "TX83-NF";
     state.activeSpaceIndex = kModelSpaceIndex;
@@ -12467,7 +12467,7 @@ private Q_SLOTS:
     popup->setCurrentIndex(model->index(0, 0));
     QTest::keyClick(command, Qt::Key_Return);
     QVERIFY(state.userLinesFlat.empty());
-    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    QCOMPARE(state.clipboard.content.userLinesFlat.size(), std::size_t(6));
     window.CancelDraftingInput();
   }
 
@@ -12528,7 +12528,7 @@ private Q_SLOTS:
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
     window.RunRibbonAction("##ClipCut");
     QVERIFY(state.userLinesFlat.empty());
-    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    QCOMPARE(state.clipboard.content.userLinesFlat.size(), std::size_t(6));
     state.userLinesFlat = {100, 100, 0, 110, 100, 0};
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
     QTest::keyClick(&window, Qt::Key_X, Qt::ControlModifier);
@@ -12562,7 +12562,7 @@ private Q_SLOTS:
     auto& state = window.State();
     SurveyPoint point; point.id = 42; point.easting = 10; point.northing = 20; point.description = "SOURCE";
     state.surveyPoints = {point};
-    state.clipboard.surveyPoints = {point};
+    state.clipboard.content.surveyPoints = {point};
     state.clipboard.basePtX = 10; state.clipboard.basePtY = 20;
     std::vector<std::string> log;
     CommitClipboardPasteAt(state, 100, 200, log);
@@ -12594,7 +12594,7 @@ private Q_SLOTS:
       tab.pointsMode = mode;
       SurveyPoint point; point.id = 42; point.easting = 10; point.northing = 20;
       state.surveyPoints = {point};
-      state.clipboard.surveyPoints = {point};
+      state.clipboard.content.surveyPoints = {point};
       state.clipboard.basePtX = 10; state.clipboard.basePtY = 20;
       std::vector<std::string> log;
       CommitClipboardPasteAt(state, 100, 200, log);

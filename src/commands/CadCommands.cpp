@@ -11159,85 +11159,85 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
   using ST = SelectedEntity::Type;
   st.selection.clear();
 
-  for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
-    st.userLinesFlat.push_back(cb.lines[i + 0] + dx);
-    st.userLinesFlat.push_back(cb.lines[i + 1] + dy);
-    st.userLinesFlat.push_back(cb.lines[i + 2]);
-    st.userLinesFlat.push_back(cb.lines[i + 3] + dx);
-    st.userLinesFlat.push_back(cb.lines[i + 4] + dy);
-    st.userLinesFlat.push_back(cb.lines[i + 5]);
-    st.userLineAttrs.push_back(cb.lineAttrs[i / 6]);
+  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 0] + dx);
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 1] + dy);
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 2]);
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 3] + dx);
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 4] + dy);
+    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 5]);
+    st.userLineAttrs.push_back(cb.content.userLineAttrs[i / 6]);
     st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
   }
   // Clipboard → model: both are cx,cy,z,r, so Z carries through a paste unchanged (REQ-057).
-  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {
-    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 0] + dx);
-    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 1] + dy);
-    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 2]);
-    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 3]);
-    st.userCircleAttrs.push_back(cb.circleAttrs[i / 4]);
+  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {
+    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 0] + dx);
+    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 1] + dy);
+    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 2]);
+    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 3]);
+    st.userCircleAttrs.push_back(cb.content.userCircleAttrs[i / 4]);
     float pnx = 0.f, pny = 0.f, pnz = 1.f;
-    CircleNormalAt(cb.circleNormals, i / 4, &pnx, &pny, &pnz);
+    CircleNormalAt(cb.content.userCircleNormals, i / 4, &pnx, &pny, &pnz);
     PushCircleNormal(st.userCircleNormals, pnx, pny, pnz);
     st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
-  for (size_t i = 0; i < cb.arcs.size(); ++i) {
-    CadArc a = cb.arcs[i];
+  for (size_t i = 0; i < cb.content.userArcs.size(); ++i) {
+    CadArc a = cb.content.userArcs[i];
     a.cx += dx;
     a.cy += dy;
     st.userArcs.push_back(a);
-    st.userArcAttrs.push_back(cb.arcAttrs[i]);
+    st.userArcAttrs.push_back(cb.content.userArcAttrs[i]);
     st.selection.push_back({ST::Arc, static_cast<int>(st.userArcs.size()) - 1});
   }
-  for (size_t i = 0; i < cb.ellipses.size(); ++i) {
-    CadEllipse el = cb.ellipses[i];
+  for (size_t i = 0; i < cb.content.userEllipses.size(); ++i) {
+    CadEllipse el = cb.content.userEllipses[i];
     el.cx += dx;
     el.cy += dy;
     st.userEllipses.push_back(el);
-    st.userEllAttrs.push_back(cb.ellAttrs[i]);
+    st.userEllAttrs.push_back(cb.content.userEllAttrs[i]);
     st.selection.push_back({ST::Ellipse, static_cast<int>(st.userEllipses.size()) - 1});
   }
-  for (size_t i = 0; i < cb.splines.size(); ++i) {  // REQ-443
-    CadSpline sp = cb.splines[i];
+  for (size_t i = 0; i < cb.content.cadSplines.size(); ++i) {  // REQ-443
+    CadSpline sp = cb.content.cadSplines[i];
     spline::MapPoints(&sp, [&](const spline::Vec3& p) { return spline::Vec3{p.x + dx, p.y + dy, p.z}; });
     st.cadSplines.push_back(std::move(sp));
-    st.cadSplineAttrs.push_back(i < cb.splineAttrs.size() ? cb.splineAttrs[i] : EntityAttributes{});
+    st.cadSplineAttrs.push_back(i < cb.content.cadSplineAttrs.size() ? cb.content.cadSplineAttrs[i] : EntityAttributes{});
     st.selection.push_back({ST::Spline, static_cast<int>(st.cadSplines.size()) - 1});
   }
-  for (size_t i = 0; i < cb.points.size(); ++i) {
-    CadPoint p = cb.points[i];
+  for (size_t i = 0; i < cb.content.cadPoints.size(); ++i) {
+    CadPoint p = cb.content.cadPoints[i];
     p.x += dx;
     p.y += dy;
     st.cadPoints.push_back(p);
-    st.cadPointAttrs.push_back(i < cb.pointAttrs.size() ? cb.pointAttrs[i] : EntityAttributes{});
+    st.cadPointAttrs.push_back(i < cb.content.cadPointAttrs.size() ? cb.content.cadPointAttrs[i] : EntityAttributes{});
     st.selection.push_back({ST::Point, static_cast<int>(st.cadPoints.size()) - 1});
   }
-  const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+  const int nPoly = static_cast<int>(cb.content.userPolylineOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
-    const int v1 = cb.polyOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = cb.content.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cb.content.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
     const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
     for (int vi = v0; vi < v1; ++vi) {
-      st.userPolylineVerts.push_back(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx);
-      st.userPolylineVerts.push_back(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy);
-      st.userPolylineVerts.push_back(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
-      st.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.polyVertsBulge.size())  // REQ-316 / ADR-047
-                                              ? cb.polyVertsBulge[static_cast<size_t>(vi)]
+      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx);
+      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy);
+      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+      st.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.content.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
+                                              ? cb.content.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                               : 0.0f);
     }
     if (st.userPolylineOffsets.empty())
       st.userPolylineOffsets.push_back(baseVert);
     st.userPolylineOffsets.push_back(baseVert + nv);
-    uint8_t cl = (static_cast<size_t>(pi) < cb.polyClosed.size()) ? cb.polyClosed[static_cast<size_t>(pi)] : 0u;
+    uint8_t cl = (static_cast<size_t>(pi) < cb.content.userPolylineClosed.size()) ? cb.content.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
     st.userPolylineClosed.push_back(cl);
-    st.userPolylineAttrs.push_back(cb.polyAttrs[static_cast<size_t>(pi)]);
+    st.userPolylineAttrs.push_back(cb.content.userPolylineAttrs[static_cast<size_t>(pi)]);
     st.selection.push_back({ST::Polyline, static_cast<int>(st.userPolylineOffsets.size()) - 2});
   }
-  for (size_t i = 0; i < cb.annotations.size(); ++i) {
-    CadAnnotation a = cb.annotations[i];
+  for (size_t i = 0; i < cb.content.cadAnnotations.size(); ++i) {
+    CadAnnotation a = cb.content.cadAnnotations[i];
     a.surveyPointLabelForId = -1;  // strip survey link so pasted labels are independent
     a.surveyLabelHasUserOffset = false;
     a.insX += dx;
@@ -11258,27 +11258,27 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
     if (cb.fromPaper)
       a.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
     st.cadAnnotations.push_back(std::move(a));
-    st.cadAnnotationAttrs.push_back(cb.annotationAttrs[i]);
+    st.cadAnnotationAttrs.push_back(cb.content.cadAnnotationAttrs[i]);
     st.selection.push_back({ST::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   }
-  for (size_t i = 0; i < cb.tables.size(); ++i) {
-    CadTable t = cb.tables[i];
+  for (size_t i = 0; i < cb.content.cadTables.size(); ++i) {
+    CadTable t = cb.content.cadTables[i];
     CadTableTranslate(&t, dx, dy);
     if (cb.fromPaper)
       t.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
     st.cadTables.push_back(std::move(t));
-    st.cadTableAttrs.push_back(cb.tableAttrs[i]);
+    st.cadTableAttrs.push_back(cb.content.cadTableAttrs[i]);
     st.selection.push_back({ST::Table, static_cast<int>(st.cadTables.size()) - 1});
   }
-  for (size_t i = 0; i < cb.blockRefs.size(); ++i) {
-    CadBlockRef r = cb.blockRefs[i];
+  for (size_t i = 0; i < cb.content.cadBlockRefs.size(); ++i) {
+    CadBlockRef r = cb.content.cadBlockRefs[i];
     CadBlockTranslate(&r, dx, dy, 0.f);
     st.cadBlockRefs.push_back(std::move(r));
-    st.cadBlockRefAttrs.push_back(cb.blockRefAttrs[i]);
+    st.cadBlockRefAttrs.push_back(cb.content.cadBlockRefAttrs[i]);
     st.selection.push_back({ST::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
   }
-  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
-    CadFilledRegion fr = cb.filledRegions[i];
+  for (size_t i = 0; i < cb.content.cadFilledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
+    CadFilledRegion fr = cb.content.cadFilledRegions[i];
     // Model-space paste: offset X/Y and carry the clipboard's Z through unchanged (REQ-057) —
     // paste must not flatten elevation.
     for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
@@ -11286,7 +11286,7 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
       fr.vertsXyz[v + 1] += dy;
     }
     st.cadFilledRegions.push_back(std::move(fr));
-    st.cadFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
+    st.cadFilledRegionAttrs.push_back(cb.content.cadFilledRegionAttrs[i]);
     st.selection.push_back({ST::FilledRegion, static_cast<int>(st.cadFilledRegions.size()) - 1});
   }
   BumpCadGpuCache(st);
@@ -11301,67 +11301,67 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   st.selectedPaperEntities.clear();
   int skipped = 0;
 
-  for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 0] + dx));
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 1] + dy));
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 2]));
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 3] + dx));
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 4] + dy));
-    L.paperLines.push_back(static_cast<float>(cb.lines[i + 5]));
-    L.paperLineAttrs.push_back(cb.lineAttrs[i / 6]);
+  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 0] + dx));
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 1] + dy));
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 2]));
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 3] + dx));
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 4] + dy));
+    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 5]));
+    L.paperLineAttrs.push_back(cb.content.userLineAttrs[i / 6]);
     st.selectedPaperEntities.push_back({PT::Line, static_cast<int>(L.paperLines.size() / 6) - 1});
   }
   // Clipboard (cx,cy,z,r) → paper (cx,cy,r): Z is DROPPED at the sheet boundary, not carried.
   // A sheet is 2D (ADR-025 (g)), so an elevated model circle pasted onto paper lands flat —
   // deliberate and visible, rather than silently keeping an elevation paper cannot represent.
-  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {
-    L.paperCircles.push_back(static_cast<float>(cb.circlesCxCyZR[i + 0] + dx));
-    L.paperCircles.push_back(static_cast<float>(cb.circlesCxCyZR[i + 1] + dy));
-    L.paperCircles.push_back(static_cast<float>(cb.circlesCxCyZR[i + 3]));  // radius — [i+2] is the discarded Z
-    L.paperCircleAttrs.push_back(cb.circleAttrs[i / 4]);
+  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {
+    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 0] + dx));
+    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 1] + dy));
+    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 3]));  // radius — [i+2] is the discarded Z
+    L.paperCircleAttrs.push_back(cb.content.userCircleAttrs[i / 4]);
     st.selectedPaperEntities.push_back({PT::Circle, static_cast<int>(L.paperCircles.size() / 3) - 1});
   }
-  for (size_t i = 0; i < cb.arcs.size(); ++i) {
-    CadArc a = cb.arcs[i];
+  for (size_t i = 0; i < cb.content.userArcs.size(); ++i) {
+    CadArc a = cb.content.userArcs[i];
     a.cx += dx;
     a.cy += dy;
     L.paperArcs.push_back(a);
-    L.paperArcAttrs.push_back(cb.arcAttrs[i]);
+    L.paperArcAttrs.push_back(cb.content.userArcAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Arc, static_cast<int>(L.paperArcs.size()) - 1});
   }
-  for (size_t i = 0; i < cb.ellipses.size(); ++i) {
-    CadEllipse el = cb.ellipses[i];
+  for (size_t i = 0; i < cb.content.userEllipses.size(); ++i) {
+    CadEllipse el = cb.content.userEllipses[i];
     el.cx += dx;
     el.cy += dy;
     L.paperEllipses.push_back(el);
-    L.paperEllAttrs.push_back(cb.ellAttrs[i]);
+    L.paperEllAttrs.push_back(cb.content.userEllAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Ellipse, static_cast<int>(L.paperEllipses.size()) - 1});
   }
-  const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+  const int nPoly = static_cast<int>(cb.content.userPolylineOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
-    const int v1 = cb.polyOffsets[(static_cast<size_t>(pi)+ 1)];
+    const int v0 = cb.content.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cb.content.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
     const int baseVert = L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.back();
     for (int vi = v0; vi < v1; ++vi) {
-      L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx));
-      L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy));
-      L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 2)]));
-      L.paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < cb.polyVertsBulge.size() ? cb.polyVertsBulge[static_cast<size_t>(vi)]
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx));
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy));
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]));
+      L.paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < cb.content.userPolylineVertsBulge.size() ? cb.content.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                                                                        : 0.f);
     }
     if (L.paperPolyOffsets.empty())
       L.paperPolyOffsets.push_back(baseVert);
     L.paperPolyOffsets.push_back(baseVert + nv);
-    uint8_t cl = (static_cast<size_t>(pi) < cb.polyClosed.size()) ? cb.polyClosed[static_cast<size_t>(pi)] : 0u;
+    uint8_t cl = (static_cast<size_t>(pi) < cb.content.userPolylineClosed.size()) ? cb.content.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
     L.paperPolyClosed.push_back(cl);
-    L.paperPolyAttrs.push_back(cb.polyAttrs[static_cast<size_t>(pi)]);
+    L.paperPolyAttrs.push_back(cb.content.userPolylineAttrs[static_cast<size_t>(pi)]);
     st.selectedPaperEntities.push_back({PT::Polyline, static_cast<int>(L.paperPolyOffsets.size()) - 2});
   }
-  for (size_t i = 0; i < cb.annotations.size(); ++i) {
-    const CadAnnotation& src = cb.annotations[i];
+  for (size_t i = 0; i < cb.content.cadAnnotations.size(); ++i) {
+    const CadAnnotation& src = cb.content.cadAnnotations[i];
     if (src.kind != CadAnnotation::Kind::Text && src.kind != CadAnnotation::Kind::Mtext) {
       ++skipped;  // dimensions have no paper store (ADR-013 scope); reported by the caller, not dropped silently.
       continue;
@@ -11381,40 +11381,40 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
     if (!cb.fromPaper)
       a.plottedHeightInches *= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
     L.paperTexts.push_back(std::move(a));
-    L.paperTextAttrs.push_back(cb.annotationAttrs[i]);
+    L.paperTextAttrs.push_back(cb.content.cadAnnotationAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Text, static_cast<int>(L.paperTexts.size()) - 1});
   }
-  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills onto the sheet (not selectable)
-    CadFilledRegion fr = cb.filledRegions[i];
+  for (size_t i = 0; i < cb.content.cadFilledRegions.size(); ++i) {  // solid fills onto the sheet (not selectable)
+    CadFilledRegion fr = cb.content.cadFilledRegions[i];
     for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
       fr.vertsXyz[v] += dx;
       fr.vertsXyz[v + 1] += dy;
       fr.vertsXyz[v + 2] = 0.f;  // landing on a sheet: paper space is 2D (ADR-025 (g))
     }
     L.paperFilledRegions.push_back(std::move(fr));
-    L.paperFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
+    L.paperFilledRegionAttrs.push_back(cb.content.cadFilledRegionAttrs[i]);
   }
-  for (size_t i = 0; i < cb.blockRefs.size(); ++i) {
-    CadBlockRef r = cb.blockRefs[i];
+  for (size_t i = 0; i < cb.content.cadBlockRefs.size(); ++i) {
+    CadBlockRef r = cb.content.cadBlockRefs[i];
     CadBlockTranslate(&r, dx, dy, 0.f);
     L.paperBlockRefs.push_back(std::move(r));
-    L.paperBlockRefAttrs.push_back(i < cb.blockRefAttrs.size() ? cb.blockRefAttrs[i] : EntityAttributes{});
+    L.paperBlockRefAttrs.push_back(i < cb.content.cadBlockRefAttrs.size() ? cb.content.cadBlockRefAttrs[i] : EntityAttributes{});
     st.selectedPaperEntities.push_back({PT::Block, static_cast<int>(L.paperBlockRefs.size()) - 1});
   }
-  for (size_t i = 0; i < cb.splines.size(); ++i) {
-    CadSpline sp = cb.splines[i];
+  for (size_t i = 0; i < cb.content.cadSplines.size(); ++i) {
+    CadSpline sp = cb.content.cadSplines[i];
     spline::MapPoints(&sp, [&](const spline::Vec3& p) { return spline::Vec3{p.x + dx, p.y + dy, 0.0}; });
     L.paperSplines.push_back(std::move(sp));
-    L.paperSplineAttrs.push_back(i < cb.splineAttrs.size() ? cb.splineAttrs[i] : EntityAttributes{});
+    L.paperSplineAttrs.push_back(i < cb.content.cadSplineAttrs.size() ? cb.content.cadSplineAttrs[i] : EntityAttributes{});
     st.selectedPaperEntities.push_back({PT::Spline, static_cast<int>(L.paperSplines.size()) - 1});
   }
-  for (size_t i = 0; i < cb.points.size(); ++i) {
-    CadPoint p = cb.points[i];
+  for (size_t i = 0; i < cb.content.cadPoints.size(); ++i) {
+    CadPoint p = cb.content.cadPoints[i];
     p.x += dx;
     p.y += dy;
     p.z = 0.0;
     L.paperPoints.push_back(p);
-    L.paperPointAttrs.push_back(i < cb.pointAttrs.size() ? cb.pointAttrs[i] : EntityAttributes{});
+    L.paperPointAttrs.push_back(i < cb.content.cadPointAttrs.size() ? cb.content.cadPointAttrs[i] : EntityAttributes{});
     st.selectedPaperEntities.push_back({PT::Point, static_cast<int>(L.paperPoints.size()) - 1});
   }
   BumpCadGpuCache(st);
@@ -11444,33 +11444,33 @@ static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, 
   // Cleared on the clipboard rather than on the destination arrays because this is the one place
   // both paste paths (PASTE and PASTEORIG) and both destination spaces pass through; the next
   // EnsureEntityIds then mints fresh ids. Re-clearing on a repeat paste is a harmless no-op.
-  ClearEntityIdsFrom(st.clipboard.lineAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.circleAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.arcAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.ellAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.polyAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.annotationAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.filledRegionAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.splineAttrs, 0);  // REQ-443: pasted spline receives fresh identity.
-  ClearEntityIdsFrom(st.clipboard.pointAttrs, 0);
-  ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.userLineAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.userCircleAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.userArcAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.userEllAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.userPolylineAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.cadAnnotationAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.cadFilledRegionAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.cadSplineAttrs, 0);  // REQ-443: pasted spline receives fresh identity.
+  ClearEntityIdsFrom(st.clipboard.content.cadPointAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.content.cadBlockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
     const int skipped = CommitPasteIntoPaper(st, *L, static_cast<float>(dx), static_cast<float>(dy));
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
                     " object(s) skipped (paper space does not store dimensions).");
-    if (!st.clipboard.surveyPoints.empty())
-      log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) +
+    if (!st.clipboard.content.surveyPoints.empty())
+      log.push_back("PASTE — " + std::to_string(st.clipboard.content.surveyPoints.size()) +
                     " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
     st.selectedSurveyPointIndices.clear();
-    if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
+    if (ActiveProjectPointsReadOnly(st) && !st.clipboard.content.surveyPoints.empty()) {
       log.push_back("PASTE — survey points not pasted: this project is open read-only.");
     } else {
-      for (const SurveyPoint& source : st.clipboard.surveyPoints) {
+      for (const SurveyPoint& source : st.clipboard.content.surveyPoints) {
         SurveyPoint copy = source;
         copy.easting += dx;
         copy.northing += dy;
@@ -11489,8 +11489,8 @@ static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, 
           st.selectedSurveyPointIndices.push_back(static_cast<int>(st.surveyPoints.size() - 1));
         }
       }
-      if (!st.clipboard.surveyPoints.empty())
-        log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) + " survey point(s) pasted.");
+      if (!st.clipboard.content.surveyPoints.empty())
+        log.push_back("PASTE — " + std::to_string(st.clipboard.content.surveyPoints.size()) + " survey point(s) pasted.");
     }
     st.clipboardPasteOverwrite = false;
   }
@@ -18684,7 +18684,7 @@ void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector
     return;
   const double dx = x - st.clipboard.basePtX;
   const double dy = y - st.clipboard.basePtY;
-  if (!st.clipboardPasteResolving && !st.clipboard.surveyPoints.empty() &&
+  if (!st.clipboardPasteResolving && !st.clipboard.content.surveyPoints.empty() &&
       !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
     std::unordered_set<int> destinationIds;
     for (const SurveyPoint& point : st.surveyPoints)
@@ -18700,7 +18700,7 @@ void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector
               destinationIds.insert(entry.point.id);
     }
     std::vector<int> conflicts;
-    for (const SurveyPoint& point : st.clipboard.surveyPoints)
+    for (const SurveyPoint& point : st.clipboard.content.surveyPoints)
       if (destinationIds.count(point.id))
         conflicts.push_back(point.id);
     if (!conflicts.empty()) {
@@ -18745,7 +18745,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
     log.push_back("PASTE — cancelled; the drawing and clipboard are unchanged.");
     return;
   }
-  std::vector<SurveyPoint> originalPoints = st.clipboard.surveyPoints;
+  std::vector<SurveyPoint> originalPoints = st.clipboard.content.surveyPoints;
   if (answer == AppCommandState::PointEditPrompt::Answer::Renumber) {
     std::unordered_set<int> used;
     for (const SurveyPoint& point : st.surveyPoints) used.insert(point.id);
@@ -18761,7 +18761,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
     int next = st.createPointsNextId - 1;
     for (const int id : used) next = std::max(next, id);
     ++next;
-    for (SurveyPoint& point : st.clipboard.surveyPoints) {
+    for (SurveyPoint& point : st.clipboard.content.surveyPoints) {
       if (std::find(conflicts.begin(), conflicts.end(), point.id) == conflicts.end()) continue;
       point.id = next;
       used.insert(next++);
@@ -18775,7 +18775,7 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
   const double x = st.clipboard.basePtX + st.pendingCopyDx;
   const double y = st.clipboard.basePtY + st.pendingCopyDy;
   CommitClipboardPasteAt(st, x, y, log);
-  st.clipboard.surveyPoints = std::move(originalPoints);
+  st.clipboard.content.surveyPoints = std::move(originalPoints);
   if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
     const int tab = st.activeDrawingIdx;
     if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size()) &&
@@ -18813,8 +18813,8 @@ static void CopyEnclosedFilledRegions(CadClipboard& cb, const std::vector<CadFil
       }
     if (!inside)
       continue;
-    cb.filledRegions.push_back(fr);
-    cb.filledRegionAttrs.push_back(i < attrs.size() ? attrs[i] : EntityAttributes{});
+    cb.content.cadFilledRegions.push_back(fr);
+    cb.content.cadFilledRegionAttrs.push_back(i < attrs.size() ? attrs[i] : EntityAttributes{});
   }
 }
 
@@ -18844,8 +18844,8 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       if (k + 5 >= L.paperLines.size())
         break;
       for (int j = 0; j < 6; ++j)
-        cb.lines.push_back(L.paperLines[k + static_cast<size_t>(j)]);
-      cb.lineAttrs.push_back(attrAt(L.paperLineAttrs, r.index));
+        cb.content.userLinesFlat.push_back(L.paperLines[k + static_cast<size_t>(j)]);
+      cb.content.userLineAttrs.push_back(attrAt(L.paperLineAttrs, r.index));
       expandBbox(L.paperLines[k], L.paperLines[k + 1]);
       expandBbox(L.paperLines[k + 3], L.paperLines[k + 4]);
       break;
@@ -18855,28 +18855,28 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       if (k + 2 >= L.paperCircles.size())
         break;
       // Paper (cx,cy,r) → clipboard (cx,cy,z,r): a sheet has no elevation, so Z enters as 0.
-      cb.circlesCxCyZR.push_back(L.paperCircles[k]);
-      cb.circlesCxCyZR.push_back(L.paperCircles[k + 1]);
-      cb.circlesCxCyZR.push_back(0.f);
-      cb.circlesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
-      cb.circleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
-      PushCircleNormal(cb.circleNormals);   // a sheet is 2D (ADR-025 (g)): the plane is world XY
+      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k]);
+      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k + 1]);
+      cb.content.userCirclesCxCyZR.push_back(0.f);
+      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
+      cb.content.userCircleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
+      PushCircleNormal(cb.content.userCircleNormals);   // a sheet is 2D (ADR-025 (g)): the plane is world XY
       expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
       break;
     }
     case PaperRef::Type::Arc: {
       if (static_cast<size_t>(r.index) >= L.paperArcs.size())
         break;
-      cb.arcs.push_back(L.paperArcs[static_cast<size_t>(r.index)]);
-      cb.arcAttrs.push_back(attrAt(L.paperArcAttrs, r.index));
+      cb.content.userArcs.push_back(L.paperArcs[static_cast<size_t>(r.index)]);
+      cb.content.userArcAttrs.push_back(attrAt(L.paperArcAttrs, r.index));
       expandBbox(static_cast<float>(L.paperArcs[static_cast<size_t>(r.index)].cx), static_cast<float>(L.paperArcs[static_cast<size_t>(r.index)].cy));
       break;
     }
     case PaperRef::Type::Ellipse: {
       if (static_cast<size_t>(r.index) >= L.paperEllipses.size())
         break;
-      cb.ellipses.push_back(L.paperEllipses[static_cast<size_t>(r.index)]);
-      cb.ellAttrs.push_back(attrAt(L.paperEllAttrs, r.index));
+      cb.content.userEllipses.push_back(L.paperEllipses[static_cast<size_t>(r.index)]);
+      cb.content.userEllAttrs.push_back(attrAt(L.paperEllAttrs, r.index));
       expandBbox(static_cast<float>(L.paperEllipses[static_cast<size_t>(r.index)].cx), static_cast<float>(L.paperEllipses[static_cast<size_t>(r.index)].cy));
       break;
     }
@@ -18888,36 +18888,36 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       const int v1 = L.paperPolyOffsets[(static_cast<size_t>(pi)+ 1)];
       if (v1 - v0 < 2)
         break;
-      if (cb.polyOffsets.empty())
-        cb.polyOffsets.push_back(0);
-      const int baseVert = cb.polyOffsets.back();
+      if (cb.content.userPolylineOffsets.empty())
+        cb.content.userPolylineOffsets.push_back(0);
+      const int baseVert = cb.content.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
-        cb.polyVertsBulge.push_back(static_cast<size_t>(vi) < L.paperPolyVertsBulge.size()
+        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)]);
+        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.content.userPolylineVertsBulge.push_back(static_cast<size_t>(vi) < L.paperPolyVertsBulge.size()
                                        ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
                                        : 0.f);
         expandBbox(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)], L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
       }
-      cb.polyOffsets.push_back(baseVert + (v1 - v0));
-      cb.polyClosed.push_back(static_cast<size_t>(pi) < L.paperPolyClosed.size() ? L.paperPolyClosed[static_cast<size_t>(pi)] : 0u);
-      cb.polyAttrs.push_back(attrAt(L.paperPolyAttrs, pi));
+      cb.content.userPolylineOffsets.push_back(baseVert + (v1 - v0));
+      cb.content.userPolylineClosed.push_back(static_cast<size_t>(pi) < L.paperPolyClosed.size() ? L.paperPolyClosed[static_cast<size_t>(pi)] : 0u);
+      cb.content.userPolylineAttrs.push_back(attrAt(L.paperPolyAttrs, pi));
       break;
     }
     case PaperRef::Type::Text: {
       if (static_cast<size_t>(r.index) >= L.paperTexts.size())
         break;
-      cb.annotations.push_back(L.paperTexts[static_cast<size_t>(r.index)]);
-      cb.annotationAttrs.push_back(attrAt(L.paperTextAttrs, r.index));
+      cb.content.cadAnnotations.push_back(L.paperTexts[static_cast<size_t>(r.index)]);
+      cb.content.cadAnnotationAttrs.push_back(attrAt(L.paperTextAttrs, r.index));
       expandBbox(L.paperTexts[static_cast<size_t>(r.index)].insX, L.paperTexts[static_cast<size_t>(r.index)].insY);
       break;
     }
     case PaperRef::Type::Spline: {
       if (static_cast<size_t>(r.index) >= L.paperSplines.size())
         break;
-      cb.splines.push_back(L.paperSplines[static_cast<size_t>(r.index)]);
-      cb.splineAttrs.push_back(attrAt(L.paperSplineAttrs, r.index));
+      cb.content.cadSplines.push_back(L.paperSplines[static_cast<size_t>(r.index)]);
+      cb.content.cadSplineAttrs.push_back(attrAt(L.paperSplineAttrs, r.index));
       for (const auto& v : L.paperSplines[static_cast<size_t>(r.index)].ctrl)
         expandBbox(static_cast<float>(v.x), static_cast<float>(v.y));
       break;
@@ -18926,8 +18926,8 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       if (static_cast<size_t>(r.index) >= L.paperPoints.size())
         break;
       const CadPoint& p = L.paperPoints[static_cast<size_t>(r.index)];
-      cb.points.push_back(p);
-      cb.pointAttrs.push_back(attrAt(L.paperPointAttrs, r.index));
+      cb.content.cadPoints.push_back(p);
+      cb.content.cadPointAttrs.push_back(attrAt(L.paperPointAttrs, r.index));
       expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
       break;
     }
@@ -18993,8 +18993,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       if (k + 5 >= st.userLinesFlat.size())
         continue;
       for (int j = 0; j < 6; ++j)
-        cb.lines.push_back(st.userLinesFlat[k + static_cast<size_t>(j)]);
-      cb.lineAttrs.push_back(static_cast<size_t>(e.index) < st.userLineAttrs.size()
+        cb.content.userLinesFlat.push_back(st.userLinesFlat[k + static_cast<size_t>(j)]);
+      cb.content.userLineAttrs.push_back(static_cast<size_t>(e.index) < st.userLineAttrs.size()
                                  ? st.userLineAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
       expandBbox(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]));
       expandBbox(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]));
@@ -19002,43 +19002,43 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       const size_t k = static_cast<size_t>(e.index) * 4;
       if (k + 3 >= st.userCirclesCxCyZR.size())
         continue;
-      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k]);
-      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1]);
-      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2]);  // z survives a model copy
-      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
-      cb.circleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
+      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k]);
+      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1]);
+      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2]);  // z survives a model copy
+      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
+      cb.content.userCircleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
                                    ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
       float ccx = 0.f, ccy = 0.f, ccz = 1.f;
       CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
-      PushCircleNormal(cb.circleNormals, ccx, ccy, ccz);
+      PushCircleNormal(cb.content.userCircleNormals, ccx, ccy, ccz);
       expandBbox(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]));
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.userArcs.size())
         continue;
-      cb.arcs.push_back(st.userArcs[k]);
-      cb.arcAttrs.push_back(k < st.userArcAttrs.size() ? st.userArcAttrs[k] : EntityAttributes{});
+      cb.content.userArcs.push_back(st.userArcs[k]);
+      cb.content.userArcAttrs.push_back(k < st.userArcAttrs.size() ? st.userArcAttrs[k] : EntityAttributes{});
       expandBbox(static_cast<float>(st.userArcs[k].cx), static_cast<float>(st.userArcs[k].cy));
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.userEllipses.size())
         continue;
-      cb.ellipses.push_back(st.userEllipses[k]);
-      cb.ellAttrs.push_back(k < st.userEllAttrs.size() ? st.userEllAttrs[k] : EntityAttributes{});
+      cb.content.userEllipses.push_back(st.userEllipses[k]);
+      cb.content.userEllAttrs.push_back(k < st.userEllAttrs.size() ? st.userEllAttrs[k] : EntityAttributes{});
       expandBbox(static_cast<float>(st.userEllipses[k].cx), static_cast<float>(st.userEllipses[k].cy));
     } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadSplines.size()) continue;
-      cb.splines.push_back(st.cadSplines[k]);
-      cb.splineAttrs.push_back(k < st.cadSplineAttrs.size() ? st.cadSplineAttrs[k] : EntityAttributes{});
+      cb.content.cadSplines.push_back(st.cadSplines[k]);
+      cb.content.cadSplineAttrs.push_back(k < st.cadSplineAttrs.size() ? st.cadSplineAttrs[k] : EntityAttributes{});
       std::vector<spline::Vec3> points;
       spline::Tessellate(st.cadSplines[k], kSplineSampleTolerance, &points);
       for (const auto& p : points) expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
     } else if (e.type == SelectedEntity::Type::Point) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadPoints.size()) continue;
-      cb.points.push_back(st.cadPoints[k]);
-      cb.pointAttrs.push_back(k < st.cadPointAttrs.size() ? st.cadPointAttrs[k] : EntityAttributes{});
+      cb.content.cadPoints.push_back(st.cadPoints[k]);
+      cb.content.cadPointAttrs.push_back(k < st.cadPointAttrs.size() ? st.cadPointAttrs[k] : EntityAttributes{});
       expandBbox(static_cast<float>(st.cadPoints[k].x), static_cast<float>(st.cadPoints[k].y));
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -19049,46 +19049,46 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       const int nv = v1 - v0;
       if (nv < 2)
         continue;
-      if (cb.polyOffsets.empty())
-        cb.polyOffsets.push_back(0);
-      const int baseVert = cb.polyOffsets.back();
+      if (cb.content.userPolylineOffsets.empty())
+        cb.content.userPolylineOffsets.push_back(0);
+      const int baseVert = cb.content.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        cb.polyVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        cb.polyVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        cb.polyVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
-        cb.polyVertsBulge.push_back(vi < static_cast<int>(st.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
+        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]);
+        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.content.userPolylineVertsBulge.push_back(vi < static_cast<int>(st.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
                                         ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                         : 0.0f);
         expandBbox(static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]),
                    static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]));
       }
-      cb.polyOffsets.push_back(baseVert + nv);
+      cb.content.userPolylineOffsets.push_back(baseVert + nv);
       uint8_t cl = static_cast<size_t>(pi) < st.userPolylineClosed.size()
                        ? st.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
-      cb.polyClosed.push_back(cl);
-      cb.polyAttrs.push_back(static_cast<size_t>(pi) < st.userPolylineAttrs.size()
+      cb.content.userPolylineClosed.push_back(cl);
+      cb.content.userPolylineAttrs.push_back(static_cast<size_t>(pi) < st.userPolylineAttrs.size()
                                  ? st.userPolylineAttrs[static_cast<size_t>(pi)] : EntityAttributes{});
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadAnnotations.size())
         continue;
-      cb.annotations.push_back(st.cadAnnotations[k]);
-      cb.annotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
+      cb.content.cadAnnotations.push_back(st.cadAnnotations[k]);
+      cb.content.cadAnnotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
                                        ? st.cadAnnotationAttrs[k] : EntityAttributes{});
       expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadTables.size())
         continue;
-      cb.tables.push_back(st.cadTables[k]);
-      cb.tableAttrs.push_back(k < st.cadTableAttrs.size() ? st.cadTableAttrs[k] : EntityAttributes{});
+      cb.content.cadTables.push_back(st.cadTables[k]);
+      cb.content.cadTableAttrs.push_back(k < st.cadTableAttrs.size() ? st.cadTableAttrs[k] : EntityAttributes{});
       expandBbox(st.cadTables[k].insX, st.cadTables[k].insY);
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadBlockRefs.size())
         continue;
-      cb.blockRefs.push_back(st.cadBlockRefs[k]);
-      cb.blockRefAttrs.push_back(k < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[k] : EntityAttributes{});
+      cb.content.cadBlockRefs.push_back(st.cadBlockRefs[k]);
+      cb.content.cadBlockRefAttrs.push_back(k < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[k] : EntityAttributes{});
       expandBbox(st.cadBlockRefs[k].xf.x, st.cadBlockRefs[k].xf.y);
     } else if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t k = static_cast<size_t>(e.index);
@@ -19096,8 +19096,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         continue;
       directFills.insert(static_cast<int>(k));
       const CadFilledRegion& fr = st.cadFilledRegions[k];
-      cb.filledRegions.push_back(fr);
-      cb.filledRegionAttrs.push_back(k < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[k]
+      cb.content.cadFilledRegions.push_back(fr);
+      cb.content.cadFilledRegionAttrs.push_back(k < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[k]
                                                                         : EntityAttributes{});
       for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3)
         expandBbox(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]));
@@ -19107,7 +19107,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     if (index < 0 || static_cast<size_t>(index) >= st.surveyPoints.size())
       continue;
     const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
-    cb.surveyPoints.push_back(point);
+    cb.content.surveyPoints.push_back(point);
     expandBbox(point.easting, point.northing);
   }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
@@ -19134,7 +19134,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       ++featureLinesNotCopied;
   log.push_back("COPYCLIP — " +
                 std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
-                " object(s) and " + std::to_string(cb.surveyPoints.size()) +
+                " object(s) and " + std::to_string(cb.content.surveyPoints.size()) +
                 " survey point(s) copied to clipboard.");
   if (featureLinesNotCopied > 0)
     log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
@@ -24381,7 +24381,7 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
     const float dx = curX - cmd.modifyBaseX;
     const float dy = curY - cmd.modifyBaseY;
-    for (const auto& ann : cmd.clipboard.annotations) {
+    for (const auto& ann : cmd.clipboard.content.cadAnnotations) {
       CadAnnotation p{};
       CadAnnotationPreviewTranslated(ann, dx, dy, &p);
       out->push_back(p);
@@ -24470,7 +24470,7 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
   if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
     const float dx = curX - cmd.modifyBaseX;
     const float dy = curY - cmd.modifyBaseY;
-    for (const auto& t : cmd.clipboard.tables)
+    for (const auto& t : cmd.clipboard.content.cadTables)
       take(t, [&](CadTable* p) { CadTableTranslate(p, dx, dy); });
     return;
   }
