@@ -295,3 +295,4 @@ void RunSurfMovePoint(AppCommandState& st, const std::string& args, std::vector<
 void RunSurfDelLine(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+std::vector<std::string> SplitCommaFields(const std::string& s);
