@@ -49,7 +49,10 @@ functions out of a file.
     change. Dispatch chains that cannot be split stay in one leftover dispatch file. A new
     `check_split_only.py` proves each Track A PR. It checks that:
     - every removed line reappears verbatim in an added file;
-    - the only new lines are includes, forward declarations and CMake source entries;
+    - the only new lines are includes, forward declarations, function declarations, namespace
+      openers (`namespace {`, `namespace name {`) and `} // namespace` closers, and CMake source
+      entries in `target_sources`, `add_library` or `add_executable`. A bare `}` is not allowed,
+      because it can change which function a line belongs to;
     - the file-size baseline only shrinks.
   - **Track B** moves one family at a time onto the step engine. The pilot is the Modify family
     (MOVE, COPY, ROTATE, SCALE, MIRROR), after ADR-0011's entity-kind operations have rewritten
