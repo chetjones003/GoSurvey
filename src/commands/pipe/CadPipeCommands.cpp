@@ -3,6 +3,7 @@
 #include "GoSurvey/Document/cadpiperun.hpp"
 #include "CadBlocks.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
+#include <sstream>
 
 
 // ---------------------------------------------------------------------------------------------
