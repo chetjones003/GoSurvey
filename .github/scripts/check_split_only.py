@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Prove that a `refactor: split-only` PR moves code between files and changes nothing else.
 
-ADR-0012, Track A. The PR may move whole lines into other files. Every removed line must reappear
-verbatim in an added line. The only added lines that are not moved lines must be includes, forward
-declarations or CMake source entries. The file-size baseline may only shrink. Blank lines are not
-compared, because they cannot change behaviour.
+ADR-0012, Track A. Every removed line must reappear verbatim in an added line of a different file,
+so a move within one file (a reorder) is rejected. The only added lines that are not moved lines
+must be includes, forward declarations, function declarations, or CMake source entries. The
+file-size baseline may only shrink. Blank lines are not compared, because they cannot change
+behaviour.
 """
 
 import argparse
@@ -18,6 +19,10 @@ import check_move_only as move_proof
 
 
 FILE_SIZE_BASELINE = move_proof.FILE_SIZE_BASELINE
+CMAKE_FILE_NAMES = ("CMakeLists.txt",)
+CMAKE_FILE_SUFFIXES = (".cmake",)
+CMAKE_SOURCE_COMMANDS = {"target_sources", "add_library", "add_executable"}
+SOURCE_PATH_TOKEN = re.compile(r"\S+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)\b")
 INCLUDE_DIRECTIVE = re.compile(r"^\s*#\s*include\b")
 FORWARD_DECLARATION = re.compile(
     r"^\s*(?:template\s*<[^>]*>\s*)?"
@@ -64,17 +69,50 @@ def is_function_declaration(text):
     return bool(FUNCTION_DECLARATION.match(text))
 
 
+def is_cmake_file(path):
+    name = path.rsplit("/", 1)[-1]
+    return name in CMAKE_FILE_NAMES or path.endswith(CMAKE_FILE_SUFFIXES)
+
+
+def is_cmake_source_entry(text_of_file, line_number, text):
+    """True when the line is a source path inside a target_sources or add_library/executable call."""
+    if not SOURCE_PATH_TOKEN.search(text):
+        return False
+    for name, _arguments, start, end in move_proof.cmake_statements(text_of_file):
+        if name not in CMAKE_SOURCE_COMMANDS:
+            continue
+        first_line = text_of_file.count("\n", 0, start) + 1
+        last_line = text_of_file.count("\n", 0, end) + 1
+        if first_line <= line_number <= last_line:
+            return True
+    return False
+
+
 def is_allowed_addition(root, head_ref, path, line_number, text, head_texts):
     """Return True when an added line that is not a moved line is allowed in this PR."""
-    if move_proof.is_build_file(path):
+    if is_cmake_file(path):
         if path not in head_texts:
             head_texts[path] = move_proof.git_text(root, head_ref, path)
-        return move_proof.is_build_entry(path, line_number, text, head_texts[path])
+        return is_cmake_source_entry(head_texts[path], line_number, text)
+    if move_proof.is_build_file(path):
+        return False
     return bool(
         INCLUDE_DIRECTIVE.match(text)
         or FORWARD_DECLARATION.match(text)
         or is_function_declaration(text)
     )
+
+
+def check_moves_leave_their_file(removed_by_path, added_by_path, added_total):
+    """A removed line must reappear in a different file, not be reordered within its own file."""
+    for path, removed in removed_by_path.items():
+        for text, count in removed.items():
+            elsewhere = added_total[text] - added_by_path[path][text]
+            if count > elsewhere:
+                raise ValueError(
+                    f"{path}: removed line is not moved to another file (reorder within a file "
+                    f"is not allowed): {text!r}"
+                )
 
 
 def check_file_size_baseline(root, base_ref, head_ref):
@@ -83,6 +121,8 @@ def check_file_size_baseline(root, base_ref, head_ref):
     if not isinstance(old, dict) or not isinstance(new, dict):
         raise ValueError(f"{FILE_SIZE_BASELINE}: expected a path-to-cap JSON object")
     for path, cap in new.items():
+        if not isinstance(cap, int) or isinstance(cap, bool):
+            raise ValueError(f"{FILE_SIZE_BASELINE}: cap for {path} is not an integer: {cap!r}")
         if path not in old:
             raise ValueError(f"{FILE_SIZE_BASELINE}: a split-only PR may not add an entry for {path}")
         if cap > old[path]:
@@ -95,39 +135,46 @@ def check_split_only(root, base_ref, head_ref):
     changes = changed_files(root, base_ref, head_ref)
     reject_binary_changes(root, base_ref, head_ref)
 
-    removed = Counter()
+    removed_by_path = {}
     added = []  # (path, new line number, text)
     details = []
-    baseline_edited = False
+    baseline_status = None
     for status, path in changes:
         if path == FILE_SIZE_BASELINE:
-            if status != "M":
-                raise ValueError(f"{path}: the file-size baseline may only be modified")
-            baseline_edited = True
+            # Deleting the baseline is allowed: it only removes entries, which is shrink-only.
+            baseline_status = status
             continue
-        hunks = move_proof.changed_hunks(root, base_ref, head_ref, path, path)
-        for hunk_removed, hunk_added in hunks:
-            removed.update(text for _, text in hunk_removed if text.strip())
+        removed_by_path[path] = Counter()
+        for hunk_removed, hunk_added in move_proof.changed_hunks(root, base_ref, head_ref, path, path):
+            removed_by_path[path].update(text for _, text in hunk_removed if text.strip())
             added.extend(
                 (path, number, text) for number, text in hunk_added if text.strip()
             )
         details.append(f"{status} {path}")
 
-    if not removed:
+    removed_total = Counter()
+    for removed in removed_by_path.values():
+        removed_total.update(removed)
+    if not removed_total:
         raise ValueError("no moved lines found")
 
-    added_counts = Counter(text for _, _, text in added)
-    missing = removed - added_counts
+    added_by_path = {path: Counter() for path in removed_by_path}
+    for path, _number, text in added:
+        added_by_path[path][text] += 1
+    added_total = Counter(text for _, _, text in added)
+
+    missing = removed_total - added_total
     if missing:
         sample = next(iter(missing))
         raise ValueError(
             f"{sum(missing.values())} removed line(s) do not reappear verbatim, "
             f"for example: {sample!r}"
         )
+    check_moves_leave_their_file(removed_by_path, added_by_path, added_total)
 
     # Each removed line matches one added line with the same text. Added lines beyond those
     # matches are new code, and each must be an allowed kind.
-    budget = removed.copy()
+    budget = removed_total.copy()
     head_texts = {}
     for path, number, text in added:
         if budget[text] > 0:
@@ -139,8 +186,10 @@ def check_split_only(root, base_ref, head_ref):
                 f"CMake source entry or moved line: {text!r}"
             )
 
-    if baseline_edited:
+    if baseline_status == "M":
         check_file_size_baseline(root, base_ref, head_ref)
+    elif baseline_status == "A":
+        raise ValueError(f"{FILE_SIZE_BASELINE}: a split-only PR may not add the file-size baseline")
 
     return details
 

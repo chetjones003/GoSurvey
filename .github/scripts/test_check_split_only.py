@@ -128,6 +128,21 @@ class SplitOnlyFixtureTests(unittest.TestCase):
 
         self.check()
 
+    def test_deleting_the_baseline_passes(self):
+        self.split_widget_into_family(OLD_CPP)
+        git(self.root, "rm", "-q", BASELINE)
+        self.commit("remove the baseline once every cap is zero")
+
+        self.check()
+
+    def test_non_integer_baseline_cap_fails_cleanly(self):
+        self.split_widget_into_family(OLD_CPP)
+        self.write(BASELINE, json.dumps({"src/old/Widget.cpp": "40", "src/old/Other.cpp": 50}))
+        self.commit("write a string cap")
+
+        with self.assertRaisesRegex(ValueError, "not an integer"):
+            self.check()
+
     def test_baseline_entry_removal_passes(self):
         self.split_widget_into_family(OLD_CPP)
         self.write(BASELINE, json.dumps({"src/old/Other.cpp": 50}))
@@ -174,6 +189,43 @@ class SplitOnlyFixtureTests(unittest.TestCase):
         self.commit("change a CMake variable")
 
         with self.assertRaisesRegex(ValueError, "CMake source entry"):
+            self.check()
+
+    def test_added_cmake_property_on_a_source_fails(self):
+        self.split_widget_into_family(OLD_CPP)
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_sources(app PRIVATE src/new/WidgetRun.cpp)\n"
+            "set_property(SOURCE src/new/WidgetRun.cpp PROPERTY COMPILE_DEFINITIONS BROKEN=1)\n"
+        ))
+        self.commit("split and change the compile definitions")
+
+        with self.assertRaisesRegex(ValueError, "CMake source entry"):
+            self.check()
+
+    def test_added_target_keyword_inside_add_library_fails(self):
+        self.split_widget_into_family(OLD_CPP)
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "add_library(extra\n"
+            "  src/new/WidgetRun.cpp\n"
+            "  EXCLUDE_FROM_ALL\n"
+            ")\n"
+        ))
+        self.commit("exclude the library from the default build")
+
+        with self.assertRaisesRegex(ValueError, "CMake source entry"):
+            self.check()
+
+    def test_reordering_lines_within_one_file_fails(self):
+        self.write("src/old/Widget.cpp", (
+            '#include "Widget.hpp"\n'
+            "void Widget::run() { --counter; }\n"
+            "void Widget::reset() {}\n"
+        ))
+        self.commit("reorder two definitions in place")
+
+        with self.assertRaisesRegex(ValueError, "not moved to another file"):
             self.check()
 
     def test_baseline_cap_increase_fails(self):
