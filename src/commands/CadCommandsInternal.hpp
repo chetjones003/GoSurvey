@@ -15,6 +15,17 @@
 
 #include "CadEntities.hpp"  // EntityAttributes
 
+/// A duplicate is a NEW entity, so it takes the source's layer, colour and linetype but NOT its id.
+/// Zero is the "unassigned" marker `MakeNewEntityAttrs` already uses; `EnsureEntityIds` sweeps on the
+/// next `BumpCadGpuCache` and hands out a fresh one. Copying the id across instead — which both
+/// duplicate paths did until 2026-08-20 — leaves two entities claiming one identity, and every
+/// id-keyed lookup then resolves to whichever the sweep reaches first. A surface tracking a
+/// breakline by id (REQ-069) would silently follow the wrong line. REQ-076; TASK-079 BUG-1.
+static EntityAttributes DuplicatedEntityAttrs(EntityAttributes a) {
+  a.id = 0;
+  return a;
+}
+
 struct AppCommandState;
 
 /// Fresh entity attributes for newly-drawn geometry: current layer, everything
