@@ -75,7 +75,6 @@ protected:
 private:
   bool CreatePdfCoordinate(const pdfview::CoordCandidate& candidate); ///< creates the geometry; no redraw
   void FinishPdfCoordinates();                                         ///< frame the view, redraw, focus
-  friend class QtEditorTests;
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
   void BuildRibbon();

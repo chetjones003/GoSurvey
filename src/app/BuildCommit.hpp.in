@@ -1,0 +1,9 @@
+#pragma once
+
+// GENERATED FILE - do not edit. cmake/Version.cmake configures this into the build tree.
+// Kept apart from Version.hpp so a new commit recompiles only the file that reports it.
+
+/// Short git commit this build was configured from (REQ-425 section 8), or "unknown". CI passes
+/// -DGOSURVEY_GIT_COMMIT; a developer build reads the commit at configure time and
+/// reconfigures when HEAD or its reflog changes (commit, checkout, reset).
+#define GOSURVEY_GIT_COMMIT "@GOSURVEY_GIT_COMMIT@"

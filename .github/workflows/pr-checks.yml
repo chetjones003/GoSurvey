@@ -133,8 +133,7 @@ jobs:
           $allowGrowth = @()
           # Approved for PR #1553 only; keep the beta baseline unchanged for future PRs.
           if ($env:PR_NUMBER -eq '1553') {
-            $allowGrowth = @('--allow-growth', 'src/qt/EditorWindow.cpp',
-                             '--allow-growth', 'tests/QtEditorTests.cpp')
+            $allowGrowth = @('--allow-growth', 'src/qt/EditorWindow.cpp')
           }
           python .github/scripts/check_file_size.py --base-ref "$env:BASE_SHA" @allowGrowth
 

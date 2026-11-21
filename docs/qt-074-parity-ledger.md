@@ -6,9 +6,9 @@ checked against accepted requirements and the current Qt source, with the beta
 their Qt routes, dialogs, and complete workflows. The broader release ribbon
 inventory remains in [the Qt migration status](qt-ui-migration.md#version-072-ribbon-inventory).
 The final sign-off evidence and remaining limits are recorded in the
-[sign-off packet](qt-074-signoff-packet.md). `tools/verify-qt-parity-ledger.ps1`
-(CTest `qt.parity-ledger`) checks that verified test references still exist and
-that the packet accounts for every #878 work item.
+[sign-off packet](qt-074-signoff-packet.md). This ledger is a historical record: the
+automated Qt GUI tests it cites, and the `qt.parity-ledger` check, were removed in
+November 2026. The Qt UI is now tested by hand.
 
 ## Status meanings
 
