@@ -3476,7 +3476,7 @@ struct AppCommandState : DrawingContent {
   float entityGripOrigCx = 0.f, entityGripOrigCy = 0.f, entityGripOrigR = 0.f; // circle/arc
   float entityGripOrigStartRad = 0.f, entityGripOrigSweepRad = 0.f; // arc
 
-  // Polyline: moved vertex's global index into userPolylineVerts (x coordinate).
+  // Polyline: moved vertex index (into vertex accessors, not the flat array).
   int entityGripOrigPolylineXIdx = -1;
   float entityGripOrigPolyVertX = 0.f, entityGripOrigPolyVertY = 0.f;
   /// REQ-316 / ADR-047: for an arc-segment (bulge) grip drag — the global vertex index whose bulge

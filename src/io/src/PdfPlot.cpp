@@ -665,7 +665,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         const int start = st.userPolylineOffsets[pi];
         const int end = (pi + 1 < st.userPolylineOffsets.size())
                             ? st.userPolylineOffsets[pi + 1]
-                            : static_cast<int>(st.userPolylineVerts.size() / 3);
+                            : static_cast<int>(st.vertexCount());
         std::vector<std::array<double, 3>> w;
         for (int k = start; k < end; ++k) {
           const size_t b = static_cast<size_t>(k);

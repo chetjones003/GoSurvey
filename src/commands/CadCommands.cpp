@@ -52306,10 +52306,10 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
           const int sv = cmd.userPolylineOffsets[(size_t)e.index];
           const int ev = cmd.userPolylineOffsets[(size_t)e.index + 1];
           for (int vi = sv; vi + 1 < ev; ++vi) {
-            const size_t xi = (size_t)vi;
-            if (xi + 3 < cmd.userPolylineVerts.size())
-              len += std::hypot(cmd.userPolylineVerts[xi+3] - cmd.vertex(xi).x,
-                                cmd.userPolylineVerts[xi+4] - cmd.vertex(xi).y);
+            const size_t nextVi = (size_t)vi + 1;
+            if (nextVi < cmd.vertexCount())
+              len += std::hypot(cmd.vertex(nextVi).x - cmd.vertex(vi).x,
+                                cmd.vertex(nextVi).y - cmd.vertex(vi).y);
           }
         }
       } else if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {

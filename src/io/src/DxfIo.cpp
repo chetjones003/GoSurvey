@@ -913,8 +913,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       if (std::fabs(p.bulge) > 1e-12) { anyBulge = true; break; }
     // REQ-316 / ADR-047: keep the polyline store's bulge array in step. Bulge is preserved verbatim
     // (the import transform here is rigid + uniform, which maps circular arcs to circular arcs).
-    if (anyBulge && st.userPolylineVertsBulge.size() < st.userPolylineVerts.size() / 3)
-      st.userPolylineVertsBulge.resize(st.userPolylineVerts.size() / 3, 0.0f);
+    if (anyBulge && st.userPolylineVertsBulge.size() < st.vertexCount())
+      st.userPolylineVertsBulge.resize(st.vertexCount(), 0.0f);
     for (const ImportPolyVert& p : pts) {
       double ox = 0, oy = 0;
       xf.apply(p.x, p.y, &ox, &oy);

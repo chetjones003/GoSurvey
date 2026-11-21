@@ -483,7 +483,6 @@ struct CadEntityStore {
   /// Number of vertices in \ref userPolylineVerts.
   [[nodiscard]] size_t vertexCount() const { return userPolylineVerts.size() / kVertexStride; }
   /// False when the flat store is not a whole number of vertices.
-  [[nodiscard]] bool vertexStoreWellFormed() const { return userPolylineVerts.size() % kVertexStride == 0; }
   /// Vertex \p i (requires `i < vertexCount()`).
   [[nodiscard]] CadPolyVertex vertex(size_t i) const {
     const size_t k = i * kVertexStride;
@@ -498,8 +497,6 @@ struct CadEntityStore {
   }
   /// Appends one vertex.
   void pushVertex(const CadPolyVertex& v) { userPolylineVerts.insert(userPolylineVerts.end(), {v.x, v.y, v.z}); }
-  /// Removes vertex \p i and shifts later vertices down (requires `i < vertexCount()`).
-  void eraseVertex(size_t i) { eraseVertexRange(i, i + 1); }
   /// Removes vertices [\p first, \p last) and shifts later vertices down.
   void eraseVertexRange(size_t first, size_t last) {
     userPolylineVerts.erase(userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(first * kVertexStride),

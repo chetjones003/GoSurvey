@@ -766,7 +766,7 @@ void EditorWindow::RefreshProperties() {
         readOnly(details, "Vertices", QString::number(std::max(0, last - first)), "propPolylineVertices");
         const bool closed = valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)];
         readOnly(details, "Closed", closed ? "Yes" : "No", "propPolylineClosed");
-        if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
+        if (last > first && static_cast<size_t>(last) <= st.vertexCount()) {
           double lo = st.vertex(first).z, hi = lo;
           for (int v = first; v < last; ++v) { const double z = st.vertex(v).z; lo = std::min(lo, z); hi = std::max(hi, z); }
           readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");

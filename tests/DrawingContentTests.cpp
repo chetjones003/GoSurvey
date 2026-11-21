@@ -741,3 +741,33 @@ TEST_CASE("Line records are read, written and erased through the entity store", 
   CHECK(store.line(0).x0 == 7.0);
   CHECK(store.lineStoreWellFormed());
 }
+
+TEST_CASE("Polyline vertices are read, written and erased through the entity store", "[issue1557][phase5][vertices]") {
+  CadEntityStore store;
+  CHECK(store.vertexCount() == 0);
+
+  store.pushVertex(CadPolyVertex{1.0, 2.0, 3.0});
+  store.pushVertex(CadPolyVertex{4.0, 5.0, 6.0});
+  store.pushVertex(CadPolyVertex{7.0, 8.0, 9.0});
+  CHECK(store.vertexCount() == 3);
+  CHECK(store.userPolylineVerts == std::vector<double>{1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+  const CadPolyVertex mid = store.vertex(1);
+  CHECK(mid.x == 4.0);
+  CHECK(mid.y == 5.0);
+  CHECK(mid.z == 6.0);
+
+  store.setVertex(0, CadPolyVertex{10.0, 11.0, 12.0});
+  CHECK(store.vertex(0).z == 12.0);
+  CHECK(store.vertex(1).x == 4.0);  // neighbour untouched
+
+  store.vertexComponent(2, CadVertexComponent::Y) = 80.0;
+  CHECK(store.vertex(2).y == 80.0);
+  CHECK(store.vertex(2).x == 7.0);
+
+  store.eraseVertexRange(0, 2);
+  CHECK(store.vertexCount() == 1);
+  CHECK(store.vertex(0).x == 7.0);
+  CHECK(store.vertex(0).y == 80.0);
+  CHECK(store.userPolylineVerts.size() % 3 == 0);
+}
