@@ -612,7 +612,7 @@ bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
     add(ln.x0, ln.y0);
     add(ln.x1, ln.y1);
   }
-  for (size_t v = 0; v + 2 < tb.userPolylineVerts.size(); v += 3) add(tb.userPolylineVerts[v], tb.userPolylineVerts[v + 1]);
+  for (size_t v = 0; v < tb.vertexCount(); ++v) add(tb.vertex(v).x, tb.vertex(v).y);
   return any;
 }
 
@@ -626,8 +626,8 @@ bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
     Box b;
     bool first = true;
     for (int v = v0; v < v1; ++v) {
-      const double x = tb.userPolylineVerts[3 * static_cast<size_t>(v)];
-      const double y = tb.userPolylineVerts[3 * static_cast<size_t>(v) + 1];
+      const double x = tb.vertex(static_cast<size_t>(v)).x;
+      const double y = tb.vertex(static_cast<size_t>(v)).y;
       if (first) {
         b.minX = b.maxX = x;
         b.minY = b.maxY = y;
@@ -667,8 +667,8 @@ void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, doub
   for (size_t p = 0; p + 1 < tb.userPolylineOffsets.size(); ++p) {
     for (int v = tb.userPolylineOffsets[p]; v < tb.userPolylineOffsets[p + 1]; ++v) {
       const size_t vi = static_cast<size_t>(v);
-      sheet.paperPolyVerts.push_back(static_cast<float>(tb.userPolylineVerts[3 * vi] + dx));
-      sheet.paperPolyVerts.push_back(static_cast<float>(tb.userPolylineVerts[3 * vi + 1] + dy));
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.vertex(vi).x + dx));
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.vertex(vi).y + dy));
       sheet.paperPolyVerts.push_back(0.f);
       sheet.paperPolyVertsBulge.push_back(vi < tb.userPolylineVertsBulge.size() ? tb.userPolylineVertsBulge[vi] : 0.f);
     }
@@ -5238,8 +5238,10 @@ bool AddVertexSourceSegments(const AppCommandState& st, const SelectedEntity& se
   const bool closed = feature ? (ix < st.featureLineClosed.size() && st.featureLineClosed[ix] != 0)
                               : (ix < st.userPolylineClosed.size() && st.userPolylineClosed[ix] != 0);
   auto vert = [&](int k, int c) {
-    const size_t i = static_cast<size_t>(v0 + k) * 3 + static_cast<size_t>(c);
-    return feature ? st.featureLineVerts[i] : static_cast<double>(st.userPolylineVerts[i]);
+    const size_t vi = static_cast<size_t>(v0 + k);
+    if (feature) return st.featureLineVerts[vi * 3 + static_cast<size_t>(c)];
+    const CadPolyVertex pv = st.vertex(vi);
+    return c == 0 ? pv.x : c == 1 ? pv.y : pv.z;
   };
   double zMin = std::numeric_limits<double>::infinity(), zMax = -zMin;
   for (int k = 0; k < cnt; ++k) {

@@ -919,9 +919,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double ox = 0, oy = 0;
       xf.apply(p.x, p.y, &ox, &oy);
       UpdateCoordMag(coordMagMax, ox, oy);
-      st.userPolylineVerts.push_back(ox - st.worldDocumentOriginX);
-      st.userPolylineVerts.push_back(oy - st.worldDocumentOriginY);
-      st.userPolylineVerts.push_back(p.z);
+      st.pushVertex(CadPolyVertex{ox - st.worldDocumentOriginX, oy - st.worldDocumentOriginY, p.z});
       if (anyBulge || !st.userPolylineVertsBulge.empty())
         st.userPolylineVertsBulge.push_back(static_cast<float>(p.bulge));
     }
@@ -4256,9 +4254,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const size_t nPolyVert =
         st.userPolylineOffsets.empty() ? 0u : static_cast<size_t>(st.userPolylineOffsets.back());
     for (size_t vi = 0; vi < nPolyVert && vi * 3 + 2 < st.userPolylineVerts.size(); ++vi) {
-      accExt(q6lx(st.userPolylineVerts[vi * 3]),
-                    q6ly(st.userPolylineVerts[vi * 3 + 1]));
-      accExtZ(static_cast<double>(st.userPolylineVerts[vi * 3 + 2]));
+      accExt(q6lx(st.vertex(static_cast<size_t>(vi)).x),
+                    q6ly(st.vertex(static_cast<size_t>(vi)).y));
+      accExtZ(static_cast<double>(st.vertex(static_cast<size_t>(vi)).z));
     }
   }
   // Arcs and ellipses (#63), for the same reason and with the same consequence: an entity type the
@@ -5519,9 +5517,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       std::vector<ray3d::Vec3> w;
       w.reserve(static_cast<size_t>(vEndIncl - vStart + 1));
       for (int vi = vStart; vi <= vEndIncl; ++vi)
-        w.push_back(ray3d::Vec3{worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)]),
-                                worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]),
-                                static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)])});
+        w.push_back(ray3d::Vec3{worldX(st.vertex(static_cast<size_t>(vi)).x),
+                                worldY(st.vertex(static_cast<size_t>(vi)).y),
+                                static_cast<double>(st.vertex(static_cast<size_t>(vi)).z)});
       return w;
     };
     /// \p curvedOutOfPlane says a segment of this run turns in a plane that is not level — a circle
@@ -5734,11 +5732,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       // polyline cannot round-trip through it — the first vertex's Z is written and the rest are
       // dropped. Recorded as technical debt in the TASK-034 log: carrying per-vertex Z needs the
       // 3D POLYLINE/VERTEX entity pair, which is its own change.
-      rec.elevation38 = std::to_string(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart * 3 + 2)]));
+      rec.elevation38 = std::to_string(static_cast<double>(st.vertex(static_cast<size_t>(vStart)).z));
       rec.vertices.reserve(static_cast<size_t>(vEndIncl - vStart + 1));
       for (int vi = vStart; vi <= vEndIncl; ++vi)
-        rec.vertices.emplace_back(std::to_string(worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)])),
-                                  std::to_string(worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)])));
+        rec.vertices.emplace_back(std::to_string(worldX(st.vertex(static_cast<size_t>(vi)).x)),
+                                  std::to_string(worldY(st.vertex(static_cast<size_t>(vi)).y)));
       // REQ-316 / ADR-047: per-vertex bulge (group 42). Only emitted when this run has any curved
       // segment; a straight run writes no group 42 and round-trips exactly as before.
       {
@@ -5801,12 +5799,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // PolylineTiltedArc.hpp so DXF and DWG cannot disagree.
     auto buildTiltedSegmentArc = [&](int ia, int ib, float bulge, float nx, float ny, float nz,
                                      CadArc* out) -> bool {
-      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(ia) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(ia) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(ia) * 3 + 2]};
-      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(ib) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 2]};
+      const ray3d::Vec3 pA{st.vertex(ia).x,
+                           st.vertex(ia).y,
+                           st.vertex(ia).z};
+      const ray3d::Vec3 pB{st.vertex(ib).x,
+                           st.vertex(ib).y,
+                           st.vertex(ib).z};
       return BuildTiltedPolylineSegmentArc(pA, pB, static_cast<double>(bulge),
                                            ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                                        static_cast<double>(nz)},

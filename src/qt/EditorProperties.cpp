@@ -767,8 +767,8 @@ void EditorWindow::RefreshProperties() {
         const bool closed = valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)];
         readOnly(details, "Closed", closed ? "Yes" : "No", "propPolylineClosed");
         if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
-          double lo = st.userPolylineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
-          for (int v = first; v < last; ++v) { const double z = st.userPolylineVerts[static_cast<size_t>(v) * 3 + 2]; lo = std::min(lo, z); hi = std::max(hi, z); }
+          double lo = st.vertex(first).z, hi = lo;
+          for (int v = first; v < last; ++v) { const double z = st.vertex(v).z; lo = std::min(lo, z); hi = std::max(hi, z); }
           readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");
           const int vertexCount = last - first;
           const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
@@ -776,9 +776,9 @@ void EditorWindow::RefreshProperties() {
           for (int seg = 0; seg < segmentCount; ++seg) {
             const int va = first + seg;
             const int vb = seg == vertexCount - 1 ? first : va + 1;
-            const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
-            const double x0 = st.userPolylineVerts[a], y0 = st.userPolylineVerts[a + 1], z0 = st.userPolylineVerts[a + 2];
-            const double x1 = st.userPolylineVerts[b], y1 = st.userPolylineVerts[b + 1], z1 = st.userPolylineVerts[b + 2];
+            const size_t a = static_cast<size_t>(va), b = static_cast<size_t>(vb);
+            const double x0 = st.vertex(a).x, y0 = st.vertex(a).y, z0 = st.vertex(a).z;
+            const double x1 = st.vertex(b).x, y1 = st.vertex(b).y, z1 = st.vertex(b).z;
             const double bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                 ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.0;
             const double segmentPlan = BulgeSegmentLength(x0, y0, x1, y1, bulge);

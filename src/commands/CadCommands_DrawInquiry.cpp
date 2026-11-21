@@ -855,10 +855,10 @@ void PeditMoveVertex(AppCommandState& st, double x, double y, std::vector<std::s
     }
   } else {
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const size_t b = static_cast<size_t>(v0 + vi) * 3;
-    if (b + 1 < st.userPolylineVerts.size()) {
-      st.userPolylineVerts[b] = x;
-      st.userPolylineVerts[b + 1] = y;
+    const size_t b = static_cast<size_t>(v0 + vi);
+    if (b < st.vertexCount()) {
+      st.vertexComponent(b, CadVertexComponent::X) = x;
+      st.vertexComponent(b, CadVertexComponent::Y) = y;
     }
   }
   BumpCadGpuCache(st);
@@ -2129,12 +2129,12 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
     }
   } else if (e.type == T::Polyline) {
     if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.userPolylineOffsets.size()) {
-      const size_t v = static_cast<size_t>(st.userPolylineOffsets[static_cast<size_t>(e.index)]) * 3;
-      if (v + 2 < st.userPolylineVerts.size()) {
+      const size_t v = static_cast<size_t>(st.userPolylineOffsets[static_cast<size_t>(e.index)]);
+      if (v < st.vertexCount()) {
         r.hasPoint = true;
-        r.x = st.userPolylineVerts[v];
-        r.y = st.userPolylineVerts[v + 1];
-        r.z = st.userPolylineVerts[v + 2];
+        r.x = st.vertex(v).x;
+        r.y = st.vertex(v).y;
+        r.z = st.vertex(v).z;
       }
     }
   } else if (e.type == T::Point) {

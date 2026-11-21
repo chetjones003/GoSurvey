@@ -339,6 +339,16 @@ enum class CadLineComponent : uint8_t { X0 = 0, Y0 = 1, Z0 = 2, X1 = 3, Y1 = 4, 
 /// Position of a component inside one circle record (the order of \ref CadCircleRecord).
 enum class CadCircleComponent : uint8_t { X = 0, Y = 1, Z = 2, Radius = 3 };
 
+/// One vertex of \ref CadEntityStore::userPolylineVerts: X, Y and Z (world units, storage coordinates).
+struct CadPolyVertex {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// Position of a component inside one polyline vertex (the order of \ref CadPolyVertex).
+enum class CadVertexComponent : uint8_t { X = 0, Y = 1, Z = 2 };
+
 struct CadEntityStore {
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
   std::vector<double> userLinesFlat;
@@ -465,6 +475,42 @@ struct CadEntityStore {
   }
 
   static constexpr size_t kLineStride = 6;
+
+  // --- Polyline vertices (ADR-0010 phase 5) ------------------------------------------------------
+  // Polyline offsets index vertices, not floats. Same rule as the line and circle records: migrated
+  // callers go through these; the per-vertex side-cars (bulge, normal) stay the caller's to keep in step.
+
+  /// Number of vertices in \ref userPolylineVerts.
+  [[nodiscard]] size_t vertexCount() const { return userPolylineVerts.size() / kVertexStride; }
+  /// False when the flat store is not a whole number of vertices.
+  [[nodiscard]] bool vertexStoreWellFormed() const { return userPolylineVerts.size() % kVertexStride == 0; }
+  /// Vertex \p i (requires `i < vertexCount()`).
+  [[nodiscard]] CadPolyVertex vertex(size_t i) const {
+    const size_t k = i * kVertexStride;
+    return CadPolyVertex{userPolylineVerts[k], userPolylineVerts[k + 1], userPolylineVerts[k + 2]};
+  }
+  /// Overwrites vertex \p i in place (requires `i < vertexCount()`).
+  void setVertex(size_t i, const CadPolyVertex& v) {
+    const size_t k = i * kVertexStride;
+    userPolylineVerts[k] = v.x;
+    userPolylineVerts[k + 1] = v.y;
+    userPolylineVerts[k + 2] = v.z;
+  }
+  /// Appends one vertex.
+  void pushVertex(const CadPolyVertex& v) { userPolylineVerts.insert(userPolylineVerts.end(), {v.x, v.y, v.z}); }
+  /// Removes vertex \p i and shifts later vertices down (requires `i < vertexCount()`).
+  void eraseVertex(size_t i) { eraseVertexRange(i, i + 1); }
+  /// Removes vertices [\p first, \p last) and shifts later vertices down.
+  void eraseVertexRange(size_t first, size_t last) {
+    userPolylineVerts.erase(userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(first * kVertexStride),
+                            userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(last * kVertexStride));
+  }
+  /// One component of vertex \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& vertexComponent(size_t i, CadVertexComponent which) {
+    return userPolylineVerts[i * kVertexStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kVertexStride = 3;
 };
 
 /// A block definition's own geometry (ADR-0010 / #1557 phase 3). The entity collections are the
@@ -1143,10 +1189,12 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     e.cy += dy;
     e.z += dz;
   }
-  for (size_t i = 0; i + 2 < c->userPolylineVerts.size(); i += 3) {
-    c->userPolylineVerts[i] += dx;
-    c->userPolylineVerts[i + 1] += dy;
-    c->userPolylineVerts[i + 2] += dz;
+  for (size_t vi = 0; vi < c->vertexCount(); ++vi) {
+    CadPolyVertex v = c->vertex(vi);
+    v.x += dx;
+    v.y += dy;
+    v.z += dz;
+    c->setVertex(vi, v);
   }
   for (CadAnnotation& t : c->cadAnnotations) {
     t.insX += dx;
@@ -1311,23 +1359,23 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
           pa = c.userPolylineAttrs[static_cast<size_t>(p)];
         const EntityAttributes ra = CadBlockResolveAttr(pa, insertAttr);
         for (int v = a; v + 1 < b; ++v) {
-          const size_t i0 = static_cast<size_t>(v) * 3;
-          const size_t i1 = static_cast<size_t>(v + 1) * 3;
-          if (i1 + 2 >= c.userPolylineVerts.size())
+          const size_t i0 = static_cast<size_t>(v);
+          const size_t i1 = static_cast<size_t>(v + 1);
+          if (i1 >= c.vertexCount())
             break;
           CadBlockWorldSeg s;
-          xformPt(c.userPolylineVerts[i0], c.userPolylineVerts[i0 + 1], c.userPolylineVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.userPolylineVerts[i1], c.userPolylineVerts[i1 + 1], c.userPolylineVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }
         const bool closed = static_cast<size_t>(p) < c.userPolylineClosed.size() && c.userPolylineClosed[static_cast<size_t>(p)] != 0;
         if (closed && b - a >= 2) {
-          const size_t i0 = static_cast<size_t>(b - 1) * 3;
-          const size_t i1 = static_cast<size_t>(a) * 3;
+          const size_t i0 = static_cast<size_t>(b - 1);
+          const size_t i1 = static_cast<size_t>(a);
           CadBlockWorldSeg s;
-          xformPt(c.userPolylineVerts[i0], c.userPolylineVerts[i0 + 1], c.userPolylineVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.userPolylineVerts[i1], c.userPolylineVerts[i1 + 1], c.userPolylineVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }

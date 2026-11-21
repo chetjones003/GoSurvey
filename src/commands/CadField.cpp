@@ -68,14 +68,14 @@ double PolylineSignedAreaPlan(const AppCommandState& st, int pi) {
   for (int s = 0; s < nvert; ++s) {
     const int va = v0 + s;
     const int vb = (s == nvert - 1) ? v0 : v0 + s + 1;
-    const size_t A = static_cast<size_t>(va) * 3;
-    const size_t B = static_cast<size_t>(vb) * 3;
-    if (B + 1 >= st.userPolylineVerts.size())
+    const size_t A = static_cast<size_t>(va);
+    const size_t B = static_cast<size_t>(vb);
+    if (B >= st.vertexCount())
       break;
-    const double x0 = st.userPolylineVerts[A];
-    const double y0 = st.userPolylineVerts[A + 1];
-    const double x1 = st.userPolylineVerts[B];
-    const double y1 = st.userPolylineVerts[B + 1];
+    const double x0 = st.vertex(A).x;
+    const double y0 = st.vertex(A).y;
+    const double x1 = st.vertex(B).x;
+    const double y1 = st.vertex(B).y;
     const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                             ? st.userPolylineVertsBulge[static_cast<size_t>(va)]
                             : 0.f;
@@ -106,15 +106,15 @@ double PolylinePathLength(const AppCommandState& st, int pi) {
   for (int s = 0; s < nseg; ++s) {
     const int va = v0 + s;
     const int vb = (s == (v1 - v0) - 1) ? v0 : v0 + s + 1;
-    const size_t A = static_cast<size_t>(va) * 3;
-    const size_t B = static_cast<size_t>(vb) * 3;
-    if (B + 1 >= st.userPolylineVerts.size())
+    const size_t A = static_cast<size_t>(va);
+    const size_t B = static_cast<size_t>(vb);
+    if (B >= st.vertexCount())
       break;
     const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                             ? st.userPolylineVertsBulge[static_cast<size_t>(va)]
                             : 0.f;
-    total += BulgeSegmentLength(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+    total += BulgeSegmentLength(st.vertex(A).x, st.vertex(A).y,
+                                st.vertex(B).x, st.vertex(B).y,
                                 static_cast<double>(bulge));
   }
   return total;

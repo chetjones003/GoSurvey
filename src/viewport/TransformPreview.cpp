@@ -180,19 +180,19 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
   const bool closed =
       static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
   auto emit = [&](int a, int b) {
-    const size_t A = static_cast<size_t>(a) * 3, B = static_cast<size_t>(b) * 3;
-    const float za = cmd.userPolylineVerts[A + 2];
+    const size_t A = static_cast<size_t>(a), B = static_cast<size_t>(b);
+    const float za = cmd.vertex(A).z;
     // REQ-316 / ADR-047: a curved segment is traced as an arc, not a chord, so the selection /
     // hover highlight follows the shape the renderer drew.
     const float bulge =
         static_cast<size_t>(a) < cmd.userPolylineVertsBulge.size() ? cmd.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
     if (bulge == 0.f) {
-      out->push_back(cmd.userPolylineVerts[A]);
-      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(cmd.vertex(A).x);
+      out->push_back(cmd.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.userPolylineVerts[B]);
-      out->push_back(cmd.userPolylineVerts[B + 1]);
-      out->push_back(cmd.userPolylineVerts[B + 2]);
+      out->push_back(cmd.vertex(B).x);
+      out->push_back(cmd.vertex(B).y);
+      out->push_back(cmd.vertex(B).z);
       return;
     }
     // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — the same construction
@@ -210,23 +210,23 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     ucs::Ucs plane{};
     BulgeArcSpan arc{};
     if (flat) {
-      arc = BulgeArc(cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], cmd.userPolylineVerts[B],
-                     cmd.userPolylineVerts[B + 1], static_cast<double>(bulge));
-    } else if (ucs::FromNormal(ray3d::Vec3{cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], za},
+      arc = BulgeArc(cmd.vertex(A).x, cmd.vertex(A).y, cmd.vertex(B).x,
+                     cmd.vertex(B).y, static_cast<double>(bulge));
+    } else if (ucs::FromNormal(ray3d::Vec3{cmd.vertex(A).x, cmd.vertex(A).y, za},
                                ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                            static_cast<double>(nz)},
                                &plane)) {
       const ucs::Point2D p1Local = ucs::WorldToPlane(
-          plane, ray3d::Vec3{cmd.userPolylineVerts[B], cmd.userPolylineVerts[B + 1], cmd.userPolylineVerts[B + 2]});
+          plane, ray3d::Vec3{cmd.vertex(B).x, cmd.vertex(B).y, cmd.vertex(B).z});
       arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
     }
     if (!arc.valid) {
-      out->push_back(cmd.userPolylineVerts[A]);
-      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(cmd.vertex(A).x);
+      out->push_back(cmd.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.userPolylineVerts[B]);
-      out->push_back(cmd.userPolylineVerts[B + 1]);
-      out->push_back(cmd.userPolylineVerts[B + 2]);
+      out->push_back(cmd.vertex(B).x);
+      out->push_back(cmd.vertex(B).y);
+      out->push_back(cmd.vertex(B).z);
       return;
     }
     constexpr double kPi = 3.14159265358979323846;
@@ -403,8 +403,8 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
     const int n = v1 - v0;
     if (n < 2 || static_cast<size_t>(v1 - 1) * 3 + 1 >= cmd.userPolylineVerts.size())
       return;
-    auto vx = [&](int i) { return cmd.userPolylineVerts[static_cast<size_t>(v0 + i) * 3]; };
-    auto vy = [&](int i) { return cmd.userPolylineVerts[static_cast<size_t>(v0 + i) * 3 + 1]; };
+    auto vx = [&](int i) { return cmd.vertex(static_cast<size_t>(v0 + i)).x; };
+    auto vy = [&](int i) { return cmd.vertex(static_cast<size_t>(v0 + i)).y; };
     const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
                         cmd.userPolylineClosed[static_cast<size_t>(pi)] != 0u;
     constexpr float kZ = 0.f;  // ReplacePolylineVerts writes z 0; the preview matches it
@@ -587,20 +587,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const bool closed =
             static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).x + dx);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).y + dy);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).x + dx);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).y + dy);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).x + dx);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).y + dy);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).x + dx);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).y + dy);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -677,20 +677,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
                               cmd.userPolylineClosed[static_cast<size_t>(pi)];
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)] + dz);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)] + dz);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).x + dx);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).y + dy);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z + dz);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).x + dx);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).y + dy);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z + dz);
           }
           if (closed && v1 - v0 >= 2) {
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)] + dz);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)] + dz);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).x + dx);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).y + dy);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z + dz);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).x + dx);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).y + dy);
+            prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z + dz);
           }
         }
       }
@@ -799,9 +799,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
                               cmd.userPolylineClosed[static_cast<size_t>(pi)];
           const auto pushVert = [&](int idx) {
-            const ray3d::Vec3 p = rp(cmd.userPolylineVerts[static_cast<size_t>(idx * 3)],
-                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 1)],
-                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 2)]);
+            const ray3d::Vec3 p = rp(cmd.vertex(static_cast<size_t>(idx)).x,
+                                     cmd.vertex(static_cast<size_t>(idx)).y,
+                                     cmd.vertex(static_cast<size_t>(idx)).z);
             prevLines->push_back(static_cast<float>(p.x));
             prevLines->push_back(static_cast<float>(p.y));
             prevLines->push_back(static_cast<float>(p.z));
@@ -958,9 +958,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const bool closed =
             static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
         auto vert = [&](int vi, float* ox, float* oy, float* oz) {
-          *ox = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-          *oy = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-          *oz = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
+          *ox = cmd.vertex(static_cast<size_t>(vi)).x;
+          *oy = cmd.vertex(static_cast<size_t>(vi)).y;
+          *oz = cmd.vertex(static_cast<size_t>(vi)).z;
           if (inBox(*ox, *oy)) { *ox += dx; *oy += dy; }
         };
         for (int vi = v0; vi + 1 < v1; ++vi) {
@@ -1033,20 +1033,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       const bool closed =
           static_cast<size_t>(pi) < cb.content.userPolylineClosed.size() && cb.content.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 0)] + dx);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).x + dx);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).y + dy);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).z);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).x + dx);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).y + dy);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).z);
       }
       if (closed && v1 - v0 >= 2) {
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 0)] + dx);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 0)] + dx);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).x + dx);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).y + dy);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).z);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).x + dx);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).y + dy);
+        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).z);
       }
     }
     return;
@@ -1139,32 +1139,32 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const bool closed =
             static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-          float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-          float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-          float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          float x0 = cmd.vertex(static_cast<size_t>(vi)).x;
+          float y0 = cmd.vertex(static_cast<size_t>(vi)).y;
+          float x1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
+          float y1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
           scalePreviewPt(bx, by, sc, &x0, &y0);
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-          float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-          float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-          float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+          float x0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
+          float y0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
+          float x1 = cmd.vertex(static_cast<size_t>(v0)).x;
+          float y1 = cmd.vertex(static_cast<size_t>(v0)).y;
           scalePreviewPt(bx, by, sc, &x0, &y0);
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -1260,32 +1260,32 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const bool closed =
             static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          float px0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-          float py0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-          float px1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-          float py1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          float px0 = cmd.vertex(static_cast<size_t>(vi)).x;
+          float py0 = cmd.vertex(static_cast<size_t>(vi)).y;
+          float px1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
+          float py1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
           mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
           mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
           prevLines->push_back(px0);
           prevLines->push_back(py0);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
           prevLines->push_back(px1);
           prevLines->push_back(py1);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
         }
         if (closed && v1 - v0 >= 2) {
-          float px0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-          float py0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-          float px1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-          float py1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+          float px0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
+          float py0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
+          float px1 = cmd.vertex(static_cast<size_t>(v0)).x;
+          float py1 = cmd.vertex(static_cast<size_t>(v0)).y;
           mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
           mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
           prevLines->push_back(px0);
           prevLines->push_back(py0);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
           prevLines->push_back(px1);
           prevLines->push_back(py1);
-          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+          prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
         }
       }
     }
@@ -1333,12 +1333,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         return;
       const int movingVi = nearFirst ? v0 : (v1 - 1);
       const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
-      const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
-      if (mIdx + 2 >= cmd.userPolylineVerts.size() || fIdx + 2 >= cmd.userPolylineVerts.size())
+      const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
+      if (mIdx >= cmd.vertexCount() || fIdx >= cmd.vertexCount())
         return;
-      const float fx = cmd.userPolylineVerts[fIdx], fy = cmd.userPolylineVerts[fIdx + 1];
-      const float mz = cmd.userPolylineVerts[mIdx + 2];
-      const float mx = cmd.userPolylineVerts[mIdx], my = cmd.userPolylineVerts[mIdx + 1];
+      const float fx = cmd.vertex(fIdx).x, fy = cmd.vertex(fIdx).y;
+      const float mz = cmd.vertex(mIdx).z;
+      const float mx = cmd.vertex(mIdx).x, my = cmd.vertex(mIdx).y;
       const float segLen = std::hypot(mx - fx, my - fy);
       if (segLen < 1e-9f)
         return;
@@ -1346,7 +1346,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       const float proj = std::max((curX - fx) * ux + (curY - fy) * uy, 1e-6f);
       prevLines->push_back(fx);
       prevLines->push_back(fy);
-      prevLines->push_back(cmd.userPolylineVerts[fIdx + 2]);
+      prevLines->push_back(cmd.vertex(fIdx).z);
       prevLines->push_back(fx + ux * proj);
       prevLines->push_back(fy + uy * proj);
       prevLines->push_back(mz);
@@ -1447,32 +1447,32 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       const bool closed =
           static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-        float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-        float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-        float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+        float x0 = cmd.vertex(static_cast<size_t>(vi)).x;
+        float y0 = cmd.vertex(static_cast<size_t>(vi)).y;
+        float x1 = cmd.vertex(static_cast<size_t>((vi + 1))).x;
+        float y1 = cmd.vertex(static_cast<size_t>((vi + 1))).y;
         rotatePreviewPt(bx, by, theta, &x0, &y0);
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        prevLines->push_back(cmd.vertex(static_cast<size_t>(vi)).z);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+        prevLines->push_back(cmd.vertex(static_cast<size_t>((vi + 1))).z);
       }
       if (closed && v1 - v0 >= 2) {
-        float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-        float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-        float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-        float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+        float x0 = cmd.vertex(static_cast<size_t>((v1 - 1))).x;
+        float y0 = cmd.vertex(static_cast<size_t>((v1 - 1))).y;
+        float x1 = cmd.vertex(static_cast<size_t>(v0)).x;
+        float y1 = cmd.vertex(static_cast<size_t>(v0)).y;
         rotatePreviewPt(bx, by, theta, &x0, &y0);
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+        prevLines->push_back(cmd.vertex(static_cast<size_t>((v1 - 1))).z);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+        prevLines->push_back(cmd.vertex(static_cast<size_t>(v0)).z);
       }
     }
   }

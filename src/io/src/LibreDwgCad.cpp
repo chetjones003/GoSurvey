@@ -507,9 +507,7 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(base);
   for (size_t i = 0; i < nv; ++i) {
-    st.userPolylineVerts.push_back(xyz[i * 3 + 0] - st.worldDocumentOriginX);
-    st.userPolylineVerts.push_back(xyz[i * 3 + 1] - st.worldDocumentOriginY);
-    st.userPolylineVerts.push_back(xyz[i * 3 + 2]);
+    st.pushVertex(CadPolyVertex{xyz[i * 3 + 0] - st.worldDocumentOriginX, xyz[i * 3 + 1] - st.worldDocumentOriginY, xyz[i * 3 + 2]});
   }
   st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
   st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
@@ -4882,14 +4880,14 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       continue;
     std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
     for (int v = 0; v < nv; ++v) {
-      const size_t k = static_cast<size_t>(a + v) * 3;
-      pts[static_cast<size_t>(v)].x = content.userPolylineVerts[k];
-      pts[static_cast<size_t>(v)].y = content.userPolylineVerts[k + 1];
+      const size_t k = static_cast<size_t>(a + v);
+      pts[static_cast<size_t>(v)].x = content.vertex(k).x;
+      pts[static_cast<size_t>(v)].y = content.vertex(k).y;
     }
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(blkhdr, nv, pts.data());
     if (lw == nullptr)
       continue;
-    const double z0 = content.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    const double z0 = content.vertex(a).z;
     if (z0 != 0.0) {
       lw->elevation = z0;
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);
@@ -6376,10 +6374,10 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
     const int b = st.userPolylineOffsets[i + 1];
     if (b - a < 2)
       continue;
-    const float z0 = st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    const float z0 = st.vertex(a).z;
     bool is3d = false, anyBulge = false;
     for (int vi = a; vi < b; ++vi) {
-      if (vi > a && std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f)
+      if (vi > a && std::fabs(st.vertex(vi).z - z0) > 1e-4f)
         is3d = true;
       if (static_cast<size_t>(vi) < st.userPolylineVertsBulge.size() &&
           st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.f)
@@ -7888,11 +7886,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       // POLYLINE_3D + VERTEX_3D carries a real Z per vertex instead; it does not carry a bulge, so
       // a curved 3D run's curve degrades to straight segments — same precedent as DxfIo's own
       // genuinely-3D-polyline path.
-      const double z0 = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart) * 3 + 2]);
+      const double z0 = static_cast<double>(st.vertex(vStart).z);
       bool is3d = false;
       for (int v = 1; v < runNv; ++v) {
-        const int k = (vStart + v) * 3;
-        if (std::fabs(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k) + 2]) - z0) > 1e-4) {
+        const size_t k = static_cast<size_t>(vStart + v);
+        if (std::fabs(static_cast<double>(st.vertex(k).z) - z0) > 1e-4) {
           is3d = true;
           break;
         }
@@ -7900,12 +7898,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (is3d) {
         std::vector<dwg_point_3d> pts3(static_cast<size_t>(runNv));
         for (int v = 0; v < runNv; ++v) {
-          const int k = (vStart + v) * 3;
+          const size_t k = static_cast<size_t>(vStart + v);
           pts3[static_cast<size_t>(v)].x =
-              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+              static_cast<double>(st.vertex(k).x) + st.worldDocumentOriginX;
           pts3[static_cast<size_t>(v)].y =
-              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
-          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 2)]);
+              static_cast<double>(st.vertex(k).y) + st.worldDocumentOriginY;
+          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.vertex(k).z);
         }
         Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, runNv, pts3.data());
         if (pl != nullptr) {
@@ -7917,11 +7915,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       }
       std::vector<dwg_point_2d> pts(static_cast<size_t>(runNv));
       for (int v = 0; v < runNv; ++v) {
-        const int k = (vStart + v) * 3;
+        const size_t k = static_cast<size_t>(vStart + v);
         pts[static_cast<size_t>(v)].x =
-            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+            static_cast<double>(st.vertex(k).x) + st.worldDocumentOriginX;
         pts[static_cast<size_t>(v)].y =
-            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+            static_cast<double>(st.vertex(k).y) + st.worldDocumentOriginY;
       }
       Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, runNv, pts.data());
       if (lw == nullptr)
@@ -8048,12 +8046,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       emitPolylineRun(runStart, vi, false);
       float nx = 0.f, ny = 0.f, nz = 1.f;
       normalAt(vi, &nx, &ny, &nz);
-      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(vi) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]};
-      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3],
-                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 2]};
+      const ray3d::Vec3 pA{st.vertex(vi).x,
+                           st.vertex(vi).y,
+                           st.vertex(vi).z};
+      const ray3d::Vec3 pB{st.vertex(static_cast<size_t>((vi + 1))).x,
+                           st.vertex(static_cast<size_t>((vi + 1))).y,
+                           st.vertex(static_cast<size_t>((vi + 1))).z};
       CadArc arc{};
       if (BuildTiltedPolylineSegmentArc(
               pA, pB, static_cast<double>(bulgeAt(vi)),
@@ -8065,12 +8063,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       emitPolylineRun(runStart, b - 1, false);
       float nx = 0.f, ny = 0.f, nz = 1.f;
       normalAt(b - 1, &nx, &ny, &nz);
-      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3],
-                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 2]};
-      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(a) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2]};
+      const ray3d::Vec3 pA{st.vertex(static_cast<size_t>((b - 1))).x,
+                           st.vertex(static_cast<size_t>((b - 1))).y,
+                           st.vertex(static_cast<size_t>((b - 1))).z};
+      const ray3d::Vec3 pB{st.vertex(a).x,
+                           st.vertex(a).y,
+                           st.vertex(a).z};
       CadArc arc{};
       if (BuildTiltedPolylineSegmentArc(
               pA, pB, static_cast<double>(bulgeAt(b - 1)),

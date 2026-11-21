@@ -668,8 +668,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                             : static_cast<int>(st.userPolylineVerts.size() / 3);
         std::vector<std::array<double, 3>> w;
         for (int k = start; k < end; ++k) {
-          const size_t b = static_cast<size_t>(k) * 3;
-          w.push_back({st.userPolylineVerts[b] + oX, st.userPolylineVerts[b + 1] + oY, st.userPolylineVerts[b + 2]});
+          const size_t b = static_cast<size_t>(k);
+          w.push_back({st.vertex(b).x + oX, st.vertex(b).y + oY, st.vertex(b).z});
         }
         emitModelChain(w, false);
       }

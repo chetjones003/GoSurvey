@@ -178,17 +178,20 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
 
   // Polylines
   if (!selective) {
-    for (size_t i = 0; i + 1 < st.userPolylineVerts.size(); i += 3)
-      HelmertPt(a, b, tx, ty, &st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
+    for (size_t vi = 0; vi < st.vertexCount(); ++vi) {
+      CadPolyVertex pv = st.vertex(vi);
+      HelmertPt(a, b, tx, ty, &pv.x, &pv.y);
+      st.setVertex(vi, pv);
+    }
   } else {
     for (size_t pi = 0; pi + 1 < st.userPolylineOffsets.size(); ++pi) {
       if (!sPolylines.count(static_cast<int>(pi))) continue;
       const int vStart = st.userPolylineOffsets[pi];
       const int vEnd   = st.userPolylineOffsets[pi + 1];
       for (int vi = vStart; vi < vEnd; ++vi) {
-        size_t base = static_cast<size_t>(vi) * 3;
-        if (base + 1 < st.userPolylineVerts.size())
-          HelmertPt(a, b, tx, ty, &st.userPolylineVerts[base], &st.userPolylineVerts[base + 1]);
+        size_t base = static_cast<size_t>(vi);
+        if (base < st.vertexCount())
+          HelmertPt(a, b, tx, ty, &st.vertexComponent(base, CadVertexComponent::X), &st.vertexComponent(base, CadVertexComponent::Y));
       }
     }
   }

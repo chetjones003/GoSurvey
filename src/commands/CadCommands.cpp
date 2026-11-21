@@ -827,10 +827,10 @@ void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
     const int a = scratch.userPolylineOffsets[p];
     const int b = scratch.userPolylineOffsets[p + 1];
     for (int v = a; v < b; ++v) {
-      const size_t base = static_cast<size_t>(v) * 3;
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base]));
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 1]));
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 2]));
+      const size_t base = static_cast<size_t>(v);
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).x));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).y));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.vertex(base).z));
       const float bg = static_cast<size_t>(v) < scratch.userPolylineVertsBulge.size()
                            ? scratch.userPolylineVertsBulge[static_cast<size_t>(v)]
                            : 0.f;
@@ -1670,10 +1670,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
         const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
         const int endV = cmd.userPolylineOffsets[(static_cast<size_t>(sel.index)+ 1)];
         for (int vi = 0; vi < endV - startV; ++vi) {
-          const size_t xIdx = (static_cast<size_t>(startV)+ vi) * 3;
-          if (xIdx + 1 >= cmd.userPolylineVerts.size())
+          const size_t xIdx = (static_cast<size_t>(startV)+ vi);
+          if (xIdx >= cmd.vertexCount())
             break;
-          tryGrip(sel, static_cast<float>(cmd.userPolylineVerts[xIdx]), static_cast<float>(cmd.userPolylineVerts[xIdx + 1]), vi);
+          tryGrip(sel, static_cast<float>(cmd.vertex(xIdx).x), static_cast<float>(cmd.vertex(xIdx).y), vi);
         }
         CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float) {
           tryGrip(sel, mx, my, kPolyBulgeGripBase + seg);  // REQ-316 / ADR-047
@@ -1804,10 +1804,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       cmd.entityGripOrigPolylineXIdx = -1;
       break;
     }
-    const size_t xIdx = (static_cast<size_t>(startV)+ bestWhich) * 3;
+    const size_t xIdx = (static_cast<size_t>(startV)+ bestWhich);
     cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
-    cmd.entityGripOrigPolyVertX = static_cast<float>(cmd.userPolylineVerts[xIdx]);
-    cmd.entityGripOrigPolyVertY = static_cast<float>(cmd.userPolylineVerts[xIdx + 1]);
+    cmd.entityGripOrigPolyVertX = static_cast<float>(cmd.vertex(xIdx).x);
+    cmd.entityGripOrigPolyVertY = static_cast<float>(cmd.vertex(xIdx).y);
     break;
   }
   case SelectedEntity::Type::Arc: {
@@ -2952,12 +2952,12 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
     if (vEnd - vBegin < 2)
       return false;
     for (int v = vBegin; v < vEnd; ++v) {
-      const size_t base = static_cast<size_t>(v) * 3;
-      if (base + 2 >= st.userPolylineVerts.size())
+      const size_t base = static_cast<size_t>(v);
+      if (base >= st.vertexCount())
         return false;
-      out.verts.push_back({static_cast<double>(st.userPolylineVerts[base + 0]) + st.worldDocumentOriginX,
-                           static_cast<double>(st.userPolylineVerts[base + 1]) + st.worldDocumentOriginY,
-                           static_cast<double>(st.userPolylineVerts[base + 2])});
+      out.verts.push_back({static_cast<double>(st.vertex(base).x) + st.worldDocumentOriginX,
+                           static_cast<double>(st.vertex(base).y) + st.worldDocumentOriginY,
+                           static_cast<double>(st.vertex(base).z)});
     }
     out.closed = closed;
     return true;
@@ -6395,9 +6395,7 @@ int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, 
     st.userPolylineOffsets.push_back(0);
   const int baseVert = st.userPolylineOffsets.back();
   for (int v = 0; v < n; ++v) {
-    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 0]);
-    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 1]);
-    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 2]);
+    st.pushVertex(CadPolyVertex{xyz[static_cast<size_t>(v) * 3 + 0], xyz[static_cast<size_t>(v) * 3 + 1], xyz[static_cast<size_t>(v) * 3 + 2]});
   }
   st.userPolylineOffsets.push_back(baseVert + n);
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
@@ -11075,9 +11073,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         st.userPolylineOffsets.push_back(0);
       const int baseVert = st.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        st.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx);
-        st.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy);
-        st.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)] + dz);  // issue #400
+        st.pushVertex(CadPolyVertex{st.vertex(vi).x + dx, st.vertex(vi).y + dy, st.vertex(vi).z + dz});  // issue #400
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
@@ -11205,9 +11201,7 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
       continue;
     const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
     for (int vi = v0; vi < v1; ++vi) {
-      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx);
-      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy);
-      st.userPolylineVerts.push_back(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+      st.pushVertex(CadPolyVertex{cb.content.vertex(vi).x + dx, cb.content.vertex(vi).y + dy, cb.content.vertex(vi).z});
       st.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.content.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
                                               ? cb.content.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                               : 0.0f);
@@ -11332,9 +11326,9 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
       continue;
     const int baseVert = L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.back();
     for (int vi = v0; vi < v1; ++vi) {
-      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx));
-      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy));
-      L.paperPolyVerts.push_back(static_cast<float>(cb.content.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]));
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.vertex(vi).x + dx));
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.vertex(vi).y + dy));
+      L.paperPolyVerts.push_back(static_cast<float>(cb.content.vertex(vi).z));
       L.paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < cb.content.userPolylineVertsBulge.size() ? cb.content.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                                                                        : 0.f);
     }
@@ -11666,13 +11660,11 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         st.userPolylineOffsets.push_back(0);
       const int baseVert = st.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        float py = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        float pz = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        float px = static_cast<float>(st.vertex(vi).x);
+        float py = static_cast<float>(st.vertex(vi).y);
+        float pz = static_cast<float>(st.vertex(vi).z);
         RotateAroundBase(bx, by, rad, &px, &py);
-        st.userPolylineVerts.push_back(px);
-        st.userPolylineVerts.push_back(py);
-        st.userPolylineVerts.push_back(pz);
+        st.pushVertex(CadPolyVertex{px, py, pz});
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
@@ -11882,12 +11874,10 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         st.userPolylineOffsets.push_back(0);
       const int baseVert = st.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        const ray3d::Vec3 p = rotPt(static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]),
-                                    static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]),
-                                    static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]));
-        st.userPolylineVerts.push_back(static_cast<float>(p.x));
-        st.userPolylineVerts.push_back(static_cast<float>(p.y));
-        st.userPolylineVerts.push_back(static_cast<float>(p.z));
+        const ray3d::Vec3 p = rotPt(static_cast<float>(st.vertex(vi).x),
+                                    static_cast<float>(st.vertex(vi).y),
+                                    static_cast<float>(st.vertex(vi).z));
+        st.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
@@ -12401,13 +12391,11 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         st.userPolylineOffsets.push_back(0);
       const int baseVert = st.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        float py = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        float pz = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        float px = static_cast<float>(st.vertex(vi).x);
+        float py = static_cast<float>(st.vertex(vi).y);
+        float pz = static_cast<float>(st.vertex(vi).z);
         ReflectPtAcrossLine(x0, y0, x1, y1, &px, &py);
-        st.userPolylineVerts.push_back(px);
-        st.userPolylineVerts.push_back(py);
-        st.userPolylineVerts.push_back(pz);
+        st.pushVertex(CadPolyVertex{px, py, pz});
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
@@ -12577,8 +12565,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
-      RotateAroundBase(bx, by, rad, &st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)],
-                       &st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+      RotateAroundBase(bx, by, rad, &st.vertexComponent(vi, CadVertexComponent::X),
+                       &st.vertexComponent(vi, CadVertexComponent::Y));
     }
   }
   for (const auto& e : st.selection) {
@@ -12754,13 +12742,13 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
       const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
       const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
-        const size_t b = static_cast<size_t>(vi) * 3;
-        if (b + 2 >= st.userPolylineVerts.size())
+        const size_t b = static_cast<size_t>(vi);
+        if (b >= st.vertexCount())
           break;
-        const ray3d::Vec3 p = rotPt(static_cast<float>(st.userPolylineVerts[b]), static_cast<float>(st.userPolylineVerts[b + 1]), static_cast<float>(st.userPolylineVerts[b + 2]));
-        st.userPolylineVerts[b] = static_cast<float>(p.x);
-        st.userPolylineVerts[b + 1] = static_cast<float>(p.y);
-        st.userPolylineVerts[b + 2] = static_cast<float>(p.z);
+        const ray3d::Vec3 p = rotPt(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z));
+        st.vertexComponent(b, CadVertexComponent::X) = static_cast<float>(p.x);
+        st.vertexComponent(b, CadVertexComponent::Y) = static_cast<float>(p.y);
+        st.vertexComponent(b, CadVertexComponent::Z) = static_cast<float>(p.z);
       }
       break;
     }
@@ -12925,9 +12913,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
-      st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)] += dx;
-      st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)] += dy;
-      st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)] += dz;
+      st.vertexComponent(vi, CadVertexComponent::X) += dx;
+      st.vertexComponent(vi, CadVertexComponent::Y) += dy;
+      st.vertexComponent(vi, CadVertexComponent::Z) += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -13104,8 +13092,8 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
       double sx = 0.0, sy = 0.0;
       int nv = 0;
       for (int vi = v0; vi < v1; ++vi) {
-        sx += static_cast<double>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-        sy += static_cast<double>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+        sx += static_cast<double>(st.vertex(vi).x);
+        sy += static_cast<double>(st.vertex(vi).y);
         ++nv;
       }
       if (nv > 0) {
@@ -13215,8 +13203,8 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
       const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
-        const float x = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-        const float y = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+        const float x = static_cast<float>(st.vertex(vi).x);
+        const float y = static_cast<float>(st.vertex(vi).y);
         m = static_cast<float>(std::max<double>(m, std::hypot(x - bx, y - by)));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -13460,8 +13448,8 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi)
-      ScalePtAroundBase(bx, by, sc, &st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)],
-                        &st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
+      ScalePtAroundBase(bx, by, sc, &st.vertexComponent(vi, CadVertexComponent::X),
+                        &st.vertexComponent(vi, CadVertexComponent::Y));
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Annotation)
@@ -13560,9 +13548,9 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
       const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
       const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
       for (int vi = v0; vi < v1; ++vi) {
-        const size_t b = static_cast<size_t>(vi) * 3 + 2;
-        if (b < st.userPolylineVerts.size())
-          sz(&st.userPolylineVerts[b]);
+        const size_t vIdx = static_cast<size_t>(vi);
+        if (vIdx < st.vertexCount())
+          sz(&st.vertexComponent(vIdx, CadVertexComponent::Z));
       }
       break;
     }
@@ -15516,7 +15504,7 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   std::vector<std::pair<double, double>> v;
   v.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i) {
-    v.push_back({st.userPolylineVerts[(static_cast<size_t>(i)* 3)], st.userPolylineVerts[(static_cast<size_t>(i)* 3 + 1)]});
+    v.push_back({st.vertex(i).x, st.vertex(i).y});
   }
 
   const int n = static_cast<int>(v.size());
@@ -15597,13 +15585,11 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   std::vector<float> srcZ;  // captured before appending, so the reads never alias the writes
   srcZ.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i)
-    srcZ.push_back(static_cast<float>(st.userPolylineVerts[static_cast<size_t>(i) * 3 + 2]));
+    srcZ.push_back(static_cast<float>(st.vertex(i).z));
   const bool zMaps1to1 = out.size() == srcZ.size();
   const float fallbackZ = srcZ.empty() ? 0.f : srcZ.front();
   for (size_t oi = 0; oi < out.size(); ++oi) {
-    st.userPolylineVerts.push_back(out[oi].first);
-    st.userPolylineVerts.push_back(out[oi].second);
-    st.userPolylineVerts.push_back(zMaps1to1 ? srcZ[oi] : fallbackZ);
+    st.pushVertex(CadPolyVertex{out[oi].first, out[oi].second, zMaps1to1 ? srcZ[oi] : fallbackZ});
   }
   st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
@@ -15798,10 +15784,10 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
         double best = 1e30;
         float bestS = 1.f;
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          const double ax = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
-          const double ay = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
-          const double bx = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
-          const double by = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
+          const double ax = st.vertex(vi).x;
+          const double ay = st.vertex(vi).y;
+          const double bx = st.vertex(static_cast<size_t>(vi + 1)).x;
+          const double by = st.vertex(static_cast<size_t>(vi + 1)).y;
           const double sd = SignedSideLine(ax, ay, bx, by, px, py);
           // Closest point on the SEGMENT (clamped), only to pick which edge is nearest the click —
           // this only decides which edge's sign wins, never a stored coordinate, so the shared
@@ -15926,9 +15912,7 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     if (v0 < 0 || v1 < v0 || static_cast<size_t>(v1) * 3 > sourceLayout.paperPolyVerts.size()) return false;
     staged.userPolylineOffsets = {0, v1 - v0};
     for (int v = v0; v < v1; ++v) {
-      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3]);
-      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
-      staged.userPolylineVerts.push_back(0.0);
+      staged.pushVertex(CadPolyVertex{sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3], sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1], 0.0});
       staged.userPolylineVertsBulge.push_back(0.f);
       staged.userPolylineVertsNormal.insert(staged.userPolylineVertsNormal.end(), {0.f, 0.f, 1.f});
     }
@@ -15973,8 +15957,8 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     const int start = staged.userPolylineOffsets[1];
     const int end = staged.userPolylineOffsets[2];
     for (int v = start; v < end; ++v) {
-      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3]));
-      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3 + 1]));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.vertex(v).x));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.vertex(v).y));
       updated.paperPolyVerts.push_back(0.f);
     }
     if (updated.paperPolyOffsets.empty()) updated.paperPolyOffsets.push_back(oldEnd);
@@ -17652,9 +17636,9 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
         const int v0 = st.userPolylineOffsets[k];
         const int v1 = st.userPolylineOffsets[k + 1];
         for (int vi = v0; vi < v1; ++vi) {
-          const size_t b = static_cast<size_t>(vi) * 3;
-          if (b + 2 < st.userPolylineVerts.size())
-            grow(st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2]);
+          const size_t b = static_cast<size_t>(vi);
+          if (b < st.vertexCount())
+            grow(st.vertex(b).x, st.vertex(b).y, st.vertex(b).z);
         }
       }
       break;
@@ -18877,9 +18861,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
         cb.content.userPolylineOffsets.push_back(0);
       const int baseVert = cb.content.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        cb.content.userPolylineVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.content.pushVertex(CadPolyVertex{L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)], L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)], L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]});
         cb.content.userPolylineVertsBulge.push_back(static_cast<size_t>(vi) < L.paperPolyVertsBulge.size()
                                        ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
                                        : 0.f);
@@ -19034,14 +19016,12 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         cb.content.userPolylineOffsets.push_back(0);
       const int baseVert = cb.content.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]);
-        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        cb.content.userPolylineVerts.push_back(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.content.pushVertex(CadPolyVertex{st.vertex(vi).x, st.vertex(vi).y, st.vertex(vi).z});
         cb.content.userPolylineVertsBulge.push_back(vi < static_cast<int>(st.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
                                         ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
                                         : 0.0f);
-        expandBbox(static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 0)]),
-                   static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]));
+        expandBbox(static_cast<float>(st.vertex(vi).x),
+                   static_cast<float>(st.vertex(vi).y));
       }
       cb.content.userPolylineOffsets.push_back(baseVert + nv);
       uint8_t cl = static_cast<size_t>(pi) < st.userPolylineClosed.size()
@@ -19338,16 +19318,16 @@ static float PolylineOpenLengthOf(const AppCommandState& st, int pi) {
   const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   float total = 0.f;
   for (int vi = v0; vi + 1 < v1; ++vi) {
-    const size_t a = static_cast<size_t>(vi) * 3;
-    const size_t b = (static_cast<size_t>(vi)+ 1) * 3;
-    if (b + 1 >= st.userPolylineVerts.size())
+    const size_t a = static_cast<size_t>(vi);
+    const size_t b = (static_cast<size_t>(vi)+ 1);
+    if (b >= st.vertexCount())
       break;
     // REQ-316 / ADR-047: a curved segment contributes its arc length, not its chord length.
     const float bulge = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
     total += static_cast<float>(BulgeSegmentLength(
-        st.userPolylineVerts[a], st.userPolylineVerts[a + 1], st.userPolylineVerts[b],
-        st.userPolylineVerts[b + 1], static_cast<double>(bulge)));
+        st.vertex(a).x, st.vertex(a).y, st.vertex(b).x,
+        st.vertex(b).y, static_cast<double>(bulge)));
   }
   return total;
 }
@@ -19466,11 +19446,11 @@ static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFir
   const float deltaLen = newLength - curTotal;
   const int movingVi = nearFirst ? v0 : (v1 - 1);
   const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
-  const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
-  if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+  const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
+  if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
     return false;
-  const float fx = static_cast<float>(st.userPolylineVerts[fIdx]), fy = static_cast<float>(st.userPolylineVerts[fIdx + 1]);
-  const float mx = static_cast<float>(st.userPolylineVerts[mIdx]), my = static_cast<float>(st.userPolylineVerts[mIdx + 1]);
+  const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
+  const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
   const float segLen = std::hypot(mx - fx, my - fy);
   if (segLen < 1e-9f) {
     log.push_back("LENGTHEN — the polyline's end segment is degenerate; there is no direction to extend along.");
@@ -19484,8 +19464,8 @@ static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFir
   const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
   if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
     PushUndoSnapshot(st, "Lengthen");
-  st.userPolylineVerts[mIdx] = fx + ux * newSegLen;
-  st.userPolylineVerts[mIdx + 1] = fy + uy * newSegLen;
+  st.vertexComponent(mIdx, CadVertexComponent::X) = fx + ux * newSegLen;
+  st.vertexComponent(mIdx, CadVertexComponent::Y) = fy + uy * newSegLen;
   return true;
 }
 
@@ -19555,11 +19535,11 @@ static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity&
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     if (v1 - v0 < 2)
       return false;
-    const size_t a0 = static_cast<size_t>(v0) * 3, a1 = (static_cast<size_t>(v1)- 1) * 3;
-    if (a1 + 1 >= st.userPolylineVerts.size())
+    const size_t a0 = static_cast<size_t>(v0), a1 = (static_cast<size_t>(v1)- 1);
+    if (a1 >= st.vertexCount())
       return false;
-    *outNearFirst = NearerToFirstPoint(pickX, pickY, static_cast<float>(st.userPolylineVerts[a0]), static_cast<float>(st.userPolylineVerts[a0 + 1]),
-                                       static_cast<float>(st.userPolylineVerts[a1]), static_cast<float>(st.userPolylineVerts[a1 + 1]));
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, static_cast<float>(st.vertex(a0).x), static_cast<float>(st.vertex(a0).y),
+                                       static_cast<float>(st.vertex(a1).x), static_cast<float>(st.vertex(a1).y));
     *outCurLen = PolylineOpenLengthOf(st, pi);
     return true;
   }
@@ -19627,17 +19607,17 @@ static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedE
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t a = static_cast<size_t>(vi) * 3, b = (static_cast<size_t>(vi)+ 1) * 3;
-      if (b + 1 >= st.userPolylineVerts.size())
+      const size_t a = static_cast<size_t>(vi), b = (static_cast<size_t>(vi)+ 1);
+      if (b >= st.vertexCount())
         break;
-      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
-                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+      segs->push_back({{st.vertex(a).x, st.vertex(a).y},
+                       {st.vertex(b).x, st.vertex(b).y}});
     }
     if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)] &&
         v1 - v0 >= 2) {
-      const size_t a = (static_cast<size_t>(v1)- 1) * 3, b = static_cast<size_t>(v0) * 3;
-      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
-                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+      const size_t a = (static_cast<size_t>(v1)- 1), b = static_cast<size_t>(v0);
+      segs->push_back({{st.vertex(a).x, st.vertex(a).y},
+                       {st.vertex(b).x, st.vertex(b).y}});
     }
   }
   // Annotation/FeatureLine/Surface/Mesh/PdfUnderlay/FilledRegion are refused before this is
@@ -20000,11 +19980,11 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
       return false;
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
-    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
-    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+    const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
+    if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
       return false;
-    const float fx = static_cast<float>(st.userPolylineVerts[fIdx]), fy = static_cast<float>(st.userPolylineVerts[fIdx + 1]);
-    const float mx = static_cast<float>(st.userPolylineVerts[mIdx]), my = static_cast<float>(st.userPolylineVerts[mIdx + 1]);
+    const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
+    const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
     const float segLen = std::hypot(mx - fx, my - fy);
     if (segLen < 1e-9f)
       return false;
@@ -20173,9 +20153,9 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
-    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
-    const float fixedX = static_cast<float>(st.userPolylineVerts[fIdx]), fixedY = static_cast<float>(st.userPolylineVerts[fIdx + 1]);
-    const float movingX = static_cast<float>(st.userPolylineVerts[mIdx]), movingY = static_cast<float>(st.userPolylineVerts[mIdx + 1]);
+    const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
+    const float fixedX = static_cast<float>(st.vertex(fIdx).x), fixedY = static_cast<float>(st.vertex(fIdx).y);
+    const float movingX = static_cast<float>(st.vertex(mIdx).x), movingY = static_cast<float>(st.vertex(mIdx).y);
     const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
     float newSegLen = 0.f;
     found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
@@ -20573,10 +20553,10 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     float bestD2 = std::numeric_limits<float>::max();
     float cum = 0.f;
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t A = static_cast<size_t>(vi) * 3, B = (static_cast<size_t>(vi)+ 1) * 3;
-      const float ax = static_cast<float>(st.userPolylineVerts[A]), ay = static_cast<float>(st.userPolylineVerts[A + 1]);
-      const float bx = static_cast<float>(st.userPolylineVerts[B]), by = static_cast<float>(st.userPolylineVerts[B + 1]);
-      const float az = static_cast<float>(st.userPolylineVerts[A + 2]), bz = static_cast<float>(st.userPolylineVerts[B + 2]);
+      const size_t A = static_cast<size_t>(vi), B = (static_cast<size_t>(vi)+ 1);
+      const float ax = static_cast<float>(st.vertex(A).x), ay = static_cast<float>(st.vertex(A).y);
+      const float bx = static_cast<float>(st.vertex(B).x), by = static_cast<float>(st.vertex(B).y);
+      const float az = static_cast<float>(st.vertex(A).z), bz = static_cast<float>(st.vertex(B).z);
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -20596,10 +20576,10 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
       cum += std::hypot(bx - ax, by - ay);
     }
     if (closed && v1 - v0 >= 2) {
-      const size_t A = (static_cast<size_t>(v1)- 1) * 3, B = static_cast<size_t>(v0) * 3;
-      const float ax = static_cast<float>(st.userPolylineVerts[A]), ay = static_cast<float>(st.userPolylineVerts[A + 1]);
-      const float bx = static_cast<float>(st.userPolylineVerts[B]), by = static_cast<float>(st.userPolylineVerts[B + 1]);
-      const float az = static_cast<float>(st.userPolylineVerts[A + 2]), bz = static_cast<float>(st.userPolylineVerts[B + 2]);
+      const size_t A = (static_cast<size_t>(v1)- 1), B = static_cast<size_t>(v0);
+      const float ax = static_cast<float>(st.vertex(A).x), ay = static_cast<float>(st.vertex(A).y);
+      const float bx = static_cast<float>(st.vertex(B).x), by = static_cast<float>(st.vertex(B).y);
+      const float az = static_cast<float>(st.vertex(A).z), bz = static_cast<float>(st.vertex(B).z);
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -20795,8 +20775,7 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
   const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   const int nNew = static_cast<int>(newVerts.size());
   const int delta = nNew - (v1 - v0);
-  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  st.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
   std::vector<float> flat;
   flat.reserve(static_cast<size_t>(nNew) * 3);
   for (const auto& p : newVerts) {
@@ -20820,10 +20799,10 @@ static std::vector<PolyVert> PolylineVertsOf(const AppCommandState& st, int pi) 
   const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
   out.reserve((static_cast<size_t>(v1)- v0));
   for (int vi = v0; vi < v1; ++vi) {
-    const size_t o = static_cast<size_t>(vi) * 3;
-    out.push_back({static_cast<float>(st.userPolylineVerts[o]),
-                   static_cast<float>(st.userPolylineVerts[o + 1]),
-                   static_cast<float>(st.userPolylineVerts[o + 2])});
+    const size_t o = static_cast<size_t>(vi);
+    out.push_back({static_cast<float>(st.vertex(o).x),
+                   static_cast<float>(st.vertex(o).y),
+                   static_cast<float>(st.vertex(o).z)});
   }
   return out;
 }
@@ -20835,9 +20814,7 @@ static void AppendNewPolyline(AppCommandState& st, const std::vector<PolyVert>& 
                               EntityAttributes attrs) {
   const int base = st.userPolylineOffsets.back();
   for (const auto& p : verts) {
-    st.userPolylineVerts.push_back(p.x);
-    st.userPolylineVerts.push_back(p.y);
-    st.userPolylineVerts.push_back(p.z);
+    st.pushVertex(CadPolyVertex{p.x, p.y, p.z});
   }
   st.userPolylineOffsets.push_back(base + static_cast<int>(verts.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
@@ -20906,9 +20883,9 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
   for (int i = 0; i < n; ++i) {
     vparam[static_cast<size_t>(i)] = ringLen;
     const int a = v0 + i, b = v0 + (i + 1) % n;
-    ringLen += static_cast<float>(std::hypot(st.userPolylineVerts[static_cast<size_t>(b) * 3] - st.userPolylineVerts[static_cast<size_t>(a) * 3],
-                              st.userPolylineVerts[static_cast<size_t>(b) * 3 + 1] -
-                              st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1]));
+    ringLen += static_cast<float>(std::hypot(st.vertex(b).x - st.vertex(a).x,
+                              st.vertex(b).y -
+                              st.vertex(a).y));
   }
   if (ringLen < 1e-9f)
     return;
@@ -20930,10 +20907,10 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
   for (int i = 0; i < n; ++i) {
     const float r = rot(vparam[static_cast<size_t>(i)]);
     if (r > 1e-6f && r < p1Rot - 1e-6f) {
-      const size_t o = (static_cast<size_t>(v0)+ i) * 3;
-      outVerts.push_back({static_cast<float>(st.userPolylineVerts[o]),
-                          static_cast<float>(st.userPolylineVerts[o + 1]),
-                          static_cast<float>(st.userPolylineVerts[o + 2])});
+      const size_t o = (static_cast<size_t>(v0)+ i);
+      outVerts.push_back({static_cast<float>(st.vertex(o).x),
+                          static_cast<float>(st.vertex(o).y),
+                          static_cast<float>(st.vertex(o).z)});
     }
   }
   outVerts.push_back({p1.x, p1.y, p1.z});
@@ -21563,11 +21540,11 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi) * 3;
-      if (inBox(static_cast<float>(st.userPolylineVerts[b]), static_cast<float>(st.userPolylineVerts[b + 1]), static_cast<float>(st.userPolylineVerts[b + 2]))) {
-        st.userPolylineVerts[b] += dx;
-        st.userPolylineVerts[b + 1] += dy;
-        st.userPolylineVerts[b + 2] += dz;
+      const size_t b = static_cast<size_t>(vi);
+      if (inBox(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z))) {
+        st.vertexComponent(b, CadVertexComponent::X) += dx;
+        st.vertexComponent(b, CadVertexComponent::Y) += dy;
+        st.vertexComponent(b, CadVertexComponent::Z) += dz;
       }
     }
   }
@@ -21849,10 +21826,10 @@ static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e
     float bestD = -1.f;
     for (int e2 = 0; e2 < numEdges; ++e2) {
       const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
-      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
       float qx = 0.f, qy = 0.f;
-      ClosestPointOnSegment(static_cast<float>(st.userPolylineVerts[a3]), static_cast<float>(st.userPolylineVerts[a3 + 1]), static_cast<float>(st.userPolylineVerts[b3]),
-                            static_cast<float>(st.userPolylineVerts[b3 + 1]), pickX, pickY, &qx, &qy);
+      ClosestPointOnSegment(static_cast<float>(st.vertex(a3).x), static_cast<float>(st.vertex(a3).y), static_cast<float>(st.vertex(b3).x),
+                            static_cast<float>(st.vertex(b3).y), pickX, pickY, &qx, &qy);
       const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
       if (bestD < 0.f || d < bestD) {
         bestD = d;
@@ -21911,14 +21888,14 @@ static bool BuildFilletCurveFromEntity(const AppCommandState& st, const Selected
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
-    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
-    if (b3 + 1 >= st.userPolylineVerts.size())
+    const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
+    if (b3 >= st.vertexCount())
       return false;
     out->isLine = true;
-    out->ax = static_cast<float>(st.userPolylineVerts[a3]);
-    out->ay = static_cast<float>(st.userPolylineVerts[a3 + 1]);
-    out->bx = static_cast<float>(st.userPolylineVerts[b3]);
-    out->by = static_cast<float>(st.userPolylineVerts[b3 + 1]);
+    out->ax = static_cast<float>(st.vertex(a3).x);
+    out->ay = static_cast<float>(st.vertex(a3).y);
+    out->bx = static_cast<float>(st.vertex(b3).x);
+    out->by = static_cast<float>(st.vertex(b3).y);
     return true;
   }
   return false;
@@ -22015,11 +21992,11 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
       return false;  // not an end segment — caller already refuses this before reaching here
     const int movingVi = nearFirst ? v0 : (v1 - 1);
     const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
-    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
-    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+    const size_t mIdx = static_cast<size_t>(movingVi), fIdx = static_cast<size_t>(fixedVi);
+    if (mIdx >= st.vertexCount() || fIdx >= st.vertexCount())
       return false;
-    const float fx = static_cast<float>(st.userPolylineVerts[fIdx]), fy = static_cast<float>(st.userPolylineVerts[fIdx + 1]);
-    const float mx = static_cast<float>(st.userPolylineVerts[mIdx]), my = static_cast<float>(st.userPolylineVerts[mIdx + 1]);
+    const float fx = static_cast<float>(st.vertex(fIdx).x), fy = static_cast<float>(st.vertex(fIdx).y);
+    const float mx = static_cast<float>(st.vertex(mIdx).x), my = static_cast<float>(st.vertex(mIdx).y);
     const float oldSegLen = std::hypot(mx - fx, my - fy);
     const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
     const float curTotal = PolylineOpenLengthOf(st, pi);
@@ -22072,10 +22049,10 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
 
   auto readVert = [&](int vi, float* x, float* y) {
-    *x = static_cast<float>(st.userPolylineVerts[static_cast<size_t>(vi) * 3]);
-    *y = static_cast<float>(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1]);
+    *x = static_cast<float>(st.vertex(vi).x);
+    *y = static_cast<float>(st.vertex(vi).y);
   };
-  auto vertZ = [&](int vi) { return st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]; };
+  auto vertZ = [&](int vi) { return st.vertex(vi).z; };
   // A tangent point lies ON one of the two segments meeting at the corner, so its elevation is the
   // interpolation between that segment's ends (issue 01). Flat polylines - the ordinary case - get
   // the shared elevation from this either way; a sloped one now gets the right answer instead of 0.
@@ -22204,11 +22181,11 @@ static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     const int numVerts = v1 - v0;
     const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
-    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
-    if (b3 + 2 >= st.userPolylineVerts.size())
+    const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
+    if (b3 >= st.vertexCount())
       return false;
-    out->p0 = {st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
-    out->p1 = {st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+    out->p0 = {st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
+    out->p1 = {st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
     out->isPolyline = true;
     out->viA = viA;
     out->viB = viB;
@@ -22326,8 +22303,8 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
                        (ty2d - static_cast<float>(pp1b.y)) * (ty2d - static_cast<float>(pp1b.y));
       const bool nearFirst = d0 <= d1;
       const int movingVi = nearFirst ? curve.viA : curve.viB;
-      const size_t k = static_cast<size_t>(movingVi) * 3;
-      if (k + 2 >= st.userPolylineVerts.size())
+      const size_t k = static_cast<size_t>(movingVi);
+      if (k >= st.vertexCount())
         return false;
       const ray3d::Vec3 fixed = nearFirst ? curve.p1 : curve.p0;
       const float newLen = static_cast<float>(ray3d::Length(ray3d::Sub(t3d, fixed)));
@@ -22335,9 +22312,9 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
         log.push_back("FILLET — that would collapse a polyline segment to zero length; refused.");
         return false;
       }
-      st.userPolylineVerts[k] = static_cast<float>(t3d.x);
-      st.userPolylineVerts[k + 1] = static_cast<float>(t3d.y);
-      st.userPolylineVerts[k + 2] = static_cast<float>(t3d.z);
+      st.vertexComponent(k, CadVertexComponent::X) = static_cast<float>(t3d.x);
+      st.vertexComponent(k, CadVertexComponent::Y) = static_cast<float>(t3d.y);
+      st.vertexComponent(k, CadVertexComponent::Z) = static_cast<float>(t3d.z);
       return true;
     }
     const size_t k = static_cast<size_t>(e.index);
@@ -23365,10 +23342,10 @@ static bool ChamferEligibility(const AppCommandState& st, const SelectedEntity& 
     float bestD = -1.f;
     for (int e2 = 0; e2 < numEdges; ++e2) {
       const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
-      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      const size_t a3 = static_cast<size_t>(viA), b3 = static_cast<size_t>(viB);
       float qx = 0.f, qy = 0.f;
-      ClosestPointOnSegment(static_cast<float>(st.userPolylineVerts[a3]), static_cast<float>(st.userPolylineVerts[a3 + 1]), static_cast<float>(st.userPolylineVerts[b3]),
-                            static_cast<float>(st.userPolylineVerts[b3 + 1]), pickX, pickY, &qx, &qy);
+      ClosestPointOnSegment(static_cast<float>(st.vertex(a3).x), static_cast<float>(st.vertex(a3).y), static_cast<float>(st.vertex(b3).x),
+                            static_cast<float>(st.vertex(b3).y), pickX, pickY, &qx, &qy);
       const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
       if (bestD < 0.f || d < bestD) {
         bestD = d;
@@ -23452,10 +23429,10 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
 
   auto readVert = [&](int vi, float* x, float* y) {
-    *x = static_cast<float>(st.userPolylineVerts[static_cast<size_t>(vi) * 3]);
-    *y = static_cast<float>(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1]);
+    *x = static_cast<float>(st.vertex(vi).x);
+    *y = static_cast<float>(st.vertex(vi).y);
   };
-  auto vertZ = [&](int vi) { return st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]; };
+  auto vertZ = [&](int vi) { return st.vertex(vi).z; };
   // Same rule as FILLET's corner (issue 01): a chamfer endpoint sits on one of the two segments
   // meeting at the corner, so its elevation interpolates along that segment.
   auto zOnSegTo = [&](int fromVi, int toVi, float qx, float qy) {
@@ -24712,7 +24689,6 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(st.cadPoints[pi].x, st.cadPoints[pi].y);
   }
 
-  const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
@@ -24721,8 +24697,7 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       for (int vi = v0; vi < v1; ++vi) {
-        consider(static_cast<double>(PV[(static_cast<size_t>(vi)* 3 + 0)]),
-                 static_cast<double>(PV[(static_cast<size_t>(vi)* 3 + 1)]));
+        consider(st.vertex(static_cast<size_t>(vi)).x, st.vertex(static_cast<size_t>(vi)).y);
       }
     }
   }
@@ -25120,7 +25095,6 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBoxGrowZ(b, p.z, true);
     out.push_back(b);
   }
-  const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
@@ -25133,9 +25107,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       EntityBox b{};
       bool any = false;
       for (int vi = v0; vi < v1; ++vi) {
-        const double vx = static_cast<double>(PV[(static_cast<size_t>(vi)* 3 + 0)]);
-        const double vy = static_cast<double>(PV[(static_cast<size_t>(vi)* 3 + 1)]);
-        EntityBoxGrowZ(b, static_cast<double>(PV[(static_cast<size_t>(vi)* 3 + 2)]), !any);
+        const CadPolyVertex pv = st.vertex(static_cast<size_t>(vi));
+        const double vx = pv.x;
+        const double vy = pv.y;
+        EntityBoxGrowZ(b, pv.z, !any);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -27823,10 +27798,8 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
       st.userPolylineOffsets.push_back(0);
     const int baseVert = st.userPolylineOffsets.back();
     for (int i = 0; i < 4; ++i) {
-      st.userPolylineVerts.push_back(xs[i]);
-      st.userPolylineVerts.push_back(ys[i]);
       // Lands on the active work plane (REQ-058) — see SubmitLineVertex.
-      st.userPolylineVerts.push_back(CadCommitElevation(st));
+      st.pushVertex(CadPolyVertex{xs[i], ys[i], CadCommitElevation(st)});
     }
     st.userPolylineOffsets.push_back(baseVert + 4);
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316: RECT is straight
@@ -28862,9 +28835,7 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
       st.userPolylineOffsets.push_back(0);
     const int baseVert = st.userPolylineOffsets.back();
     for (int v = begin; v < end; ++v) {
-      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 0]);
-      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 1]);
-      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 2]);
+      st.pushVertex(CadPolyVertex{r.vertsXyz[static_cast<size_t>(v) * 3 + 0], r.vertsXyz[static_cast<size_t>(v) * 3 + 1], r.vertsXyz[static_cast<size_t>(v) * 3 + 2]});
     }
     st.userPolylineOffsets.push_back(baseVert + (end - begin));
     // Straight through from the generator: a contour that closed in the surface's interior becomes a
@@ -29960,24 +29931,24 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
       const bool closed = static_cast<size_t>(idx) < st.userPolylineClosed.size() &&
                           st.userPolylineClosed[static_cast<size_t>(idx)];
       const int vb = (seg == (endV - startV) - 1 && closed) ? startV : va + 1;
-      if (static_cast<size_t>(vb) * 3 + 1 >= st.userPolylineVerts.size())
+      if (static_cast<size_t>(vb) >= st.vertexCount())
         return;
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
       SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
-      const double b = ArcBulgeThrough(st.userPolylineVerts[static_cast<size_t>(va) * 3],
-                                       st.userPolylineVerts[static_cast<size_t>(va) * 3 + 1],
+      const double b = ArcBulgeThrough(st.vertex(va).x,
+                                       st.vertex(va).y,
                                        static_cast<double>(x), static_cast<double>(y),
-                                       st.userPolylineVerts[static_cast<size_t>(vb) * 3],
-                                       st.userPolylineVerts[static_cast<size_t>(vb) * 3 + 1]);
+                                       st.vertex(vb).x,
+                                       st.vertex(vb).y);
       st.userPolylineVertsBulge[static_cast<size_t>(va)] = static_cast<float>(b);
       return;
     }
     const int globalV = startV + st.entityGripWhich;
-    const size_t xIdx = static_cast<size_t>(globalV) * 3;
-    if (xIdx + 1 >= st.userPolylineVerts.size())
+    const size_t xIdx = static_cast<size_t>(globalV);
+    if (xIdx >= st.vertexCount())
       return;
-    st.userPolylineVerts[xIdx] = x;
-    st.userPolylineVerts[xIdx + 1] = y;
+    st.vertexComponent(xIdx, CadVertexComponent::X) = x;
+    st.vertexComponent(xIdx, CadVertexComponent::Y) = y;
     return;
   }
   case SelectedEntity::Type::Spline: {  // REQ-443: drag one fit point / control vertex; its Z is kept
@@ -30415,8 +30386,7 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     nvPer[static_cast<size_t>(i)] = st.userPolylineOffsets[(static_cast<size_t>(i)+ 1)] - st.userPolylineOffsets[static_cast<size_t>(i)];
   const int a = st.userPolylineOffsets[static_cast<size_t>(pi)];
   const int b = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* a),
-                             st.userPolylineVerts.begin() + (static_cast<std::ptrdiff_t>(3)* b));
+  st.eraseVertexRange(static_cast<size_t>(a), static_cast<size_t>(b));
   // REQ-316 / ADR-047: the parallel bulge array is per-VERTEX, so its cut span is [a, b) — not the
   // triplet range the vertex array uses. Same reasoning as EraseFeatureLineByIndex's flag array.
   if (!st.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.userPolylineVertsBulge.size())
@@ -30524,10 +30494,10 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
   const int np = static_cast<int>(st.userPolylineOffsets.size()) - 1;
 
   auto vertAt = [&](int vi) -> ray3d::Vec3 {
-    const size_t k = static_cast<size_t>(vi) * 3;
-    return ray3d::Vec3{static_cast<double>(st.userPolylineVerts[k]),
-                       static_cast<double>(st.userPolylineVerts[k + 1]),
-                       static_cast<double>(st.userPolylineVerts[k + 2])};
+    const size_t k = static_cast<size_t>(vi);
+    return ray3d::Vec3{static_cast<double>(st.vertex(k).x),
+                       static_cast<double>(st.vertex(k).y),
+                       static_cast<double>(st.vertex(k).z)};
   };
   auto bulgeAt = [&](int vi) -> float {
     return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
@@ -31410,11 +31380,9 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
         st.userPolylineOffsets.push_back(0);
       const int baseVert = st.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        const size_t b = static_cast<size_t>(vi) * 3;
-        const ray3d::Vec3 p = rp(static_cast<float>(st.userPolylineVerts[b]), static_cast<float>(st.userPolylineVerts[b + 1]), static_cast<float>(st.userPolylineVerts[b + 2]));
-        st.userPolylineVerts.push_back(static_cast<float>(p.x));
-        st.userPolylineVerts.push_back(static_cast<float>(p.y));
-        st.userPolylineVerts.push_back(static_cast<float>(p.z));
+        const size_t b = static_cast<size_t>(vi);
+        const ray3d::Vec3 p = rp(static_cast<float>(st.vertex(b).x), static_cast<float>(st.vertex(b).y), static_cast<float>(st.vertex(b).z));
+        st.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
       }
       st.userPolylineOffsets.push_back(baseVert + (v1 - v0));
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
@@ -31687,17 +31655,17 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-      const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-      const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-      const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
+      const float ax = static_cast<float>(st.vertex(vi).x);
+      const float ay = static_cast<float>(st.vertex(vi).y);
+      const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
+      const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
       out->push_back({ax, ay, bx, by});
     }
     if (closed && v1 - v0 >= 2) {
-      const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3)]);
-      const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3 + 1)]);
-      const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3)]);
-      const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3 + 1)]);
+      const float ax = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).x);
+      const float ay = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).y);
+      const float bx = static_cast<float>(st.vertex(v0).x);
+      const float by = static_cast<float>(st.vertex(v0).y);
       out->push_back({ax, ay, bx, by});
     }
   }
@@ -31714,10 +31682,10 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
   auto pushEdge = [&](int vi) {
     if (vi == skipEdgeVi)
       return;
-    const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-    const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-    const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-    const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
+    const float ax = static_cast<float>(st.vertex(vi).x);
+    const float ay = static_cast<float>(st.vertex(vi).y);
+    const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
+    const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
     out->push_back({ax, ay, bx, by});
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
@@ -31725,10 +31693,10 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
   if (closed && v1 - v0 >= 2) {
     const int closingVi = v1 - 1;
     if (closingVi != skipEdgeVi) {
-      const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(closingVi)* 3)]);
-      const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(closingVi)* 3 + 1)]);
-      const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3)]);
-      const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3 + 1)]);
+      const float ax = static_cast<float>(st.vertex(closingVi).x);
+      const float ay = static_cast<float>(st.vertex(closingVi).y);
+      const float bx = static_cast<float>(st.vertex(v0).x);
+      const float by = static_cast<float>(st.vertex(v0).y);
       out->push_back({ax, ay, bx, by});
     }
   }
@@ -31838,10 +31806,10 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
-      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
-      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
-      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
+      const double x0 = st.vertex(vi).x;
+      const double y0 = st.vertex(vi).y;
+      const double x1 = st.vertex(static_cast<size_t>(vi + 1)).x;
+      const double y1 = st.vertex(static_cast<size_t>(vi + 1)).y;
       const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         return;
@@ -31914,10 +31882,10 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
-      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
-      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
-      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
+      const double x0 = st.vertex(vi).x;
+      const double y0 = st.vertex(vi).y;
+      const double x1 = st.vertex(static_cast<size_t>(vi + 1)).x;
+      const double y1 = st.vertex(static_cast<size_t>(vi + 1)).y;
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         return;
@@ -32084,11 +32052,11 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
     }
   } else {
     const int vi = trimA ? tgt.vLo : tgt.vLo + 1;
-    const size_t vk = (static_cast<size_t>(vi)* 3);
-    if (vk + 1 >= st.userPolylineVerts.size())
+    const size_t vk = static_cast<size_t>(vi);
+    if (vk >= st.vertexCount())
       return false;
-    st.userPolylineVerts[vk] = rx;
-    st.userPolylineVerts[vk + 1] = ry;
+    st.vertexComponent(vk, CadVertexComponent::X) = rx;
+    st.vertexComponent(vk, CadVertexComponent::Y) = ry;
   }
 
   log.push_back("TRIM — segment shortened.");
@@ -32209,18 +32177,18 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(e.index)+ 1)];
     double bestDepth = useRay ? 1e300 : -1e300;
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t A = static_cast<size_t>(vi) * 3, B = (static_cast<size_t>(vi)+ 1) * 3;
-      if (B + 2 >= st.userPolylineVerts.size())
+      const size_t A = static_cast<size_t>(vi), B = (static_cast<size_t>(vi)+ 1);
+      if (B >= st.vertexCount())
         break;
       if (useRay) {
         double t = 0.0;
         (void)ray3d::RaySegmentDistance(
             *pickRay,
-            ray3d::Vec3{st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2]},
-            ray3d::Vec3{st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]}, &t);
+            ray3d::Vec3{st.vertex(A).x, st.vertex(A).y, st.vertex(A).z},
+            ray3d::Vec3{st.vertex(B).x, st.vertex(B).y, st.vertex(B).z}, &t);
         bestDepth = std::min(bestDepth, t);
       } else {
-        const double az = st.userPolylineVerts[A + 2], bz = st.userPolylineVerts[B + 2];
+        const double az = st.vertex(A).z, bz = st.vertex(B).z;
         bestDepth = std::max(bestDepth, std::max(az, bz));
       }
     }
@@ -32552,12 +32520,12 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     // REQ-316 / ADR-047: a curved segment is hit-tested against the ARC it draws, not its chord —
     // so a click or hover on the bulge registers. Arc samples reuse the ARC entity's own metric.
     auto polySegD2 = [&](int va, int vb) -> double {
-      const size_t A = static_cast<size_t>(va) * 3, B = static_cast<size_t>(vb) * 3;
+      const size_t A = static_cast<size_t>(va), B = static_cast<size_t>(vb);
       const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                               ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
       auto chordD2 = [&]() {
-        return d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2],
-                         st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]);
+        return d2Segment(st.vertex(A).x, st.vertex(A).y, st.vertex(A).z,
+                         st.vertex(B).x, st.vertex(B).y, st.vertex(B).z);
       };
       if (bulge == 0.f)
         return chordD2();
@@ -32568,8 +32536,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         nz = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 2];
       }
       if (IsFlatNormal(nx, ny, nz)) {
-        const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+        const BulgeArcSpan arc = BulgeArc(st.vertex(A).x, st.vertex(A).y,
+                                          st.vertex(B).x, st.vertex(B).y,
                                           static_cast<double>(bulge));
         if (!arc.valid)
           return chordD2();
@@ -32577,7 +32545,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
           return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
         double d2 = 1e300;
         constexpr int ns = 24;
-        const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
+        const double za = static_cast<double>(st.vertex(A).z);
         for (int s = 0; s <= ns; ++s) {
           const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
           d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
@@ -32588,8 +32556,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       // same technique as the tilted render branch above — then sampled back to world 3D, so both
       // the plan-view flattened metric (d2Point with no ray) and the true ray-to-curve metric (with
       // one) see the real tilted shape rather than a flat approximation.
-      const ray3d::Vec3 p0{st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2]};
-      const ray3d::Vec3 p1{st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]};
+      const ray3d::Vec3 p0{st.vertex(A).x, st.vertex(A).y, st.vertex(A).z};
+      const ray3d::Vec3 p1{st.vertex(B).x, st.vertex(B).y, st.vertex(B).z};
       ucs::Ucs plane{};
       if (!ucs::FromNormal(p0, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                            static_cast<double>(nz)},
@@ -32912,17 +32880,17 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi + 1 < v1; ++vi)
-      out->push_back({st.userPolylineVerts[(static_cast<size_t>(vi)* 3)],
-                      st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)],
-                      st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)],
-                      st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]});
+      out->push_back({st.vertex(vi).x,
+                      st.vertex(vi).y,
+                      st.vertex(static_cast<size_t>(vi + 1)).x,
+                      st.vertex(static_cast<size_t>(vi + 1)).y});
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     if (closed && v1 - v0 >= 2)
-      out->push_back({st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3)],
-                      st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3 + 1)],
-                      st.userPolylineVerts[(static_cast<size_t>(v0)* 3)],
-                      st.userPolylineVerts[(static_cast<size_t>(v0)* 3 + 1)]});
+      out->push_back({st.vertex(static_cast<size_t>(v1 - 1)).x,
+                      st.vertex(static_cast<size_t>(v1 - 1)).y,
+                      st.vertex(v0).x,
+                      st.vertex(v0).y});
   }
 
   auto tessellate = [&](auto pointAt, int n) {
@@ -33122,10 +33090,10 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
           float best = 1e30f;
           float bestS = 1.f;
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-            const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-            const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-            const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
+            const float ax = static_cast<float>(st.vertex(vi).x);
+            const float ay = static_cast<float>(st.vertex(vi).y);
+            const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
+            const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
             float qx = 0.f, qy = 0.f;
             OfsClosestPtSeg(ax, ay, bx, by, px, py, &qx, &qy);
             const float sd = OfsSignedSideLine(ax, ay, bx, by, px, py);
@@ -33245,7 +33213,7 @@ static void AppendPolylineOffsetPreview(const AppCommandState& st, int pi, float
   std::vector<std::pair<float, float>> v;
   v.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i)
-    v.push_back({st.userPolylineVerts[(static_cast<size_t>(i)* 3)], st.userPolylineVerts[(static_cast<size_t>(i)* 3 + 1)]});
+    v.push_back({st.vertex(i).x, st.vertex(i).y});
 
   const int n = static_cast<int>(v.size());
   const int nEdges = closed ? n : n - 1;
@@ -33652,11 +33620,11 @@ static bool FindNearestPolylineSegment3D(const AppCommandState& st, int polyIx, 
   bool any = false;
   double best = 0.0;
   auto tryEdge = [&](int vi) {
-    const size_t a3 = static_cast<size_t>(vi) * 3, b3 = (static_cast<size_t>(vi)+ 1) * 3;
-    if (b3 + 2 >= st.userPolylineVerts.size())
+    const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
+    if (b3 >= st.vertexCount())
       return;
-    const ray3d::Vec3 a{st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
-    const ray3d::Vec3 b{st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+    const ray3d::Vec3 a{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
+    const ray3d::Vec3 b{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
     double d2;
     if (useRay) {
       const double d = ray3d::RaySegmentDistance(*pickRay, a, b);
@@ -33723,11 +33691,11 @@ static void Collect3DTrimCrossings(const AppCommandState& st, const std::vector<
       auto tryEdge = [&](int vi) {
         if (targetIsPoly && c.index == targetIndex && vi == targetVi)
           return;  // a polyline segment can't cut itself, but its siblings can
-        const size_t a3 = static_cast<size_t>(vi) * 3, b3 = (static_cast<size_t>(vi)+ 1) * 3;
-        if (b3 + 2 >= st.userPolylineVerts.size())
+        const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
+        if (b3 >= st.vertexCount())
           return;
-        const ray3d::Vec3 qa{st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
-        const ray3d::Vec3 qb{st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+        const ray3d::Vec3 qa{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z};
+        const ray3d::Vec3 qb{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z};
         tryLineCutSeg(qa, qb);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
@@ -33770,14 +33738,14 @@ static void Apply3DTrimCut(AppCommandState& st, const SelectedEntity& hit, bool 
   PushUndoSnapshot(st, "Trim");
   if (targetIsPoly) {
     const int vi = trimA ? targetVi : targetVi + 1;
-    const size_t vk = static_cast<size_t>(vi) * 3;
-    if (vk + 2 >= st.userPolylineVerts.size()) {
+    const size_t vk = static_cast<size_t>(vi);
+    if (vk >= st.vertexCount()) {
       log.push_back("TRIM — nothing to trim at pick.");
       return;
     }
-    st.userPolylineVerts[vk] = static_cast<float>(cut.x);
-    st.userPolylineVerts[vk + 1] = static_cast<float>(cut.y);
-    st.userPolylineVerts[vk + 2] = static_cast<float>(cut.z);
+    st.vertexComponent(vk, CadVertexComponent::X) = static_cast<float>(cut.x);
+    st.vertexComponent(vk, CadVertexComponent::Y) = static_cast<float>(cut.y);
+    st.vertexComponent(vk, CadVertexComponent::Z) = static_cast<float>(cut.z);
   } else {
     st.lineComponent(tk, trimA ? CadLineComponent::X0 : CadLineComponent::X1) = static_cast<float>(cut.x);
     st.lineComponent(tk, trimA ? CadLineComponent::Y0 : CadLineComponent::Y1) = static_cast<float>(cut.y);
@@ -34008,12 +33976,12 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const size_t a3 = static_cast<size_t>(vi) * 3, b3 = (static_cast<size_t>(vi)+ 1) * 3;
-      if (b3 + 2 >= st.userPolylineVerts.size())
+      const size_t a3 = static_cast<size_t>(vi), b3 = (static_cast<size_t>(vi)+ 1);
+      if (b3 >= st.vertexCount())
         return;
       consider(true, pi, vi,
-               ray3d::Vec3{st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]},
-               ray3d::Vec3{st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]});
+               ray3d::Vec3{st.vertex(a3).x, st.vertex(a3).y, st.vertex(a3).z},
+               ray3d::Vec3{st.vertex(b3).x, st.vertex(b3).y, st.vertex(b3).z});
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       tryEdge(vi);
@@ -34635,12 +34603,12 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       const bool closed =
           static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-        const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-        const float az = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 2)]);
-        const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-        const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
-        const float bz = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 2)]);
+        const float ax = static_cast<float>(st.vertex(vi).x);
+        const float ay = static_cast<float>(st.vertex(vi).y);
+        const float az = static_cast<float>(st.vertex(vi).z);
+        const float bx = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).x);
+        const float by = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).y);
+        const float bz = static_cast<float>(st.vertex(static_cast<size_t>(vi + 1)).z);
         Edge e{};
         e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
         e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(vi);
@@ -34648,12 +34616,12 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         edges.push_back(e);
       }
       if (closed && v1 - v0 >= 2) {
-        const float ax = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3)]);
-        const float ay = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3 + 1)]);
-        const float az = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((v1 - 1))* 3 + 2)]);
-        const float bx = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3)]);
-        const float by = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3 + 1)]);
-        const float bz = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(v0)* 3 + 2)]);
+        const float ax = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).x);
+        const float ay = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).y);
+        const float az = static_cast<float>(st.vertex(static_cast<size_t>(v1 - 1)).z);
+        const float bx = static_cast<float>(st.vertex(v0).x);
+        const float by = static_cast<float>(st.vertex(v0).y);
+        const float bz = static_cast<float>(st.vertex(v0).z);
         Edge e{};
         e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
         e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(v1 - 1);
@@ -35529,9 +35497,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       // Replace the vertex slice [v0*3, v1*3) with cleaned data
       const int nNew  = static_cast<int>(clean.size());
       const int delta = nNew - (v1 - v0);
-      st.userPolylineVerts.erase(
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+      st.eraseVertexRange(static_cast<size_t>(v0), static_cast<size_t>(v1));
 
       std::vector<float> newV;
       newV.reserve(static_cast<size_t>(nNew) * 3);
@@ -38348,12 +38314,12 @@ bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity
     const int vE = st.userPolylineOffsets[pi + 1];
     std::vector<ray3d::Vec3> pts;
     for (int v = vB; v < vE; ++v) {
-      const size_t b = static_cast<size_t>(v) * 3;
-      if (b + 2 >= st.userPolylineVerts.size())
+      const size_t b = static_cast<size_t>(v);
+      if (b >= st.vertexCount())
         return false;
-      pts.push_back({static_cast<double>(st.userPolylineVerts[b + 0]),
-                     static_cast<double>(st.userPolylineVerts[b + 1]),
-                     static_cast<double>(st.userPolylineVerts[b + 2])});
+      pts.push_back({static_cast<double>(st.vertex(b).x),
+                     static_cast<double>(st.vertex(b).y),
+                     static_cast<double>(st.vertex(b).z)});
     }
     // A closed polyline may or may not repeat its first vertex at the end.
     if (pts.size() >= 2 && ray3d::Length(ray3d::Sub(pts.front(), pts.back())) < 1e-7)
@@ -38806,12 +38772,12 @@ namespace {
       return false;
     std::vector<ray3d::Vec3> pts;
     for (int v = vB; v < vE; ++v) {
-      const std::size_t f = static_cast<std::size_t>(v) * 3;
-      if (f + 2 >= st.userPolylineVerts.size())
+      const std::size_t f = static_cast<std::size_t>(v);
+      if (f >= st.vertexCount())
         return false;
-      pts.push_back({static_cast<double>(st.userPolylineVerts[f + 0]),
-                     static_cast<double>(st.userPolylineVerts[f + 1]),
-                     static_cast<double>(st.userPolylineVerts[f + 2])});
+      pts.push_back({static_cast<double>(st.vertex(f).x),
+                     static_cast<double>(st.vertex(f).y),
+                     static_cast<double>(st.vertex(f).z)});
     }
     if (closed) {
       // A closed polyline may or may not repeat its first vertex at the end
@@ -41909,9 +41875,7 @@ void AppendRevcloudPolyline(AppCommandState& st, const std::vector<double>& xy,
     st.userPolylineOffsets.push_back(0);
   const int baseVert = st.userPolylineOffsets.back();
   for (int i = 0; i < n; ++i) {
-    st.userPolylineVerts.push_back(static_cast<float>(xy[static_cast<std::size_t>(i) * 2]));
-    st.userPolylineVerts.push_back(static_cast<float>(xy[static_cast<std::size_t>(i) * 2 + 1]));
-    st.userPolylineVerts.push_back(static_cast<float>(z));
+    st.pushVertex(CadPolyVertex{static_cast<float>(xy[static_cast<std::size_t>(i) * 2]), static_cast<float>(xy[static_cast<std::size_t>(i) * 2 + 1]), static_cast<float>(z)});
   }
   st.userPolylineOffsets.push_back(baseVert + n);
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
@@ -42048,19 +42012,19 @@ bool RevcloudCornersFromObject(const AppCommandState& st, const SelectedEntity& 
   }
   const int a = st.userPolylineOffsets[i];
   const int b = st.userPolylineOffsets[i + 1];
-  *z = st.userPolylineVerts[static_cast<std::size_t>(a) * 3 + 2];
+  *z = st.vertex(a).z;
   for (int v = a; v < b; ++v) {
     const std::size_t at = static_cast<std::size_t>(v);
     if (static_cast<std::size_t>(v) < st.userPolylineVertsBulge.size() && st.userPolylineVertsBulge[at] != 0.f) {
       log.push_back("REVCLOUD - that polyline has curved segments; a cloud can only follow straight edges.");
       return false;
     }
-    if (std::fabs(static_cast<double>(st.userPolylineVerts[at * 3 + 2]) - *z) > 1e-4) {
+    if (std::fabs(static_cast<double>(st.vertex(static_cast<size_t>(at)).z) - *z) > 1e-4) {
       log.push_back("REVCLOUD - that polyline is not flat; a cloud can only follow a flat shape.");
       return false;
     }
-    corners->push_back(st.userPolylineVerts[at * 3]);
-    corners->push_back(st.userPolylineVerts[at * 3 + 1]);
+    corners->push_back(st.vertex(static_cast<size_t>(at)).x);
+    corners->push_back(st.vertex(static_cast<size_t>(at)).y);
   }
   return true;
 }
@@ -44373,9 +44337,9 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
     break;
   }
   default: {
-    const std::size_t base = static_cast<std::size_t>(st.userPolylineOffsets[i]) * 3u;
-    anchor = ray3d::Vec3{st.userPolylineVerts[base + 0], st.userPolylineVerts[base + 1],
-                         st.userPolylineVerts[base + 2]};
+    const std::size_t base = static_cast<std::size_t>(st.userPolylineOffsets[i]);
+    anchor = ray3d::Vec3{st.vertex(base).x, st.vertex(base).y,
+                         st.vertex(base).z};
     break;
   }
   }
@@ -44453,8 +44417,8 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
       double off = 0.0;
       const ucs::Point2D q = ucs::WorldToPlane(
           frame,
-          ray3d::Vec3{st.userPolylineVerts[v * 3 + 0], st.userPolylineVerts[v * 3 + 1],
-                      st.userPolylineVerts[v * 3 + 2]},
+          ray3d::Vec3{st.vertex(static_cast<size_t>(v)).x, st.vertex(static_cast<size_t>(v)).y,
+                      st.vertex(static_cast<size_t>(v)).z},
           &off);
       if (std::fabs(off) > planeTol) {
         flat = false;
@@ -52342,10 +52306,10 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
           const int sv = cmd.userPolylineOffsets[(size_t)e.index];
           const int ev = cmd.userPolylineOffsets[(size_t)e.index + 1];
           for (int vi = sv; vi + 1 < ev; ++vi) {
-            const size_t xi = (size_t)vi * 3;
+            const size_t xi = (size_t)vi;
             if (xi + 3 < cmd.userPolylineVerts.size())
-              len += std::hypot(cmd.userPolylineVerts[xi+3] - cmd.userPolylineVerts[xi],
-                                cmd.userPolylineVerts[xi+4] - cmd.userPolylineVerts[xi+1]);
+              len += std::hypot(cmd.userPolylineVerts[xi+3] - cmd.vertex(xi).x,
+                                cmd.userPolylineVerts[xi+4] - cmd.vertex(xi).y);
           }
         }
       } else if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {

@@ -4827,15 +4827,15 @@ inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& 
                             : 0.f;
     if (bulge == 0.f)
       continue;
-    const std::size_t A = static_cast<std::size_t>(va) * 3, B = static_cast<std::size_t>(vb) * 3;
-    const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                      st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+    const std::size_t A = static_cast<std::size_t>(va), B = static_cast<std::size_t>(vb);
+    const BulgeArcSpan arc = BulgeArc(st.vertex(A).x, st.vertex(A).y,
+                                      st.vertex(B).x, st.vertex(B).y,
                                       static_cast<double>(bulge));
     if (!arc.valid)
       continue;
     const double mid = arc.startAngle + arc.sweep * 0.5;
     fn(s, static_cast<float>(arc.cx + arc.radius * std::cos(mid)),
-       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.userPolylineVerts[A + 2]);
+       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.vertex(A).z);
   }
 }
 
@@ -6234,11 +6234,11 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     }
     if (st.entityGripOrigPolylineXIdx < 0)
       return;
-    const size_t xIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
-    if (xIdx + 1 >= st.userPolylineVerts.size())
+    const size_t vIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
+    if (vIdx >= st.vertexCount())
       return;
-    st.userPolylineVerts[xIdx] = st.entityGripOrigPolyVertX;
-    st.userPolylineVerts[xIdx + 1] = st.entityGripOrigPolyVertY;
+    st.vertexComponent(vIdx, CadVertexComponent::X) = st.entityGripOrigPolyVertX;
+    st.vertexComponent(vIdx, CadVertexComponent::Y) = st.entityGripOrigPolyVertY;
     break;
   }
   case SelectedEntity::Type::Arc: {

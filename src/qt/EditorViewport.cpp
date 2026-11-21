@@ -1362,9 +1362,9 @@ void EditorViewport::paintGL() {
             const int first = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index)];
             const int last = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index + 1)];
             for (int vertex = first; vertex < last; ++vertex) {
-              const std::size_t k = static_cast<std::size_t>(vertex) * 3;
-              if (k + 2 < m_State.userPolylineVerts.size())
-                grips.push_back({m_State.userPolylineVerts[k], m_State.userPolylineVerts[k + 1], m_State.userPolylineVerts[k + 2]});
+              const std::size_t k = static_cast<std::size_t>(vertex);
+              if (k < m_State.vertexCount())
+                grips.push_back({m_State.vertex(k).x, m_State.vertex(k).y, m_State.vertex(k).z});
             }
             CadForEachPolylineArcMidGrip(m_State, selected.index,
                 [&](int, float x, float y, float z) { grips.push_back({x, y, z}); });

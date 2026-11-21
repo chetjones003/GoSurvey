@@ -46,8 +46,11 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     add2(&a.cx, &a.cy);
   for (CadEllipse& el : st.userEllipses)
     add2(&el.cx, &el.cy);
-  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3)
-    add2(&st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
+  for (size_t vi = 0; vi < st.vertexCount(); ++vi) {
+    CadPolyVertex pv = st.vertex(vi);
+    add2(&pv.x, &pv.y);
+    st.setVertex(vi, pv);
+  }
   for (CadAnnotation& an : st.cadAnnotations) {
     add2(&an.insX, &an.insY);
     add2(&an.boxMinX, &an.boxMinY);

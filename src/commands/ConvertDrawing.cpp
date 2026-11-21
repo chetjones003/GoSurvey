@@ -303,8 +303,8 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
     add(a.cx, a.cy, a.r);
   for (const CadEllipse& e : cb.content.userEllipses)
     add(e.cx, e.cy, std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)));
-  for (size_t i = 0; i + 2 < cb.content.userPolylineVerts.size(); i += 3)
-    add(cb.content.userPolylineVerts[i], cb.content.userPolylineVerts[i + 1]);
+  for (size_t vi = 0; vi < cb.content.vertexCount(); ++vi)
+    add(cb.content.vertex(vi).x, cb.content.vertex(vi).y);
   for (const CadAnnotation& a : cb.content.cadAnnotations) {
     add(a.insX, a.insY);
     add(a.boxMinX, a.boxMinY);

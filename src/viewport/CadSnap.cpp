@@ -1212,12 +1212,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const bool closed =
         static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
     auto considerEdge = [&](int ia, int ib) {
-      const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-      const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-      const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-      const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-      const float az = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)];
-      const float bz = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)];
+      const float ax = cmd.vertex(static_cast<size_t>(ia)).x;
+      const float ay = cmd.vertex(static_cast<size_t>(ia)).y;
+      const float bx = cmd.vertex(static_cast<size_t>(ib)).x;
+      const float by = cmd.vertex(static_cast<size_t>(ib)).y;
+      const float az = cmd.vertex(static_cast<size_t>(ia)).z;
+      const float bz = cmd.vertex(static_cast<size_t>(ib)).z;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
@@ -2251,14 +2251,14 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdge = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.vertex(static_cast<size_t>(ib)).y;
         PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)]);
+                            cmd.vertex(static_cast<size_t>(ia)).z);
         PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
+                            cmd.vertex(static_cast<size_t>(ib)).z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdge(vi, vi + 1);
@@ -2311,13 +2311,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgeMid = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.vertex(static_cast<size_t>(ib)).y;
         PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)] +
-                                    cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]));
+                            0.5f * (cmd.vertex(static_cast<size_t>(ia)).z +
+                                    cmd.vertex(static_cast<size_t>(ib)).z));
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgeMid(vi, vi + 1);
@@ -2489,13 +2489,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgePerp = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.vertex(static_cast<size_t>(ib)).y;
         PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out,
-                          cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)],
-                          cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
+                          cmd.vertex(static_cast<size_t>(ia)).z,
+                          cmd.vertex(static_cast<size_t>(ib)).z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgePerp(vi, vi + 1);
@@ -2670,10 +2670,10 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
         const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
         for (int vi = 0; vi < endV - startV; ++vi) {
-          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-          if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
-          gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
-                        cmd.userPolylineVerts[xIdx + 2]);
+          const size_t xIdx = static_cast<size_t>(startV + vi);
+          if (xIdx >= cmd.vertexCount()) break;
+          gripCandidate(cmd.vertex(xIdx).x, cmd.vertex(xIdx).y,
+                        cmd.vertex(xIdx).z);
         }
       }
     } else if (sel.type == SelectedEntity::Type::Arc) {
