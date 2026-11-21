@@ -1,47 +1,12 @@
+# GoSurvey.exe: the Qt frontend, its bundled resources and its Qt runtime.
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
-# Issue #918: the Qt frontend must carry no ImGui or GLFW. Walks every library `target` links, directly
-# or through another library, and fails the configure step on any ImGui/GLFW target or on a source file
-# named for ImGui. Issue #917 guards gosurvey_domain alone; this covers the whole Qt link closure, so a
-# dependency added to a Qt target (or to anything it links) cannot reintroduce ImGui unnoticed.
-function(gosurvey_assert_no_imgui_in_link_graph target)
-  set(_pending "${target}")
-  set(_seen "")
-  while(_pending)
-    list(POP_FRONT _pending _current)
-    if(_current IN_LIST _seen)
-      continue()
-    endif()
-    list(APPEND _seen "${_current}")
-    if(_current MATCHES "^(imgui|glfw|gosurvey_imgui_text|GoSurvey$)")
-      message(FATAL_ERROR "${target} links ${_current}; the Qt frontend must not link ImGui or GLFW (issue #918)")
-    endif()
-    get_target_property(_imported "${_current}" IMPORTED)
-    if(NOT _imported)
-      get_target_property(_sources "${_current}" SOURCES)
-      foreach(_source IN LISTS _sources)
-        if(_source MATCHES "[Ii]m[Gg]ui")
-          message(FATAL_ERROR "${target} compiles ${_source} through ${_current}; ImGui sources do not belong in the Qt link graph (issue #918)")
-        endif()
-      endforeach()
-    endif()
-    foreach(_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
-      get_target_property(_dependencies "${_current}" ${_property})
-      foreach(_dependency IN LISTS _dependencies)
-        if(_dependency MATCHES "^\\$<LINK_ONLY:(.*)>$")
-          set(_dependency "${CMAKE_MATCH_1}")
-        endif()
-        if(TARGET "${_dependency}")
-          get_target_property(_aliased "${_dependency}" ALIASED_TARGET)
-          if(_aliased)
-            set(_dependency "${_aliased}")
-          endif()
-          list(APPEND _pending "${_dependency}")
-        endif()
-      endforeach()
-    endforeach()
-  endwhile()
-endfunction()
+# Qt text layout, shared by the app and the headless tools.
+add_library(gosurvey_qt_text STATIC src/qt/QtText.cpp)
+target_include_directories(gosurvey_qt_text PUBLIC src/qt)
+target_link_libraries(gosurvey_qt_text PUBLIC GoSurvey::Document Qt6::Gui)
+target_compile_options(gosurvey_qt_text PRIVATE /utf-8)
+gosurvey_target_warnings(gosurvey_qt_text)
 
 add_library(gosurvey_qt_frontend STATIC
   src/qt/DrawingDocumentTabBar.cpp
@@ -50,7 +15,6 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorRibbon.cpp
   src/qt/EditorChrome.cpp
   src/qt/QtAppearance.cpp
-  src/qt/QtText.cpp
   src/qt/QtSplash.cpp
   src/qt/QtViewCube.cpp
   src/qt/QtAnnotations.cpp
@@ -90,52 +54,90 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/FailureReport.cpp
   src/renderer/src/ViewportRenderer.cpp
   src/pdf/src/PdfAttach.cpp
-  src/io/src/PdfPlot.cpp
-  src/io/src/PlotStyleTable.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
   src/update/UpdateService.cpp
-  # REQ-080 usage ping; REQ-425 crash and startup-failure reports
   src/telemetry/TelemetryPing.cpp
   src/telemetry/TelemetryService.cpp
   src/platform/CrashReporter.cpp
-  src/platform/CrashReporterWireReason.cpp
-  src/platform/CrashBuildInfo.cpp
   src/platform/StartupFailure.cpp
-  src/platform/FailureReportUi.cpp
-)
+  src/platform/FailureReportUi.cpp)
+target_include_directories(gosurvey_qt_frontend PRIVATE src/telemetry)
 target_link_libraries(gosurvey_qt_frontend PUBLIC
-  gosurvey_domain GoSurvey::Pdf GoSurvey::UI Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
-  comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
-target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
-target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry")
+  gosurvey_domain gosurvey_qt_text Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
+  Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
+target_compile_options(gosurvey_qt_frontend PRIVATE /utf-8)
 gosurvey_target_warnings(gosurvey_qt_frontend)
+
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
 set_target_properties(GoSurveyQt PROPERTIES OUTPUT_NAME GoSurvey)
-target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
-target_link_libraries(GoSurveyQt PRIVATE GoSurvey::Engine)
-gosurvey_assert_no_imgui_in_link_graph(GoSurveyQt)
+target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend GoSurvey::Engine)
+target_compile_options(GoSurveyQt PRIVATE /utf-8)
 gosurvey_target_warnings(GoSurveyQt)
-if(MSVC)
-  target_compile_options(GoSurveyQt PRIVATE /utf-8)
-  target_compile_options(gosurvey_qt_frontend PRIVATE /utf-8)
-endif()
 
-# Use the same installed kit for runtime deployment; no downloads or guessed DLL paths.
-get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
-get_filename_component(_qt_bin "${_qt_qmake}" DIRECTORY)
-get_filename_component(_qt_root "${_qt_bin}/.." ABSOLUTE)
-find_program(GOSURVEY_WINDEPLOYQT windeployqt HINTS "${_qt_bin}" REQUIRED NO_DEFAULT_PATH)
+# Deploy the Qt runtime from the configured kit (no downloads, no guessed paths).
+get_target_property(_qmake Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(GOSURVEY_QT_BIN "${_qmake}" DIRECTORY)
+get_filename_component(GOSURVEY_QT_ROOT_DIR "${GOSURVEY_QT_BIN}/.." ABSOLUTE)
+find_program(GOSURVEY_WINDEPLOYQT windeployqt HINTS "${GOSURVEY_QT_BIN}" REQUIRED NO_DEFAULT_PATH)
 add_custom_command(TARGET GoSurveyQt POST_BUILD
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyQt>"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyQt>"
   COMMAND "${GOSURVEY_WINDEPLOYQT}" --no-translations --no-compiler-runtime
-    --plugindir "$<TARGET_FILE_DIR:GoSurveyQt>/qt-plugins"
-    "$<TARGET_FILE:GoSurveyQt>"
+    --plugindir "$<TARGET_FILE_DIR:GoSurveyQt>/qt-plugins" "$<TARGET_FILE:GoSurveyQt>"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/qt.conf" "$<TARGET_FILE_DIR:GoSurveyQt>/qt.conf"
+    "${CMAKE_SOURCE_DIR}/cmake/qt.conf" "$<TARGET_FILE_DIR:GoSurveyQt>/qt.conf"
   VERBATIM)
+
+# --- Bundled resources --------------------------------------------------------------------------
+# Staged by a stamp so an edited resource is copied even when nothing relinks. Folders are wiped
+# first so a deleted source file does not linger beside the exe or in the installer.
+set(_res "${CMAKE_SOURCE_DIR}/resources")
+set(_out "$<TARGET_FILE_DIR:GoSurveyQt>/resources")
+set(GOSURVEY_RESOURCE_FILES default-template.gst whats-new.md whats-new-bg.png splash-bg.png qt-splash-bg.png)
+set(GOSURVEY_RESOURCE_DIRS icons hatches blocks fonts drawing-templates wiki whats-new)
+foreach(_file IN LISTS GOSURVEY_RESOURCE_FILES ITEMS wiki/Home.md)
+  if(NOT EXISTS "${_res}/${_file}")
+    message(FATAL_ERROR "resources/${_file} is required.")
+  endif()
+endforeach()
+
+set(_depends "")
+set(_commands COMMAND "${CMAKE_COMMAND}" -E make_directory "${_out}/layouts")
+foreach(_file IN LISTS GOSURVEY_RESOURCE_FILES)
+  list(APPEND _depends "${_res}/${_file}")
+  list(APPEND _commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_res}/${_file}" "${_out}/${_file}")
+endforeach()
+foreach(_dir IN LISTS GOSURVEY_RESOURCE_DIRS)
+  file(GLOB_RECURSE _files CONFIGURE_DEPENDS "${_res}/${_dir}/*")
+  list(APPEND _depends ${_files})
+  list(APPEND _commands
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${_out}/${_dir}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_res}/${_dir}" "${_out}/${_dir}")
+endforeach()
+# A manifest of the file list, rewritten only when it changes, so deleting a file also restages.
+function(gosurvey_write_manifest path)
+  string(REPLACE ";" "\n" _list "${ARGN}")
+  file(CONFIGURE OUTPUT "${path}" CONTENT "${_list}\n" @ONLY)
+endfunction()
+gosurvey_write_manifest("${CMAKE_BINARY_DIR}/resources.manifest" ${_depends})
+set(_stamp "${CMAKE_BINARY_DIR}/.gosurvey_resources-$<CONFIG>.stamp")
+add_custom_command(OUTPUT "${_stamp}" ${_commands}
+  COMMAND "${CMAKE_COMMAND}" -E touch "${_stamp}"
+  DEPENDS ${_depends} "${CMAKE_BINARY_DIR}/resources.manifest"
+  COMMENT "Stage bundled resources beside GoSurvey.exe")
+add_custom_target(gosurvey_stage_resources DEPENDS "${_stamp}")
+
+# CS-MAP dictionaries and US grid files (~230 MB) have their own stamp so they copy only when changed.
+file(GLOB_RECURSE _files CONFIGURE_DEPENDS "${GOSURVEY_CSMAP_DIR}/dictionaries/*")
+gosurvey_write_manifest("${CMAKE_BINARY_DIR}/csmap.manifest" ${_files})
+set(_stamp "${CMAKE_BINARY_DIR}/.gosurvey_csmap-$<CONFIG>.stamp")
+add_custom_command(OUTPUT "${_stamp}" DEPENDS ${_files} "${CMAKE_BINARY_DIR}/csmap.manifest"
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${_out}/csmap"
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${GOSURVEY_CSMAP_DIR}/dictionaries" "${_out}/csmap"
+  COMMAND "${CMAKE_COMMAND}" -E touch "${_stamp}"
+  COMMENT "Stage CS-MAP dictionaries beside GoSurvey.exe")
+add_custom_target(gosurvey_stage_csmap DEPENDS "${_stamp}")
 
 add_dependencies(GoSurveyQt gosurvey_stage_resources gosurvey_stage_csmap)

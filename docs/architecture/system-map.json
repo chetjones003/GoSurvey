@@ -11721,33 +11721,6 @@
       "note": "A native Win32 failure-report window that duplicates the Qt dialog in src/qt/FailureReport.cpp. Two failure UIs exist; the final map must choose one."
     },
     {
-      "path": "src/platform/GpuPreference.cpp",
-      "lines": [
-        1,
-        120
-      ],
-      "system": "Windows",
-      "concern": "gpu-preference",
-      "symbols": [
-        "ReadGpuPreferenceForThisExe",
-        "WriteGpuPreferenceForThisExe"
-      ],
-      "note": "Registry-backed GPU preference for hybrid graphics. Windows OS service. No current production caller; GpuPreferenceTests.cpp is its only consumer."
-    },
-    {
-      "path": "src/platform/GpuPreference.hpp",
-      "lines": [
-        1,
-        45
-      ],
-      "system": "Windows",
-      "concern": "gpu-preference",
-      "symbols": [
-        "GpuPreference"
-      ],
-      "note": "Preference enum and read/write declarations."
-    },
-    {
       "path": "src/platform/HttpFetch.cpp",
       "lines": [
         1,
@@ -15818,6 +15791,7 @@
         "tests/FilletGeomTests.cpp",
         "tests/ChamferGeomTests.cpp",
         "tests/TransformationTests.cpp",
+        "tests/CutClipboardTests.cpp",
         "tests/PaperSpaceTests.cpp",
         "tests/PaperTypedPointsTests.cpp",
         "tests/PaperLeaderTests.cpp",
@@ -16113,7 +16087,7 @@
         "Render device: a toolkit-neutral GoSurvey/Renderer device interface (buffer, texture, shader, framebuffer and draw-submit handles) plus a factory. The OpenGL backend implements it with GLEW; the Headless null device implements it by recording submitted draw calls. Neither exists in source yet (ADR-0003); ViewportRenderer.cpp is the de facto device today.",
         "Graphics context: one call that creates the context and format, made from GoSurveyEditor composition. It replaces QSurfaceFormat in main.cpp and the two glewInit calls (EditorViewport::initializeGL and ViewportRenderer::Init).",
         "File dialogs: the Browse*Utf8 free functions become a UI interface that Commands depends on. WinFileDialogs is the Windows implementation; headless::QueueDialogAnswer, ClearDialogAnswers and PendingDialogAnswers are the Headless control surface.",
-        "OS services: AppPaths, ProcessRun, GpuPreference, and the process-level handoff in main.cpp (single-instance mutex and window restore) are Windows implementations behind neutral service declarations.",
+        "OS services: AppPaths, ProcessRun, and the process-level handoff in main.cpp (single-instance mutex and window restore) are Windows implementations behind neutral service declarations.",
         "Crash capture: InstallHandler, TakeCrashReportFromCommandLine and TryRunCrashReportUiMode stay Windows; the upload (TryPostCrashReportSilent) is called through the Network interface.",
         "Transport: the HttpFetch declaration is split into a Network interface and a WinHTTP implementation here.",
         "PDF seam: PdfAttach_Init, PdfAttach_Shutdown and the PdfDraftCache_* calls form the Pdf-facing interface. Windows and Headless implement it; the GL upload moves to the OpenGL device.",

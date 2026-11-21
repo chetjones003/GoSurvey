@@ -4127,10 +4127,6 @@ struct AppCommandState : DrawingContent {
   /// one asked for nothing and silently got the other one. Applied by writing Windows' own
   /// per-application preference, so it takes effect at the **next launch**, not this one.
   bool systemPreferIntegratedGpu = false;
-  /// Result of the last attempt to record that preference with Windows, shown beside the checkbox.
-  /// Empty until the user toggles it. It is shown rather than logged because the settings dialog is
-  /// where the user is looking when they change it (REQ-201).
-  std::string systemGpuPreferenceMessage;
   bool systemAutoCheckCertificationUpdate = true;
   bool systemDisplayOLETextSizeDialog = true;
   bool systemBeepOnError = false;
