@@ -1,7 +1,7 @@
 {
   "src/commands/CadBlocks.cpp": 4307,
   "src/commands/CadCommands.cpp": 52546,
-  "src/commands/CadCommands.hpp": 8002,
+  "src/commands/CadCommands.hpp": 7978,
   "src/commands/CadCommands_Alignment.cpp": 5801,
   "src/geometry/src/brep.cpp": 19848,
   "src/io/src/AcisSatParser.cpp": 3189,

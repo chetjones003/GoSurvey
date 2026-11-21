@@ -13,7 +13,7 @@ _Avoid_: geometry arrays, flat arrays.
 
 **Drawing content**: The Commands-owned value holding everything a drawing saves and the user
 edits: the entity store plus survey, terrain, PDF and paper-layout data, and the "current"
-settings (current layer, color, text style). Undo frames and per-tab documents each hold one.
+settings (current layer, color, text style). Undo frames, per-tab documents and the clipboard each hold one.
 Excludes view state, app preferences, selection and the entity-id counter. See
 [ADR-0010](docs/adr/0010-drawing-content-and-entity-store.md).
 _Avoid_: geometry snapshot (for the content itself; the undo frame wraps it).

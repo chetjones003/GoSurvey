@@ -575,7 +575,8 @@ struct CadClipboard {
   /// entity fields are filled by a copy; the rest of \ref DrawingContent stays at its defaults and
   /// is never read. A copy from paper space stores z = 0 in `userCirclesCxCyZR`, and a paste into
   /// paper space drops z: the sheet is 2D (ADR-025 (g)), so Z collapses at that boundary.
-  /// `userCircleNormals` (REQ-312) flattens to world +Z at the same boundary.
+  /// `userCircleNormals` (REQ-312) flattens to world +Z at the same boundary. A copy does not carry
+  /// `userPolylineVertsNormal` (REQ-325) yet, so a pasted bulged segment on a tilted plane comes back flat.
   DrawingContent content;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
@@ -591,7 +592,8 @@ struct CadClipboard {
   double      srcOriginX = 0.0, srcOriginY = 0.0;  ///< the source drawing's document origin: world = local + origin
 
   bool empty() const {
-    // Only the entity fields count: the non-entity fields of DrawingContent are never copied.
+    // Only the entity fields count: the non-entity fields of DrawingContent are never copied. Keep this
+    // list in step with the entity fields of DrawingContent, or a new kind will look empty.
     return content.userLinesFlat.empty() && content.userCirclesCxCyZR.empty() && content.userArcs.empty() &&
            content.userEllipses.empty() && (content.userPolylineOffsets.size() <= 1) && content.cadSplines.empty() &&
            content.cadPoints.empty() && content.cadAnnotations.empty() && content.cadTables.empty() &&
