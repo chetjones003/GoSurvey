@@ -51,14 +51,23 @@ functions out of a file.
     - every removed line reappears verbatim in an added file;
     - the only new lines are includes, forward declarations, function declarations, namespace
       openers (`namespace {`, `namespace name {`) and `} // namespace` closers, and CMake source
-      entries in `target_sources`, `add_library` or `add_executable`. A bare `}` is not allowed,
-      because it can change which function a line belongs to;
+      entries: a source path inside `target_sources`, `add_library`, `add_executable` or a
+      `set(<NAME>_SOURCES ...)` list, plus the bare opener and closing `)` of such a call. A bare
+      `}` is not allowed, because it can change which function a line belongs to;
     - the file-size baseline only shrinks.
   - **Track B** moves one family at a time onto the step engine. The pilot is the Modify family
     (MOVE, COPY, ROTATE, SCALE, MIRROR), after ADR-0011's entity-kind operations have rewritten
     their bodies.
 - **Family files are the module boundary,** not a size workaround. Files are not split arbitrarily
   just to pass the gate.
+
+### Shared helpers during a Track A move
+
+A moved function that other files still call must stay visible to them. The proof forbids editing
+a line, so a `static` helper cannot become external. Its text moves, verbatim, into an existing
+header. Each translation unit then gets its own copy, which the compiler may report as
+`C4505` (unreferenced function removed). That warning is accepted until the helpers move to a
+source file with external linkage in a later step.
 
 ## Alternatives rejected
 
