@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "CadEntities.hpp"
-#include "GoSurvey/Document/CadEntityStore.hpp"
 #include "CadLayerRow.hpp"
 #include "DimensionStyle.hpp"
 #include "DrawingSettings.hpp"
