@@ -511,3 +511,295 @@ std::string SolidVerbUpper(brep::PrimitiveKind kind);
 std::string SectionClipReport(const AppCommandState& st);
 bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
 void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log);
+#include "CadCoordinateFrame.hpp"
+#include <set>
+
+bool ParseTwoDoubles(std::string s, double* x, double* y);
+bool ParseOneFloat(const std::string& s, float* v);
+bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut);
+void ExecuteGradingGroupCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);
+void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job);
+void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& resolved, std::vector<double>& xyz, std::vector<float>& colors, std::vector<float>& intensity, std::int64_t& totalCount);
+const char* PointCloudExportCommandName(PointCloudExportFormat format);
+bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
+bool ApplyCrosshair3dValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
+const char* ProjectionName(Camera::Projection p);
+bool ApplyProjectionValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
+bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
+void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz, std::vector<std::string>& log);
+void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string>& log);
+void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string>& log);
+bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SampleEllipseWorld(std::vector<ray3d::Vec3>& out, const CadEllipse& e, int segments);
+void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za, float xb, float yb, float zb, bool subtract, bool windowMode, bool includeSurveyPoints = false, const Camera* cam = nullptr, float vpW = 0.f, float vpH = 0.f);
+namespace CadCmdGeom {
+float DistSqPointSegment(float px, float py, float ax, float ay, float bx, float by);
+float MinDistSqSegSeg(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy);
+} // namespace CadCmdGeom
+void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
+void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
+bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log);
+bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
+bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
+bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
+bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
+
+using PaperRef = PaperEntityRef;
+
+static void ResetPaperModifyDrafts(AppCommandState& st) {
+  st.paperLengthenPhase = st.paperExtendPhase = st.paperBreakPhase = st.paperStretchPhase = 0;
+  st.paperExtendBoundaries.clear();
+  st.paperBreakEntity = PaperEntityRef{};
+  st.paperFilletPhase = st.paperChamferPhase = 0;
+  st.paperFilletFirstEntity = PaperEntityRef{}; st.paperFilletFirstPolySeg = -1;
+  st.paperChamferFirstEntity = PaperEntityRef{}; st.paperChamferFirstPolySeg = -1;
+  st.filletTextAwaitingRadius = st.filletTextAwaitingTrim = false;
+  st.chamferTextAwaitingFirstValue = st.chamferTextAwaitingSecondDist = false;
+  st.chamferTextAwaitingAngle = st.chamferTextAwaitingTrim = false;
+}
+
+static bool RayAtElevation(const ray3d::Ray& ray, double z, float* x, float* y) {
+  if (std::fabs(ray.dir.z) < 1e-12)
+    return false;
+  const double t = (z - ray.origin.z) / ray.dir.z;
+  *x = static_cast<float>(ray.origin.x + t * ray.dir.x);
+  *y = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  return true;
+}
+
+static void ResetModifyRotateDraft(AppCommandState& st) {
+  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  st.modifyBaseX = st.modifyBaseY = 0.f;
+  st.scaleRefDist = 1.f;
+  st.scalePhase = AppCommandState::ScalePhase::FactorPick;
+  st.scaleRefP1X = st.scaleRefP1Y = 0.f;
+  st.scaleNewLenP1X = st.scaleNewLenP1Y = 0.f;
+  st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
+  st.rotateBaseX = st.rotateBaseY = st.rotateBaseZ = 0.f;
+  st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
+  st.rotateAnglePt1X = st.rotateAnglePt1Y = 0.f;
+  st.rotateCopyMode = false;
+  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.mirrorP1Z = st.mirrorP2Z = 0.f;
+  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
+  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
+  // TASK-099 F4. The phase enums above were reset without the collections and latched entities
+  // that go with them, so this left EXTEND's boundary list and BREAK's pending entity behind.
+  // CancelActiveCommand happened to reset those itself immediately after calling this, which hid
+  // it; every other caller (FinishMirrorCommand, LENGTHEN's Enter finish) did not.
+  st.extendBoundaries.clear();
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+  st.lengthenPendingEntity = SelectedEntity{};
+  st.lengthenPendingApplyOnValue = false;
+}
+
+static float ReflectAngleAcrossLine(float x0, float y0, float x1, float y1, float angle) {
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  return 2.f * phi - angle;
+}
+
+template <class T>
+static void ScalePtAroundBase(double bx, double by, double sc, T* x, T* y) {
+  *x = static_cast<T>(bx + sc * (static_cast<double>(*x) - bx));
+  *y = static_cast<T>(by + sc * (static_cast<double>(*y) - by));
+}
+
+static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotation* ann) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
+    return;
+  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  float dmx = cmx;
+  float dmy = cmy;
+  if (!ann->dimLinearVertical)
+    dmy = cmy + ann->dimSignedOffset;
+  else
+    dmx = cmx + ann->dimSignedOffset;
+  ScalePtAroundBase(bx, by, sc, &ann->dimExt1X, &ann->dimExt1Y);
+  ScalePtAroundBase(bx, by, sc, &ann->dimExt2X, &ann->dimExt2Y);
+  ScalePtAroundBase(bx, by, sc, &dmx, &dmy);
+  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
+  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  if (!ann->dimLinearVertical)
+    ann->dimSignedOffset = dmy - ncmy;
+  else
+    ann->dimSignedOffset = dmx - ncmx;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+}
+
+static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& a, float bx, float by, float sc) {
+  if (a.kind == CadAnnotation::Kind::Text) {
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::Mtext) {
+    ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
+    ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
+    if (a.boxMinX > a.boxMaxX)
+      std::swap(a.boxMinX, a.boxMaxX);
+    if (a.boxMinY > a.boxMaxY)
+      std::swap(a.boxMinY, a.boxMaxY);
+    a.insX = a.boxMinX;
+    a.insY = a.boxMinY;
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    ScaleCadDimLinearAroundBase(bx, by, sc, &a);
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
+  } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+    ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    CadDimAngularSyncTextPlacement(&a, st.drawing.modelUnitsPerPlottedInch);
+    CadDimRefreshMeasurementText(&a, st.drawing.activeDimensionStyle, CadAngleDisplaySettings(st));
+  }
+}
+
+static bool PeelTypedElevation(const std::string& raw, std::string* outXy, float* outZ, bool* outHasZ,
+                               const char* verbUpper, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  *outXy = trimmed;
+  *outZ = 0.f;
+  *outHasZ = false;
+  const size_t c1 = trimmed.find(',');
+  const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+  if (c2 == std::string::npos)
+    return true;
+  if (trimmed.find(',', c2 + 1) != std::string::npos) {
+    log.push_back(std::string(verbUpper) + " - too many coordinates: X,Y or X,Y,Z.");
+    return false;
+  }
+  const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+  char* zEnd = nullptr;
+  const double zv = std::strtod(zText.c_str(), &zEnd);
+  if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+    log.push_back(std::string(verbUpper) + " - elevation must be a number: X,Y,Z.");
+    return false;
+  }
+  *outZ = static_cast<float>(zv);
+  *outHasZ = true;
+  *outXy = trimmed.substr(0, c2);
+  return true;
+}
+
+/// REQ-329 increment 1 (GitHub issue #402): resolve a typed MOVE/COPY point to storage X/Y plus a
+/// world Z, honouring the active UCS.
+///
+/// Under the World UCS — and any in-plan survey drawing (\c CadWorkPlaneIsWorldXy) — this is exactly
+/// the pre-REQ-329 path: \c ParseStoragePoint for the X/Y pair (which already applies an in-plan UCS
+/// rotation) and the peeled elevation as a world Z, relative or absolute exactly as REQ-322 defined
+/// it. Under a rotated/tilted UCS the whole `(x, y, z)` — relative `@dx,dy,dz` or absolute `x,y,z` —
+/// is interpreted in the active UCS axes, matching how ARRAY (#400) and the draw commands read a
+/// typed point.
+///
+/// \p outConsumed distinguishes the two failure modes \c HandleModifyText already had: a bad
+/// elevation field is reported and the phase holds (\p outConsumed true); an unparseable point is
+/// left for the caller's "unknown command" fallthrough (\p outConsumed false).
+static bool ResolveTypedModifyPoint(AppCommandState& st, const std::string& raw, bool allowRelative,
+                                    float baseLocalX, float baseLocalY, float baseWorldZ,
+                                    const char* verbUpper, float* outLocalX, float* outLocalY,
+                                    float* outWorldZ, bool* outConsumed, std::vector<std::string>& log) {
+  *outConsumed = false;
+  std::string xy;
+  float z = 0.f;
+  bool hasZ = false;
+  if (!PeelTypedElevation(raw, &xy, &z, &hasZ, verbUpper, log)) {
+    *outConsumed = true;  // reported by name; stay in the phase
+    return false;
+  }
+  const bool relative = !xy.empty() && xy[0] == '@';
+
+  if (CadWorkPlaneIsWorldXy(st)) {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, xy, &px, &py, allowRelative, baseLocalX, baseLocalY))
+      return false;
+    *outLocalX = px;
+    *outLocalY = py;
+    // A relative destination states its own Z offset from the base; an absolute one states a Z, and
+    // with no explicit Z that is 0 — the caller then computes `dz = outWorldZ - baseWorldZ`, which
+    // keeps the historical "difference of the two elevations" semantics (req322-move-3d.txt).
+    *outWorldZ = relative ? baseWorldZ + z : z;
+    return true;
+  }
+
+  double a = 0.0;
+  double b = 0.0;
+  bool rel = false;
+  if (!ParsePointComponents(xy, &a, &b, &rel, allowRelative)) {
+    // Bearing / distance<angle typed forms are not decomposed here — they fall back to the flat
+    // in-plane parser (2D, no elevation change). A stated increment-1 limitation: explicit numeric
+    // coordinates get the full 3D UCS treatment, the surveyor's bearing entry keeps working in the
+    // work plane as it does today.
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, xy, &px, &py, allowRelative, baseLocalX, baseLocalY))
+      return false;
+    *outLocalX = px;
+    *outLocalY = py;
+    *outWorldZ = baseWorldZ;
+    return true;
+  }
+
+  // `st.activeUcs` is the TRUE-WORLD frame (see CadActiveUcsStorage's contract note), and both
+  // `CadCoord::WorldFromLocal` below and `CadCoord::LocalFromWorld` further down work in true world —
+  // so the UCS transform here must too, exactly as `ParseStoragePointZ`'s own UCS branch does. Using
+  // the storage-origin frame would subtract the document origin twice once a drawing has been
+  // rebased.
+  ray3d::Vec3 world;
+  if (rel) {
+    double bwx = 0.0;
+    double bwy = 0.0;
+    CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &bwx, &bwy);
+    world = ray3d::Add({bwx, bwy, static_cast<double>(baseWorldZ)},
+                       ucs::UcsVectorToWorld(st.activeUcs, {a, b, static_cast<double>(z)}));
+  } else {
+    world = ucs::UcsToWorld(st.activeUcs, {a, b, static_cast<double>(z)});
+  }
+  if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
+    return false;
+  CadCoord::LocalFromWorld(st, world.x, world.y, outLocalX, outLocalY);
+  if (!std::isfinite(*outLocalX) || !std::isfinite(*outLocalY))
+    return false;
+  *outWorldZ = static_cast<float>(world.z);
+  st.resolvedPointZValid = true;
+  st.resolvedPointZ = static_cast<float>(world.z);
+  return true;
+}
+
+static double PickDistSqPointSegmentD(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1e-24) {
+    const double dx = px - ax;
+    const double dy = py - ay;
+    return dx * dx + dy * dy;
+  }
+  const double t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
+  const double dx = px - qx;
+  const double dy = py - qy;
+  return dx * dx + dy * dy;
+}
