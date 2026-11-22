@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <vector>
 
 #include "CadEntities.hpp"  // EntityAttributes
@@ -157,3 +158,165 @@ void ResetDistDraft(AppCommandState& st);
 /// Resets every in-progress draft/prompt tool. Call on command start, cancel, or
 /// clear-geometry so no half-collected state leaks into the next command.
 void ResetAllCadDraftTools(AppCommandState& st);
+
+static void CommitSurfSwapEdgeLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                    std::vector<std::string>& log) {
+  if (s.dataShortcutReadOnly) {
+    log.push_back("SURFSWAPEDGE — surface reference \"" + s.name + "\" is read-only.");
+    return;
+  }
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  auto trial = std::make_shared<CadTin>(*s.tin);
+  if (!TinSwapInteriorEdgeNear(trial->vertsXyz, trial->indices, x, y)) {
+    log.push_back("SURFSWAPEDGE — pick is not on an interior edge.");
+    return;
+  }
+  PushUndoSnapshot(st, "Swap TIN edge");
+  s.swappedEdgePicks.emplace_back(x, y);
+  s.tin = std::move(trial);
+  BumpCadGpuCache(st);
+  log.push_back("SURFSWAPEDGE — swapped an interior edge on \"" + s.name + "\".");
+}
+
+static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::vector<std::string>& log) {
+  assert(cmd != nullptr);
+  assert(cmd[0] != '\0');
+  if (s.dataShortcutReadOnly) {
+    log.push_back(std::string(cmd) + " — surface reference \"" + s.name + "\" is read-only.");
+    return true;
+  }
+  if (s.kind == SurfaceKind::Tin && !s.isVolumeSurface())
+    return false;
+  log.push_back(std::string(cmd) + " — \"" + s.name + "\" is not a TIN surface.");
+  return true;
+}
+
+// A TIN imported from a Civil 3D DWG is a fixed triangulation with no definition (no point groups, files, added
+// points, breaklines, contours, boundaries or corridor). Point edits would be rebuilt from the edits alone and
+// replace the imported triangulation, so they are refused rather than silently losing it.
+static bool SurfaceIsImportedFixedTin(const CadSurface& s) {
+  return s.importedFixedTin && s.tin && !s.isVolumeSurface() && s.sourcePointGroups.empty() && s.sourcePointFiles.empty() &&
+         s.addedPointXyz.empty() && s.breaklines.empty() && s.contourSources.empty() && s.boundaries.empty() &&
+         s.movedPoints.empty() && s.corridorFeatureLines.empty();
+}
+
+static bool RefusesImportedTinPointEdit(const CadSurface& s, const char* command, std::vector<std::string>& log) {
+  if (!SurfaceIsImportedFixedTin(s)) return false;
+  log.push_back(std::string(command) + " — \"" + s.name + "\" is an imported fixed triangulation with no definition; "
+                "point edits would rebuild it from the edits alone and discard the imported surface. Edit the surface in "
+                "Civil 3D, or build a new surface from points.");
+  return true;
+}
+
+static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, double z,
+                                    std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEADDPOINT", log))
+    return;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    log.push_back("SURFACEADDPOINT — x, y, and z must be finite numbers.");
+    return;
+  }
+  PushUndoSnapshot(st, "Add surface point");
+  s.addedPointXyz.push_back(x);
+  s.addedPointXyz.push_back(y);
+  s.addedPointXyz.push_back(z);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEADDPOINT — added a definition point on \"" + s.name + "\".");
+}
+
+static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                    std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEDELPOINT", log))
+    return;
+  if (!std::isfinite(x) || !std::isfinite(y)) {
+    log.push_back("SURFACEDELPOINT — x and y must be finite numbers.");
+    return;
+  }
+  const bool hasInputs = !s.sourcePointGroups.empty() || !s.sourcePointFiles.empty() || !s.addedPointXyz.empty();
+  if (!hasInputs) {
+    log.push_back("SURFACEDELPOINT — \"" + s.name + "\" has no definition points to delete.");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete surface point");
+  s.deletedPointPicks.emplace_back(x, y);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEDELPOINT — recorded a point-delete edit on \"" + s.name + "\".");
+}
+
+static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double x1, double y1, double x2, double y2,
+                                     double z2, std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEMOVEPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEMOVEPOINT", log))
+    return;
+  if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
+    log.push_back("SURFACEMOVEPOINT — coordinates must be finite numbers.");
+    return;
+  }
+  PushUndoSnapshot(st, "Move surface point");
+  CadSurface::MovedPoint m;
+  m.fromX = x1;
+  m.fromY = y1;
+  m.toX = x2;
+  m.toY = y2;
+  m.toZ = z2;
+  s.movedPoints.push_back(m);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEMOVEPOINT — recorded a point-move edit on \"" + s.name + "\".");
+}
+
+static void CommitSurfDelLineLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                   std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFDELLINE", log))
+    return;
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFDELLINE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  auto probe = s.tin->indices;
+  if (!TinDeleteInteriorEdgeNear(probe, s.tin->vertsXyz, x, y)) {
+    log.push_back("SURFDELLINE — no interior edge within 1 ft of the pick.");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete TIN line");
+  s.deletedEdgePicks.emplace_back(x, y);
+  BumpCadGpuCache(st);
+  log.push_back("SURFDELLINE — recorded an edge-delete edit on \"" + s.name + "\".");
+}
+void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunSurfMovePoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunSurfDelLine(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+
+namespace {
+
+/// Splits `a, b, c` into trimmed fields.
+///
+/// Commas rather than spaces because surface names and point-group names routinely contain them
+/// ("Existing Ground", "Ground + Curb") — the same problem DESIGNATEBOUNDARY solves by reading its
+/// kind off the END of the line, which does not generalise to a variable-length group list. Empty
+/// fields are kept rather than skipped so the caller can reject them by name instead of silently
+/// building from a shorter list than the user typed.
+std::vector<std::string> SplitCommaFields(const std::string& s) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  for (;;) {
+    const size_t comma = s.find(',', start);
+    const size_t len = (comma == std::string::npos) ? std::string::npos : comma - start;
+    out.push_back(StringUtil::trimCopy(s.substr(start, len)));
+    if (comma == std::string::npos)
+      break;
+    start = comma + 1;
+  }
+  return out;
+}
+
+} // namespace
