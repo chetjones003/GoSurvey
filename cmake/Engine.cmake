@@ -240,6 +240,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/featureline/CadFeatureLineCommands.cpp
   src/commands/solid/CadSolidEditCommands.cpp
   src/commands/solid/CadSolidFeatureCommands.cpp
+  src/commands/solid/CadSolidPrimitiveCommands.cpp
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Alignment.cpp
   src/commands/CadCommands_Bench.cpp
