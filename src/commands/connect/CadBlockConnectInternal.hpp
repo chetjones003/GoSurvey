@@ -1,4 +1,3 @@
-#pragma once
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
