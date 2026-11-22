@@ -1,0 +1,42 @@
+name: prune actions storage
+
+# Deletes every Actions cache and artifact except the newest one in each family
+# (see tools/prune-actions-storage.ps1). Runs daily on the self-hosted Windows runner.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting"
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: prune-actions-storage
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/prune-actions-storage.ps1
+      - name: Prune caches and artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $args = @('-Repo', $env:GITHUB_REPOSITORY)
+          if ($env:DRY_RUN -eq 'true') { $args += '-DryRun' }
+          ./tools/prune-actions-storage.ps1 @args
