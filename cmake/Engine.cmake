@@ -243,6 +243,32 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/solid/CadSolidPrimitiveCommands.cpp
   src/commands/solid/CadSolidSectionCommands.cpp
   src/commands/properties/CadPropertyCommands.cpp
+  src/commands/surface/CadSurfaceDisplay.cpp
+  src/commands/surface/CadSurfaceBuildCommands.cpp
+  src/commands/surface/CadSurfaceManageCommands.cpp
+  src/commands/surface/CadSurfaceDrapeCommands.cpp
+  src/commands/grading/CadGradingCommands.cpp
+  src/commands/solid/CadSolidDisplay.cpp
+  src/commands/pointcloud/CadPointCloudCommands.cpp
+  src/commands/pdf/CadPdfAttachCommands.cpp
+  src/commands/layers/CadLayerStyleCommands.cpp
+  src/commands/view/CadViewCommands.cpp
+  src/commands/input/CadInputParsing.cpp
+  src/commands/paperspace/CadPaperSpaceCommands.cpp
+  src/commands/selection/CadSelectionCommands.cpp
+  src/commands/clipboard/CadClipboardCommands.cpp
+  src/commands/gizmo/CadGizmoCommands.cpp
+  src/commands/annotation/CadAnnotationCommands.cpp
+  src/commands/draw/CadDrawCommands.cpp
+  src/commands/inquiry/CadInquiryCommands.cpp
+  src/commands/modify/CadMoveRotateCommands.cpp
+  src/commands/modify/CadScalePreviewCommands.cpp
+  src/commands/modify/CadMirrorArrayDeleteCommands.cpp
+  src/commands/modify/CadOffsetCommands.cpp
+  src/commands/modify/CadCurveEditCommands.cpp
+  src/commands/modify/CadFilletChamferCommands.cpp
+  src/commands/modify/CadTrimCommands.cpp
+  src/commands/modify/CadJoinOverkillCommands.cpp
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Alignment.cpp
   src/commands/CadCommands_Bench.cpp
