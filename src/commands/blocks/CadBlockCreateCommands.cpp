@@ -1,4 +1,5 @@
 #include "CadBlocks.hpp"
+#include "CadBlockCreateInternal.hpp"
 #include "connect/CadBlockConnectInternal.hpp"
 #include "CadCommands.hpp"
 #include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <sstream>
 #include "CadBlocks.hpp"
+#include "CadBlockCreateInternal.hpp"
 #include "CadCommandsInternal.hpp"
 
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
