@@ -1,5 +1,121 @@
 #include "CadCommandsInternal.hpp"
 
+namespace {
+
+/// Build a `brep::Profile` (storage coordinates — ADR-025 D2) from one selected entity, or return
+/// false if it is not an eligible extrude profile. Increment 1b accepts a **closed polyline**
+/// (straight segments) and a **circle**; arcs-in-polylines and multi-loop regions are later work.
+bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity& sel,
+                                 brep::Profile* out) {
+  constexpr double kPiLocal = 3.14159265358979323846;
+
+  if (sel.type == SelectedEntity::Type::Polyline) {
+    const size_t pi = static_cast<size_t>(sel.index);
+    if (pi + 1 >= st.drawing.userPolylineOffsets.size())
+      return false;
+    const bool closed = pi < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[pi] != 0;
+    if (!closed)
+      return false;
+    const int vB = st.drawing.userPolylineOffsets[pi];
+    const int vE = st.drawing.userPolylineOffsets[pi + 1];
+    std::vector<ray3d::Vec3> pts;
+    for (int v = vB; v < vE; ++v) {
+      const size_t b = static_cast<size_t>(v);
+      if (b >= st.drawing.vertexCount())
+        return false;
+      pts.push_back({static_cast<double>(st.drawing.vertex(b).x),
+                     static_cast<double>(st.drawing.vertex(b).y),
+                     static_cast<double>(st.drawing.vertex(b).z)});
+    }
+    // A closed polyline may or may not repeat its first vertex at the end.
+    if (pts.size() >= 2 && ray3d::Length(ray3d::Sub(pts.front(), pts.back())) < 1e-7)
+      pts.pop_back();
+    if (pts.size() < 3)
+      return false;
+
+    // Fit the profile plane by Newell's method — robust for a non-planar-ish ring, and it gives the
+    // area-weighted normal. Orient it "up" for a roughly-horizontal profile so `EXTRUDE 10` rises.
+    ray3d::Vec3 nrm{0, 0, 0};
+    ray3d::Vec3 centroid{0, 0, 0};
+    for (size_t i = 0; i < pts.size(); ++i) {
+      const ray3d::Vec3& a = pts[i];
+      const ray3d::Vec3& b = pts[(i + 1) % pts.size()];
+      nrm.x += (a.y - b.y) * (a.z + b.z);
+      nrm.y += (a.z - b.z) * (a.x + b.x);
+      nrm.z += (a.x - b.x) * (a.y + b.y);
+      centroid = ray3d::Add(centroid, a);
+    }
+    if (ray3d::Length(nrm) < 1e-12)
+      return false;  // collinear / degenerate
+    nrm = ray3d::Normalize(nrm);
+    if (nrm.z < 0.0)
+      nrm = ray3d::Scale(nrm, -1.0);
+    centroid = ray3d::Scale(centroid, 1.0 / static_cast<double>(pts.size()));
+
+    ucs::Ucs plane;
+    if (!ucs::FromNormal(centroid, nrm, &plane))
+      return false;
+    out->plane = plane;
+    out->vertices = std::move(pts);
+    out->edges.assign(out->vertices.size(), brep::ProfileEdge{});
+    return true;
+  }
+
+  if (sel.type == SelectedEntity::Type::Circle) {
+    const size_t ci = static_cast<size_t>(sel.index);
+    if (ci >= st.drawing.circleCount())
+      return false;
+    const CadCircleRecord cc = st.drawing.circle(ci);
+    const double cx = cc.cx;
+    const double cy = cc.cy;
+    const double cz = cc.cz;
+    const double r = cc.r;
+    if (!(r > 0.0))
+      return false;
+    ray3d::Vec3 nrm{0, 0, 1};
+    if (ci * 3 + 2 < st.drawing.userCircleNormals.size()) {
+      const ray3d::Vec3 cand{static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 0]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 1]),
+                             static_cast<double>(st.drawing.userCircleNormals[ci * 3 + 2])};
+      if (ray3d::Length(cand) > 1e-9)
+        nrm = ray3d::Normalize(cand);
+    }
+    ucs::Ucs plane;
+    if (!ucs::FromNormal(ray3d::Vec3{cx, cy, cz}, nrm, &plane))
+      return false;
+    out->plane = plane;
+    out->vertices = {ucs::UcsToWorld(plane, ray3d::Vec3{r, 0.0, 0.0}),
+                     ucs::UcsToWorld(plane, ray3d::Vec3{-r, 0.0, 0.0})};
+    brep::ProfileEdge e;
+    e.arc = true;
+    e.centre = ray3d::Vec3{cx, cy, cz};
+    e.sweep = kPiLocal;
+    out->edges = {e, e};
+    return true;
+  }
+
+  return false;
+}
+
+}  // namespace
+
+/// Gather every eligible profile from the current selection. Returns the eligible count; \p skipped
+/// is how many selected objects were not a closed polyline or circle.
+int GatherExtrudeProfiles(const AppCommandState& st, std::vector<brep::Profile>* out, int* skipped) {
+  out->clear();
+  int skip = 0;
+  for (const SelectedEntity& sel : st.selection) {
+    brep::Profile p;
+    if (ExtrudeProfileFromSelection(st, sel, &p))
+      out->push_back(std::move(p));
+    else
+      ++skip;
+  }
+  if (skipped)
+    *skipped = skip;
+  return static_cast<int>(out->size());
+}
+
 void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vector<std::string>& log) {
   std::istringstream iss(rest);
   std::string tok;
