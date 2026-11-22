@@ -299,6 +299,11 @@ void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<s
 void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunVolCsv(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunWatershed(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log);
+void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log);
+void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 namespace {
 
@@ -356,6 +361,26 @@ void AppendVolumeTableItemValue(const SurfaceVolumeResult& r, int p, std::vector
                 {"Cut", FormatVolumeYd3(r.cutFt3, p), "Fill", FormatVolumeYd3(r.fillFt3, p), "Net",
                  FormatVolumeYd3(r.netFt3, p), "Cut area", FormatLinear(r.cutAreaFt2, p) + " ft2", "Fill area",
                  FormatLinear(r.fillAreaFt2, p) + " ft2", "Common area", FormatLinear(r.commonAreaFt2, p) + " ft2"});
+}
+
+} // namespace
+
+namespace {
+
+int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, bool closed) {
+  const int n = static_cast<int>(xyz.size() / 3);
+  if (n < 2)
+    return 0;
+  if (st.drawing.userPolylineOffsets.empty())
+    st.drawing.userPolylineOffsets.push_back(0);
+  const int baseVert = st.drawing.userPolylineOffsets.back();
+  for (int v = 0; v < n; ++v) {
+    st.drawing.pushVertex(CadPolyVertex{xyz[static_cast<size_t>(v) * 3 + 0], xyz[static_cast<size_t>(v) * 3 + 1], xyz[static_cast<size_t>(v) * 3 + 2]});
+  }
+  st.drawing.userPolylineOffsets.push_back(baseVert + n);
+  st.drawing.userPolylineClosed.push_back(closed ? 1u : 0u);
+  st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));  // current layer and colour (REQ-356)
+  return 1;
 }
 
 } // namespace
