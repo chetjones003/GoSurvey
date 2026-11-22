@@ -1,8 +1,5 @@
 {
-  "src/commands/CadBlocks.cpp": 3314,
   "src/commands/CadCommands.cpp": 8540,
-  "src/commands/CadCommands.hpp": 7978,
-  "src/commands/CadCommands_Alignment.cpp": 5798,
   "src/geometry/src/brep.cpp": 19848,
   "src/io/src/AcisSatParser.cpp": 3189,
   "src/io/src/DxfIo.cpp": 6683,

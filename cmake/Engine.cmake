@@ -271,12 +271,18 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/modify/CadJoinOverkillCommands.cpp
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Alignment.cpp
+  src/commands/alignment/CadAlignmentProfileCommands.cpp
+  src/commands/alignment/CadAlignmentEditCommands.cpp
+  src/commands/alignment/CadAlignmentStyleCommands.cpp
+  src/commands/alignment/CadAlignmentLayoutCommands.cpp
   src/commands/CadCommands_Bench.cpp
   src/commands/CadCommands_DrawInquiry.cpp
   src/commands/CadCommands_Geo.cpp
   src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadBlocks.cpp
+  src/commands/blocks/CadBlockEditorCommands.cpp
+  src/commands/pipe/CadPipeCatalogCommands.cpp
   src/commands/CadColor.cpp
   src/commands/CadCoordinateFrame.cpp
   src/commands/CadDynInput.cpp

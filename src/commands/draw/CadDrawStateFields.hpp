@@ -1,0 +1,341 @@
+  enum class LinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
+  /// Segments committed in the current LINE chain; the point being specified is
+  /// (lineDraftSegments + 2) once past the first point (REQ-024 ordinal prompt).
+  uint32_t lineDraftSegments = 0;
+
+  enum class PolylinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
+
+  float polyFirstX = 0.f;
+  float polyFirstY = 0.f;
+  uint32_t polyDraftSegments = 0;
+
+  enum class ArcPhase : std::uint8_t { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
+
+  float arcAx = 0.f, arcAy = 0.f;
+  float arcBx = 0.f, arcBy = 0.f;
+  float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
+
+  enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+
+  enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
+  std::vector<spline::Vec3> splineDraftPoints;
+
+  /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
+  enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
+  enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
+  bool leaderShowArrow = true;
+  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
+      LeaderPhase::WaitFirst;
+  bool leaderFinishAfterAnnotation = false;
+  std::vector<spline::Vec3> leaderDraftPoints;
+  enum class PeditPhase : std::uint8_t {
+    WaitObject,
+    WaitOption,
+    WaitVertex,
+    WaitJoin,
+    WaitVertexMove,
+    WaitVertexInsert
+  } peditPhase = PeditPhase::WaitObject;
+  int peditIndex = -1;
+  int peditVertex = 0;
+  bool peditPaper = false;
+  /// MEASURE and DIVIDE share object-pick + value prompt state (same AutoCAD two-step).
+  enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
+  SelectedEntity measureTarget{};
+  bool measurePaper = false;
+  PaperEntityRef measurePaperTarget{PaperEntityRef::Type::Line, -1};
+  double measurePickX = 0.0;
+  double measurePickY = 0.0;
+  enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
+  std::vector<spline::Vec3> areaDraftPoints;
+  double areaRunning = 0.0;
+  bool areaSubtract = false;
+  bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
+
+  /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
+  /// elevation is given. The surface is remembered between runs in a drawing, so the common case
+  /// - one ground surface, several pads at different levels - is just a number each time.
+  enum class PadSolidPhase : std::uint8_t { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
+      PadSolidPhase::WaitBoundary;
+  std::uint64_t padSolidBoundaryId = 0;
+  std::string padSolidSurface;
+
+  float ellCx = 0.f, ellCy = 0.f;
+  float ellMajEx = 0.f, ellMajEy = 0.f;
+  float ellCz = 0.f, ellMajEz = 0.f;  ///< work-plane elevation of each pick (REQ-312), as arcAz/arcBz
+
+  /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
+  /// is how a rectangle of an exact width and height is drawn.
+  enum class RectPhase : std::uint8_t { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
+
+  float rectX1 = 0.f, rectY1 = 0.f;
+
+  enum class TextCmdPhase : std::uint8_t { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
+
+  float textInsX = 0.f, textInsY = 0.f;
+  float textHeightDraft = 1.f;
+  float textRotDraft = 0.f;
+
+  enum class MtextPhase : std::uint8_t { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
+  /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
+  enum class MleaderPhase : std::uint8_t { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
+  float mleaderTipX = 0.f;
+  float mleaderTipY = 0.f;
+  float mleaderTipZ = 0.f;
+  /// Multileader index while \ref Kind::MleaderAddLeader is active (-1 = none).
+  int mleaderEditIndex = -1;
+
+  float mtxtX1 = 0.f, mtxtY1 = 0.f;
+  float mtxtX2 = 0.f, mtxtY2 = 0.f;
+  /// Multiline MTEXT editor over the box (new placement or double-click edit). Not command-line text.
+  bool mtextRichEditorOpen = false;
+  bool mtextRichEditorPlacement = false;
+  /// Editor target (REQ-039 phase 2): when \c mtextRichEditorPaper, \c mtextRichEditorAnnIndex indexes
+  /// \c paperLayouts[mtextRichEditorPaperLayout].paperTexts; otherwise it indexes \c cadAnnotations.
+  bool mtextRichEditorPaper = false;
+  int mtextRichEditorPaperLayout = -1;
+  /// Single-line \c Kind::Text edit (no MTEXT rich tags): plain content box.
+  bool mtextRichEditorPlain = false;
+  int mtextRichEditorAnnIndex = -1;
+  std::string mtextRichEditorBuf;
+  bool mtextRichEditorFocusRequest = false;
+  int mtextRichEditorCursor = 0;
+  int mtextRichEditorSelStart = 0;
+  int mtextRichEditorSelEnd = 0;
+  bool mtextRichEditorTypingAllCaps = false;
+
+  // --- WYSIWYG editor state (ADR-023) ---
+  // The caret and selection anchor are **visible character indices** (tags are not characters); the widget
+  // publishes the matching raw byte offsets into mtextRichEditorSelStart/End above, so the formatting
+  // toolbar keeps working on byte ranges exactly as it did. Plain members, no new type: the ui/ widget
+  // must not become a dependency of the commands layer.
+  int mtextEditCaret = 0;
+  int mtextEditAnchor = 0;            ///< caret == anchor means no selection
+  /// The editor owns keyboard focus. Keeping that ownership local prevents one input control from
+  /// blocking pointer interaction with the rest of the application. The
+  /// widget only takes ActiveID for the duration of a drag-select, exactly as a stock widget does.
+  bool mtextEditFocused = false;
+  bool mtextEditMouseSelecting = false;
+  float mtextEditScrollY = 0.f;       ///< px scrolled when the text outgrows the box's height cap
+  std::vector<std::string> mtextEditUndo;  ///< in-editor Ctrl+Z snapshots (drawing undo is separate)
+  std::vector<std::string> mtextEditRedo;
+  float mtextEditLastHeight = 0.f;    ///< height the wrapped layout used last frame (positions the box)
+  /// Fix a word typed with Caps Lock inverted ("hELLO" → "Hello") when it is finished. Persisted.
+  bool mtextEditAutocorrectCapsLock = false;
+  // Find and Replace (the Options menu). Buffers are small fixed arrays to match the other UI text fields.
+  bool mtextFindReplaceOpen = false;
+  char mtextFindBuf[128] = {0};
+  char mtextReplaceBuf[128] = {0};
+  bool mtextFindMatchCase = false;
+  std::string mtextFindStatus;        ///< "3 replaced" / "not found", shown under the fields
+
+  // --- MTEXT "Text Formatting" panel chrome (REQ-051) ---
+  // Unlike the fields above, this is not per-edit state: it survives closing the editor and is persisted
+  // (UserPrefs, the \c cmdBar* pattern of REQ-040), so the panel reopens where the user left it.
+  // \ref CloseMtextRichEditorUi deliberately does not touch it.
+  bool mtextPanelAnchorValid = false;    ///< false → place near the MTEXT box this frame. Persisted.
+  float mtextPanelAnchorX = 0.f;         ///< panel top-LEFT anchor in screen px. Persisted.
+  float mtextPanelAnchorY = 0.f;
+  bool mtextPanelRulerVisible = true;    ///< column ruler shown above the in-place box. Persisted.
+  bool mtextPanelRow2Visible = true;     ///< second toolbar row shown (the expand control). Persisted.
+  unsigned int mtextPanelRunColor = 0xFFFFFFu;  ///< last colour picked for the per-selection swatch (RGB).
+  /// Panel size measured last frame (the panel auto-sizes to its content). Used to clamp the anchor and to
+  /// span the caption before this frame's size is known — session-only, deliberately not persisted, since a
+  /// stale size from a different font/DPI would misplace the panel for one frame.
+  float mtextPanelMeasuredW = 0.f;
+  float mtextPanelMeasuredH = 0.f;
+  /// True while the ruler's width marker is being dragged (so the undo snapshot is pushed exactly once).
+  bool mtextRulerDragActive = false;
+
+  enum class DimPhase : std::uint8_t { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
+  /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
+  enum class DimAngularPhase : std::uint8_t { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
+  float dimAngVx = 0.f;
+  float dimAngVy = 0.f;
+  float dimE1x = 0.f, dimE1y = 0.f;
+  float dimE2x = 0.f, dimE2y = 0.f;
+  /// \c Kind::DimLinear, \p dimPhase == WaitDimLinePt — preview orientation (horizontal vs vertical span).
+  bool dimLinearDraftVertical = false;
+  /// When true, \p dimLinearDraftVertical is fixed until the crosshair moves from \p dimLinearLockCursorW*.
+  bool dimLinearOrientUserLock = false;
+  float dimLinearLockCursorWx = 0.f;
+  float dimLinearLockCursorWy = 0.f;
+
+  float anchorX = 0.f;
+  float anchorY = 0.f;
+  /// Elevation the anchor was committed at (REQ-058). Recorded per-vertex rather than taken from
+  /// the work plane at commit time, because a line's two ends can legitimately differ: the anchor
+  /// may have snapped to something on the datum while the far end snaps to something elevated.
+  float anchorZ = 0.f;
+  /// From UI — ortho constrains LINE segment picks / typed ortho distances toward cursor.
+  bool orthoMode = false;
+  /// POLAR tracking (issue #154, REQ-154). Mutually exclusive with \ref orthoMode, as in AutoCAD:
+  /// enabling one clears the other. When on, rubber-band picks snap to the nearest polar ray —
+  /// a multiple of \ref polarIncrementDeg, or one of \ref polarExtraAnglesDeg — measured in the
+  /// active UCS's XY plane from its +X, so a rotated frame rotates the rays with it.
+  bool polarMode = false;
+  double polarIncrementDeg = 90.0;
+  std::vector<double> polarExtraAnglesDeg;
+  /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
+  std::string alignmentCursorReadout;  ///< REQ-501.2: station/offset/bearing under the cursor; UI-only, never saved
+  float uiCursorWorldX = 0.f;
+  float uiCursorWorldY = 0.f;
+  /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
+  double viewportPanX = 0.;
+  double viewportPanY = 0.;
+  /// Camera target elevation (REQ-058). Pan is a 3D point once the view can tilt: dragging up in
+  /// an orbited view moves the target along the camera's UP axis, which has a Z component, so a
+  /// target constrained to Z = 0 cannot follow the cursor and the pan stops feeling 1:1.
+  /// Always 0 in plan view, where the up axis lies in the XY plane.
+  double viewportPanZ = 0.;
+  float viewportZoom = 1.f;
+  /// Camera orientation about the pan point (REQ-058 / ADR-025 (c)). Pan and zoom remain the
+  /// single source of truth for WHERE the camera looks and HOW FAR — these two add only the
+  /// direction, so a \ref Camera built by \ref CadViewCamera cannot drift from the view.
+  /// Defaults are plan view, which reproduces the pre-3D pipeline exactly.
+  float viewportAzimuthDeg = 0.f;
+  float viewportElevationDeg = 90.f;
+  /// Screen roll about the view axis (GitHub #153). Zero for plan view, every ViewCube orientation
+  /// and every hand orbit; set only by `PLAN` of a UCS whose Z is tilted off world +Z, so that the
+  /// UCS +Y comes out up the screen. Persisted per drawing alongside azimuth/elevation.
+  float viewportRollDeg = 0.f;
+
+  /// How the view projects (REQ-309 / D-2026-08-31-g). `Camera` has implemented both projections
+  /// since REQ-058; these two fields are what finally *select* between them — before them nothing
+  /// in the application ever assigned `Camera::projection`, so perspective was unreachable.
+  ///
+  /// They sit here, beside azimuth/elevation, because they share exactly that lifetime: per
+  /// drawing, saved per tab, persisted in `internal document payload`, restored by a named view. **Orthographic is the
+  /// default everywhere**, which is what keeps REQ-058's plan-view parity guarantee intact.
+  Camera::Projection viewportProjection = Camera::Projection::Orthographic;
+  float viewportFovDeg = kDefaultFovDeg;  ///< Perspective vertical FOV; ignored when orthographic.
+
+  /// ViewCube orientation animation (REQ-059). A face/arrow/home press sets a target and the view
+  /// eases to it over \ref kViewAnimSeconds instead of snapping, so the user keeps their bearings —
+  /// a hard jump makes it easy to lose track of which way the model turned. Orbiting by hand
+  /// cancels any animation in flight so the drag is never fighting an interpolation.
+  bool  viewAnimActive = false;
+  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f, viewAnimFromRoll = 0.f;
+  float viewAnimToAz = 0.f, viewAnimToEl = 90.f, viewAnimToRoll = 0.f;
+  float viewAnimT = 0.f;  ///< 0..1 progress.
+
+  /// The active User Coordinate System (REQ-058 / ADR-025 (e); REQ-154, GitHub #126).
+  ///
+  /// One frame, replacing the origin/normal/azimuth triple that stood in for it before the UCS
+  /// command existed: that shape could express a plane and a spin but not a basis, so nothing could
+  /// ask it "which way is UCS +X?". Its XY plane is the work plane a click resolves against, and its
+  /// axes are the frame typed coordinates, ORTHO and the grid are interpreted in. The default is the
+  /// WCS, under which every pre-UCS behaviour is unchanged.
+  ///
+  /// **It never moves geometry.** Entities stay in WCS; this only changes how the user's input is
+  /// read and how coordinates are reported back.
+  ucs::Ucs activeUcs;
+
+  /// `UCS Previous` history, oldest first. Bounded by \ref kUcsPreviousDepth — AutoCAD keeps a
+  /// limited stack too, and an unbounded one would grow for the life of the session.
+  std::vector<ucs::Ucs> ucsPrevious;
+
+  /// Saved UCSs (\ref DrawingContent::ucsNamed) and views (\ref DrawingContent::namedViews) live in
+  /// drawing content. "World" is reserved and is never stored there. \ref activeViewName is which
+  /// saved view the camera matches: empty whenever the camera has been moved since a restore — that
+  /// is the "Unsaved View" the ribbon shows, and a statement about the CAMERA, not about the drawing.
+  std::string activeViewName;
+
+  /// UCSFOLLOW: when set, any change to \ref activeUcs immediately switches the view to a PLAN view
+  /// of the new UCS. 0 leaves the camera alone. Per drawing tab, which is as per-viewport as this
+  /// application currently gets — there is one model view per tab (see the requirement's note).
+  bool ucsFollow = false;
+
+  /// Where the UCS command is in its prompt sequence. Several options need further picks after the
+  /// keyword, and modelling that as an explicit phase (rather than as flags) keeps every prompt's
+  /// valid input in one place — the same shape ARRAY and the other multi-step commands use.
+  enum class UcsPhase : uint8_t {
+    Idle,
+    WaitOriginOrOption,  ///< the top-level prompt: a point, or one of the keywords
+    WaitXAxisPoint,      ///< after an origin: a point on the new +X, or blank to accept origin-only
+    WaitXyPoint,         ///< after an X point: a point in the +Y half of the XY plane, or blank
+    WaitRotationAngle,   ///< X / Y / Z: degrees, right-hand rule about \ref ucsRotationAxis
+    WaitZAxisOrigin,     ///< ZAxis: the origin
+    WaitRotationAngleP1, ///< X/Y/Z + 2P: first point of the pair that defines the angle
+    WaitRotationAngleP2, ///< X/Y/Z + 2P: second point; the angle is p1->p2 in the rotation plane
+    WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
+    WaitObjectPick,      ///< Object: click an entity to align to
+    WaitNamedName,       ///< Named: the name to save the current frame under
+  } ucsPhase = UcsPhase::Idle;
+
+  /// 'X', 'Y' or 'Z' — the axis \ref UcsPhase::WaitRotationAngle will rotate about.
+  char ucsRotationAxis = 'Z';
+
+  /// Picks accumulated across the multi-point UCS options, in WORLD coordinates (not storage-local:
+  /// a coordinate frame is a world-space object, and keeping it local would make it move whenever
+  /// the document origin rebased).
+  ray3d::Vec3 ucsPendingOrigin{0.0, 0.0, 0.0};
+  ray3d::Vec3 ucsPendingXAxisPoint{0.0, 0.0, 0.0};
+  /// First of the two picks that define a rotation angle (`UCS Z` then `2P`). Kept separate from the
+  /// two above because it means something different — not a corner of the new frame, but one end of
+  /// a direction being measured — and sharing a field would make that read as the same thing.
+  ray3d::Vec3 ucsAngleBasePoint{0.0, 0.0, 0.0};
+
+  /// PLAN's own prompt phase. Kept separate from \ref ucsPhase so neither command can be nudged
+  /// into the other's state machine.
+  enum class PlanPhase : uint8_t { Idle, WaitOption, WaitNamedName } planPhase = PlanPhase::Idle;
+  /// Elevation of the cursor's work-plane intersection, published alongside the existing
+  /// \c uiCursorWorldX/Y so readouts and future 3D-aware commands can see it.
+  float uiCursorWorldZ = 0.f;
+
+  /// The Z of the point CURRENTLY being resolved, when that point carries its own (REQ-154).
+  ///
+  /// On a UCS parallel to world XY every point on the work plane shares one elevation, so the UCS
+  /// origin's Z describes them all — which is why a single constant sufficed before. **A tilted UCS
+  /// breaks that**: the plane's Z varies across it, and a point's elevation is a property of the
+  /// point, not of the plane. Rather than teach ~29 geometry-creation sites about the UCS, the two
+  /// places a point is actually resolved publish its Z here and \ref CadWorkPlaneElevation reads it.
+  ///
+  /// Set at point resolution (a viewport click's ray x plane hit, or a typed UCS coordinate mapped
+  /// through the frame) and cleared when point entry ends, so a stale value can never leak into a
+  /// later command. Under a flat UCS the published value equals the origin's Z, so this channel
+  /// changes nothing there.
+  bool  resolvedPointZValid = false;
+  float resolvedPointZ = 0.f;
+  /// The published Z was TYPED (`x,y,z`, REQ-354), not read off the work plane — so the next typed
+  /// point without a Z clears it instead of inheriting it.
+  bool  resolvedPointZTyped = false;
+  /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
+  /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
+  /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
+  /// the plan-space test, which is correct whenever the view is unrotated anyway.
+  float uiViewportWidthPx = 0.f;
+  float uiViewportHeightPx = 0.f;
+
+  /// LINE/POLYLINE — pick bearing from two reference clicks (\p AP), optional +/- adjustment, then lock.
+  enum class SegmentAnglePickPhase : uint8_t { Idle, WaitP1, WaitP2, WaitAdjustOrCommit };
+  SegmentAnglePickPhase segmentAnglePickPhase = SegmentAnglePickPhase::Idle;
+  float segmentPickRefX1 = 0.f;
+  float segmentPickRefY1 = 0.f;
+  /// Draft bearing ° clockwise from north (after second pick; editable with +/- before lock).
+  float segmentPickDraftBearingDeg = 0.f;
+
+  /// LINE/POLYLINE next point: lock segment to a bearing (° clockwise from north); distance-only or click on ray.
+  bool segmentAngleLockActive = false;
+  float segmentLockUx = 1.f;
+  float segmentLockUy = 0.f;
+  /// LINE/POLYLINE: user typed \c A / \c angle alone — next line is parsed as bearing ° CW from north (blank Enter
+  /// cancels).
+  bool segmentAngleKeyboardAwaitBearing = false;
+
+  /// Next stable entity id to hand out for this drawing (REQ-076 / ADR-027). Monotonic, persisted
+  /// in `internal document payload`, and **never rewound** — in particular it is deliberately NOT part of
+  /// \ref DrawingGeometrySnapshot, so draw → undo → draw gives the second entity a *new* id rather
+  /// than reusing the undone one's. Reuse is the one thing an identity must not do.
+  std::uint64_t nextEntityId = 1;
+  /// \ref cadGpuRevision at the last \ref EnsureEntityIds sweep. The sweep early-outs when geometry
+  /// has not changed since, which is what makes it safe to call unconditionally every frame — the
+  /// common case is one integer compare, not a walk of every entity (architecture §11.7).
+  ///
+  /// Deliberately **64-bit against a 32-bit revision**, so \ref kEntityIdSweepNever can be a value
+  /// the revision cannot reach. A 32-bit sentinel would collide once every 2^32 edits and skip the
+  /// sweep for that drawing — rare enough to never be reproduced, and silent when it happened.
+  std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
+
+  // --- Circle ---
+  enum class CircleStyle : std::uint8_t { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
