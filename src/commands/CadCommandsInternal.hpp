@@ -508,3 +508,6 @@ int GatherExtrudeProfiles(const AppCommandState& st, std::vector<brep::Profile>*
 
 std::string SolidCreatedMessage(brep::PrimitiveKind kind, const brep::MassProperties& mp);
 std::string SolidVerbUpper(brep::PrimitiveKind kind);
+std::string SectionClipReport(const AppCommandState& st);
+bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log);
+void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log);
