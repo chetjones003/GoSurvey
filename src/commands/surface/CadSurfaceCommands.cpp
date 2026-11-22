@@ -20,11 +20,6 @@
 #include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "GoSurvey/PointCloud/CylinderFit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
-#include "io/src/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
-#include "io/src/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
-#include "io/src/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
-#include "io/src/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
-#include "io/src/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
 #include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Terrain/contourgen.hpp>  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 
