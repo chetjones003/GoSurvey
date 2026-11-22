@@ -18,7 +18,6 @@
 #include <fstream>
 #include <sstream>
 #include "CadBlocks.hpp"
-#include "CadBlockCreateInternal.hpp"
 #include "CadCommandsInternal.hpp"
 
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
