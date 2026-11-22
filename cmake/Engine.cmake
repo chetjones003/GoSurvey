@@ -236,6 +236,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/blocks/CadBlockCreateCommands.cpp
   src/commands/report/CadVolumeReportCommands.cpp
   src/commands/drainage/CadDrainageCommands.cpp
+  src/commands/revcloud/CadRevcloudCommands.cpp
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Alignment.cpp
   src/commands/CadCommands_Bench.cpp
