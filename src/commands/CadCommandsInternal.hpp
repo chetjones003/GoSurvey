@@ -507,3 +507,4 @@ int GatherExtrudeProfiles(const AppCommandState& st, std::vector<brep::Profile>*
 } // namespace
 
 std::string SolidCreatedMessage(brep::PrimitiveKind kind, const brep::MassProperties& mp);
+std::string SolidVerbUpper(brep::PrimitiveKind kind);
