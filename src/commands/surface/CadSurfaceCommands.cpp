@@ -25,7 +25,6 @@
 #include "io/src/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
 #include "io/src/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
 #include "io/src/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
-#include "io/src/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
 #include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Terrain/contourgen.hpp>  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 
