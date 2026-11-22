@@ -1,5 +1,10 @@
 #include "CadCommandsInternal.hpp"
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <sstream>
+
 void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vector<std::string>& log) {
   std::istringstream iss(rest);
   std::string tok;
