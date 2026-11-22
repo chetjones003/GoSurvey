@@ -12,10 +12,12 @@
 #pragma once
 
 #include <cassert>
+#include <cstdio>
 #include <vector>
 
 #include "CadEntities.hpp"  // EntityAttributes
 #include "CadCommands.hpp"  // complete AppCommandState and the ParseStoragePointZ declaration
+#include <GoSurvey/Core/NumFormat.hpp>
 #include <GoSurvey/Core/StringUtil.hpp>
 
 /// A duplicate is a NEW entity, so it takes the source's layer, colour and linetype but NOT its id.
@@ -295,6 +297,8 @@ void RunSurfMovePoint(AppCommandState& st, const std::string& args, std::vector<
 void RunSurfDelLine(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunVolCsv(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 namespace {
 
@@ -317,6 +321,41 @@ std::vector<std::string> SplitCommaFields(const std::string& s) {
     start = comma + 1;
   }
   return out;
+}
+
+} // namespace
+
+namespace {
+[[nodiscard]] std::string SurfaceNameForId(const AppCommandState& st, std::uint64_t id) {
+  const int ix = FindSurfaceIndexById(st, id);
+  if (ix < 0)
+    return {};
+  return st.drawing.cadSurfaces[static_cast<size_t>(ix)].name;
+}
+
+void RememberVolumeResult(AppCommandState& st, const SurfaceVolumeResult& r, const std::string& baseName,
+                          const std::string& comparisonName) {
+  st.hasLastVolumeResult = true;
+  st.lastVolumeResult = r;
+  st.lastVolumeBaseName = baseName;
+  st.lastVolumeComparisonName = comparisonName;
+  const int p = st.displayLinearPrecision;
+  char buf[512];
+  std::snprintf(buf, sizeof(buf),
+                "Volume report: cut %s, fill %s, net %s, cut area %s ft2, fill area %s ft2, common area %s ft2.",
+                FormatVolumeYd3(r.cutFt3, p).c_str(), FormatVolumeYd3(r.fillFt3, p).c_str(),
+                FormatVolumeYd3(r.netFt3, p).c_str(), FormatLinear(r.cutAreaFt2, p).c_str(),
+                FormatLinear(r.fillAreaFt2, p).c_str(), FormatLinear(r.commonAreaFt2, p).c_str());
+  st.lastVolumeReportText = buf;
+}
+
+void AppendVolumeTableItemValue(const SurfaceVolumeResult& r, int p, std::vector<std::string>* cells) {
+  if (!cells)
+    return;
+  cells->insert(cells->end(),
+                {"Cut", FormatVolumeYd3(r.cutFt3, p), "Fill", FormatVolumeYd3(r.fillFt3, p), "Net",
+                 FormatVolumeYd3(r.netFt3, p), "Cut area", FormatLinear(r.cutAreaFt2, p) + " ft2", "Fill area",
+                 FormatLinear(r.fillAreaFt2, p) + " ft2", "Common area", FormatLinear(r.commonAreaFt2, p) + " ft2"});
 }
 
 } // namespace
