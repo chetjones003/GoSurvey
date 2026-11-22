@@ -1,6 +1,6 @@
 {
-  "src/commands/CadBlocks.cpp": 3720,
-  "src/commands/CadCommands.cpp": 50193,
+  "src/commands/CadBlocks.cpp": 3314,
+  "src/commands/CadCommands.cpp": 50173,
   "src/commands/CadCommands.hpp": 7978,
   "src/commands/CadCommands_Alignment.cpp": 5798,
   "src/geometry/src/brep.cpp": 19848,
