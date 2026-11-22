@@ -74,26 +74,6 @@ EntityAttributes NewBlockAttr(const AppCommandState& st) {
   return a;
 }
 
-std::vector<std::string> SplitCommaRest(std::istream& in) {
-  std::string rest;
-  std::getline(in, rest);
-  std::vector<std::string> f;
-  std::string cur;
-  for (char c : rest) {
-    if (c == ',') {
-      f.push_back(StringUtil::trimCopy(cur));
-      cur.clear();
-    } else {
-      cur.push_back(c);
-    }
-  }
-  if (!cur.empty() || !rest.empty())
-    f.push_back(StringUtil::trimCopy(cur));
-  if (!f.empty() && f[0].empty())
-    f.erase(f.begin());
-  return f;
-}
-
 void NoteRecent(AppCommandState& st, const std::string& name) {
   st.blockRecent.erase(std::remove_if(st.blockRecent.begin(), st.blockRecent.end(),
                                       [&](const std::string& n) { return CadBlockEqCi(n, name); }),
@@ -1376,23 +1356,6 @@ void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
 
 namespace {
 
-// Parse a float without throwing. Returns false (and leaves out untouched) when
-// the token is not a clean number — callers report a usage error instead of
-// letting std::invalid_argument/out_of_range escape the command dispatcher.
-bool TryParseF(const std::string& s, float& out) {
-  try {
-    size_t used = 0;
-    const float v = std::stof(s, &used);
-    while (used < s.size() && std::isspace(static_cast<unsigned char>(s[used])))
-      ++used;
-    if (used != s.size())
-      return false;
-    out = v;
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
 
 void ApplyInsertDialogRotations(const AppCommandState& st, CadBlockXform* xf) {
   assert(xf != nullptr);
