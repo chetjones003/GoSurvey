@@ -271,9 +271,12 @@ def format_outputs(version: str, base_markdown: str,
         notes.append("No user-facing changes.")
         whats_new.append("No user-facing changes in this beta.")
 
-    insertion = re.search(r"(?m)^## Key Features\s*$", base_markdown)
+    # The beta summary goes before "## Key Features" when the page has one, otherwise before its
+    # first section, so rewriting the release What's New page cannot block beta releases.
+    insertion = (re.search(r"(?m)^## Key Features\s*$", base_markdown)
+                 or re.search(r"(?m)^## ", base_markdown))
     if not insertion:
-        raise ValueError("resources/whats-new.md is missing its 'Key Features' insertion point")
+        raise ValueError("resources/whats-new.md has no '## ' section to use as the insertion point")
     generated = "\n".join(whats_new) + "\n\n---\n\n"
     full_markdown = base_markdown[: insertion.start()] + generated + base_markdown[insertion.start() :]
     return "\n".join(notes).rstrip() + "\n", full_markdown
