@@ -388,37 +388,18 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   stepengine::ResetActiveSession(st);
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
-  if (IsGizmoCommandKind(st.active))
-    EndGizmoCommand(st);
   st.resolvedPointZValid = false;
   st.resolvedPointZ = 0.f;
   st.resolvedPointZTyped = false;
-  st.ucsPhase = AppCommandState::UcsPhase::Idle;
-  st.planPhase = AppCommandState::PlanPhase::Idle;
   st.polylineTypedZValid = false;
   st.polylineTypedZRelative = false;
   st.polylineTypedZ = 0.f;
   CloseMtextRichEditorUi(st);
   ClearDimGripInteraction(st);
   AbortMtextGripInteraction(st);
-  if (st.pdfDraftCache) {
-    PdfDraftCache_Free(st.pdfDraftCache);
-    st.pdfDraftCache = nullptr;
-  }
-  if (st.pdfAttachPreviewReady) {
-    PdfAttach_ReleaseTexture(st.pdfAttachPreview);
-    st.pdfAttachPreviewReady = false;
-  }
-  st.pdfAttachDialogOpen = false;
-  st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
-  st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
-  st.insertBlockAttrDialogOpen = false;
   st.blockCreateDialogOpen = false;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  st.blockCreateAwaitingBasePoint = false;
   st.wblockDialogOpen = false;
-  st.insertBlockAttrRefIndex = -1;
-  st.insertBlockSnappedPipeRun = -1;
 }
 
 EntityAttributes MakeNewEntityAttrs(const AppCommandState& st) {

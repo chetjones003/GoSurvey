@@ -6,8 +6,18 @@
 
 namespace stepengine {
 
+enum class PdfAttachPhase : std::uint8_t {
+  WaitDialog,       ///< Dialog is open; user browses / configures
+  Building,         ///< Async rasterize running in background; dialog shows spinner
+  WaitInsertPoint,  ///< User picks insertion point in viewport
+  WaitScaleRef,     ///< User picks second point to define scale interactively
+  WaitRotationPt,   ///< User picks rotation reference point
+};
+
 class PdfAttachSession final : public CommandSession {
  public:
+  PdfAttachPhase phase = PdfAttachPhase::WaitDialog;
+
   [[nodiscard]] CadCommandKind kind() const override { return CadCommandKind::PdfAttach; }
   [[nodiscard]] StepDescriptor currentStep(const AppCommandState& st) const override;
   StepSubmitResult onText(AppCommandState& st, const std::string& trimmedLine,
@@ -20,6 +30,11 @@ class PdfAttachSession final : public CommandSession {
 
 class PaperRectViewportSession final : public CommandSession {
  public:
+  int phase = 0;       ///< 0 = need first corner, 1 = need second
+  float firstXIn = 0.f;
+  float firstYIn = 0.f;
+  int mode = 0;        ///< REQ-490: 0 = rectangle, 1 = awaiting closed polyline Object pick
+
   [[nodiscard]] CadCommandKind kind() const override { return CadCommandKind::PaperRectViewport; }
   [[nodiscard]] StepDescriptor currentStep(const AppCommandState& st) const override;
   StepSubmitResult onText(AppCommandState& st, const std::string& trimmedLine,

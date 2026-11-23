@@ -19,9 +19,9 @@ namespace stepengine {
 // UcsSession
 // ---------------------------------------------------------------------------
 
-StepDescriptor UcsSession::currentStep(const AppCommandState& st) const {
-  using UPh = AppCommandState::UcsPhase;
-  switch (st.ucsPhase) {
+StepDescriptor UcsSession::currentStep(const AppCommandState&) const {
+  using UPh = UcsPhase;
+  switch (phase) {
   case UPh::WaitOriginOrOption:
   case UPh::WaitRotationAngleP1:
   case UPh::WaitZAxisOrigin:
@@ -32,14 +32,14 @@ StepDescriptor UcsSession::currentStep(const AppCommandState& st) const {
     StepDynInputSpec dyn;
     dyn.pointEntry = true;
     dyn.ucsPolar = true;
-    dyn.ucsPolarBase = st.ucsPendingOrigin;
+    dyn.ucsPolarBase = pendingOrigin;
     return StepDescriptor::Point("", dyn, BlankEnterPolicy::Custom);
   }
   case UPh::WaitRotationAngleP2: {
     StepDynInputSpec dyn;
     dyn.pointEntry = true;
     dyn.ucsPolar = true;
-    dyn.ucsPolarBase = st.ucsAngleBasePoint;
+    dyn.ucsPolarBase = angleBasePoint;
     return StepDescriptor::Point("", dyn, BlankEnterPolicy::Custom);
   }
   case UPh::WaitObjectPick:
@@ -73,13 +73,8 @@ void UcsSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                          pick.pickRay);
 }
 
-void UcsSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  st.ucsPhase = AppCommandState::UcsPhase::Idle;
+void UcsSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("UCS canceled - the coordinate system is unchanged.");
-}
-
-void UcsSession::onReset(AppCommandState& st) {
-  st.ucsPhase = AppCommandState::UcsPhase::Idle;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,13 +96,8 @@ StepSubmitResult PlanSession::onBlankEnter(AppCommandState& st, std::vector<std:
   return StepSubmitResult::Handled;
 }
 
-void PlanSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  st.planPhase = AppCommandState::PlanPhase::Idle;
+void PlanSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("PLAN canceled - the view is unchanged.");
-}
-
-void PlanSession::onReset(AppCommandState& st) {
-  st.planPhase = AppCommandState::PlanPhase::Idle;
 }
 
 // ---------------------------------------------------------------------------

@@ -237,36 +237,37 @@ bool IsPropCommandKind(AppCommandState::Kind k) {
 
 void EndPropCommand(AppCommandState& st) {
   stepengine::EndSession(st);
-  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
   st.selBoxWaitingSecond = false;
   st.selection.clear();
   BumpCadGpuCache(st);  // the pick highlight goes with the selection
 }
 
 std::string CadPropCommandPromptText(const AppCommandState& st) {
-  using P = AppCommandState::PropCmdPhase;
+  using P = stepengine::PropCmdPhase;
   using K = AppCommandState::Kind;
+  const auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  const P phase = sess ? sess->phase : P::SelectObjects;
   if (st.active == K::LayMCur)
     return "LAYMCUR — select an object whose layer will become current. ESC cancels.";
   if (st.active == K::MatchProp) {
-    if (st.propCmdPhase == P::SelectTargets)
+    if (phase == P::SelectTargets)
       return "MATCHPROP — select destination object(s), Enter when done. ESC cancels.";
     return "MATCHPROP — select source object. ESC cancels.";
   }
   if (st.active != K::ChProp)
     return "";
-  switch (st.propCmdPhase) {
+  switch (phase) {
   case P::WaitProperty:
     return "CHPROP — property to change [Color/LAyer/LType/LWeight] (Enter ends):";
   case P::WaitValue:
-    switch (st.chPropProperty) {
-    case AppCommandState::ChPropProperty::Color:
+    switch (sess ? sess->chPropProperty : stepengine::ChPropProperty::Color) {
+    case stepengine::ChPropProperty::Color:
       return "CHPROP — new color [ByLayer/ByBlock/1-255/name/#RRGGBB]:";
-    case AppCommandState::ChPropProperty::Layer:
+    case stepengine::ChPropProperty::Layer:
       return "CHPROP — new layer name:";
-    case AppCommandState::ChPropProperty::Linetype:
+    case stepengine::ChPropProperty::Linetype:
       return "CHPROP — new linetype [ByLayer/ByBlock/Continuous/DASHED/HIDDEN/CENTER/PHANTOM/DIVIDE/BORDER]:";
-    case AppCommandState::ChPropProperty::Lineweight:
+    case stepengine::ChPropProperty::Lineweight:
       return "CHPROP — new lineweight in mm, or ByLayer:";
     }
     return "";
@@ -299,7 +300,6 @@ void BeginPropCommand(AppCommandState& st, AppCommandState::Kind k) {
   ResetAllCadDraftTools(st);
   st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PropCmdSession>(k), /*recordAsLastCommand=*/true);
-  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
 }
 
 /// LAYMCUR's whole action on the selection it has. Refuses (and clears the pick) a selection on
@@ -327,6 +327,9 @@ void LayMCurFromSelection(AppCommandState& st, std::vector<std::string>& log) {
 
 /// MATCHPROP's source step on the selection it has: exactly one object carrying attributes.
 void MatchPropTakeSource(AppCommandState& st, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  if (!sess)
+    return;
   const EntityAttributes* a = st.selection.size() == 1 ? AttrsOfSelected(st, st.selection.front()) : nullptr;
   if (a == nullptr) {
     log.push_back(st.selection.size() > 1 ? "MATCHPROP — select ONE source object."
@@ -335,21 +338,24 @@ void MatchPropTakeSource(AppCommandState& st, std::vector<std::string>& log) {
     BumpCadGpuCache(st);
     return;
   }
-  st.matchPropSource = *a;
-  st.matchPropSourceHasLineStyle = CadLineStyleApplies(st.selection.front().type);
+  sess->matchPropSource = *a;
+  sess->matchPropSourceHasLineStyle = CadLineStyleApplies(st.selection.front().type);
   st.selection.clear();
   BumpCadGpuCache(st);
-  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectTargets;
+  sess->phase = stepengine::PropCmdPhase::SelectTargets;
   log.push_back(std::string("MATCHPROP — matching Layer, Color") +
-                (st.matchPropSourceHasLineStyle ? ", Linetype, Lineweight" : "") + ".");
+                (sess->matchPropSourceHasLineStyle ? ", Linetype, Lineweight" : "") + ".");
   log.push_back(CadPropCommandPromptText(st));
 }
 
 /// MATCHPROP's destination step: the source's layer and colour onto every picked object, and its
 /// linetype / lineweight where both carry one — one undo step per pick (REQ-356 item 2).
 void MatchPropApplyToSelection(AppCommandState& st, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  if (!sess)
+    return;
   EnsureAttrCounts(st);
-  const EntityAttributes& src = st.matchPropSource;
+  const EntityAttributes& src = sess->matchPropSource;
   bool pushed = false;
   int changed = 0;
   for (const SelectedEntity& e : st.selection) {
@@ -359,7 +365,7 @@ void MatchPropApplyToSelection(AppCommandState& st, std::vector<std::string>& lo
     EntityAttributes next = *a;
     next.layer = src.layer;
     next.color = src.color;
-    if (st.matchPropSourceHasLineStyle && CadLineStyleApplies(e.type)) {
+    if (sess->matchPropSourceHasLineStyle && CadLineStyleApplies(e.type)) {
       next.linetype = src.linetype;
       next.lineweightMm = src.lineweightMm;
     }
@@ -382,11 +388,14 @@ void MatchPropApplyToSelection(AppCommandState& st, std::vector<std::string>& lo
 
 /// CHPROP's value step: parse, apply (one undo step), report. False when the value is refused.
 bool ChPropApplyValue(AppCommandState& st, const std::string& value, std::vector<std::string>& log) {
-  using PP = AppCommandState::ChPropProperty;
+  const auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  if (!sess)
+    return false;
+  using PP = stepengine::ChPropProperty;
   int changed = 0;
   int skipped = 0;
   std::string what;
-  switch (st.chPropProperty) {
+  switch (sess->chPropProperty) {
   case PP::Color: {
     std::string storage;
     if (!CadColorStorageFromTyped(value, &storage)) {
@@ -457,8 +466,8 @@ bool ChPropApplyValue(AppCommandState& st, const std::string& value, std::vector
 }
 
 /// The CHPROP property keyword: the full word or AutoCAD's capitalised abbreviation.
-bool ChPropParseProperty(const std::string& word, AppCommandState::ChPropProperty* out) {
-  using PP = AppCommandState::ChPropProperty;
+bool ChPropParseProperty(const std::string& word, stepengine::ChPropProperty* out) {
+  using PP = stepengine::ChPropProperty;
   const std::string w = StringUtil::toLowerAsciiCopy(word);
   if (w == "c" || w == "color" || w == "colour")
     *out = PP::Color;
@@ -479,8 +488,10 @@ void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (!PropCommandModelSpaceOnly(st, AppCommandState::Kind::ChProp, log))
     return;
   BeginPropCommand(st, AppCommandState::Kind::ChProp);
-  if (!st.selection.empty())
-    st.propCmdPhase = AppCommandState::PropCmdPhase::WaitProperty;  // a held selection is the pick
+  if (!st.selection.empty()) {
+    if (auto* sess = st.sessionAs<stepengine::PropCmdSession>())
+      sess->phase = stepengine::PropCmdPhase::WaitProperty;  // a held selection is the pick
+  }
   log.push_back(CadPropCommandPromptText(st));
 }
 
@@ -510,27 +521,29 @@ void StartLayMCurCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void CadPropCommandSelectionChanged(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  using P = AppCommandState::PropCmdPhase;
-  if (st.selection.empty() || !IsPropCommandKind(st.active))
+  using P = stepengine::PropCmdPhase;
+  auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  if (st.selection.empty() || !sess)
     return;
   if (st.active == K::LayMCur)
     LayMCurFromSelection(st, log);
-  else if (st.active == K::MatchProp && st.propCmdPhase == P::SelectObjects)
+  else if (st.active == K::MatchProp && sess->phase == P::SelectObjects)
     MatchPropTakeSource(st, log);
-  else if (st.active == K::MatchProp && st.propCmdPhase == P::SelectTargets)
+  else if (st.active == K::MatchProp && sess->phase == P::SelectTargets)
     MatchPropApplyToSelection(st, log);
   // CHPROP accumulates until Enter, as MOVE / COPY do (REQ-121).
 }
 
 bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  using P = AppCommandState::PropCmdPhase;
-  if (!IsPropCommandKind(st.active))
+  using P = stepengine::PropCmdPhase;
+  auto* sess = st.sessionAs<stepengine::PropCmdSession>();
+  if (!sess)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string verb = AppCommandState::KindName(st.active);
 
-  if (st.active == K::LayMCur || (st.active == K::MatchProp && st.propCmdPhase == P::SelectObjects)) {
+  if (st.active == K::LayMCur || (st.active == K::MatchProp && sess->phase == P::SelectObjects)) {
     if (line.empty()) {
       log.push_back(verb + " — nothing picked; ended.");
       EndPropCommand(st);
@@ -550,14 +563,14 @@ bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, 
   }
 
   // CHPROP
-  switch (st.propCmdPhase) {
+  switch (sess->phase) {
   case P::SelectObjects:
     if (!line.empty()) {
       log.push_back(CadPropCommandPromptText(st));
     } else if (st.selection.empty()) {
       log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
     } else {
-      st.propCmdPhase = P::WaitProperty;
+      sess->phase = P::WaitProperty;
       log.push_back(CadPropCommandPromptText(st));
     }
     return true;
@@ -570,7 +583,7 @@ bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, 
     std::istringstream is(line);
     std::string word;
     is >> word;
-    if (!ChPropParseProperty(word, &st.chPropProperty)) {
+    if (!ChPropParseProperty(word, &sess->chPropProperty)) {
       log.push_back("CHPROP — \"" + word + "\" is not a property. " + CadPropCommandPromptText(st));
       return true;
     }
@@ -578,7 +591,7 @@ bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, 
     std::getline(is, value);
     value = StringUtil::trimCopy(value);
     if (value.empty()) {
-      st.propCmdPhase = P::WaitValue;
+      sess->phase = P::WaitValue;
       log.push_back(CadPropCommandPromptText(st));
       return true;
     }
@@ -591,7 +604,7 @@ bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, 
       log.push_back(CadPropCommandPromptText(st));  // refused: ask again for the same property
       return true;
     }
-    st.propCmdPhase = P::WaitProperty;  // applied, or Enter = keep and ask for another property
+    sess->phase = P::WaitProperty;  // applied, or Enter = keep and ask for another property
     log.push_back(CadPropCommandPromptText(st));
     return true;
   case P::SelectTargets:

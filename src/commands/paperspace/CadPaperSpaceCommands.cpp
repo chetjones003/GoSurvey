@@ -225,8 +225,6 @@ void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string
     return;
   }
   stepengine::BeginSession(cmd, std::make_unique<stepengine::PaperRectViewportSession>(), /*recordAsLastCommand=*/true);
-  cmd.paperVpPhase = 0;
-  cmd.paperVpMode = 0;
   log.push_back("MVIEW — click first corner or type [Fit/2/3/4/Object] (Esc to cancel).");
 }
 

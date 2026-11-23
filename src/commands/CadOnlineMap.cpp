@@ -149,12 +149,13 @@ bool OnlineMapController::LocalRectToMercator(double minX, double minY, double m
 
 void OnlineMapController::Update(AppCommandState& st, bool modelView, const Camera& cam, int fbWidth,
                                  int fbHeight, std::vector<std::string>& log) {
-  using GP = AppCommandState::GeoCmdPhase;
+  using GP = stepengine::GeoCmdPhase;
   ++frame_;
   draws_.clear();
   const DrawingSettings& s = st.drawing.drawingSettings;
   const OnlineMapInfo& info = OnlineMapInfoOf(s.onlineMap);
-  bool capturing = st.active == AppCommandState::Kind::GeoCaptureArea && st.geoCmdPhase == GP::Capturing;
+  const auto* geoSess = st.sessionAs<stepengine::GeoCmdSession>();
+  bool capturing = geoSess && st.active == AppCommandState::Kind::GeoCaptureArea && geoSess->phase == GP::Capturing;
   if (!capturing)
     job_ = {};  // ended or cancelled (Esc): nothing is kept
   const auto failCapture = [&](const std::string& why) {

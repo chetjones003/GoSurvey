@@ -16,9 +16,9 @@ namespace stepengine {
 // GizmoCmdSession (3DMOVE / 3DROTATE / 3DSCALE)
 // ---------------------------------------------------------------------------
 
-StepDescriptor GizmoCmdSession::currentStep(const AppCommandState& st) const {
-  using P = AppCommandState::GizmoCmdPhase;
-  switch (st.gizmoCmdPhase) {
+StepDescriptor GizmoCmdSession::currentStep(const AppCommandState&) const {
+  using P = GizmoCmdPhase;
+  switch (phase) {
   case P::SelectObjects:
     return StepDescriptor::SelectObjects("", BlankEnterPolicy::Custom, /*includeSurvey=*/false);
   case P::BasePoint:
@@ -42,7 +42,7 @@ StepSubmitResult GizmoCmdSession::onBlankEnter(AppCommandState& st, std::vector<
 
 void GizmoCmdSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                      std::vector<std::string>& log) {
-  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint) {
+  if (phase == GizmoCmdPhase::BasePoint) {
     SubmitGizmoBasePoint(st, pick.localX, pick.localY, CadCommitElevation(st), log);
     return;
   }
@@ -64,9 +64,8 @@ void GizmoCmdSession::onReset(AppCommandState& st) {
 // PropCmdSession (CHPROP / MATCHPROP / LAYMCUR)
 // ---------------------------------------------------------------------------
 
-StepDescriptor PropCmdSession::currentStep(const AppCommandState& st) const {
-  if (kind_ == CadCommandKind::ChProp &&
-      st.propCmdPhase != AppCommandState::PropCmdPhase::SelectObjects) {
+StepDescriptor PropCmdSession::currentStep(const AppCommandState&) const {
+  if (kind_ == CadCommandKind::ChProp && phase != PropCmdPhase::SelectObjects) {
     return StepDescriptor::Custom("", StepClickRoute::Ignore, BlankEnterPolicy::Custom);
   }
   return StepDescriptor::SelectObjects("", BlankEnterPolicy::Custom, /*includeSurvey=*/false);
@@ -105,16 +104,16 @@ void PropCmdSession::onReset(AppCommandState& st) {
 // GeoCmdSession
 // ---------------------------------------------------------------------------
 
-StepDescriptor GeoCmdSession::currentStep(const AppCommandState& st) const {
+StepDescriptor GeoCmdSession::currentStep(const AppCommandState&) const {
   using K = CadCommandKind;
-  using GP = AppCommandState::GeoCmdPhase;
+  using GP = GeoCmdPhase;
   switch (kind_) {
   case K::GeoMarkPoint:
     return StepDescriptor::Point("GEOMARKPOINT: Pick the position or type X,Y | ESC cancel",
                                  StepDynInputSpec{}, BlankEnterPolicy::Custom);
   case K::GeoMarkLatLong: {
     const char* hint =
-        st.geoCmdPhase == GP::WaitFirst
+        phase == GP::WaitFirst
             ? "GEOMARKLATLONG: Latitude — decimal degrees or D M S N/S (lat,long in one go) | ESC cancel"
             : "GEOMARKLATLONG: Longitude — decimal degrees (west negative) or D M S E/W | ESC cancel";
     return StepDescriptor::Text(hint, BlankEnterPolicy::Custom);
@@ -125,18 +124,18 @@ StepDescriptor GeoCmdSession::currentStep(const AppCommandState& st) const {
         StepDynInputSpec{}, BlankEnterPolicy::Custom);
   case K::GeoReorientMarker: {
     const char* hint =
-        st.geoCmdPhase == GP::WaitFirst
+        phase == GP::WaitFirst
             ? "GEOREORIENTMARKER: Pick the design point or type X,Y | ESC cancel"
             : "GEOREORIENTMARKER: Pick a point to the north of the design point | ESC cancel";
     return StepDescriptor::Point(hint, StepDynInputSpec{}, BlankEnterPolicy::Custom);
   }
   case K::GeoCaptureArea: {
-    if (st.geoCmdPhase == GP::Capturing) {
+    if (phase == GP::Capturing) {
       return StepDescriptor::Custom(
           "Capture Area: gathering the map tiles | ESC cancel (nothing is kept)",
           StepClickRoute::SnappedPointPick, BlankEnterPolicy::Custom);
     }
-    const char* hint = st.geoCmdPhase == GP::WaitFirst
+    const char* hint = phase == GP::WaitFirst
                            ? "Capture Area: Pick the first corner or type X,Y | ESC cancel"
                            : "Capture Area: Pick the opposite corner or type X,Y | ESC cancel";
     return StepDescriptor::Point(hint, StepDynInputSpec{}, BlankEnterPolicy::Custom);

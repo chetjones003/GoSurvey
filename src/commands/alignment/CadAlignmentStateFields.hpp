@@ -114,13 +114,3 @@
   /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
   /// drawing. Session-only — never in \ref DrawingDocument, never in `internal document payload`.
   bool blockEditActive = false;
-  bool bconnectAwaitingFace = false;
-  char bconnectNameBuf[128]{};
-  char bconnectSizeBuf[64]{};
-  /// Role/engagement queued from a prompt-form BCONNECT, applied once the face pick resolves
-  /// (issue #486 increment A2).
-  CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::Inlet;
-  float bconnectEngagementPending = 0.f;
-  /// Compatibility tag queued from the BCONNECT wizard, applied once the point resolves (typed
-  /// coordinates or a face pick) — issue #496.
-  std::string bconnectCompatTagPending;

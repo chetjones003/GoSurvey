@@ -147,39 +147,8 @@
   /// application currently gets — there is one model view per tab (see the requirement's note).
   bool ucsFollow = false;
 
-  /// Where the UCS command is in its prompt sequence. Several options need further picks after the
-  /// keyword, and modelling that as an explicit phase (rather than as flags) keeps every prompt's
-  /// valid input in one place — the same shape ARRAY and the other multi-step commands use.
-  enum class UcsPhase : uint8_t {
-    Idle,
-    WaitOriginOrOption,  ///< the top-level prompt: a point, or one of the keywords
-    WaitXAxisPoint,      ///< after an origin: a point on the new +X, or blank to accept origin-only
-    WaitXyPoint,         ///< after an X point: a point in the +Y half of the XY plane, or blank
-    WaitRotationAngle,   ///< X / Y / Z: degrees, right-hand rule about \ref ucsRotationAxis
-    WaitZAxisOrigin,     ///< ZAxis: the origin
-    WaitRotationAngleP1, ///< X/Y/Z + 2P: first point of the pair that defines the angle
-    WaitRotationAngleP2, ///< X/Y/Z + 2P: second point; the angle is p1->p2 in the rotation plane
-    WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
-    WaitObjectPick,      ///< Object: click an entity to align to
-    WaitNamedName,       ///< Named: the name to save the current frame under
-  } ucsPhase = UcsPhase::Idle;
-
-  /// 'X', 'Y' or 'Z' — the axis \ref UcsPhase::WaitRotationAngle will rotate about.
-  char ucsRotationAxis = 'Z';
-
-  /// Picks accumulated across the multi-point UCS options, in WORLD coordinates (not storage-local:
-  /// a coordinate frame is a world-space object, and keeping it local would make it move whenever
-  /// the document origin rebased).
-  ray3d::Vec3 ucsPendingOrigin{0.0, 0.0, 0.0};
-  ray3d::Vec3 ucsPendingXAxisPoint{0.0, 0.0, 0.0};
-  /// First of the two picks that define a rotation angle (`UCS Z` then `2P`). Kept separate from the
-  /// two above because it means something different — not a corner of the new frame, but one end of
-  /// a direction being measured — and sharing a field would make that read as the same thing.
-  ray3d::Vec3 ucsAngleBasePoint{0.0, 0.0, 0.0};
-
-  /// PLAN's own prompt phase. Kept separate from \ref ucsPhase so neither command can be nudged
-  /// into the other's state machine.
-  enum class PlanPhase : uint8_t { Idle, WaitOption, WaitNamedName } planPhase = PlanPhase::Idle;
+  // UCS and PLAN per-invocation phase and scratch picks live in stepengine::UcsSession and
+  // stepengine::PlanSession (src/commands/ucs/CadUcsViewSessions.hpp).
   /// Elevation of the cursor's work-plane intersection, published alongside the existing
   /// \c uiCursorWorldX/Y so readouts and future 3D-aware commands can see it.
   float uiCursorWorldZ = 0.f;

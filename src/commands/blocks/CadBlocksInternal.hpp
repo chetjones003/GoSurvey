@@ -52,7 +52,6 @@ void FinishInsertCommand(AppCommandState& st) {
   st.insertBlockDialogOpen = false;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   stepengine::EndSession(st);
 }
 
@@ -111,7 +110,8 @@ void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.insertBlockDialogOpen = false;
   st.insertBlockAttrDialogOpen = true;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAttributes;
+  if (auto* sess = st.sessionAs<stepengine::InsertBlockSession>())
+    sess->phase = stepengine::InsertBlockPhase::WaitAttributes;
   log.push_back("INSERT — enter attribute values.");
 }
 

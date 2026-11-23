@@ -65,7 +65,7 @@ TEST_CASE("MVIEW cancellation leaves the active layout unchanged (REQ-490)", "[r
   CancelActiveCommand(state, log);
   CHECK(state.active == AppCommandState::Kind::None);
   CHECK(state.drawing.paperLayouts[0].viewports.empty());
-  CHECK(state.paperVpMode == 0);
+  CHECK(state.sessionAs<stepengine::PaperRectViewportSession>() == nullptr);
 }
 
 TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-490)", "[req490][mview]") {
@@ -74,7 +74,8 @@ TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-490)", 
   SubmitText(state, "MVIEW", log);
   SubmitViewportPick(state, 2.0, 3.0, log);
   CHECK(state.drawing.paperLayouts[0].viewports.empty());
-  CHECK(state.paperVpPhase == 1);
+  REQUIRE(state.sessionAs<stepengine::PaperRectViewportSession>() != nullptr);
+  CHECK(state.sessionAs<stepengine::PaperRectViewportSession>()->phase == 1);
   SubmitViewportPick(state, 8.0, 9.0, log);
   REQUIRE(state.drawing.paperLayouts[0].viewports.size() == 1);
   const Viewport& viewport = state.drawing.paperLayouts[0].viewports[0];

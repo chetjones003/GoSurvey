@@ -482,15 +482,15 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   //
   // The stores are LOCAL, the UCS is WORLD (see CadActiveUcsStorage), so the pending picks are
   // converted down here rather than the rubber being built in world and converted wholesale.
-  if (cmd.active == AppCommandState::Kind::Ucs) {
-    using UPh = AppCommandState::UcsPhase;
+  if (const auto* us = cmd.sessionAs<stepengine::UcsSession>()) {
+    using UPh = stepengine::UcsPhase;
     auto localOf = [&](const ray3d::Vec3& world, float* lx, float* ly) {
       CadCoord::LocalFromWorld(cmd, world.x, world.y, lx, ly);
     };
-    if (cmd.ucsPhase == UPh::WaitXAxisPoint || cmd.ucsPhase == UPh::WaitXyPoint) {
+    if (us->phase == UPh::WaitXAxisPoint || us->phase == UPh::WaitXyPoint) {
       float ox = 0.f, oy = 0.f;
-      localOf(cmd.ucsPendingOrigin, &ox, &oy);
-      if (cmd.ucsPhase == UPh::WaitXAxisPoint) {
+      localOf(us->pendingOrigin, &ox, &oy);
+      if (us->phase == UPh::WaitXAxisPoint) {
         // One rubber: origin to cursor, which IS the X axis being defined.
         PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
       } else {
@@ -504,7 +504,7 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
         // all, and would give no hint that crossing the axis flips the frame over. Projecting out
         // the perpendicular makes the preview flip exactly when the result flips.
         float xx = 0.f, xy = 0.f;
-        localOf(cmd.ucsPendingXAxisPoint, &xx, &xy);
+        localOf(us->pendingXAxisPoint, &xx, &xy);
         const float axx = xx - ox, axy = xy - oy;
         const float alen = std::hypot(axx, axy);
         PushRubberSegViewRel(rubberLines, ox, oy, xx, xy, 0., 0., zc, zc);
@@ -526,23 +526,23 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
           }
         }
       }
-    } else if (cmd.ucsPhase == UPh::WaitRotationAngleP1 || cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+    } else if (us->phase == UPh::WaitRotationAngleP1 || us->phase == UPh::WaitRotationAngleP2) {
       // `2P`: nothing to draw until the first point is down, then the rubber IS the direction whose
       // angle is being measured.
-      if (cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+      if (us->phase == UPh::WaitRotationAngleP2) {
         float bx = 0.f, by = 0.f;
-        localOf(cmd.ucsAngleBasePoint, &bx, &by);
+        localOf(us->angleBasePoint, &bx, &by);
         PushRubberSegViewRel(rubberLines, bx, by, curXf, curYf, 0., 0., zc, zc);
       }
-    } else if (cmd.ucsPhase == UPh::WaitZAxisPoint) {
+    } else if (us->phase == UPh::WaitZAxisPoint) {
       float ox = 0.f, oy = 0.f;
-      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      localOf(us->pendingOrigin, &ox, &oy);
       PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::PdfAttach &&
-      cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+  if (const auto* pdfSess = cmd.sessionAs<stepengine::PdfAttachSession>();
+      pdfSess && pdfSess->phase == stepengine::PdfAttachPhase::WaitInsertPoint &&
       cmd.pdfAttachPreviewReady && cmd.pdfAttachPreview.pageWidthPts > 0.f &&
       cmd.pdfAttachPreview.pageHeightPts > 0.f) {
     const float cosR = std::cos(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
@@ -564,18 +564,18 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::InsertBlock) {
-    using IPh = AppCommandState::InsertBlockPhase;
-    if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-        cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitAlignFace) {
+  if (const auto* is = cmd.sessionAs<stepengine::InsertBlockSession>()) {
+    using IPh = stepengine::InsertBlockPhase;
+    if (is->phase == IPh::WaitInsertPoint || is->phase == IPh::WaitScale ||
+        is->phase == IPh::WaitRotation || is->phase == IPh::WaitAlignFace) {
       float pickZ = zc;
-      if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale) {
+      if (is->phase == IPh::WaitInsertPoint || is->phase == IPh::WaitScale) {
         pickZ = cmd.uiCursorWorldZ;
         if (cmd.viewportSnapPickValid)
           pickZ = cmd.viewportSnapPickLocalZ;
       }
       // Drag indicator from the fixed insertion point to the cursor during scale/rotation/align picks.
-      if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
+      if (is->phase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
         float lz = pickZ;
