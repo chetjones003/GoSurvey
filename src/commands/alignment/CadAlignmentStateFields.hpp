@@ -9,37 +9,9 @@
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  std::vector<SelectedEntity> trimCutters;
-  /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
-  float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
-  /// issue #399 increment 4: the drawn trim-line's two points carry a real elevation when the pick
-  /// arrives through a camera ray (orbited view / non-world UCS), so smart TRIM resolves in true 3D
-  /// the same way the classic "click the piece to remove" path already does. Left 0 on the plan-view
-  /// path, which is byte-for-byte unchanged.
-  float trimCutInfP1z = 0.f, trimCutInfP2z = 0.f;
-  /// OFFSET: distance (or T for a through point) first, then select object, then side/through pick;
-  /// on a successful commit it loops back to WaitSelectEntity with the same distance/mode retained,
-  /// until Enter/Esc ends the command (REQ-103's documented TRIM/OFFSET per-target loop pattern).
-  enum class OffsetPhase : std::uint8_t {
-    WaitDistanceOrThrough,
-    WaitSelectEntity,
-    WaitSidePick,
-    WaitThroughPick,
-  } offsetPhase = OffsetPhase::WaitDistanceOrThrough;
-  bool offsetEntityValid = false;
-  SelectedEntity offsetEntity{};
-  /// Typed offset distance (always positive); combined with side pick for sign. Persists across the
-  /// select/side loop until OFFSET ends or a new distance is typed.
-  float offsetTypedDistance = 0.f;
-  /// True once the user has typed T for through-point mode instead of a fixed distance; persists
-  /// across the loop the same way offsetTypedDistance does.
-  bool offsetThroughMode = false;
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
-  /// Paper layout captured by OFFSET when its paper object is picked; guards the side-pick from
-  /// ever resolving the stored index against a different layout after a tab switch.
-  int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
   /// Renderer-only invalidation. Unlike cadGpuRevision, this does not dirty the drawing or cancel surface workers.
@@ -94,16 +66,13 @@
   std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
 
-  /// TABLE and ADDPOINTTABLE prompt state (REQ-466, REQ-474).
-  int tableStage = 0;
+  /// TABLE and ADDPOINTTABLE shared style / dialog settings (REQ-466, REQ-474).
   std::string tablePendingStyle;
   int tablePendingCols = 3;
   int tablePendingRows = 2;
   float tablePendingColumnWidthInches = 1.5f;
   float tablePendingRowHeightInches = 0.375f;
   bool tableInsertDialogRequested = false;
-  int pointTableStage = 0;
-  std::string pointTableStyle;
   std::string pointTableLayer;
   bool pointTableSplitEnabled = true;
   int pointTableMaxRows = 20;
@@ -111,7 +80,6 @@
   double pointTableOffset = 0.3;
   bool pointTableTileAcross = true;
   bool pointTableDynamic = true;
-  std::vector<int> pointTableIds;
   /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
   bool addPointTableDialogAvailable = false;
   bool addPointTableDialogRequested = false;
@@ -132,26 +100,8 @@
   /// the drawing's default (100 ft, or 30 m in a metric drawing). Tangent-Tangent starts without curves, as Civil 3D's
   /// layout toolbar does; the last mode chosen is kept.
   alignment::CurveSettings alignmentCurveSettings{false, 0.0, 0.0, 0.0};
-  /// ALIGNMENTLAYOUT (Kind::AlignmentLayout): the PIs picked so far and the alignment as it was before the session, so
-  /// every PI rebuilds the tail from scratch and `U` can take one back.
-  struct AlignmentLayoutSession {
-    std::string name;
-    std::vector<alignment::Point2> pis;  ///< Drawing-local.
-    alignment::Alignment base;
-    bool snapshotTaken = false;
-    bool fixedDirection = false;  ///< The first tangent keeps the dialog's starting direction.
-    double directionAzimuth = 0.0;
-    size_t warningsShown = 0;
-  } alignmentLayout;
-  /// CREATEALIGNMENTFROMOBJECTS picks (Kind::AlignmentFromObjects). The picked objects live in `selection`, so the
-  /// command that finally creates the alignment reads them from there.
-  struct AlignmentFromObjectsPick {
-    enum class Phase : std::uint8_t { WaitFirst, WaitMore, WaitDirection } phase = Phase::WaitFirst;
-    bool hasPick = false;
-    double pickX = 0.0;  ///< Drawing-local point of the first pick: the alignment starts at the end nearest it.
-    double pickY = 0.0;
-    bool reverse = false;
-  } alignmentFromObjects;
+  /// Last CREATEALIGNMENTFROMOBJECTS pick args, kept across session close for the Qt dialog.
+  std::string alignmentFromObjectsLastPickArgs;
   /// REQ-485.1: the Alignment Layout Tools window follows this alignment while it is open.
   std::string alignmentLayoutToolsName;
 

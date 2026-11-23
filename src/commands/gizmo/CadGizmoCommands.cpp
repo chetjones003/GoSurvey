@@ -855,7 +855,7 @@ void EndGizmoCommand(AppCommandState& st) {
   st.gizmoHoverAxis = -1;
   st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
   st.gizmoBaseValid = false;
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 std::string CadGizmoCommandPromptText(const AppCommandState& st) {
@@ -946,8 +946,7 @@ void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selBoxWaitingSecond = false;
-  st.active = kind;
-  st.lastCommand = kind;
+  stepengine::BeginSession(st, std::make_unique<stepengine::GizmoCmdSession>(kind), /*recordAsLastCommand=*/true);
   st.gizmoOpBeforeCmd = st.gizmoOp;
   CancelGizmoDrag(st);  // a persistent-gizmo drag armed under the old op cannot carry over
   st.gizmoOp = GizmoOpForCommandKind(kind);

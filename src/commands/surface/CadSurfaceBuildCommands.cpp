@@ -8,6 +8,7 @@
 #include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Terrain/tinvolume.hpp>
 #include "GoSurvey/Survey/AlignmentGroundModel.hpp"
+#include <GoSurvey/IO/SurveyCsv.hpp>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -1215,4 +1216,295 @@ void TickVolumeDashboard(AppCommandState& st) {
     jobPtr->done.store(true, std::memory_order_release);
   });
   dash.job = std::move(job);
+}
+
+SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  SurfaceBuildInputs in;
+  in.originX = st.drawing.worldDocumentOriginX;
+  in.originY = st.drawing.worldDocumentOriginY;
+
+  if (surface.gradingGroup) {
+    for (const auto& member : surface.gradingMembers) {
+      if (!member.strips) {
+        in.inputsIncomplete = true;
+        in.incompleteReason = "missing baked grading strips";
+        log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+        return in;
+      }
+      for (const auto& strip : *member.strips) {
+        if (((member.infill && (strip.size() < 9 || strip.size() % 3 != 0)) ||
+             (!member.infill && strip.size() != 12)) ||
+            !std::all_of(strip.begin(), strip.end(),
+                         [](double v) { return std::isfinite(v); })) {
+          in.inputsIncomplete = true;
+          in.incompleteReason = "invalid baked grading strip";
+          log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+          return in;
+        }
+        if (member.infill) {
+          std::string polygonError;
+          if (!IsSimpleInfillPolygon(strip, &polygonError)) {
+            in.inputsIncomplete = true;
+            in.incompleteReason = "infill " + polygonError;
+            log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+            return in;
+          }
+        }
+        ResolvedChain chain;
+        TinBoundaryLoop loop;
+        loop.kind = TinBoundaryKind::Clip;
+        for (size_t v = 0; v < strip.size(); v += 3) {
+          const double x = strip[v] + in.originX, y = strip[v + 1] + in.originY;
+          chain.verts.push_back({x, y, strip[v + 2]});
+          loop.ring.emplace_back(x, y);
+        }
+        AppendChainConstraints(chain, true, in.constraints, &in.constraintSourceIds, member.gradingId);
+        in.cullLoops.push_back(std::move(loop));
+      }
+    }
+    if (!TinFindCrossingConflicts(in.constraints).empty()) {
+      in.inputsIncomplete = true;
+      in.incompleteReason = "grading strips cross at different elevations";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+    }
+    return in;
+  }
+
+  int unresolvedGroups = 0;
+  for (const std::string& gname : surface.sourcePointGroups) {
+    const int gi = FindPointGroupIndex(st, gname);
+    if (gi < 0) {
+      ++unresolvedGroups;
+      log.push_back("Surface \"" + surface.name + "\": point group \"" + gname + "\" no longer exists.");
+      continue;
+    }
+    for (int pi : ResolvePointGroup(st, st.drawing.pointGroups[static_cast<size_t>(gi)], &log)) {
+      const SurveyPoint& p = st.drawing.surveyPoints[static_cast<size_t>(pi)];
+      in.pts.push_back({p.easting + st.drawing.worldDocumentOriginX, p.northing + st.drawing.worldDocumentOriginY,
+                        static_cast<float>(p.elevation)});
+    }
+  }
+  (void)unresolvedGroups;
+
+  for (const CadSurfacePointFile& pf : surface.sourcePointFiles) {
+    std::vector<SurveyFilePoint> filePts;
+    int skipped = 0;
+    std::string err;
+    if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex),
+                                 pf.skipFirstRow, &filePts, &skipped, &err)) {
+      in.inputsIncomplete = true;
+      in.incompleteReason = "point file \"" + pf.path + "\" could not be read (" + err + ")";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason +
+                    ". Keeping the previous triangulation.");
+      continue;
+    }
+    if (skipped > 0)
+      log.push_back("Surface \"" + surface.name + "\": point file \"" + pf.path + "\" — " +
+                    std::to_string(skipped) + " unreadable row(s) skipped.");
+    for (const SurveyFilePoint& p : filePts)
+      in.pts.push_back({p.easting, p.northing, p.elevation});
+  }
+
+  ApplyDefinitionPointEdits(surface, in);
+
+  std::vector<CadSurfaceBreakline> resolvedBreaklines;
+  int droppedBreaklines = 0;
+  for (const CadSurfaceBreakline& bl : surface.breaklines) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, bl.entityId, /*requireClosed=*/false, chain)) {
+      ++droppedBreaklines;
+      continue;
+    }
+    resolvedBreaklines.push_back(bl);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, bl.entityId);
+  }
+  surface.breaklines = std::move(resolvedBreaklines);
+  if (droppedBreaklines > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBreaklines) +
+                  " breakline(s) no longer exist and were removed from the definition.");
+
+  std::vector<CadSurfaceBreakline> resolvedContours;
+  int droppedContours = 0;
+  for (const CadSurfaceBreakline& c : surface.contourSources) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, c.entityId, /*requireClosed=*/false, chain)) {
+      ++droppedContours;
+      continue;
+    }
+    resolvedContours.push_back(c);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, c.entityId);
+  }
+  surface.contourSources = std::move(resolvedContours);
+  if (droppedContours > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedContours) +
+                  " contour source(s) no longer exist and were removed from the definition.");
+
+  std::vector<CadSurfaceBoundary> resolvedBoundaries;
+  int droppedBoundaries = 0;
+  for (const CadSurfaceBoundary& b : surface.boundaries) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, b.entityId, /*requireClosed=*/true, chain)) {
+      ++droppedBoundaries;
+      continue;
+    }
+    resolvedBoundaries.push_back(b);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints, &in.constraintSourceIds, b.entityId);
+    TinBoundaryLoop loop;
+    loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
+              : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
+              : b.kind == CadBoundaryKind::Show  ? TinBoundaryKind::Show
+              : b.kind == CadBoundaryKind::Mask  ? TinBoundaryKind::Mask
+                                                 : TinBoundaryKind::Clip;
+    for (const auto& v : chain.verts)
+      loop.ring.push_back({v[0], v[1]});
+    in.cullLoops.push_back(std::move(loop));
+  }
+  surface.boundaries = std::move(resolvedBoundaries);
+  if (droppedBoundaries > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBoundaries) +
+                  " boundary(ies) no longer exist and were removed from the definition.");
+
+  {
+    std::vector<const TinBoundaryLoop*> clips;
+    for (const TinBoundaryLoop& loop : in.cullLoops) {
+      if (loop.kind == TinBoundaryKind::Clip)
+        clips.push_back(&loop);
+    }
+    if (!clips.empty()) {
+      std::vector<TinInputPoint> kept;
+      kept.reserve(in.pts.size());
+      for (const TinInputPoint& p : in.pts) {
+        bool inside = false;
+        for (const TinBoundaryLoop* clip : clips) {
+          if (TinPointInPolygon(p.x, p.y, clip->ring)) {
+            inside = true;
+            break;
+          }
+        }
+        if (inside)
+          kept.push_back(p);
+      }
+      in.pts = std::move(kept);
+    }
+  }
+
+  ApplySurfaceCrossingCorrections(surface, in);
+  for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
+    log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
+                  std::to_string(issue.x) + ", " + std::to_string(issue.y) +
+                  ") with different elevations (" + std::to_string(issue.zFromA) + " vs " +
+                  std::to_string(issue.zFromB) + ").");
+
+  return in;
+}
+
+void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("SURFACEADDFILE — usage: SURFACEADDFILE <surface>, <path>[, <PNEZD|PENZD|NEZ|ENZ>[, HEADER]].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEADDFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurfacePointFile pf;
+  if (SurfaceRefusesPointEdits(st.drawing.cadSurfaces[static_cast<size_t>(si)], "SURFACEADDFILE", log)) return;
+  pf.path = f[1];
+  if (f.size() >= 3 && !f[2].empty()) {
+    const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
+    if (lay == "pnezd")      pf.layoutIndex = 0;
+    else if (lay == "penzd") pf.layoutIndex = 1;
+    else if (lay == "nez")   pf.layoutIndex = 2;
+    else if (lay == "enz")   pf.layoutIndex = 3;
+    else {
+      log.push_back("SURFACEADDFILE — layout must be PNEZD, PENZD, NEZ or ENZ.");
+      return;
+    }
+  }
+  for (size_t i = 3; i < f.size(); ++i)
+    if (StringUtil::toLowerAsciiCopy(f[i]) == "header")
+      pf.skipFirstRow = true;
+
+  std::vector<SurveyFilePoint> probe;
+  int skipped = 0;
+  std::string err;
+  if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex), pf.skipFirstRow,
+                               &probe, &skipped, &err)) {
+    log.push_back("SURFACEADDFILE — cannot read \"" + pf.path + "\": " + err + ". Not linked.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Link point file to surface");
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFACEIMPORTFILE", log)) return;
+  log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
+                std::to_string(probe.size()) + " point(s)" +
+                (skipped > 0 ? ", " + std::to_string(skipped) + " row(s) unreadable" : "") + ").");
+  s.sourcePointFiles.push_back(std::move(pf));
+  BumpCadGpuCache(st);
+}
+
+void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty()) {
+    log.push_back("SURFACEIMPORTFILE — usage: SURFACEIMPORTFILE <surface>, <number> (SURFACELIST numbers them).");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEIMPORTFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.drawing.cadSurfaces[static_cast<size_t>(si)];
+  char* numEnd = nullptr;
+  const long parsed = std::strtol(f[1].c_str(), &numEnd, 10);
+  const bool numOk = !f[1].empty() && numEnd && *numEnd == '\0';
+  const int n = numOk ? static_cast<int>(parsed) : 0;
+  if (n < 1 || static_cast<size_t>(n) > s.sourcePointFiles.size()) {
+    log.push_back("SURFACEIMPORTFILE — \"" + s.name + "\" has " + std::to_string(s.sourcePointFiles.size()) +
+                  " point file(s); " + f[1] + " is out of range.");
+    return;
+  }
+
+  const CadSurfacePointFile pf = s.sourcePointFiles[(static_cast<size_t>(n) - 1)];
+  PushUndoSnapshot(st, "Import surface point file");
+
+  const int savedLayout = st.surveyImportCsvLayoutIdx;
+  const bool savedSkip = st.surveyImportCsvSkipFirstRow;
+  std::string savedPath = st.surveyImportCsvPath;
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", pf.path.c_str());
+  st.surveyImportCsvLayoutIdx = pf.layoutIndex;
+  st.surveyImportCsvSkipFirstRow = pf.skipFirstRow;
+  const size_t before = st.drawing.surveyPoints.size();
+  const bool ok = SurveyCsvImportFile(st, log);
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", savedPath.c_str());
+  st.surveyImportCsvLayoutIdx = savedLayout;
+  st.surveyImportCsvSkipFirstRow = savedSkip;
+
+  if (!ok) {
+    log.push_back("SURFACEIMPORTFILE — import failed; the link is left in place.");
+    return;
+  }
+  const size_t added = st.drawing.surveyPoints.size() - before;
+  if (added == 0) {
+    log.push_back("SURFACEIMPORTFILE — no points were imported (see the lines above; duplicate point "
+                  "ids are skipped). The link to \"" + pf.path + "\" is left in place.");
+    return;
+  }
+
+  PointGroup g;
+  g.name = "Imported: " + std::filesystem::path(pf.path).filename().string();
+  for (int i = 1; i < 10000 && FindPointGroupIndex(st, g.name) >= 0; ++i)
+    g.name = "Imported: " + std::filesystem::path(pf.path).filename().string() + " (" + std::to_string(i + 1) + ")";
+  for (size_t i = before; i < st.drawing.surveyPoints.size(); ++i)
+    g.rule.explicitIds.push_back(st.drawing.surveyPoints[i].id);
+  st.drawing.pointGroups.push_back(g);
+
+  s.sourcePointGroups.push_back(g.name);
+  s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
+  log.push_back("SURFACEIMPORTFILE — imported " + std::to_string(added) + " point(s) from \"" + pf.path +
+                "\" into point group \"" + g.name + "\"; the link is broken.");
+  BumpCadGpuCache(st);
 }

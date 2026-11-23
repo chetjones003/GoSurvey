@@ -1,92 +1,7 @@
-  enum class LinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
-  /// Segments committed in the current LINE chain; the point being specified is
-  /// (lineDraftSegments + 2) once past the first point (REQ-024 ordinal prompt).
-  uint32_t lineDraftSegments = 0;
-
-  enum class PolylinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
-
-  float polyFirstX = 0.f;
-  float polyFirstY = 0.f;
-  uint32_t polyDraftSegments = 0;
-
-  enum class ArcPhase : std::uint8_t { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
-
-  float arcAx = 0.f, arcAy = 0.f;
-  float arcBx = 0.f, arcBy = 0.f;
-  float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
-
-  enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
-
-  enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
-  std::vector<spline::Vec3> splineDraftPoints;
-
-  /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
-  enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
-  enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
-  bool leaderShowArrow = true;
-  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
-      LeaderPhase::WaitFirst;
-  bool leaderFinishAfterAnnotation = false;
-  std::vector<spline::Vec3> leaderDraftPoints;
-  enum class PeditPhase : std::uint8_t {
-    WaitObject,
-    WaitOption,
-    WaitVertex,
-    WaitJoin,
-    WaitVertexMove,
-    WaitVertexInsert
-  } peditPhase = PeditPhase::WaitObject;
-  int peditIndex = -1;
-  int peditVertex = 0;
-  bool peditPaper = false;
-  /// MEASURE and DIVIDE share object-pick + value prompt state (same AutoCAD two-step).
-  enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
-  SelectedEntity measureTarget{};
-  bool measurePaper = false;
-  PaperEntityRef measurePaperTarget{PaperEntityRef::Type::Line, -1};
-  double measurePickX = 0.0;
-  double measurePickY = 0.0;
-  enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
-  std::vector<spline::Vec3> areaDraftPoints;
-  double areaRunning = 0.0;
-  bool areaSubtract = false;
-  bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
-
-  /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
-  /// elevation is given. The surface is remembered between runs in a drawing, so the common case
-  /// - one ground surface, several pads at different levels - is just a number each time.
-  enum class PadSolidPhase : std::uint8_t { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
-      PadSolidPhase::WaitBoundary;
-  std::uint64_t padSolidBoundaryId = 0;
+  /// PADSOLID (GitHub #150): remembered surface name (per-invocation phase/id live in
+  /// stepengine::PadSolidSession).
   std::string padSolidSurface;
 
-  float ellCx = 0.f, ellCy = 0.f;
-  float ellMajEx = 0.f, ellMajEy = 0.f;
-  float ellCz = 0.f, ellMajEz = 0.f;  ///< work-plane elevation of each pick (REQ-312), as arcAz/arcBz
-
-  /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
-  /// is how a rectangle of an exact width and height is drawn.
-  enum class RectPhase : std::uint8_t { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
-
-  float rectX1 = 0.f, rectY1 = 0.f;
-
-  enum class TextCmdPhase : std::uint8_t { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
-
-  float textInsX = 0.f, textInsY = 0.f;
-  float textHeightDraft = 1.f;
-  float textRotDraft = 0.f;
-
-  enum class MtextPhase : std::uint8_t { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
-  /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
-  enum class MleaderPhase : std::uint8_t { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
-  float mleaderTipX = 0.f;
-  float mleaderTipY = 0.f;
-  float mleaderTipZ = 0.f;
-  /// Multileader index while \ref Kind::MleaderAddLeader is active (-1 = none).
-  int mleaderEditIndex = -1;
-
-  float mtxtX1 = 0.f, mtxtY1 = 0.f;
-  float mtxtX2 = 0.f, mtxtY2 = 0.f;
   /// Multiline MTEXT editor over the box (new placement or double-click edit). Not command-line text.
   bool mtextRichEditorOpen = false;
   bool mtextRichEditorPlacement = false;
@@ -146,20 +61,6 @@
   float mtextPanelMeasuredH = 0.f;
   /// True while the ruler's width marker is being dragged (so the undo snapshot is pushed exactly once).
   bool mtextRulerDragActive = false;
-
-  enum class DimPhase : std::uint8_t { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
-  /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
-  enum class DimAngularPhase : std::uint8_t { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
-  float dimAngVx = 0.f;
-  float dimAngVy = 0.f;
-  float dimE1x = 0.f, dimE1y = 0.f;
-  float dimE2x = 0.f, dimE2y = 0.f;
-  /// \c Kind::DimLinear, \p dimPhase == WaitDimLinePt — preview orientation (horizontal vs vertical span).
-  bool dimLinearDraftVertical = false;
-  /// When true, \p dimLinearDraftVertical is fixed until the crosshair moves from \p dimLinearLockCursorW*.
-  bool dimLinearOrientUserLock = false;
-  float dimLinearLockCursorWx = 0.f;
-  float dimLinearLockCursorWy = 0.f;
 
   float anchorX = 0.f;
   float anchorY = 0.f;
@@ -307,22 +208,6 @@
   float uiViewportWidthPx = 0.f;
   float uiViewportHeightPx = 0.f;
 
-  /// LINE/POLYLINE — pick bearing from two reference clicks (\p AP), optional +/- adjustment, then lock.
-  enum class SegmentAnglePickPhase : uint8_t { Idle, WaitP1, WaitP2, WaitAdjustOrCommit };
-  SegmentAnglePickPhase segmentAnglePickPhase = SegmentAnglePickPhase::Idle;
-  float segmentPickRefX1 = 0.f;
-  float segmentPickRefY1 = 0.f;
-  /// Draft bearing ° clockwise from north (after second pick; editable with +/- before lock).
-  float segmentPickDraftBearingDeg = 0.f;
-
-  /// LINE/POLYLINE next point: lock segment to a bearing (° clockwise from north); distance-only or click on ray.
-  bool segmentAngleLockActive = false;
-  float segmentLockUx = 1.f;
-  float segmentLockUy = 0.f;
-  /// LINE/POLYLINE: user typed \c A / \c angle alone — next line is parsed as bearing ° CW from north (blank Enter
-  /// cancels).
-  bool segmentAngleKeyboardAwaitBearing = false;
-
   /// Next stable entity id to hand out for this drawing (REQ-076 / ADR-027). Monotonic, persisted
   /// in `internal document payload`, and **never rewound** — in particular it is deliberately NOT part of
   /// \ref DrawingGeometrySnapshot, so draw → undo → draw gives the second entity a *new* id rather
@@ -336,6 +221,3 @@
   /// the revision cannot reach. A 32-bit sentinel would collide once every 2^32 edits and skip the
   /// sweep for that drawing — rare enough to never be reproduced, and silent when it happened.
   std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
-
-  // --- Circle ---
-  enum class CircleStyle : std::uint8_t { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;

@@ -461,26 +461,20 @@ void BuildBreakRemovalPreview(const AppCommandState& cmd, float curX, float curY
     outSpan->clear();
   if (outMarkers)
     outMarkers->clear();
-  if (cmd.active != AppCommandState::Kind::Break ||
-      cmd.breakPhase != AppCommandState::BreakPhase::SelectSecondPoint)
+  const auto* brk = cmd.sessionAs<stepengine::BreakSession>();
+  if (!brk || brk->phase != stepengine::BreakPhase::SelectSecondPoint)
     return;
   BreakPoint p2{};
-  if (!ClosestPointOnEntity(cmd, cmd.breakEntity, curX, curY, &p2))
+  if (!ClosestPointOnEntity(cmd, brk->entity, curX, curY, &p2))
     return;
-  // Arc spans tessellate against the view, exactly as the renderer tessellates committed arcs
-  // (REQ-058) — set here rather than inherited from a previous BuildTransformPreview call, since
-  // this function is now reached on its own.
   g_previewOrthoHalfH = orthoHalfHeightWorld;
   g_previewSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
   std::vector<float> localSpan;
   std::vector<float>* span = outSpan ? outSpan : &localSpan;
-  appendBreakRemovedSpan(span, cmd, cmd.breakEntity, cmd.breakP1, p2);
+  appendBreakRemovedSpan(span, cmd, brk->entity, brk->p1, p2);
   if (outMarkers) {
-    // Markers carry the span's own Z so they sit on the object, not on the datum — the same rule
-    // AppendEntityHighlight follows, and for the same reason: at a tilted view a fixed Z draws the
-    // marker somewhere the object is not.
     const float mz = span->size() >= 3 ? (*span)[2] : 0.f;
-    appendBreakPointMarker(outMarkers, cmd.breakP1.x, cmd.breakP1.y, mz, orthoHalfHeightWorld);
+    appendBreakPointMarker(outMarkers, brk->p1.x, brk->p1.y, mz, orthoHalfHeightWorld);
     appendBreakPointMarker(outMarkers, p2.x, p2.y, mz, orthoHalfHeightWorld);
   }
 }
@@ -493,12 +487,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   g_previewFbHeightPx = framebufferHeightPx;
   g_previewSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
   using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
-  using OP = AppCommandState::OffsetPhase;
-  using MirP = AppCommandState::MirrorPhase;
+  using MP = stepengine::ModifyPhase;
+  using OP = stepengine::OffsetPhase;
+  using MirP = stepengine::MirrorPhase;
 
-  if (cmd.active == K::Spline && !cmd.splineDraftPoints.empty()) {
-    std::vector<spline::Vec3> points = cmd.splineDraftPoints;
+  if (const auto* sps = cmd.sessionAs<stepengine::SplineSession>(); sps && !sps->draftPoints.empty()) {
+    std::vector<spline::Vec3> points = sps->draftPoints;
     // The command commits a picked point at the active/snap-resolved work-plane elevation. Keep
     // the ghost on that same plane instead of inheriting the previous pick's potentially different Z.
     const double z = CadCommitElevation(cmd);
@@ -506,7 +500,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
                    points.back().y - static_cast<double>(curY)) > 1e-9)
       points.push_back({static_cast<double>(curX), static_cast<double>(curY), z});
     CadSpline draft;
-    const bool made = cmd.splineMethod == AppCommandState::SplineMethod::Fit
+    const bool made = sps->method == stepengine::SplineMethod::Fit
                           ? spline::MakeFit(points, false, &draft, nullptr)
                           : spline::MakeControl(points, false, &draft, nullptr);
     if (made) {
@@ -522,8 +516,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active == K::Offset && cmd.offsetEntityValid &&
-      (cmd.offsetPhase == OP::WaitThroughPick || cmd.offsetPhase == OP::WaitSidePick)) {
+  if (const auto* ofs = cmd.sessionAs<stepengine::OffsetSession>();
+      ofs && ofs->entityValid &&
+      (ofs->phase == OP::WaitThroughPick || ofs->phase == OP::WaitSidePick)) {
     CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
     return;
   }
@@ -532,11 +527,11 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   // BuildBreakRemovalPreview. This one is drawn translucent at ordinary line width, which is right
   // for a ghost of geometry somewhere it is not yet, and useless for material highlighted in place.
 
-  if (cmd.active == K::Move || cmd.active == K::Copy) {
-    if (cmd.modifyPhase != MP::NeedDestination)
+  if (const auto* mc = cmd.sessionAs<stepengine::MoveCopySession>()) {
+    if (mc->phase != MP::NeedDestination)
       return;
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+    const float dx = curX - mc->baseX;
+    const float dy = curY - mc->baseY;
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
@@ -623,8 +618,6 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   // rotating about world Z. The 3D cursor is reconstructed from `curX,curY` plus the work-plane Z
   // CadUi already resolves every frame (`cmd.uiCursorWorldZ`), so this needs no signature change.
   if (cmd.active == K::Array) {
-    using APh = AppCommandState::ArrayPhase;
-
     auto appendTranslatedInstance = [&](float dx, float dy, float dz) {
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
@@ -829,27 +822,27 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       }
     };
 
-    if (cmd.arrayType == AppCommandState::ArrayType::Rectangular) {
-      // The grid axes are the active UCS X/Y (REQ-305 acceptance 10). Spacings are UCS-local
-      // distances resolved from the cursor on the work plane, then each cell's local offset is
-      // mapped back to a world delta — the same arithmetic as `ArrayCellWorldDelta` at commit.
+    const auto* arr = cmd.sessionAs<stepengine::ArraySession>();
+    if (!arr)
+      return;
+    using APh = stepengine::ArrayPhase;
+    if (arr->type == stepengine::ArrayType::Rectangular) {
       const ucs::Ucs frame =
-          CadWorkPlaneAnchoredAt(cmd, cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ);
+          CadWorkPlaneAnchoredAt(cmd, arr->anchorX, arr->anchorY, arr->anchorZ);
       const ucs::Point2D cursorLocal =
           ucs::WorldToPlane(frame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
-      int cols = std::max(cmd.arrayCols, 1);
-      float colSpacing = cmd.arrayColSpacing;
+      int cols = std::max(arr->cols, 1);
+      float colSpacing = arr->colSpacing;
       int rows = 1;
       float rowSpacing = 0.f;
-      if (cmd.arrayPhase == APh::Rect_WaitColumnSpacing) {
+      if (arr->phase == APh::Rect_WaitColumnSpacing) {
         colSpacing = static_cast<float>(cursorLocal.x);
-      } else if (cmd.arrayPhase == APh::Rect_WaitRows) {
-        // cols/colSpacing already fixed; rows not chosen yet — preview the single fixed row.
-      } else if (cmd.arrayPhase == APh::Rect_WaitRowSpacing) {
-        rows = std::max(cmd.arrayRows, 1);
+      } else if (arr->phase == APh::Rect_WaitRows) {
+      } else if (arr->phase == APh::Rect_WaitRowSpacing) {
+        rows = std::max(arr->rows, 1);
         rowSpacing = static_cast<float>(cursorLocal.y);
       } else {
-        return;  // PickSelection / WaitType / Rect_WaitColumns — not enough entered yet to preview
+        return;
       }
       for (int r = 0; r < rows; ++r)
         for (int c = 0; c < cols; ++c) {
@@ -862,20 +855,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       return;
     }
 
-    // Polar — rotation is about the active UCS Z axis through the picked centre (REQ-305
-    // acceptance 11 / REQ-328).
-    if (cmd.arrayPhase != APh::Polar_WaitAngle && cmd.arrayPhase != APh::Polar_WaitRotateAnswer)
+    if (arr->phase != APh::Polar_WaitAngle && arr->phase != APh::Polar_WaitRotateAnswer)
       return;
     constexpr float kPi = 3.14159265358979323846f;
-    const int n = std::max(cmd.arrayItemCount, 1);
-    const ray3d::Vec3 axisPoint{cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ};
+    const int n = std::max(arr->itemCount, 1);
+    const ray3d::Vec3 axisPoint{arr->centerX, arr->centerY, arr->centerZ};
     const ucs::Ucs centreFrame =
-        CadWorkPlaneAnchoredAt(cmd, cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ);
+        CadWorkPlaneAnchoredAt(cmd, arr->centerX, arr->centerY, arr->centerZ);
     const ray3d::Vec3 axisUnit = ray3d::Normalize(centreFrame.zAxis);
-    float fillDeg = cmd.arrayFillAngleDeg;
-    if (cmd.arrayPhase == APh::Polar_WaitAngle) {
-      // The sweep angle is measured IN THE UCS PLANE (local X/Y about the centre), not world X/Y —
-      // a raw world-XY `atan2` collapses to ~0 under any non-plan UCS and stacks every instance.
+    float fillDeg = arr->fillAngleDeg;
+    if (arr->phase == APh::Polar_WaitAngle) {
       const ucs::Point2D lc = ucs::WorldToPlane(centreFrame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
       fillDeg = std::atan2(static_cast<float>(lc.y), static_cast<float>(lc.x)) * (180.f / kPi);
       if (fillDeg < 0.f)
@@ -887,27 +876,28 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n) : fillRad / static_cast<float>(n - 1));
     for (int i = 1; i < n; ++i) {
       const float ang = step * static_cast<float>(i);
-      if (cmd.arrayRotateItems) {
+      if (arr->rotateItems) {
         appendRotatedInstance(axisPoint, axisUnit, ang);
       } else {
         const ray3d::Vec3 a = ray3d::RotatePointAboutAxis(
-            ray3d::Vec3{cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ}, axisPoint, axisUnit,
+            ray3d::Vec3{arr->anchorX, arr->anchorY, arr->anchorZ}, axisPoint, axisUnit,
             static_cast<double>(ang));
-        appendTranslatedInstance(static_cast<float>(a.x) - cmd.arrayAnchorX,
-                                 static_cast<float>(a.y) - cmd.arrayAnchorY,
-                                 static_cast<float>(a.z) - cmd.arrayAnchorZ);
+        appendTranslatedInstance(static_cast<float>(a.x) - arr->anchorX,
+                                 static_cast<float>(a.y) - arr->anchorY,
+                                 static_cast<float>(a.z) - arr->anchorZ);
       }
     }
     return;
   }
 
-  if (cmd.active == K::Stretch && cmd.modifyPhase == MP::NeedDestination) {
+  if (const auto* stSess = cmd.sessionAs<stepengine::StretchSession>();
+      stSess && stSess->phase == MP::NeedDestination) {
     // Mirrors the Move/Copy block above, but each definition point is gated against the captured
     // box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
-    const float mnX = cmd.stretchRectMnX, mxX = cmd.stretchRectMxX;
-    const float mnY = cmd.stretchRectMnY, mxY = cmd.stretchRectMxY;
+    const float dx = curX - stSess->baseX;
+    const float dy = curY - stSess->baseY;
+    const float mnX = stSess->rectMnX, mxX = stSess->rectMxX;
+    const float mnY = stSess->rectMnY, mxY = stSess->rectMxY;
     auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
@@ -988,9 +978,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+  if (const auto* ps = cmd.sessionAs<stepengine::PasteSession>()) {
+    const float dx = curX - ps->baseX;
+    const float dy = curY - ps->baseY;
     const CadClipboard& cb = cmd.clipboard;
     // Lines
     for (size_t i = 0; i < cb.content.lineCount(); ++i) {
@@ -1052,11 +1042,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
-    using SP = AppCommandState::ScalePhase;
-    if (cmd.scalePhase == SP::Ref_WaitP2) {
-      prevLines->push_back(cmd.scaleRefP1X);
-      prevLines->push_back(cmd.scaleRefP1Y);
+  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>();
+      ss && ss->phase == MP::NeedDestination) {
+    using SP = stepengine::ScalePhase;
+    if (ss->scalePhase == SP::Ref_WaitP2) {
+      prevLines->push_back(ss->refP1X);
+      prevLines->push_back(ss->refP1Y);
       // Reference/measure rubber: drawn on the work plane, since it marks distances the user is
       // picking rather than geometry belonging to an object (REQ-058).
       prevLines->push_back(CadCommitElevation(cmd));
@@ -1065,9 +1056,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       prevLines->push_back(CadCommitElevation(cmd));
       return;
     }
-    if (cmd.scalePhase == SP::NewLength_WaitP2) {
-      prevLines->push_back(cmd.scaleNewLenP1X);
-      prevLines->push_back(cmd.scaleNewLenP1Y);
+    if (ss->scalePhase == SP::NewLength_WaitP2) {
+      prevLines->push_back(ss->newLenP1X);
+      prevLines->push_back(ss->newLenP1Y);
       prevLines->push_back(CadCommitElevation(cmd));
       prevLines->push_back(curX);
       prevLines->push_back(curY);
@@ -1076,8 +1067,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     float sc = 1.f;
     if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
       return;
-    const float bx = cmd.modifyBaseX;
-    const float by = cmd.modifyBaseY;
+    const float bx = ss->baseX;
+    const float by = ss->baseY;
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
         const size_t li = static_cast<size_t>(e.index);
@@ -1173,12 +1164,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active == K::Mirror) {
-    if (cmd.mirrorPhase != MirP::NeedP2 && cmd.mirrorPhase != MirP::NeedEraseAnswer)
+  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>()) {
+    if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
       return;
-    const float x0 = cmd.mirrorP1X, y0 = cmd.mirrorP1Y;
-    const float x1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
-    const float y1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+    const float x0 = ms->p1X, y0 = ms->p1Y;
+    const float x1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    const float y1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
     // The mirror line itself, so the user sees what they are reflecting across — same rubber-line
     // convention SCALE uses for its reference/new-length segments above.
     prevLines->push_back(x0);
@@ -1294,12 +1285,11 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active == K::Lengthen) {
-    using LenP = AppCommandState::LengthenPhase;
-    if (cmd.lengthenPhase != LenP::WaitDynamicTarget)
+  if (const auto* lenSess = cmd.sessionAs<stepengine::LengthenSession>()) {
+    if (lenSess->phase != stepengine::LengthenPhase::WaitDynamicTarget)
       return;
-    const SelectedEntity& e = cmd.lengthenPendingEntity;
-    const bool nearFirst = cmd.lengthenPendingNearFirst;
+    const SelectedEntity& e = lenSess->pendingEntity;
+    const bool nearFirst = lenSess->pendingNearFirst;
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
       if (li >= cmd.drawing.lineCount())
@@ -1378,15 +1368,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (cmd.active != K::Rotate)
+  const auto* rs = cmd.sessionAs<stepengine::RotateSession>();
+  if (!rs)
     return;
 
   float theta = 0.f;
   if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
     return;
 
-  const float bx = cmd.rotateBaseX;
-  const float by = cmd.rotateBaseY;
+  const float bx = rs->baseX;
+  const float by = rs->baseY;
   for (const auto& e : cmd.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
@@ -1696,41 +1687,30 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<double>* hl
   hlCircles->clear();
   for (const auto& e : cmd.selection)
     AppendEntityHighlight(cmd, e, hlLines, hlCircles);
-  if (cmd.active == AppCommandState::Kind::Offset && cmd.offsetPhase == AppCommandState::OffsetPhase::WaitSelectEntity &&
+  if (const auto* ofs = cmd.sessionAs<stepengine::OffsetSession>();
+      ofs && ofs->phase == stepengine::OffsetPhase::WaitSelectEntity &&
       cmd.offsetHoverHighlightValid)
     AppendEntityHighlight(cmd, cmd.offsetHoverEntity, hlLines, hlCircles);
-  // TRIM cutting edges read as a selection while they are being picked (REQ-056): they are chosen the way
-  // a selection is chosen, so they get the selection's highlight rather than an appearance of their own.
-  if (cmd.active == AppCommandState::Kind::Trim) {
-    for (const auto& c : cmd.trimCutters)
+  if (const auto* trim = cmd.sessionAs<stepengine::TrimSession>()) {
+    for (const auto& c : trim->cutters)
       AppendEntityHighlight(cmd, c, hlLines, hlCircles);
   }
-  // EXTEND boundary edges get the same selection-highlight treatment as TRIM cutting edges
-  // (REQ-056) — they are picked the way a selection is picked.
-  if (cmd.active == AppCommandState::Kind::Extend) {
-    for (const auto& c : cmd.extendBoundaries)
+  if (const auto* ext = cmd.sessionAs<stepengine::ExtendSession>()) {
+    for (const auto& c : ext->boundaries)
       AppendEntityHighlight(cmd, c, hlLines, hlCircles);
   }
-  // BREAK's pending entity (between the first and second point picks) reads as a selection too —
-  // same REQ-056 precedent as TRIM/EXTEND.
-  if (cmd.active == AppCommandState::Kind::Break &&
-      cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint)
-    AppendEntityHighlight(cmd, cmd.breakEntity, hlLines, hlCircles);
-  // LENGTHEN DYnamic latches its target between the object pick and the new-length pick, exactly
-  // as BREAK latches breakEntity — so it reads as a selection for the same REQ-056 reason. It was
-  // the one entity-latching REQ-103 command left out of this list (TASK-099 F3).
-  if (cmd.active == AppCommandState::Kind::Lengthen &&
-      cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget)
-    AppendEntityHighlight(cmd, cmd.lengthenPendingEntity, hlLines, hlCircles);
-  // FILLET's first curve is latched between the two picks, exactly as BREAK latches breakEntity —
-  // same REQ-056 reason (REQ-103 step 6a).
-  if (cmd.active == AppCommandState::Kind::Fillet &&
-      cmd.filletPhase == AppCommandState::FilletPhase::WaitSecondEntity)
-    AppendEntityHighlight(cmd, cmd.filletFirstEntity, hlLines, hlCircles);
-  // CHAMFER's first curve, same shape as FILLET's above (REQ-103 step 6b).
-  if (cmd.active == AppCommandState::Kind::Chamfer &&
-      cmd.chamferPhase == AppCommandState::ChamferPhase::WaitSecondEntity)
-    AppendEntityHighlight(cmd, cmd.chamferFirstEntity, hlLines, hlCircles);
+  if (const auto* brk = cmd.sessionAs<stepengine::BreakSession>();
+      brk && brk->phase == stepengine::BreakPhase::SelectSecondPoint)
+    AppendEntityHighlight(cmd, brk->entity, hlLines, hlCircles);
+  if (const auto* len = cmd.sessionAs<stepengine::LengthenSession>();
+      len && len->phase == stepengine::LengthenPhase::WaitDynamicTarget)
+    AppendEntityHighlight(cmd, len->pendingEntity, hlLines, hlCircles);
+  if (const auto* fil = cmd.sessionAs<stepengine::FilletSession>();
+      fil && fil->phase == stepengine::FilletPhase::WaitSecondEntity)
+    AppendEntityHighlight(cmd, fil->firstEntity, hlLines, hlCircles);
+  if (const auto* chm = cmd.sessionAs<stepengine::ChamferSession>();
+      chm && chm->phase == stepengine::ChamferPhase::WaitSecondEntity)
+    AppendEntityHighlight(cmd, chm->firstEntity, hlLines, hlCircles);
 }
 
 namespace {
@@ -1942,33 +1922,33 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
     if (sel.type == e.type && sel.index == e.index)
       return;
   }
-  if (cmd.active == AppCommandState::Kind::Trim) {
-    for (const auto& c : cmd.trimCutters) {
+  if (const auto* trim = cmd.sessionAs<stepengine::TrimSession>()) {
+    for (const auto& c : trim->cutters) {
       if (c.type == e.type && c.index == e.index)
         return;
     }
   }
-  if (cmd.active == AppCommandState::Kind::Extend) {
-    for (const auto& c : cmd.extendBoundaries) {
+  if (const auto* ext = cmd.sessionAs<stepengine::ExtendSession>()) {
+    for (const auto& c : ext->boundaries) {
       if (c.type == e.type && c.index == e.index)
         return;
     }
   }
-  if (cmd.active == AppCommandState::Kind::Break &&
-      cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint &&
-      cmd.breakEntity.type == e.type && cmd.breakEntity.index == e.index)
+  if (const auto* brk = cmd.sessionAs<stepengine::BreakSession>();
+      brk && brk->phase == stepengine::BreakPhase::SelectSecondPoint &&
+      brk->entity.type == e.type && brk->entity.index == e.index)
     return;
-  if (cmd.active == AppCommandState::Kind::Lengthen &&
-      cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget &&
-      cmd.lengthenPendingEntity.type == e.type && cmd.lengthenPendingEntity.index == e.index)
+  if (const auto* len = cmd.sessionAs<stepengine::LengthenSession>();
+      len && len->phase == stepengine::LengthenPhase::WaitDynamicTarget &&
+      len->pendingEntity.type == e.type && len->pendingEntity.index == e.index)
     return;
-  if (cmd.active == AppCommandState::Kind::Fillet &&
-      cmd.filletPhase == AppCommandState::FilletPhase::WaitSecondEntity &&
-      cmd.filletFirstEntity.type == e.type && cmd.filletFirstEntity.index == e.index)
+  if (const auto* fil = cmd.sessionAs<stepengine::FilletSession>();
+      fil && fil->phase == stepengine::FilletPhase::WaitSecondEntity &&
+      fil->firstEntity.type == e.type && fil->firstEntity.index == e.index)
     return;
-  if (cmd.active == AppCommandState::Kind::Chamfer &&
-      cmd.chamferPhase == AppCommandState::ChamferPhase::WaitSecondEntity &&
-      cmd.chamferFirstEntity.type == e.type && cmd.chamferFirstEntity.index == e.index)
+  if (const auto* chm = cmd.sessionAs<stepengine::ChamferSession>();
+      chm && chm->phase == stepengine::ChamferPhase::WaitSecondEntity &&
+      chm->firstEntity.type == e.type && chm->firstEntity.index == e.index)
     return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }

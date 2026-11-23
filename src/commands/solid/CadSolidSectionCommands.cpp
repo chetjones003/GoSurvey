@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "CadCoordinateFrame.hpp"
 
 #include <algorithm>
@@ -237,112 +238,111 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
 }
 
 std::string CadSectionPromptText(const AppCommandState& st) {
-  switch (st.sectionPhase) {
-  case AppCommandState::SectionPhase::SelectSolids:
+  const auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
+    return "SECTION";
+  switch (ss->phase) {
+  case stepengine::SectionPhase::SelectSolids:
     return "SECTION — select solids, Enter when done. ESC cancels.";
-  case AppCommandState::SectionPhase::WaitP1:
-    // `[UCS]` is bracketed so it draws as a clickable option (REQ-040), and it is what keeps
-    // increment 1's behaviour reachable: the active work plane, without picking three points.
+  case stepengine::SectionPhase::WaitP1:
     return "SECTION — first point on the section plane, or [UCS] for the work plane. ESC cancels.";
-  case AppCommandState::SectionPhase::WaitP2:
+  case stepengine::SectionPhase::WaitP2:
     return "SECTION — second point on the plane. ESC cancels.";
-  case AppCommandState::SectionPhase::WaitP3:
+  case stepengine::SectionPhase::WaitP3:
     return "SECTION — third point on the plane. ESC cancels.";
   }
   return "SECTION";
 }
 
-/// Resolve the selection into solid indices and move to the plane phase, or say why not.
 static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
-  st.sectionSolidIndices.clear();
+  auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
+    return;
+  ss->solidIndices.clear();
   const int nSolid = static_cast<int>(st.drawing.cadSolids.size());
   for (const SelectedEntity& e : st.selection)
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
-      st.sectionSolidIndices.push_back(e.index);
-  // Deduplicated, as SLICE does with the same data. A solid can reach `selection` twice — a
-  // rectangle merged into an existing selection, or a pick-first set carried in from another
-  // command — and without this SECTION would cut the same solid twice and lay two identical closed
-  // polylines on top of each other, then report "2 section outlines created" for one solid.
-  std::sort(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end());
-  st.sectionSolidIndices.erase(
-      std::unique(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end()),
-      st.sectionSolidIndices.end());
-  st.sectionSolidOwners.clear();
-  for (const int idx : st.sectionSolidIndices)
-    st.sectionSolidOwners.push_back(st.drawing.cadSolids[static_cast<std::size_t>(idx)]);
-  if (st.sectionSolidIndices.empty()) {
-    // Stays in the selection phase rather than ending: the user picked something, it just was not
-    // a solid, and throwing them out of the command for that is the behaviour this increment exists
-    // to remove.
+      ss->solidIndices.push_back(e.index);
+  std::sort(ss->solidIndices.begin(), ss->solidIndices.end());
+  ss->solidIndices.erase(
+      std::unique(ss->solidIndices.begin(), ss->solidIndices.end()),
+      ss->solidIndices.end());
+  ss->solidOwners.clear();
+  for (const int idx : ss->solidIndices)
+    ss->solidOwners.push_back(st.drawing.cadSolids[static_cast<std::size_t>(idx)]);
+  if (ss->solidIndices.empty()) {
     log.push_back("SECTION — that is not a solid. Select one or more solids, Enter when done.");
-    st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+    ss->phase = stepengine::SectionPhase::SelectSolids;
     return;
   }
-  st.sectionPhase = AppCommandState::SectionPhase::WaitP1;
+  ss->phase = stepengine::SectionPhase::WaitP1;
   log.push_back(CadSectionPromptText(st));
 }
 
 void CancelSectionCommand(AppCommandState& st) {
-  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
-  st.sectionSolidIndices.clear();
-  st.sectionSolidOwners.clear();
+  if (auto* ss = st.sessionAs<stepengine::SectionSession>()) {
+    ss->phase = stepengine::SectionPhase::SelectSolids;
+    ss->solidIndices.clear();
+    ss->solidOwners.clear();
+  }
 }
 
-/// `SECTION` — choose solids, then define the section plane by three points (REQ-335 increment 2).
-///
-/// Pick-first is honoured: with solids already selected it goes straight to the plane, which is the
-/// convention every modify command in this application already follows.
 void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelSectionCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Section;
-  st.lastCommand = AppCommandState::Kind::Section;
   st.selBoxWaitingSecond = false;
+  auto sess = std::make_unique<stepengine::SectionSession>();
+  auto* ss = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
   if (!st.selection.empty()) {
     SectionEnterPlanePhase(st, log);
-    if (st.sectionPhase != AppCommandState::SectionPhase::SelectSolids)
+    if (ss->phase != stepengine::SectionPhase::SelectSolids)
       return;
     st.selection.clear();
   }
-  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  ss->phase = stepengine::SectionPhase::SelectSolids;
   log.push_back(CadSectionPromptText(st));
 }
 
-/// Build the plane from the three picked points and section with it.
 static void CommitSectionFromPoints(AppCommandState& st, std::vector<std::string>& log) {
+  auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
+    return;
   const ray3d::Vec3 n =
-      ray3d::Cross(ray3d::Sub(st.sectionP2, st.sectionP1), ray3d::Sub(st.sectionP3, st.sectionP1));
+      ray3d::Cross(ray3d::Sub(ss->p2, ss->p1), ray3d::Sub(ss->p3, ss->p1));
   if (!(ray3d::Length(n) > 1e-9)) {
-    // Collinear points are a plane with no orientation. Said, not guessed at — and the command
-    // stays open at the third point so the pick can simply be repeated.
     log.push_back("SECTION — the three points are in a line; they do not define a plane.");
-    st.sectionPhase = AppCommandState::SectionPhase::WaitP3;
+    ss->phase = stepengine::SectionPhase::WaitP3;
     log.push_back(CadSectionPromptText(st));
     return;
   }
-  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, st.sectionP1, ray3d::Normalize(n),
-                          log);
-  st.active = AppCommandState::Kind::None;
-  CancelSectionCommand(st);
+  const std::vector<int> indices = ss->solidIndices;
+  const auto owners = ss->solidOwners;
+  const ray3d::Vec3 p1 = ss->p1;
+  CadSectionSolidsByPlane(st, indices, owners, p1, ray3d::Normalize(n), log);
+  stepengine::EndSession(st);
 }
 
-/// Section by the ACTIVE UCS plane — increment 1's behaviour, reached now by the `[UCS]` option.
 static void CommitSectionByUcs(AppCommandState& st, std::vector<std::string>& log) {
+  auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
+    return;
   const ucs::Ucs frame = CadActiveUcsStorage(st);
-  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, frame.origin, frame.zAxis, log);
-  st.active = AppCommandState::Kind::None;
-  CancelSectionCommand(st);
+  const std::vector<int> indices = ss->solidIndices;
+  const auto owners = ss->solidOwners;
+  CadSectionSolidsByPlane(st, indices, owners, frame.origin, frame.zAxis, log);
+  stepengine::EndSession(st);
 }
 
 bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Section)
+  auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
-  using SP = AppCommandState::SectionPhase;
+  using SP = stepengine::SectionPhase;
 
-  if (st.sectionPhase == SP::SelectSolids) {
+  if (ss->phase == SP::SelectSolids) {
     if (!line.empty())
-      return false;  // a typed line during selection is not ours; let the dispatcher have it
+      return false;
     if (st.selection.empty()) {
       log.push_back("SECTION — nothing selected. Click a solid, or ESC.");
       return true;
@@ -352,9 +352,9 @@ bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std:
   }
 
   if (line.empty())
-    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+    return true;
 
-  if (st.sectionPhase == SP::WaitP1) {
+  if (ss->phase == SP::WaitP1) {
     const std::string low = StringUtil::toLowerAsciiCopy(line);
     if (low == "ucs" || low == "u") {
       CommitSectionByUcs(st, log);
@@ -364,15 +364,15 @@ bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std:
 
   ray3d::Vec3 p{};
   if (!ParseSolidBasePoint(st, line, &p, log, "SECTION"))
-    return true;  // it has already said why, once (code review on #478, finding 11)
-  if (st.sectionPhase == SP::WaitP1) {
-    st.sectionP1 = p;
-    st.sectionPhase = SP::WaitP2;
-  } else if (st.sectionPhase == SP::WaitP2) {
-    st.sectionP2 = p;
-    st.sectionPhase = SP::WaitP3;
+    return true;
+  if (ss->phase == SP::WaitP1) {
+    ss->p1 = p;
+    ss->phase = SP::WaitP2;
+  } else if (ss->phase == SP::WaitP2) {
+    ss->p2 = p;
+    ss->phase = SP::WaitP3;
   } else {
-    st.sectionP3 = p;
+    ss->p3 = p;
     CommitSectionFromPoints(st, log);
     return true;
   }
@@ -381,22 +381,23 @@ bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std:
 }
 
 void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Section)
+  auto* ss = st.sessionAs<stepengine::SectionSession>();
+  if (!ss)
     return;
-  using SP = AppCommandState::SectionPhase;
+  using SP = stepengine::SectionPhase;
   const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
                       static_cast<double>(CadCommitElevation(st))};
-  switch (st.sectionPhase) {
+  switch (ss->phase) {
   case SP::WaitP1:
-    st.sectionP1 = p;
-    st.sectionPhase = SP::WaitP2;
+    ss->p1 = p;
+    ss->phase = SP::WaitP2;
     break;
   case SP::WaitP2:
-    st.sectionP2 = p;
-    st.sectionPhase = SP::WaitP3;
+    ss->p2 = p;
+    ss->phase = SP::WaitP3;
     break;
   case SP::WaitP3:
-    st.sectionP3 = p;
+    ss->p3 = p;
     CommitSectionFromPoints(st, log);
     return;
   case SP::SelectSolids:
@@ -767,7 +768,7 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
 void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::SectionClip;
+  stepengine::BeginSession(st, std::make_unique<stepengine::SectionClipSession>(), /*recordAsLastCommand=*/false);
   log.push_back(SectionClipReport(st));
 }
 
@@ -788,7 +789,8 @@ ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st) {
 }
 
 const char* CadSectionPlanePromptText(const AppCommandState& st) {
-  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
+  const auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (sp && sp->phase == stepengine::SectionPlanePhase::WaitThroughPoint)
     return "SECTIONPLANE — specify the through point of the section line. ESC cancels.";
   return "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels.";
 }
@@ -856,20 +858,21 @@ static bool ApplySectionPlaneFromLine(AppCommandState& st, const ray3d::Vec3& a,
 /// Take \p p as the next point of the section line, and place the plane once there are two.
 static void SubmitSectionPlaneLinePoint(AppCommandState& st, const ray3d::Vec3& p,
                                         std::vector<std::string>& log) {
-  using PP = AppCommandState::SectionPlanePhase;
-  if (st.sectionPlanePhase == PP::PickFaceOrPoint) {
-    st.sectionPlaneP1 = p;
-    st.sectionPlanePhase = PP::WaitThroughPoint;
+  auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (!sp)
+    return;
+  using PP = stepengine::SectionPlanePhase;
+  if (sp->phase == PP::PickFaceOrPoint) {
+    sp->p1 = p;
+    sp->phase = PP::WaitThroughPoint;
     log.push_back(CadSectionPlanePromptText(st));
     return;
   }
-  if (!ApplySectionPlaneFromLine(st, st.sectionPlaneP1, p, log)) {
-    // Still open, still on the same first point: the through point is what was wrong, and making
-    // the user start the line again would throw away a pick that was fine.
+  if (!ApplySectionPlaneFromLine(st, sp->p1, p, log)) {
     log.push_back(CadSectionPlanePromptText(st));
     return;
   }
-  CancelSectionPlaneCommand(st);
+  stepengine::EndSession(st);
 }
 
 /// ORTHO applied to a section line: the through point is pulled onto the work plane's X or Y from the
@@ -915,70 +918,62 @@ static bool SectionPlanePointFromRay(const AppCommandState& st, const ray3d::Ray
 
 void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray,
                                const solidpick::Tolerance& tol) {
-  if (st.active != AppCommandState::Kind::SectionPlane ||
-      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint) {
-    st.sectionPlanePreviewValid = false;
+  auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (!sp || sp->phase != stepengine::SectionPlanePhase::WaitThroughPoint) {
+    if (sp)
+      sp->previewValid = false;
     return;
   }
   SelectedSubObject hit{};
   solidpick::Pick pick{};
   const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
   ray3d::Vec3 p{};
-  st.sectionPlanePreviewValid = SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, &p);
-  if (st.sectionPlanePreviewValid)
-    st.sectionPlanePreviewPoint = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
+  sp->previewValid = SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, &p);
+  if (sp->previewValid)
+    sp->previewPoint = SectionPlaneOrthoConstrain(st, sp->p1, p);
 }
 
-void ClearSectionPlanePreview(AppCommandState& st) { st.sectionPlanePreviewValid = false; }
+void ClearSectionPlanePreview(AppCommandState& st) {
+  if (auto* sp = st.sessionAs<stepengine::SectionPlaneSession>())
+    sp->previewValid = false;
+}
 
 void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::SectionPlane)
+  auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (!sp)
     return;
   ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
                 static_cast<double>(CadCommitElevation(st))};
-  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
-    p = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
+  if (sp->phase == stepengine::SectionPlanePhase::WaitThroughPoint)
+    p = SectionPlaneOrthoConstrain(st, sp->p1, p);
   SubmitSectionPlaneLinePoint(st, p, log);
 }
 
 bool HandleSectionPlaneTextInput(const std::string& lineIn, AppCommandState& st,
                                  std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::SectionPlane)
+  if (!st.sessionAs<stepengine::SectionPlaneSession>())
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   if (line.empty())
-    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+    return true;
   ray3d::Vec3 p{};
   if (!ParseSolidBasePoint(st, line, &p, log, "SECTIONPLANE"))
-    return true;  // it has already said why, once
+    return true;
   SubmitSectionPlaneLinePoint(st, p, log);
   return true;
 }
 
 void CancelSectionPlaneCommand(AppCommandState& st) {
   if (st.active == AppCommandState::Kind::SectionPlane)
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
 }
 
-/// `SECTIONPLANE` — put a section plane on a face of a solid, and show it (REQ-342).
-///
-/// The command has one step, so being active IS "waiting for a face". Note what it does NOT do:
-/// it does not ask which solids to section, the way `SECTION` does. A clip plane is a property of
-/// the view and cuts everything in the drawing, so a per-solid selection would be a question whose
-/// answer is never used — and #479's own screenshots show AutoCAD asking for the face and nothing
-/// else.
 void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::SectionPlane;
-  st.lastCommand = AppCommandState::Kind::SectionPlane;
   st.selBoxWaitingSecond = false;
-  st.sectionPlanePhase = AppCommandState::SectionPlanePhase::PickFaceOrPoint;
-  st.sectionPlaneP1 = ray3d::Vec3{};
+  stepengine::BeginSession(st, std::make_unique<stepengine::SectionPlaneSession>());
   if (st.drawing.cadSolids.empty()) {
-    // Said before the user hunts for something to click. The command still opens: a solid can be
-    // created and picked without retyping, and refusing outright would be a command that works or
-    // not depending on drawing order.
     log.push_back("SECTIONPLANE — there are no solids in the drawing yet.");
   }
   log.push_back(CadSectionPlanePromptText(st));
@@ -1057,31 +1052,27 @@ static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& so
 /// `Ctrl`+click has used since REQ-318, so the face this takes is the face that highlighted.
 bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
                                 const solidpick::Tolerance& tol, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::SectionPlane)
+  auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (!sp)
     return false;
-  using PP = AppCommandState::SectionPlanePhase;
+  using PP = stepengine::SectionPlanePhase;
 
   SelectedSubObject hit{};
   solidpick::Pick pick{};
   const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
 
-  // Where this click lands when it is taken as a POINT rather than a face: on the geometry it hit,
-  // which is what makes "click the middle of the torus" mean the middle of the torus, and otherwise
-  // on the work plane, which is where a click in empty space has always been resolved.
   const auto pointOfClick = [&](ray3d::Vec3* out) {
     return SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, out);
   };
 
-  if (st.sectionPlanePhase == PP::WaitThroughPoint) {
+  if (sp->phase == PP::WaitThroughPoint) {
     ray3d::Vec3 p{};
     if (!pointOfClick(&p)) {
       log.push_back("SECTIONPLANE — that click is not on the work plane; pick a point on it.");
       log.push_back(CadSectionPlanePromptText(st));
       return false;
     }
-    // ORTHO applies to the picked through point, exactly as it did to the preview — so the plane
-    // that lands is the plane that was drawn.
-    SubmitSectionPlaneLinePoint(st, SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p), log);
+    SubmitSectionPlaneLinePoint(st, SectionPlaneOrthoConstrain(st, sp->p1, p), log);
     return st.active != AppCommandState::Kind::SectionPlane;
   }
 
@@ -1179,12 +1170,12 @@ SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
 }
 
 bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out) {
-  if (!out || !st.sectionPlanePreviewValid ||
-      st.active != AppCommandState::Kind::SectionPlane ||
-      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint)
+  const auto* sp = st.sessionAs<stepengine::SectionPlaneSession>();
+  if (!out || !sp || !sp->previewValid ||
+      sp->phase != stepengine::SectionPlanePhase::WaitThroughPoint)
     return false;
-  const ray3d::Vec3 a = st.sectionPlaneP1;
-  const ray3d::Vec3 b = st.sectionPlanePreviewPoint;
+  const ray3d::Vec3 a = sp->p1;
+  const ray3d::Vec3 b = sp->previewPoint;
   ucs::Ucs frame{};
   if (!SectionPlaneFrameFromLine(st, a, b, &frame))
     return false;  // the cursor is on the first point, or straight above it: no plane to show yet

@@ -624,11 +624,11 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     tessellateSolidPtr(sp);
   // Only the run PIPERUN is drawing right now is a draft; every other run is finished geometry.
-  const bool routingNow =
-      st.active == AppCommandState::Kind::PipeRun && st.pipeRunLiveIndex >= 0;
+  const auto* pipeSess = st.sessionAs<stepengine::PipeRunSession>();
+  const bool routingNow = pipeSess && pipeSess->liveIndex >= 0;
   for (std::size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
     const bool draft = routingNow && i < st.pipeRunWorldSolidOwnerIndex.size() &&
-                       st.pipeRunWorldSolidOwnerIndex[i] == st.pipeRunLiveIndex;
+                       st.pipeRunWorldSolidOwnerIndex[i] == pipeSess->liveIndex;
     tessellateSolidPtr(st.pipeRunWorldSolids[i], draft);
   }
 

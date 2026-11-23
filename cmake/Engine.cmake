@@ -229,7 +229,21 @@ set_source_files_properties(src/io/src/LibreDwg.cpp src/io/src/LibreDwgCad.cpp P
 # (WinFileDialogs.cpp or HeadlessFileDialogs.cpp) and PDF attach (PdfAttach.cpp or HeadlessPdfAttach.cpp).
 set(GOSURVEY_DOMAIN_SOURCES
   # Commands
-  src/commands/CadCommands.cpp
+  src/commands/CadDocumentState.cpp
+  src/commands/CadPickingHelpers.cpp
+  src/commands/engine/CommandRegistry.cpp
+  src/commands/engine/StepEngine.cpp
+  src/commands/modify/CadModifyPilotModule.cpp
+  src/commands/modify/CadModifyRestModule.cpp
+  src/commands/draw/CadDrawModule.cpp
+  src/commands/solid/CadSolidModule.cpp
+  src/commands/pipe/CadPipeSiteModule.cpp
+  src/commands/surface/CadSurfaceModule.cpp
+  src/commands/alignment/CadAlignmentModule.cpp
+  src/commands/ucs/CadUcsViewModule.cpp
+  src/commands/gizmo/CadGizmoGeoPropModule.cpp
+  src/commands/blocks/CadBlocksModule.cpp
+  src/commands/misc/CadMiscModule.cpp
   src/commands/pipe/CadPipeCommands.cpp
   src/commands/surface/CadSurfaceCommands.cpp
   src/commands/connect/CadBlockConnectCommands.cpp
@@ -337,7 +351,6 @@ target_link_libraries(gosurvey_domain PUBLIC
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
 target_compile_definitions(gosurvey_domain PRIVATE NOMINMAX)
-set_source_files_properties(src/commands/CadCommands.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
 if(GOSURVEY_ENABLE_ANALYZE)
   set_source_files_properties(src/platform/StbImage.cpp PROPERTIES COMPILE_OPTIONS /analyze-)
 endif()

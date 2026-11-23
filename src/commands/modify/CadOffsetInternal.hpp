@@ -9,24 +9,12 @@
 
 namespace OffsetCmd {
 
-static void ResetOffsetDraft(AppCommandState& st) {
-  st.offsetEntityValid = false;
-  st.offsetEntity = {};
-  st.offsetTypedDistance = 0.f;
-  st.offsetThroughMode = false;
-  st.offsetPhase = AppCommandState::OffsetPhase::WaitDistanceOrThrough;
-  st.offsetHoverHighlightValid = false;
-  st.offsetHoverEntity = {};
-  st.offsetPaperLayoutIndex = -1;
-}
-
-/// Loop-back reset used between offsets within one OFFSET invocation (REQ-103): clears only the
-/// picked entity, keeping the typed distance / through-mode so the next pick reuses it, matching
-/// TRIM's own per-target loop.
 static void ResetOffsetSelectionForNextPick(AppCommandState& st) {
-  st.offsetEntityValid = false;
-  st.offsetEntity = {};
-  st.offsetPhase = AppCommandState::OffsetPhase::WaitSelectEntity;
+  if (auto* ofs = st.sessionAs<stepengine::OffsetSession>()) {
+    ofs->entityValid = false;
+    ofs->entity = {};
+    ofs->phase = stepengine::OffsetPhase::WaitSelectEntity;
+  }
   st.offsetHoverHighlightValid = false;
   st.offsetHoverEntity = {};
 }
@@ -368,9 +356,10 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
 }
 
 static bool CommitOffsetSigned(AppCommandState& st, float signedD, std::vector<std::string>& log) {
-  if (!st.offsetEntityValid)
+  const auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs || !ofs->entityValid)
     return false;
-  const SelectedEntity& e = st.offsetEntity;
+  const SelectedEntity& e = ofs->entity;
   bool ok = false;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg:
@@ -400,15 +389,6 @@ static bool CommitOffsetSigned(AppCommandState& st, float signedD, std::vector<s
   return ok;
 }
 
-static void FinishOffsetAndIdle(AppCommandState& st, std::vector<std::string>& log) {
-  (void)log;
-  ResetOffsetDraft(st);
-  st.active = AppCommandState::Kind::None;
-}
-
-/// REQ-103's documented TRIM/OFFSET per-target loop: after a successful offset, go back to
-/// "select object" with the same typed distance / through-mode still armed, instead of ending the
-/// command. The caller only reaches here after a successful CommitOffsetSigned.
 static void LoopOffsetBackToSelect(AppCommandState& st, std::vector<std::string>& log) {
   ResetOffsetSelectionForNextPick(st);
   log.push_back("OFFSET — select next object to offset (same distance), or Enter/Esc to finish.");
@@ -416,9 +396,10 @@ static void LoopOffsetBackToSelect(AppCommandState& st, std::vector<std::string>
 
 static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
                                     bool loopToSelect = true) {
-  if (!st.offsetEntityValid)
+  const auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs || !ofs->entityValid)
     return;
-  const SelectedEntity& e = st.offsetEntity;
+  const SelectedEntity e = ofs->entity;
   const bool tilted = !CadWorkPlaneIsWorldXy(st);  // REQ-329 increment 7
   const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
                                   : ucs::Point2D{px, py};
@@ -483,10 +464,11 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
 
 static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
                                  bool loopToSelect = true) {
-  if (!st.offsetEntityValid || st.offsetTypedDistance <= 0.f)
+  const auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs || !ofs->entityValid || ofs->typedDistance <= 0.f)
     return;
-  const float d = st.offsetTypedDistance;
-  const SelectedEntity& e = st.offsetEntity;
+  const float d = ofs->typedDistance;
+  const SelectedEntity e = ofs->entity;
   const bool tilted = !CadWorkPlaneIsWorldXy(st);
   // REQ-329 increment 7: on a tilted work plane the pick is resolved in the plane's own 2D frame.
   const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
@@ -622,8 +604,11 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
 /// resulting copy to the owning layout. The temporary state keeps the geometric rules shared while
 /// the real document gets exactly one undo snapshot and no model-space mutation.
 static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
-  const int li = st.offsetPaperLayoutIndex;
-  if (li < 0 || static_cast<size_t>(li) >= st.drawing.paperLayouts.size() || !st.offsetEntityValid)
+  auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs)
+    return false;
+  const int li = ofs->paperLayoutIndex;
+  if (li < 0 || static_cast<size_t>(li) >= st.drawing.paperLayouts.size() || !ofs->entityValid)
     return false;
   const PaperLayout& sourceLayout = st.drawing.paperLayouts[static_cast<size_t>(li)];
   AppCommandState staged;
@@ -634,16 +619,18 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   staged.drawing.userEllipses.clear(); staged.drawing.userEllAttrs.clear();
   staged.drawing.userPolylineOffsets.clear(); staged.drawing.userPolylineVerts.clear(); staged.drawing.userPolylineVertsBulge.clear();
   staged.drawing.userPolylineVertsNormal.clear(); staged.drawing.userPolylineClosed.clear(); staged.drawing.userPolylineAttrs.clear();
-  staged.offsetEntity = {st.offsetEntity.type, 0};
-  staged.offsetEntityValid = true;
-  staged.offsetTypedDistance = st.offsetTypedDistance;
-  staged.offsetThroughMode = st.offsetThroughMode;
-  staged.offsetPhase = st.offsetPhase;
+  auto stagedOfs = std::make_unique<stepengine::OffsetSession>();
+  stagedOfs->entity = {ofs->entity.type, 0};
+  stagedOfs->entityValid = true;
+  stagedOfs->typedDistance = ofs->typedDistance;
+  stagedOfs->throughMode = ofs->throughMode;
+  stagedOfs->phase = ofs->phase;
+  staged.activeSession = std::move(stagedOfs);
+  staged.active = CadCommandKind::Offset;
   const EntityAttributes fallback = MakeNewEntityAttrs(st);
   EntityAttributes inherited = fallback;
-  using PT = PaperRef::Type;
-  const int index = st.offsetEntity.index;
-  switch (st.offsetEntity.type) {
+  const int index = ofs->entity.index;
+  switch (ofs->entity.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(index) * 6;
     if (index < 0 || k + 5 >= sourceLayout.paperLines.size()) return false;
@@ -694,7 +681,7 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   }
 
   std::vector<std::string> stagedLog;
-  if (st.offsetPhase == AppCommandState::OffsetPhase::WaitThroughPick)
+  if (ofs->phase == stepengine::OffsetPhase::WaitThroughPick)
     HandleOffsetThroughPick(staged, px, py, stagedLog, false);
   else
     HandleOffsetSidePick(staged, px, py, stagedLog, false);
@@ -707,7 +694,7 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   }
 
   PaperLayout updated = sourceLayout;
-  switch (st.offsetEntity.type) {
+  switch (ofs->entity.type) {
   case SelectedEntity::Type::LineSeg:
     for (size_t i = 6; i < staged.drawing.userLinesFlat.size(); ++i) updated.paperLines.push_back(static_cast<float>(staged.drawing.userLinesFlat[i]));
     updated.paperLineAttrs.push_back(inherited);
@@ -746,14 +733,13 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   return true;
 }
 
-
-
 static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  using OP = AppCommandState::OffsetPhase;
-  switch (st.offsetPhase) {
+  auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs)
+    return;
+  using OP = stepengine::OffsetPhase;
+  switch (ofs->phase) {
   case OP::WaitDistanceOrThrough:
-    // REQ-103: distance/through-mode is specified BEFORE an object is picked, matching AutoCAD's
-    // own OFFSET order. A viewport click here isn't a valid answer to that prompt.
     log.push_back("OFFSET — type a positive offset distance, or T for through-point mode.");
     return;
   case OP::WaitSelectEntity: {
@@ -763,21 +749,11 @@ static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, 
       log.push_back("OFFSET — nothing under cursor; try again.");
       return;
     }
-    // REQ-087 / REQ-201. A feature line is pickable (it has to be, to select and move), so without
-    // this it would be accepted here and then dropped silently by CommitOffsetSigned's `default:`.
-    // Refusing is not a limitation we are hiding — offsetting a 3D chain has no defined answer for
-    // what elevation the offset copy carries, and neither REQ-087 nor REQ-088 supplies one, so the
-    // Workshop does not get to pick one (CLAUDE.md layer rule 3). Stays in the select phase.
     if (hit.type == SelectedEntity::Type::FeatureLine) {
       log.push_back("OFFSET — 1 feature line ignored: offsetting one has no defined elevation for "
                     "the new line. Pick a line, circle, arc, ellipse, or polyline.");
       return;
     }
-    // REQ-068 / ADR-036 (c) — the same reasoning, one kind later. A surface became pickable, so
-    // without this it would be accepted here and then dropped by CommitOffsetSigned's `default:`,
-    // leaving the user having picked something and watched nothing happen. There is also no answer
-    // to offer: "offset a surface" would mean a second surface at a vertical or normal displacement,
-    // which is a grading operation no requirement defines.
     if (hit.type == SelectedEntity::Type::Surface) {
       log.push_back("OFFSET — 1 surface ignored: a surface cannot be offset. Pick a line, circle, "
                     "arc, ellipse, or polyline.");
@@ -787,13 +763,13 @@ static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, 
       log.push_back("OFFSET — splines are not supported; nothing changed.");
       return;
     }
-    st.offsetEntity = hit;
-    st.offsetEntityValid = true;
-    if (st.offsetThroughMode) {
-      st.offsetPhase = OP::WaitThroughPick;
+    ofs->entity = hit;
+    ofs->entityValid = true;
+    if (ofs->throughMode) {
+      ofs->phase = OP::WaitThroughPick;
       log.push_back("OFFSET — click the through point (line / circle / arc).");
     } else {
-      st.offsetPhase = OP::WaitSidePick;
+      ofs->phase = OP::WaitSidePick;
       log.push_back("OFFSET — pick which side of the object to offset.");
     }
     return;

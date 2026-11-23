@@ -174,14 +174,13 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
   assert(ghosts != nullptr);
   if (ghosts == nullptr)
     return;
-  using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
+  using MP = stepengine::ModifyPhase;
   const int count = static_cast<int>(st.drawing.pdfAttachments.size());
-  if (st.active == K::Move || st.active == K::Copy) {
-    if (st.modifyPhase != MP::NeedDestination)
+  if (const auto* mc = st.sessionAs<stepengine::MoveCopySession>()) {
+    if (mc->phase != MP::NeedDestination)
       return;
-    const float dx = curX - st.modifyBaseX;
-    const float dy = curY - st.modifyBaseY;
+    const float dx = curX - mc->baseX;
+    const float dy = curY - mc->baseY;
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
@@ -192,12 +191,12 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     }
     return;
   }
-  if (st.active == K::Rotate) {
+  if (const auto* rs = st.sessionAs<stepengine::RotateSession>()) {
     float theta = 0.f;
     if (!CadRotatePreviewTheta(st, curX, curY, &theta))
       return;
-    const float bx = st.rotateBaseX;
-    const float by = st.rotateBaseY;
+    const float bx = rs->baseX;
+    const float by = rs->baseY;
     constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
@@ -209,14 +208,14 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
     }
     return;
   }
-  if (st.active == K::Scale) {
-    if (st.modifyPhase != MP::NeedDestination)
+  if (const auto* ss = st.sessionAs<stepengine::ScaleSession>()) {
+    if (ss->phase != MP::NeedDestination)
       return;
     float sc = 1.f;
     if (!CadScalePreviewFactor(st, curX, curY, &sc))
       return;
-    const float bx = st.modifyBaseX;
-    const float by = st.modifyBaseY;
+    const float bx = ss->baseX;
+    const float by = ss->baseY;
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
@@ -638,8 +637,8 @@ void EditorViewport::paintGL() {
     AppendCadDraftRubberLines(m_State, m_Cursor.x, m_Cursor.y, m_State.orthoMode,
         camera.targetX, camera.targetY, camera.orthoHalfH, h, rubber);
     std::vector<float> trimRemovalLines;
-    if (m_State.active == AppCommandState::Kind::Trim &&
-        m_State.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2 &&
+    if (const auto* trimSess = m_State.sessionAs<stepengine::TrimSession>();
+        trimSess && trimSess->phase == stepengine::TrimPhase::CuttingLine_WaitP2 &&
         (m_State.activeSpaceIndex == kModelSpaceIndex || InFloatingModelSpace(m_State))) {
       float p2x = static_cast<float>(m_Cursor.x);
       float p2y = static_cast<float>(m_Cursor.y);
@@ -647,24 +646,24 @@ void EditorViewport::paintGL() {
                                                 : m_State.uiCursorWorldZ;
       const bool trim3d = !CadViewIsPlan(m_State);
       if (trim3d) {
-        ApplyOrthoConstrainFromAnchor(m_State, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
-            &p2x, &p2y, m_State.orthoMode, m_State.trimCutInfP1z, p2z, &p2z);
+        ApplyOrthoConstrainFromAnchor(m_State, trimSess->cutInfP1x, trimSess->cutInfP1y,
+            &p2x, &p2y, m_State.orthoMode, trimSess->cutInfP1z, p2z, &p2z);
       } else if (m_State.orthoMode) {
-        const float dx = p2x - m_State.trimCutInfP1x;
-        const float dy = p2y - m_State.trimCutInfP1y;
-        if (std::fabs(dx) >= std::fabs(dy)) p2y = m_State.trimCutInfP1y;
-        else p2x = m_State.trimCutInfP1x;
+        const float dx = p2x - trimSess->cutInfP1x;
+        const float dy = p2y - trimSess->cutInfP1y;
+        if (std::fabs(dx) >= std::fabs(dy)) p2y = trimSess->cutInfP1y;
+        else p2x = trimSess->cutInfP1x;
       }
-      AppendDashedPreviewSegment(rubber, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
-          m_State.trimCutInfP1z, p2x, p2y, p2z, camera.orthoHalfH, h);
+      AppendDashedPreviewSegment(rubber, trimSess->cutInfP1x, trimSess->cutInfP1y,
+          trimSess->cutInfP1z, p2x, p2y, p2z, camera.orthoHalfH, h);
       if (trim3d) {
         CadTrimAppendCutLineRemovedPreview3D(m_State,
-            {m_State.trimCutInfP1x, m_State.trimCutInfP1y, m_State.trimCutInfP1z},
+            {trimSess->cutInfP1x, trimSess->cutInfP1y, trimSess->cutInfP1z},
             {p2x, p2y, p2z}, &trimRemovalLines);
       } else {
-        CadTrimAppendCutLineRemovedPreview(m_State, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
-            p2x, p2y, .5f * (m_State.trimCutInfP1x + p2x),
-            .5f * (m_State.trimCutInfP1y + p2y), &trimRemovalLines);
+        CadTrimAppendCutLineRemovedPreview(m_State, trimSess->cutInfP1x, trimSess->cutInfP1y,
+            p2x, p2y, .5f * (trimSess->cutInfP1x + p2x),
+            .5f * (trimSess->cutInfP1y + p2y), &trimRemovalLines);
       }
     }
     BuildTransformPreview(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
@@ -1071,9 +1070,12 @@ void EditorViewport::paintGL() {
     const auto isTrimHighlighted = [&](PaperEntityRef::Type type, int index) {
       if (m_State.paperHoverValid && m_State.paperHover.type == type && m_State.paperHover.index == index)
         return true;
-      return std::find_if(m_State.paperTrimCutters.begin(), m_State.paperTrimCutters.end(),
+      const auto* trimSess = m_State.sessionAs<stepengine::TrimSession>();
+      if (!trimSess)
+        return false;
+      return std::find_if(trimSess->paperCutters.begin(), trimSess->paperCutters.end(),
           [&](const PaperEntityRef& cutter) { return cutter.type == type && cutter.index == index; }) !=
-          m_State.paperTrimCutters.end();
+          trimSess->paperCutters.end();
     };
     for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6) {
       const int index = static_cast<int>(i / 6);
@@ -1815,7 +1817,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
         m_State.active == AppCommandState::Kind::SectionPlane) {
-      if (m_State.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+      const auto* sp = m_State.sessionAs<stepengine::SectionPlaneSession>();
+      if (sp && sp->phase == stepengine::SectionPlanePhase::WaitThroughPoint) {
         SubmitSectionPlanePointPick(m_State, static_cast<float>(m_Cursor.x),
             static_cast<float>(m_Cursor.y), m_Log);
         overlayHandled = true;
@@ -2377,8 +2380,8 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     } else if (m_State.gizmoHoverAxis >= 0 && !m_State.gizmoDragActive) {
       m_State.gizmoHoverAxis = -1;
     }
-    if (m_State.active == AppCommandState::Kind::SectionPlane &&
-        m_State.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+    if (const auto* sp = m_State.sessionAs<stepengine::SectionPlaneSession>();
+        sp && sp->phase == stepengine::SectionPlanePhase::WaitThroughPoint) {
       solidpick::Tolerance previewTol;
       previewTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
       previewTol.edge = previewTol.vertex;

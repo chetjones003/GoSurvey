@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -274,20 +275,22 @@ const SolidParamSpec* CadSolidParamSpecs(brep::PrimitiveKind kind, int* outCount
 }
 
 void CancelSolidCommand(AppCommandState& st) {
-  st.solidKind = brep::PrimitiveKind::None;
-  st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
-  st.solidBase = ray3d::Vec3{};
-  st.solidPendingParam = -1;
-  st.solidPendingIsDiameter = false;
-  st.solidPickValid = false;
-  st.solidBaseAngleRad = 0.0;
-  st.solidInscribed = false;
-  st.solidBaseIsCorner = false;
-  st.solidCornerDx = 0.0;
-  st.solidCornerDy = 0.0;
-  for (int i = 0; i < AppCommandState::kMaxSolidParams; ++i) {
-    st.solidParamValue[i] = 0.0;
-    st.solidParamSet[i] = false;
+  if (auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>()) {
+    ss->solidKind = brep::PrimitiveKind::None;
+    ss->phase = stepengine::SolidPhase::WaitBasePoint;
+    ss->solidBase = ray3d::Vec3{};
+    ss->solidPendingParam = -1;
+    ss->solidPendingIsDiameter = false;
+    ss->solidPickValid = false;
+    ss->solidBaseAngleRad = 0.0;
+    ss->solidInscribed = false;
+    ss->solidBaseIsCorner = false;
+    ss->solidCornerDx = 0.0;
+    ss->solidCornerDy = 0.0;
+    for (int i = 0; i < stepengine::SolidPrimitiveSession::kMaxSolidParams; ++i) {
+      ss->solidParamValue[i] = 0.0;
+      ss->solidParamSet[i] = false;
+    }
   }
 }
 
@@ -312,25 +315,24 @@ std::string TrimNumber(double v) {
 } // namespace
 
 std::string CadSolidPromptText(const AppCommandState& st) {
-  if (st.solidKind == brep::PrimitiveKind::None)
+  const auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss || ss->solidKind == brep::PrimitiveKind::None)
     return {};
-  const std::string verb = SolidVerbUpper(st.solidKind);
-  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
+  const std::string verb = SolidVerbUpper(ss->solidKind);
+  if (ss->phase == stepengine::SolidPhase::WaitBasePoint) {
     const char* what = "base centre point";
-    if (st.solidBaseIsCorner)
-      what = "first corner";  // BOX / WEDGE are drawn corner-to-corner, like AutoCAD
-    else if (st.solidKind == brep::PrimitiveKind::Sphere || st.solidKind == brep::PrimitiveKind::Torus)
+    if (ss->solidBaseIsCorner)
+      what = "first corner";
+    else if (ss->solidKind == brep::PrimitiveKind::Sphere || ss->solidKind == brep::PrimitiveKind::Torus)
       what = "centre point";
     return verb + " — " + std::string(what) + " (click, or type X,Y or X,Y,Z):";
   }
 
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
-  if (st.solidPendingParam >= 0 && st.solidPendingParam < n)
-    return verb + " — " + specs[st.solidPendingParam].label + ":";
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
+  if (ss->solidPendingParam >= 0 && ss->solidPendingParam < n)
+    return verb + " — " + specs[ss->solidPendingParam].label + ":";
 
-  // Lead with the dimension being PICKED, because that is what the cursor is currently changing and
-  // what the rubber band is showing — a prompt that opened with a list would bury it.
   const int picking = CadSolidCurrentPickParam(st);
   std::string s = verb + " — ";
   if (picking >= 0) {
@@ -341,115 +343,111 @@ std::string CadSolidPromptText(const AppCommandState& st) {
     s += " (click or type)";
     if (specs[picking].pick == SolidPickKind::Radius)
       s += ", [D]iameter";
-    if (st.solidKind == brep::PrimitiveKind::Pyramid)
-      s += std::string(", [I]nscribed (now ") + (st.solidInscribed ? "inscribed" : "circumscribed") + ")";
+    if (ss->solidKind == brep::PrimitiveKind::Pyramid)
+      s += std::string(", [I]nscribed (now ") + (ss->solidInscribed ? "inscribed" : "circumscribed") + ")";
     s += ". ";
   }
 
-  // Then every option, with the ones already set echoed back. A prompt that only listed the letters
-  // would make the user hold four numbers in their head; showing them is what lets a value be
-  // re-typed to correct it.
   for (int i = 0; i < n; ++i) {
     if (i)
       s += ", ";
     s += specs[i].letter;
     s += " ";
     s += specs[i].label;
-    if (st.solidParamSet[i])
-      s += " = " + TrimNumber(st.solidParamValue[i]);
+    if (ss->solidParamSet[i])
+      s += " = " + TrimNumber(ss->solidParamValue[i]);
   }
   s += ". Enter creates.";
   return s;
 }
 
 
-ucs::Ucs CadSolidPlacementFrameFor(const AppCommandState& st) { return SolidPlacementFrame(st, st.solidBase); }
+ucs::Ucs CadSolidPlacementFrameFor(const AppCommandState& st) {
+  const auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  return SolidPlacementFrame(st, ss ? ss->solidBase : ray3d::Vec3{});
+}
 
 int CadSolidCurrentPickParam(const AppCommandState& st) {
+  const auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss)
+    return -1;
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
   for (int i = 0; i < n; ++i) {
     if (specs[i].pick == SolidPickKind::Typed || specs[i].optional)
-      continue;  // keyword-and-default dimensions are never picked, and never block the sequence
-    if (!st.solidParamSet[i])
+      continue;
+    if (!ss->solidParamSet[i])
       return i;
   }
   return -1;
 }
 
 void CadResolveSolidPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
-  st.solidPickValid = false;
-  if (st.solidKind == brep::PrimitiveKind::None ||
-      st.solidPhase != AppCommandState::SolidPhase::WaitParameters)
+  auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss)
+    return;
+  ss->solidPickValid = false;
+  if (ss->solidKind == brep::PrimitiveKind::None ||
+      ss->phase != stepengine::SolidPhase::WaitParameters)
     return;
   const int picking = CadSolidCurrentPickParam(st);
   if (picking < 0)
     return;
   int specCount = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &specCount);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &specCount);
 
   const ucs::Ucs f = CadSolidPlacementFrameFor(st);
-  const ray3d::Vec3 d = ray3d::Sub(cursorOnPlane, st.solidBase);
+  const ray3d::Vec3 d = ray3d::Sub(cursorOnPlane, ss->solidBase);
   const double inPlaneX = ray3d::Dot(d, f.xAxis);
   const double inPlaneY = ray3d::Dot(d, f.yAxis);
 
   switch (specs[picking].pick) {
   case SolidPickKind::Radius:
-    st.solidPickA = std::sqrt(inPlaneX * inPlaneX + inPlaneY * inPlaneY);
-    st.solidPickAngleRad = std::atan2(inPlaneY, inPlaneX);
-    st.solidPickValid = st.solidPickA > 1e-9;
+    ss->solidPickA = std::sqrt(inPlaneX * inPlaneX + inPlaneY * inPlaneY);
+    ss->solidPickAngleRad = std::atan2(inPlaneY, inPlaneX);
+    ss->solidPickValid = ss->solidPickA > 1e-9;
     break;
   case SolidPickKind::CornerXY:
-    st.solidPickA = inPlaneX;
-    st.solidPickB = inPlaneY;
-    // Both extents must be real: a corner dragged along one axis alone describes a line, not a box,
-    // and building it would just be refused a moment later as a non-positive width.
-    st.solidPickValid = std::fabs(inPlaneX) > 1e-9 && std::fabs(inPlaneY) > 1e-9;
+    ss->solidPickA = inPlaneX;
+    ss->solidPickB = inPlaneY;
+    ss->solidPickValid = std::fabs(inPlaneX) > 1e-9 && std::fabs(inPlaneY) > 1e-9;
     break;
   case SolidPickKind::Height: {
-    // Height cannot come from the work plane: the cursor is ON it, so its offset along the axis is
-    // always zero. It comes from the point on the solid's AXIS closest to the cursor ray, which is
-    // what makes dragging upward raise the solid.
-    //
-    // Plan view has no ray and therefore no answer here — looking straight down the axis, "how far
-    // up is the cursor" is not a question the screen can answer. The prompt asks for a typed value
-    // instead of inventing one.
     if (!ray || !ray->valid())
       break;
-    const ray3d::Vec3 axisDir = f.zAxis;  // unit by construction
-    const ray3d::Vec3 w0 = ray3d::Sub(st.solidBase, ray->origin);
+    const ray3d::Vec3 axisDir = f.zAxis;
+    const ray3d::Vec3 w0 = ray3d::Sub(ss->solidBase, ray->origin);
     const double b = ray3d::Dot(axisDir, ray->dir);
-    const double den = 1.0 - b * b;  // both unit length, so this is sin^2 of the angle between them
+    const double den = 1.0 - b * b;
     if (!(den > 1e-9))
-      break;  // the axis and the ray are parallel: every height projects to the same pixel
+      break;
     const double dv = ray3d::Dot(axisDir, w0);
     const double ev = ray3d::Dot(ray->dir, w0);
-    st.solidPickA = (b * ev - dv) / den;
-    st.solidPickValid = std::fabs(st.solidPickA) > 1e-9;
+    ss->solidPickA = (b * ev - dv) / den;
+    ss->solidPickValid = std::fabs(ss->solidPickA) > 1e-9;
     break;
   }
   case SolidPickKind::Typed:
     break;
   }
-  if (!std::isfinite(st.solidPickA) || !std::isfinite(st.solidPickB) ||
-      !std::isfinite(st.solidPickAngleRad))
-    st.solidPickValid = false;
+  if (!std::isfinite(ss->solidPickA) || !std::isfinite(ss->solidPickB) ||
+      !std::isfinite(ss->solidPickAngleRad))
+    ss->solidPickValid = false;
 }
 
 bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::Solid* out,
                               brep::Problem* outWhy) {
-  if (!out || st.solidKind == brep::PrimitiveKind::None)
+  const auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!out || !ss || ss->solidKind == brep::PrimitiveKind::None)
     return false;
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
 
-  // Effective values: what has been set, an optional dimension's default, and — for the one being
-  // picked right now — the cursor.
-  double v[AppCommandState::kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
-  bool have[AppCommandState::kMaxSolidParams] = {false, false, false, false};
+  double v[stepengine::SolidPrimitiveSession::kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
+  bool have[stepengine::SolidPrimitiveSession::kMaxSolidParams] = {false, false, false, false};
   for (int i = 0; i < n; ++i) {
-    if (st.solidParamSet[i]) {
-      v[i] = st.solidParamValue[i];
+    if (ss->solidParamSet[i]) {
+      v[i] = ss->solidParamValue[i];
       have[i] = true;
     } else if (specs[i].optional) {
       v[i] = specs[i].defaultValue;
@@ -457,43 +455,33 @@ bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::S
     }
   }
 
-  double cornerDx = st.solidCornerDx;
-  double cornerDy = st.solidCornerDy;
+  double cornerDx = ss->solidCornerDx;
+  double cornerDy = ss->solidCornerDy;
   const int picking = CadSolidCurrentPickParam(st);
-  if (applyPick && st.solidPickValid && picking >= 0) {
+  if (applyPick && ss->solidPickValid && picking >= 0) {
     if (specs[picking].pick == SolidPickKind::CornerXY) {
-      // One pick, two dimensions — and the SIGNED offsets too, because `length` and `width` cannot
-      // say which way the box was dragged and the frame origin has to move to the midpoint.
-      cornerDx = st.solidPickA;
-      cornerDy = st.solidPickB;
-      v[picking] = std::fabs(st.solidPickA);
+      cornerDx = ss->solidPickA;
+      cornerDy = ss->solidPickB;
+      v[picking] = std::fabs(ss->solidPickA);
       have[picking] = true;
       if (picking + 1 < n) {
-        v[picking + 1] = std::fabs(st.solidPickB);
+        v[picking + 1] = std::fabs(ss->solidPickB);
         have[picking + 1] = true;
       }
     } else {
-      v[picking] = st.solidPickA;
+      v[picking] = ss->solidPickA;
       have[picking] = true;
     }
   }
 
   for (int i = 0; i < n; ++i) {
     if (!have[i])
-      { if (outWhy) *outWhy = brep::Problem::NonFiniteParameter; return false; }  // still being specified
+      { if (outWhy) *outWhy = brep::Problem::NonFiniteParameter; return false; }
   }
 
-  // Placement. A box or wedge's base point is the first CORNER, so the frame origin moves to the
-  // midpoint of the two corners; every other primitive is placed on its base centre already.
-  //
-  // The offset magnitude is always the committed length / width — a picked opposite corner only
-  // supplies the SIGN (which way it was dragged, which `length` and `width` cannot say). Typed
-  // dimensions carry no sign, so they anchor at the first corner in the positive direction; without
-  // this the "first corner" prompt would be a lie for the typed path and the box would land centred
-  // on that point instead.
-  ray3d::Vec3 origin = st.solidBase;
+  ray3d::Vec3 origin = ss->solidBase;
   ucs::Ucs frame = SolidPlacementFrame(st, origin);
-  if (st.solidBaseIsCorner) {
+  if (ss->solidBaseIsCorner) {
     const double sx = cornerDx < 0.0 ? -1.0 : 1.0;
     const double sy = cornerDy < 0.0 ? -1.0 : 1.0;
     cornerDx = sx * v[0];
@@ -505,7 +493,7 @@ bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::S
 
   brep::Problem why = brep::Problem::Ok;
   bool built = false;
-  switch (st.solidKind) {
+  switch (ss->solidKind) {
   case brep::PrimitiveKind::Box:
     built = brep::MakeBox(frame, v[0], v[1], v[2], out, &why);
     break;
@@ -517,16 +505,10 @@ bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::S
     if (sidesD != std::floor(sidesD))
     { if (outWhy) *outWhy = brep::Problem::SideCountOutOfRange; return false; }
     const int sides = static_cast<int>(sidesD);
-    // The base turns with the cursor, the way AutoCAD's does: the radius pick's DIRECTION is the
-    // polygon's rotation, not just its size.
-    ucs::Ucs baseFrame = ucs::RotatedAboutZ(frame, st.solidBaseAngleRad * 180.0 / 3.14159265358979323846);
+    ucs::Ucs baseFrame = ucs::RotatedAboutZ(frame, ss->solidBaseAngleRad * 180.0 / 3.14159265358979323846);
     baseFrame.origin = frame.origin;
-    // Inscribed means the given radius IS the circumradius (the polygon sits inside that circle);
-    // circumscribed — AutoCAD's default — means it is the apothem, so the circumradius is larger.
-    // `PyramidCircumradius` is the one place that conversion lives, and the one-line form calls it
-    // too, so the same numbers through either route build one identical pyramid.
-    const double baseR = PyramidCircumradius(v[1], sides, st.solidInscribed);
-    const double topR = PyramidCircumradius(v[2], sides, st.solidInscribed);
+    const double baseR = PyramidCircumradius(v[1], sides, ss->solidInscribed);
+    const double topR = PyramidCircumradius(v[2], sides, ss->solidInscribed);
     built = brep::MakePyramid(baseFrame, sides, baseR, topR, v[3], out, &why);
     break;
   }
@@ -555,33 +537,27 @@ void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb,
   const SolidVerbSpec* spec = FindSolidVerb(verb);
   if (!spec)
     return;
-  CancelSolidCommand(st);
-  st.active = AppCommandState::Kind::Solid;
-  st.solidKind = spec->kind;
-  st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
-  // BOX and WEDGE are drawn corner-to-corner here, which is what AutoCAD does and what the base
-  // point means at this prompt. The ONE-LINE form is unchanged and still takes a base CENTRE plus
-  // explicit length and width — with the dimensions given outright, a centre is the natural anchor,
-  // and changing it would break the acceptance that rests on it.
-  st.solidBaseIsCorner = spec->kind == brep::PrimitiveKind::Box || spec->kind == brep::PrimitiveKind::Wedge;
+  auto sess = std::make_unique<stepengine::SolidPrimitiveSession>();
+  sess->solidKind = spec->kind;
+  sess->phase = stepengine::SolidPhase::WaitBasePoint;
+  sess->solidBaseIsCorner = spec->kind == brep::PrimitiveKind::Box || spec->kind == brep::PrimitiveKind::Wedge;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back(CadSolidPromptText(st));
 }
 
 namespace {
 
-/// Build and store the solid from the base point and the parameters gathered so far.
-///
-/// Routes through the SAME `MakeX` call the one-line form uses, so the two forms cannot disagree
-/// about what a set of numbers means, and every refusal is the kernel's own (REQ-201).
 void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
+  auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss)
+    return;
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
-  const std::string verb = SolidVerbUpper(st.solidKind);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
+  const std::string verb = SolidVerbUpper(ss->solidKind);
 
-  // Refuse a half-specified solid by NAMING what is missing, rather than assuming a size for it.
   std::string missing;
   for (int i = 0; i < n; ++i) {
-    if (st.solidParamSet[i] || specs[i].optional)
+    if (ss->solidParamSet[i] || specs[i].optional)
       continue;
     if (!missing.empty())
       missing += ", ";
@@ -594,40 +570,36 @@ void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
 
   brep::Solid solid;
   brep::Problem why = brep::Problem::Ok;
-  // Through the SAME builder the live preview draws from, so the solid that appears on Enter is
-  // exactly the one the user was looking at.
   const bool built = CadBuildSolidFromCommand(st, /*applyPick=*/false, &solid, &why);
 
   if (!built) {
-    // The command stays open on a refusal, deliberately: the user has given a base point and two or
-    // three dimensions, and throwing all of it away because one was wrong would be the worse
-    // outcome. They retype the offending letter and press Enter again.
     log.push_back(verb + " — " + brep::ProblemText(why));
     return;
   }
 
+  const brep::PrimitiveKind kind = ss->solidKind;
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
-  PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(st.solidKind));
+  PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(kind));
   st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
   BumpCadGpuCache(st);
 
-  log.push_back(SolidCreatedMessage(st.solidKind, mp));
-
-  CancelSolidCommand(st);
-  st.active = AppCommandState::Kind::None;
+  log.push_back(SolidCreatedMessage(kind, mp));
+  stepengine::EndSession(st);
 }
 
-/// Store \p value in parameter \p index and report it back.
 void SetSolidParam(AppCommandState& st, int index, double value, std::vector<std::string>& log) {
+  auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss)
+    return;
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
   if (index < 0 || index >= n)
     return;
-  st.solidParamValue[index] = value;
-  st.solidParamSet[index] = true;
-  st.solidPendingParam = -1;
-  log.push_back(SolidVerbUpper(st.solidKind) + " — " + specs[index].label + " = " + TrimNumber(value) +
+  ss->solidParamValue[index] = value;
+  ss->solidParamSet[index] = true;
+  ss->solidPendingParam = -1;
+  log.push_back(SolidVerbUpper(ss->solidKind) + " — " + specs[index].label + " = " + TrimNumber(value) +
                 ".");
   log.push_back(CadSolidPromptText(st));
 }
@@ -635,27 +607,27 @@ void SetSolidParam(AppCommandState& st, int index, double value, std::vector<std
 } // namespace
 
 bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.solidKind == brep::PrimitiveKind::None)
+  auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss || ss->solidKind == brep::PrimitiveKind::None)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
-  const std::string verb = SolidVerbUpper(st.solidKind);
+  const std::string verb = SolidVerbUpper(ss->solidKind);
 
-  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
+  if (ss->phase == stepengine::SolidPhase::WaitBasePoint) {
     if (line.empty())
-      return false;  // a bare Enter here has nothing to act on; the prompt stands
+      return false;
     ray3d::Vec3 base{};
     if (!ParseSolidBasePoint(st, line, &base, log, verb.c_str()))
-      return true;  // the reason has been reported; stay on this prompt rather than cancel
-    st.solidBase = base;
-    st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
+      return true;
+    ss->solidBase = base;
+    ss->phase = stepengine::SolidPhase::WaitParameters;
     log.push_back(CadSolidPromptText(st));
     return true;
   }
 
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
 
-  // Enter creates it.
   if (line.empty()) {
     CommitPromptedSolid(st, log);
     return true;
@@ -670,46 +642,37 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
     return true;
   };
 
-  // A letter was armed on the previous line: this one is its value.
-  if (st.solidPendingParam >= 0) {
+  if (ss->solidPendingParam >= 0) {
     double v = 0.0;
     if (!parseNumber(line, &v)) {
       log.push_back(verb + " — \"" + line + "\" is not a number.");
       log.push_back(CadSolidPromptText(st));
       return true;
     }
-    // `D` armed a DIAMETER, so it is halved into the radius it names. This is the ONE place the
-    // halving happens — `D <value>` on a single line arms the parameter and falls through to here
-    // too — so a diameter can never reach the kernel as a radius.
-    if (st.solidPendingIsDiameter)
+    if (ss->solidPendingIsDiameter)
       v *= 0.5;
-    st.solidPendingIsDiameter = false;
-    SetSolidParam(st, st.solidPendingParam, v, log);
+    ss->solidPendingIsDiameter = false;
+    SetSolidParam(st, ss->solidPendingParam, v, log);
     return true;
   }
 
   const char first = static_cast<char>(std::toupper(static_cast<unsigned char>(line[0])));
 
-  // `I` — PYRAMID's inscribed / circumscribed toggle. The base radius means the polygon's
-  // circumradius when inscribed and its apothem when circumscribed (AutoCAD's default), so this
-  // changes what an already-typed radius MEANS and is echoed back with the prompt.
-  if (st.solidKind == brep::PrimitiveKind::Pyramid && first == 'I' &&
+  if (ss->solidKind == brep::PrimitiveKind::Pyramid && first == 'I' &&
       StringUtil::trimCopy(line.substr(1)).empty()) {
-    st.solidInscribed = !st.solidInscribed;
-    log.push_back(verb + " — base is now " + (st.solidInscribed ? "INSCRIBED" : "CIRCUMSCRIBED") + ".");
+    ss->solidInscribed = !ss->solidInscribed;
+    log.push_back(verb + " — base is now " + (ss->solidInscribed ? "INSCRIBED" : "CIRCUMSCRIBED") + ".");
     log.push_back(CadSolidPromptText(st));
     return true;
   }
 
-  // `D <value>` — a diameter for whichever radius is being picked, halved into it. AutoCAD offers it
-  // at every radius prompt, and it is the one abbreviation people reach for without thinking.
   if (first == 'D') {
     const int target = CadSolidCurrentPickParam(st);
     if (target >= 0 && specs[target].pick == SolidPickKind::Radius) {
       const std::string rest = StringUtil::trimCopy(line.substr(1));
       if (rest.empty()) {
-        st.solidPendingParam = target;
-        st.solidPendingIsDiameter = true;
+        ss->solidPendingParam = target;
+        ss->solidPendingIsDiameter = true;
         log.push_back(verb + " — " + specs[target].label + " diameter:");
         return true;
       }
@@ -719,23 +682,20 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
         log.push_back(CadSolidPromptText(st));
         return true;
       }
-      // Halved in the ONE place a diameter is ever halved — the armed-value branch above — reached
-      // by arming the parameter and handing it the value, so `D 10` and `D` then `10` are one path.
-      st.solidPendingParam = target;
-      st.solidPendingIsDiameter = true;
+      ss->solidPendingParam = target;
+      ss->solidPendingIsDiameter = true;
       char buf[64];
       std::snprintf(buf, sizeof(buf), "%.17g", d);
       return HandleSolidTextInput(buf, st, log);
     }
   }
 
-  // `R 4` / `R4` / `R` — a leading letter naming one of this primitive's dimensions.
   for (int i = 0; i < n; ++i) {
     if (specs[i].letter != first)
       continue;
     const std::string rest = StringUtil::trimCopy(line.substr(1));
     if (rest.empty()) {
-      st.solidPendingParam = i;  // arm it; the next line is the value
+      ss->solidPendingParam = i;
       log.push_back(CadSolidPromptText(st));
       return true;
     }
@@ -753,13 +713,10 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
     return true;
   }
 
-  // A bare number fills the next dimension that has not been set — which is what makes typing
-  // `4` then `25` at a CYLINDER prompt mean radius then height, the same order the one-line form
-  // takes them in.
   double v = 0.0;
   if (parseNumber(line, &v)) {
     for (int i = 0; i < n; ++i) {
-      if (!st.solidParamSet[i]) {
+      if (!ss->solidParamSet[i]) {
         SetSolidParam(st, i, v, log);
         return true;
       }
@@ -774,47 +731,41 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
 }
 
 void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.solidKind == brep::PrimitiveKind::None)
+  auto* ss = st.sessionAs<stepengine::SolidPrimitiveSession>();
+  if (!ss || ss->solidKind == brep::PrimitiveKind::None)
     return;
-  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
-    st.solidBase = ray3d::Vec3{static_cast<double>(wx), static_cast<double>(wy),
-                               static_cast<double>(CadCommitElevation(st))};
-    st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
+  if (ss->phase == stepengine::SolidPhase::WaitBasePoint) {
+    ss->solidBase = ray3d::Vec3{static_cast<double>(wx), static_cast<double>(wy),
+                                static_cast<double>(CadCommitElevation(st))};
+    ss->phase = stepengine::SolidPhase::WaitParameters;
     log.push_back(CadSolidPromptText(st));
     return;
   }
 
-  // A click at a DIMENSION prompt commits whatever the cursor is currently worth — the same value
-  // the rubber preview has been drawing, republished each frame by the viewport (`solidPickA/B`).
   const int picking = CadSolidCurrentPickParam(st);
   if (picking < 0) {
-    log.push_back(SolidVerbUpper(st.solidKind) + " — every dimension is set. Press Enter to create.");
+    log.push_back(SolidVerbUpper(ss->solidKind) + " — every dimension is set. Press Enter to create.");
     return;
   }
-  if (!st.solidPickValid) {
-    // No value under the cursor. Height needs a pick RAY, which plan view does not have: there is no
-    // "how far up is the cursor" to read, and inventing one would place the solid somewhere the user
-    // never pointed. Say so rather than swallow the click (the TASK-099 lesson).
-    log.push_back(SolidVerbUpper(st.solidKind) +
+  if (!ss->solidPickValid) {
+    log.push_back(SolidVerbUpper(ss->solidKind) +
                   " — this dimension cannot be picked from here; type a value, or orbit the view.");
     return;
   }
   int n = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &n);
   if (specs[picking].pick == SolidPickKind::CornerXY) {
-    // One click, two dimensions, plus the signed offsets the frame origin needs (BOX / WEDGE).
-    st.solidCornerDx = st.solidPickA;
-    st.solidCornerDy = st.solidPickB;
-    SetSolidParam(st, picking, std::fabs(st.solidPickA), log);
+    ss->solidCornerDx = ss->solidPickA;
+    ss->solidCornerDy = ss->solidPickB;
+    SetSolidParam(st, picking, std::fabs(ss->solidPickA), log);
     if (picking + 1 < n)
-      SetSolidParam(st, picking + 1, std::fabs(st.solidPickB), log);
+      SetSolidParam(st, picking + 1, std::fabs(ss->solidPickB), log);
   } else {
     if (specs[picking].pick == SolidPickKind::Radius)
-      st.solidBaseAngleRad = st.solidPickAngleRad;  // the base turns with the cursor (PYRAMID)
-    SetSolidParam(st, picking, st.solidPickA, log);
+      ss->solidBaseAngleRad = ss->solidPickAngleRad;
+    SetSolidParam(st, picking, ss->solidPickA, log);
   }
 
-  // Every dimension in: create it, so a fully-picked solid needs no extra Enter — AutoCAD's shape.
   if (CadSolidCurrentPickParam(st) < 0)
     CommitPromptedSolid(st, log);
 }
@@ -834,7 +785,8 @@ namespace {
 
 /// The placement frame: the active UCS anchored at the first picked point.
 [[nodiscard]] ucs::Ucs PolysolidFrame(const AppCommandState& st) {
-  return SolidPlacementFrame(st, st.polysolidBase);
+  const auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  return SolidPlacementFrame(st, ps ? ps->base : ray3d::Vec3{});
 }
 
 [[nodiscard]] const char* JustifyName(brep::Justify j) {
@@ -906,25 +858,25 @@ namespace {
 ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st) { return PolysolidFrame(st); }
 
 void CancelPolysolidCommand(AppCommandState& st) {
-  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitFirstPoint;
-  st.polysolidPath = brep::Path{};
-  st.polysolidBase = ray3d::Vec3{};
-  st.polysolidArcMode = false;
-  st.polysolidPending = 0;
-  // Width, height and justification deliberately SURVIVE the cancel: they are the settings the next
-  // wall will want, which is what AutoCAD's PSOLWIDTH and PSOLHEIGHT are for.
+  if (auto* ps = st.sessionAs<stepengine::PolysolidSession>()) {
+    ps->phase = stepengine::PolysolidPhase::WaitFirstPoint;
+    ps->path = brep::Path{};
+    ps->base = ray3d::Vec3{};
+    ps->arcMode = false;
+    ps->pending = 0;
+  }
 }
 
 bool CadBuildPolysolidFromCommand(const AppCommandState& st, const ucs::Point2D* cursor,
                                   brep::Solid* out, brep::Problem* outWhy) {
-  brep::Path p = st.polysolidPath;
+  const auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return false;
+  brep::Path p = ps->path;
   if (cursor) {
-    // The segment the cursor is currently proposing, so the preview and the click that commits it
-    // are built from ONE function — a preview computed separately eventually shows a wall the click
-    // does not build (ADR-046 (a), the argument REQ-313 already made for its own preview).
     const double sweep =
-        st.polysolidArcMode ? TangentArcSweep(PolysolidEndPoint(p), PolysolidEndTangent(p), *cursor)
-                            : 0.0;
+        ps->arcMode ? TangentArcSweep(PolysolidEndPoint(p), PolysolidEndTangent(p), *cursor)
+                    : 0.0;
     p.segs.push_back(brep::PathSeg{*cursor, sweep});
   }
   if (p.segs.empty())
@@ -934,44 +886,48 @@ bool CadBuildPolysolidFromCommand(const AppCommandState& st, const ucs::Point2D*
 }
 
 std::string CadPolysolidPromptText(const AppCommandState& st) {
+  const auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  const auto phase = ps ? ps->phase : stepengine::PolysolidPhase::WaitFirstPoint;
+  const bool emptySegs = !ps || ps->path.segs.empty();
+  const bool arcMode = ps && ps->arcMode;
   char buf[320];
   const std::string dims = "[H=" + TrimNumber(st.polysolidHeight) + " W=" +
                            TrimNumber(st.polysolidWidth) + " J=" + JustifyName(st.polysolidJustify) +
                            "]";
-  switch (st.polysolidPhase) {
-  case AppCommandState::PolysolidPhase::WaitObject:
+  switch (phase) {
+  case stepengine::PolysolidPhase::WaitObject:
     std::snprintf(buf, sizeof(buf),
                   "POLYSOLID - select a line, arc, circle or polyline to sweep along %s",
                   dims.c_str());
     return buf;
-  case AppCommandState::PolysolidPhase::WaitFirstPoint:
+  case stepengine::PolysolidPhase::WaitFirstPoint:
     std::snprintf(buf, sizeof(buf),
                   "POLYSOLID - start point, or Object / Height / Width / Justify %s", dims.c_str());
     return buf;
-  case AppCommandState::PolysolidPhase::WaitNextPoint:
+  case stepengine::PolysolidPhase::WaitNextPoint:
     break;
   }
   std::snprintf(buf, sizeof(buf),
                 "POLYSOLID - next point%s, or %s / Close / Undo / Height / Width / Justify, Enter to "
                 "finish %s",
-                st.polysolidPath.segs.empty() ? "" : " (Enter finishes)",
-                st.polysolidArcMode ? "Line" : "Arc", dims.c_str());
+                emptySegs ? "" : " (Enter finishes)",
+                arcMode ? "Line" : "Arc", dims.c_str());
   return buf;
 }
 
 namespace {
 
-/// Store the wall built from the path so far and end the command.
 void CommitPolysolid(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.polysolidPath.segs.empty()) {
+  auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return;
+  if (ps->path.segs.empty()) {
     log.push_back("POLYSOLID - a wall needs at least two points; Esc cancels.");
     return;
   }
   brep::Solid solid;
   brep::Problem why = brep::Problem::Ok;
   if (!CadBuildPolysolidFromCommand(st, nullptr, &solid, &why)) {
-    // The kernel's own reason, and the command STAYS OPEN — the points already picked are worth
-    // more than the message, and `U` can take back the one that caused it.
     log.push_back(std::string("POLYSOLID - ") + brep::ProblemText(why));
     log.push_back(CadPolysolidPromptText(st));
     return;
@@ -979,33 +935,32 @@ void CommitPolysolid(AppCommandState& st, std::vector<std::string>& log) {
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
   st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
-  CancelPolysolidCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
-/// Add the segment ending at \p pt, in the frame's plane.
 void AddPolysolidPoint(AppCommandState& st, const ucs::Point2D& pt, std::vector<std::string>& log) {
-  const ucs::Point2D from = PolysolidEndPoint(st.polysolidPath);
+  auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return;
+  const ucs::Point2D from = PolysolidEndPoint(ps->path);
   if (std::fabs(pt.x - from.x) < 1e-9 && std::fabs(pt.y - from.y) < 1e-9) {
     log.push_back("POLYSOLID - that is the same point as the last one.");
     return;
   }
   double sweep = 0.0;
-  if (st.polysolidArcMode) {
-    if (st.polysolidPath.segs.empty()) {
-      // An arc has to be tangent to SOMETHING. There is no incoming direction at the very first
-      // segment, so this is refused rather than given a direction the user did not choose.
+  if (ps->arcMode) {
+    if (ps->path.segs.empty()) {
       log.push_back("POLYSOLID - an arc needs a straight run before it to be tangent to; draw one "
                     "first, or press L for a straight segment.");
       return;
     }
-    sweep = TangentArcSweep(from, PolysolidEndTangent(st.polysolidPath), pt);
+    sweep = TangentArcSweep(from, PolysolidEndTangent(ps->path), pt);
   }
-  st.polysolidPath.segs.push_back(brep::PathSeg{pt, sweep});
-  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+  ps->path.segs.push_back(brep::PathSeg{pt, sweep});
+  ps->phase = stepengine::PolysolidPhase::WaitNextPoint;
   log.push_back(CadPolysolidPromptText(st));
 }
 
@@ -1051,20 +1006,20 @@ bool SetPolysolidSetting(AppCommandState& st, char letter, const std::string& va
 } // namespace
 
 void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelPolysolidCommand(st);
-  st.active = AppCommandState::Kind::Polysolid;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PolysolidSession>(), false);
   log.push_back(CadPolysolidPromptText(st));
 }
 
 bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
                               std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return false;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  // A letter armed on its own line takes the next line as its value, which is what makes `H` then
-  // `4` work as well as `H 4` — the shape the prompted primitives already established.
-  if (st.polysolidPending != 0) {
-    const char letter = st.polysolidPending;
-    st.polysolidPending = 0;
+  if (ps->pending != 0) {
+    const char letter = ps->pending;
+    ps->pending = 0;
     if (line.empty()) {
       log.push_back(CadPolysolidPromptText(st));
       return true;
@@ -1075,12 +1030,9 @@ bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
   }
 
   if (line.empty()) {
-    // Enter FINISHES an open wall. At the very first prompt there is nothing to finish, so it ends
-    // the command rather than reporting a refusal for something the user never started.
-    if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
+    if (ps->phase == stepengine::PolysolidPhase::WaitFirstPoint) {
       log.push_back("POLYSOLID canceled.");
-      CancelPolysolidCommand(st);
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return true;
     }
     CommitPolysolid(st, log);
@@ -1091,10 +1043,9 @@ bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
   const std::string rest = StringUtil::trimCopy(line.substr(1));
   const bool bareLetter = rest.empty();
 
-  // No coordinate begins with one of these letters, so there is nothing to disambiguate against.
   if (head == 'H' || head == 'W' || head == 'J') {
     if (bareLetter) {
-      st.polysolidPending = head;
+      ps->pending = head;
       log.push_back(head == 'J' ? "POLYSOLID - justification (Left / Center / Right)?"
                                 : (head == 'H' ? "POLYSOLID - height?" : "POLYSOLID - width?"));
       return true;
@@ -1105,72 +1056,66 @@ bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
   }
 
   if (head == 'O' && bareLetter) {
-    if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitNextPoint) {
+    if (ps->phase == stepengine::PolysolidPhase::WaitNextPoint) {
       log.push_back("POLYSOLID - Object converts something already drawn; it cannot join a run "
                     "already under way.");
       return true;
     }
-    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitObject;
+    ps->phase = stepengine::PolysolidPhase::WaitObject;
     log.push_back(CadPolysolidPromptText(st));
     return true;
   }
 
   if ((head == 'A' || head == 'L') && bareLetter) {
-    st.polysolidArcMode = head == 'A';
-    log.push_back(st.polysolidArcMode ? "POLYSOLID - arc segments." : "POLYSOLID - straight segments.");
+    ps->arcMode = head == 'A';
+    log.push_back(ps->arcMode ? "POLYSOLID - arc segments." : "POLYSOLID - straight segments.");
     log.push_back(CadPolysolidPromptText(st));
     return true;
   }
 
   if (head == 'C' && bareLetter) {
-    if (st.polysolidPath.segs.size() < 2) {
+    if (ps->path.segs.size() < 2) {
       log.push_back("POLYSOLID - a closed wall needs at least three points.");
       return true;
     }
-    // Close by returning to the start: a straight run, or an arc tangent to the last one, exactly as
-    // a further picked point would be.
-    const ucs::Point2D from = PolysolidEndPoint(st.polysolidPath);
+    const ucs::Point2D from = PolysolidEndPoint(ps->path);
     const double sweep =
-        st.polysolidArcMode
-            ? TangentArcSweep(from, PolysolidEndTangent(st.polysolidPath), st.polysolidPath.start)
+        ps->arcMode
+            ? TangentArcSweep(from, PolysolidEndTangent(ps->path), ps->path.start)
             : 0.0;
-    st.polysolidPath.segs.push_back(brep::PathSeg{st.polysolidPath.start, sweep});
-    st.polysolidPath.closed = true;
+    ps->path.segs.push_back(brep::PathSeg{ps->path.start, sweep});
+    ps->path.closed = true;
     CommitPolysolid(st, log);
-    if (st.active == AppCommandState::Kind::Polysolid) {
-      // Refused: take the closing segment back off so the run is exactly where it was.
-      st.polysolidPath.segs.pop_back();
-      st.polysolidPath.closed = false;
+    if (auto* still = st.sessionAs<stepengine::PolysolidSession>()) {
+      still->path.segs.pop_back();
+      still->path.closed = false;
     }
     return true;
   }
 
   if (head == 'U' && bareLetter) {
-    if (st.polysolidPath.segs.empty()) {
+    if (ps->path.segs.empty()) {
       log.push_back("POLYSOLID - nothing to undo yet.");
       return true;
     }
-    st.polysolidPath.segs.pop_back();
-    if (st.polysolidPath.segs.empty())
+    ps->path.segs.pop_back();
+    if (ps->path.segs.empty())
       log.push_back("POLYSOLID - back to the start point.");
     log.push_back(CadPolysolidPromptText(st));
     return true;
   }
 
-  // Anything else is a coordinate — except at the Object prompt, which wants something already
-  // drawn. Typing a point there would silently start an ordinary run instead, which is not what was
-  // asked for.
-  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject) {
+  if (ps->phase == stepengine::PolysolidPhase::WaitObject) {
     log.push_back("POLYSOLID - click the line, arc, circle or polyline to sweep along (Esc cancels).");
     return true;
   }
   ray3d::Vec3 pt{};
   if (!ParseSolidBasePoint(st, line, &pt, log, "POLYSOLID"))
-    return true;  // the reason has been reported; the prompt stands
-  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
-    st.polysolidBase = pt;
-    st.polysolidPath = brep::Path{};
-    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+    return true;
+  if (ps->phase == stepengine::PolysolidPhase::WaitFirstPoint) {
+    ps->base = pt;
+    ps->path = brep::Path{};
+    ps->phase = stepengine::PolysolidPhase::WaitNextPoint;
     log.push_back(CadPolysolidPromptText(st));
     return true;
   }
@@ -1181,15 +1126,18 @@ bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
 
 void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
                                  std::vector<std::string>& log) {
-  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject) {
+  auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return;
+  if (ps->phase == stepengine::PolysolidPhase::WaitObject) {
     CadPolysolidConvertObjectAt(st, wx, wy, log);
     return;
   }
   const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
-  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
-    st.polysolidBase = pt;
-    st.polysolidPath = brep::Path{};
-    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+  if (ps->phase == stepengine::PolysolidPhase::WaitFirstPoint) {
+    ps->base = pt;
+    ps->path = brep::Path{};
+    ps->phase = stepengine::PolysolidPhase::WaitNextPoint;
     log.push_back(CadPolysolidPromptText(st));
     return;
   }
@@ -1258,8 +1206,11 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   }
   }
 
-  const AppCommandState::PolysolidPhase savedPhase = st.polysolidPhase;
-  st.polysolidBase = anchor;
+  auto* ps = st.sessionAs<stepengine::PolysolidSession>();
+  if (!ps)
+    return;
+  const stepengine::PolysolidPhase savedPhase = ps->phase;
+  ps->base = anchor;
   const ucs::Ucs frame = PolysolidFrame(st);
   const double planeTol = 1e-6 * std::max(1.0, std::fabs(anchor.x) + std::fabs(anchor.y));
 
@@ -1353,18 +1304,18 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   }
 
   if (!flat) {
-    st.polysolidPhase = savedPhase;
+    ps->phase = savedPhase;
     log.push_back("POLYSOLID - that object does not lie in the current work plane, so there is no "
                   "flat path to sweep. Set the UCS to its plane first.");
     return;
   }
 
-  st.polysolidPath = std::move(path);
+  ps->path = std::move(path);
   brep::Solid solid;
   brep::Problem why = brep::Problem::Ok;
   if (!CadBuildPolysolidFromCommand(st, nullptr, &solid, &why)) {
-    st.polysolidPath = brep::Path{};
-    st.polysolidPhase = savedPhase;
+    ps->path = brep::Path{};
+    ps->phase = savedPhase;
     log.push_back(std::string("POLYSOLID - ") + brep::ProblemText(why));
     log.push_back(CadPolysolidPromptText(st));
     return;
@@ -1372,9 +1323,8 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
   st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
-  CancelPolysolidCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }

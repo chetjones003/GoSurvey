@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "surface/CadSurfaceInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include <GoSurvey/Terrain/daylight.hpp>
@@ -108,27 +109,24 @@ std::string FormatSlope(double run) {
 std::string GradingDefaultSurface(const AppCommandState& st) {
   if (!st.gradingSurface.empty() && FindSurfaceIndex(st, st.gradingSurface) >= 0)
     return st.gradingSurface;
-  // Issue #997: an edited grading whose target surface is gone must be told which one to use, not
-  // quietly regraded to whatever surface happens to be left.
-  if (st.gradingEditId != 0)
+  const auto* gs = st.sessionAs<stepengine::GradingSession>();
+  if (gs && gs->editId != 0)
     return std::string();
   if (st.drawing.cadSurfaces.size() == 1)
     return st.drawing.cadSurfaces[0].name;
   return std::string();
 }
 
-/// Resolve the baseline's stable id to a live index, or -1 if it is gone (REQ-076: a reference to a
-/// deleted entity resolves to NOTHING, never to whatever took its array slot).
 int GradingBaselineIndex(const AppCommandState& st) {
-  if (st.gradingBaselineId == 0)
+  const auto* gs = st.sessionAs<stepengine::GradingSession>();
+  if (!gs || gs->baselineId == 0)
     return -1;
-  const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, st.gradingBaselineId);
+  const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, gs->baselineId);
   if (ix < 0 || static_cast<size_t>(ix) + 1 >= st.drawing.featureLineOffsets.size())
     return -1;
   return ix;
 }
 
-/// True when the chosen baseline is an open line, which is the only case that needs a side.
 bool GradingBaselineIsOpen(const AppCommandState& st) {
   const int i = GradingBaselineIndex(st);
   if (i < 0 || static_cast<size_t>(i) >= st.drawing.featureLineClosed.size())
@@ -136,10 +134,9 @@ bool GradingBaselineIsOpen(const AppCommandState& st) {
   return st.drawing.featureLineClosed[static_cast<size_t>(i)] == 0;
 }
 
-/// The options prompt, naming everything it already has — the shape every other command with
-/// keywords uses, so the current slopes and surface are readable rather than remembered.
 void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
-  st.gradingPhase = AppCommandState::GradingPhase::WaitOptions;
+  if (auto* gs = st.sessionAs<stepengine::GradingSession>())
+    gs->phase = stepengine::GradingPhase::WaitOptions;
   const std::string surf = GradingDefaultSurface(st);
   const char* target = "Surface";
   if (st.gradingTarget == CadGradingDefinition::Target::Distance) target = "Distance";
@@ -198,14 +195,17 @@ std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
 /// side and target come back as the prompt's values. Returns false, having said why, when the
 /// result's baseline is gone - rebuilding it from nothing would be inventing a design.
 bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<std::string>& log) {
-  st.gradingEditId = 0;
+  auto* gs = st.sessionAs<stepengine::GradingSession>();
+  if (!gs)
+    return false;
+  gs->editId = 0;
   const int ix = FindEntityIndexById(st.drawing.featureLineAttrs, id);
   const CadFeatureLineInfo* info =
       (ix >= 0 && static_cast<size_t>(ix) < st.drawing.featureLineInfo.size())
           ? &st.drawing.featureLineInfo[static_cast<size_t>(ix)]
           : nullptr;
   if (info == nullptr || !info->grading) {
-    st.gradingBaselineId = id;
+    gs->baselineId = id;
     return true;
   }
   const CadGradingDefinition& def = *info->grading;
@@ -214,8 +214,8 @@ bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<s
                   "\" is gone, so it cannot be rebuilt. It is left as it is.");
     return false;
   }
-  st.gradingEditId = id;
-  st.gradingBaselineId = def.baselineId;
+  gs->editId = id;
+  gs->baselineId = def.baselineId;
   st.gradingCutRun = def.cutRun;
   st.gradingFillRun = def.fillRun;
   st.gradingSideLeft = def.sideLeft;
@@ -457,8 +457,11 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
 
   // Issue #997: the inputs travel with the result, by stable id, so it can be edited after reopen.
   EnsureEntityIds(st);
+  const auto* gs = st.sessionAs<stepengine::GradingSession>();
+  const std::uint64_t baselineId = gs ? gs->baselineId : 0;
+  const std::uint64_t editId = gs ? gs->editId : 0;
   CadGradingDefinition def;
-  def.baselineId = st.gradingBaselineId;
+  def.baselineId = baselineId;
   def.surfaceId = static_cast<size_t>(si) < st.drawing.cadSurfaceAttrs.size()
                       ? st.drawing.cadSurfaceAttrs[static_cast<size_t>(si)].id
                       : 0;
@@ -473,14 +476,14 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
                                   GradingTargetDescription(st, surf);
 
   std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
-  if (st.gradingEditId != 0) {
+  if (editId != 0) {
     for (size_t i = 0; i < st.drawing.cadSurfaces.size(); ++i) {
       const auto &group = st.drawing.cadSurfaces[i];
       if (!group.gradingGroup)
         continue;
       const auto it = std::find_if(
           group.gradingMembers.begin(), group.gradingMembers.end(),
-          [&](const auto &m) { return m.gradingId == st.gradingEditId; });
+          [&](const auto &m) { return m.gradingId == editId; });
       if (it == group.gradingMembers.end())
         continue;
       if (skippedAny) {
@@ -504,7 +507,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
       }
       CadSurface candidate = group;
       CadGradingGroupMember rebuilt =
-          BakeGradingMember(st, st.gradingEditId, baseline, daylight);
+          BakeGradingMember(st, editId, baseline, daylight);
       if (it->infill) {
         std::vector<double> ring;
         ring.reserve(daylight.verts.size() * 3);
@@ -527,9 +530,9 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   }
 
   size_t resultIx = 0;
-  const bool editing = st.gradingEditId != 0;
+  const bool editing = editId != 0;
   if (editing) {
-    const int ti = FindEntityIndexById(st.drawing.featureLineAttrs, st.gradingEditId);
+    const int ti = FindEntityIndexById(st.drawing.featureLineAttrs, editId);
     if (ti < 0 || static_cast<size_t>(ti) + 1 >= st.drawing.featureLineOffsets.size() ||
         static_cast<size_t>(ti) >= st.drawing.featureLineInfo.size()) {
       log.push_back("GRADING - the grading being edited is gone; nothing was changed.");
@@ -586,9 +589,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
                     "otherwise close across ground where no daylight was computed.");
     }
   }
-  st.active = AppCommandState::Kind::None;
-  st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
-  st.gradingEditId = 0;
+  stepengine::EndSession(st);
 }
 
 }  // namespace
@@ -832,11 +833,10 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Grading;
-  st.lastCommand = AppCommandState::Kind::Grading;
-  st.gradingBaselineId = 0;
+  auto sess = std::make_unique<stepengine::GradingSession>();
+  auto* gs = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
   st.gradingSideChosen = false;
-  st.gradingEditId = 0;
   st.gradingTarget = CadGradingDefinition::Target::Surface;
   st.gradingTargetValue = 0.0;
   st.gradingDistanceGradePercent = 0.0;
@@ -848,7 +848,7 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.drawing.featureLineOffsets.size() < 2) {
     log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
                   "is the design edge the slopes come off.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   if (st.drawing.cadSurfaces.empty())
@@ -857,30 +857,27 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
   if (n == 1) {
     if (!GradingTakeFeatureLine(st, id, log)) {
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     GradingPrompt(st, log);
     return;
   }
-  st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
+  gs->phase = stepengine::GradingPhase::WaitBaseline;
   log.push_back(n > 1 ? "GRADING - select ONE feature line as the baseline. ESC cancels."
                       : "GRADING - select the feature line to grade from. ESC cancels.");
 }
 
-/// One typed line while GRADING is running.
-///
-/// Not in the anonymous namespace, unlike its sibling below, because `ProcessCommandLineSubmit`'s
-/// blank-line branch has to reach it: a bare Enter is this command's action, and that branch
-/// consumes blank lines before any Kind-keyed block sees them.
 void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                                std::vector<std::string>& log) {
-  using P = AppCommandState::GradingPhase;
+  auto* gs = st.sessionAs<stepengine::GradingSession>();
+  if (!gs)
+    return;
+  using P = stepengine::GradingPhase;
   const std::string tr = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(tr);
 
-  if ((st.gradingPhase == P::WaitBaseline ||
-       st.gradingPhase == P::WaitOptions) &&
+  if ((gs->phase == P::WaitBaseline || gs->phase == P::WaitOptions) &&
       (low == "group" || low == "g" || low.rfind("group ", 0) == 0 ||
        low.rfind("g ", 0) == 0)) {
     const size_t space = tr.find(' ');
@@ -889,15 +886,13 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                     "selected grading results.");
       return;
     }
-    st.active = AppCommandState::Kind::None;
-    st.gradingEditId = 0;
-    st.gradingPhase = P::WaitBaseline;
+    stepengine::EndSession(st);
     ExecuteGradingGroupCommand(st, StringUtil::trimCopy(tr.substr(space + 1)),
                                log);
     return;
   }
 
-  switch (st.gradingPhase) {
+  switch (gs->phase) {
     case P::WaitTargetKind:
       if (low == "surface" || low == "s") st.gradingTarget = CadGradingDefinition::Target::Surface;
       else if (low == "distance" || low == "d") st.gradingTarget = CadGradingDefinition::Target::Distance;
@@ -905,7 +900,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       else if (low == "relative" || low == "r") st.gradingTarget = CadGradingDefinition::Target::RelativeElevation;
       else { log.push_back("GRADING - target must be Surface, Distance, Absolute, or Relative."); return; }
       if (st.gradingTarget == CadGradingDefinition::Target::Surface) { GradingPrompt(st, log); return; }
-      st.gradingPhase = P::WaitTargetValue;
+      gs->phase = P::WaitTargetValue;
       if (st.gradingTarget == CadGradingDefinition::Target::Distance)
         log.push_back("GRADING - enter horizontal distance (> 0).");
       else if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation)
@@ -923,7 +918,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       }
       st.gradingTargetValue = value;
       if (st.gradingTarget == CadGradingDefinition::Target::Distance) {
-        st.gradingPhase = P::WaitDistanceGrade;
+        gs->phase = P::WaitDistanceGrade;
         log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
       } else GradingPrompt(st, log);
       return;
@@ -940,7 +935,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
     }
     case P::WaitCutSlope:
     case P::WaitFillSlope: {
-      const bool isCut = st.gradingPhase == P::WaitCutSlope;
+      const bool isCut = gs->phase == P::WaitCutSlope;
       if (tr.empty()) {
         GradingPrompt(st, log);
         return;
@@ -949,7 +944,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       if (!ParseSlopeRun(tr, &run)) {
         log.push_back("GRADING - enter a slope as run:rise (3:1), a bare run (3), or a percent "
                       "(33%).");
-        return;  // stay on this prompt rather than grading at a slope nobody chose
+        return;
       }
       if (isCut)
         st.gradingCutRun = run;
@@ -992,17 +987,17 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
     }
     case P::WaitOptions: {
       if (tr.empty()) {
-        BuildGradingDaylight(st, log);  // bare Enter is the ACTION here, since all of it has defaults
+        BuildGradingDaylight(st, log);
         return;
       }
       if (low == "c" || low == "cut") {
-        st.gradingPhase = P::WaitCutSlope;
+        gs->phase = P::WaitCutSlope;
         log.push_back("GRADING - enter cut slope (run:rise, a bare run, or a percent) <" +
                       FormatSlope(st.gradingCutRun) + ">. Cut is where the design sits BELOW ground.");
         return;
       }
       if (low == "f" || low == "fill") {
-        st.gradingPhase = P::WaitFillSlope;
+        gs->phase = P::WaitFillSlope;
         log.push_back("GRADING - enter fill slope (run:rise, a bare run, or a percent) <" +
                       FormatSlope(st.gradingFillRun) + ">. Fill is where it sits ABOVE ground.");
         return;
@@ -1011,18 +1006,18 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
         std::string names;
         for (const CadSurface& s : st.drawing.cadSurfaces)
           names += (names.empty() ? "" : ", ") + s.name;
-        st.gradingPhase = P::WaitSurfaceName;
+        gs->phase = P::WaitSurfaceName;
         log.push_back(names.empty() ? "GRADING - the drawing has no surfaces to grade to."
                                     : "GRADING - enter surface name. Surfaces: " + names + ".");
         return;
       }
       if (low == "t" || low == "target") {
-        st.gradingPhase = P::WaitTargetKind;
+        gs->phase = P::WaitTargetKind;
         log.push_back("GRADING - target [Surface/Distance/Absolute/Relative].");
         return;
       }
       if (low == "p" || low == "percent") {
-        st.gradingPhase = P::WaitDistanceGrade;
+        gs->phase = P::WaitDistanceGrade;
         log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
         return;
       }
@@ -1032,12 +1027,10 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                         "and there is no side to choose.");
           return;
         }
-        st.gradingPhase = P::WaitSide;
+        gs->phase = P::WaitSide;
         log.push_back("GRADING - grade to which side, [L]eft or [R]ight, looking along the baseline?");
         return;
       }
-      // A slope typed straight at the options prompt is taken as the FILL slope, which is the one
-      // changed most often; anything else keeps the prompt rather than discarding the command.
       double run = 0.0;
       if (ParseSlopeRun(tr, &run)) {
         st.gradingFillRun = run;
@@ -1049,9 +1042,6 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       return;
     }
     case P::WaitBaseline: {
-      // This prompt wants a PICK, so there is nothing useful to do with typed text — but doing
-      // nothing SILENTLY is the defect that made PADSOLID look hung, and the review checklist's own
-      // words are "no error path is empty or swallows the error". Say why the typing did nothing.
       if (tr.empty())
         log.push_back("GRADING - still waiting for a baseline: click a feature line. ESC cancels.");
       else
@@ -1065,9 +1055,6 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
   }
 }
 
-
-
-/// A viewport pick while GRADING is waiting for its baseline.
 void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   SelectedEntity hit{};
   float d2 = 0.f;
@@ -1081,9 +1068,8 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
   EnsureEntityIds(st);
   ClearCadSelection(st);
   st.selection.push_back(hit);
-  // REQ-076 stable id. A grading result whose baseline is gone ends the command, left as it is.
   if (!GradingTakeFeatureLine(st, st.drawing.featureLineAttrs[static_cast<size_t>(hit.index)].id, log)) {
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   GradingPrompt(st, log);

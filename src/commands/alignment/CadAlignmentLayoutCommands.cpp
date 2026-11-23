@@ -1055,8 +1055,9 @@ std::string FormatWorldNumber(double v) {
   return b.data();
 }
 
-bool BeginInteractive(AppCommandState& st, AppCommandState::Kind k, const char* name, std::vector<std::string>& log) {
-  assert(k != AppCommandState::Kind::None);
+bool BeginInteractive(AppCommandState& st, std::unique_ptr<stepengine::CommandSession> sess,
+                      const char* name, std::vector<std::string>& log) {
+  assert(sess != nullptr);
   assert(name != nullptr);
   if (st.active != AppCommandState::Kind::None) {
     log.push_back(std::string(name) + " - finish or cancel the active command first.");
@@ -1064,16 +1065,28 @@ bool BeginInteractive(AppCommandState& st, AppCommandState::Kind k, const char* 
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.active = k;
-  st.lastCommand = k;
+  stepengine::BeginSession(st, std::move(sess), true);
   return true;
+}
+
+std::string FormatFromObjectsPickArgs(const AppCommandState& st,
+                                      const stepengine::AlignmentFromObjectsSession& p) {
+  std::string out;
+  if (p.hasPick)
+    out += ", PICK=" + FormatWorldNumber(p.pickX + CadCoord::WorldOriginX(st)) + " " +
+           FormatWorldNumber(p.pickY + CadCoord::WorldOriginY(st));
+  if (p.reverse) out += ", REVERSE";
+  assert(out.size() < 200);
+  assert(!p.reverse || !out.empty());
+  return out;
 }
 
 /// Rebuilds the alignment being laid out from the session's base and PIs (REQ-485.1). The first change takes the
 /// session's one undo snapshot. False (alignment unchanged) when the PIs cannot form an alignment.
 bool RebuildLayout(AppCommandState& st, std::vector<std::string>& log) {
-  AppCommandState::AlignmentLayoutSession& s = st.alignmentLayout;
+  auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
+  if (!sp) return false;
+  stepengine::AlignmentLayoutSession& s = *sp;
   assert(!s.name.empty());
   const int ix = FindAlignment(st, s.name);
   if (ix < 0) return false;
@@ -1111,13 +1124,12 @@ bool RebuildLayout(AppCommandState& st, std::vector<std::string>& log) {
   return true;
 }
 
-void FinishLayout(AppCommandState& st, std::vector<std::string>& log) {
-  assert(st.active == AppCommandState::Kind::AlignmentLayout);
-  const int ix = FindAlignment(st, st.alignmentLayout.name);
-  st.active = AppCommandState::Kind::None;
+void FinishLayout(AppCommandState& st, const std::string& layoutName, std::vector<std::string>& log) {
+  const int ix = FindAlignment(st, layoutName);
+  stepengine::EndSession(st);
   if (ix < 0) return;
   const alignment::Alignment& a = st.drawing.alignments[static_cast<size_t>(ix)];
-  assert(a.name == st.alignmentLayout.name);
+  assert(a.name == layoutName);
   if (a.Empty()) {
     log.push_back("ALIGNMENTLAYOUT - \"" + a.name + "\" has no geometry yet.");
     return;
@@ -1128,8 +1140,9 @@ void FinishLayout(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 bool SubmitLayoutPoint(AppCommandState& st, alignment::Point2 p, std::vector<std::string>& log) {
-  AppCommandState::AlignmentLayoutSession& s = st.alignmentLayout;
-  assert(st.active == AppCommandState::Kind::AlignmentLayout);
+  auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
+  if (!sp) return false;
+  stepengine::AlignmentLayoutSession& s = *sp;
   assert(std::isfinite(p.x) && std::isfinite(p.y));
   if (s.fixedDirection && s.pis.size() == 1) {  // the dialog's starting direction holds the first tangent
     const alignment::Point2 dir{std::sin(s.directionAzimuth), std::cos(s.directionAzimuth)};
@@ -1155,8 +1168,9 @@ bool SubmitLayoutPoint(AppCommandState& st, alignment::Point2 p, std::vector<std
 /// The from-objects result for the current picks, for the direction prompt. False carries the refusal.
 bool PreviewFromObjects(const AppCommandState& st, alignment::Alignment* out, std::string* why) {
   assert(out != nullptr && why != nullptr);
-  const AppCommandState::AlignmentFromObjectsPick& p = st.alignmentFromObjects;
-  assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
+  const auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return false;
+  const stepengine::AlignmentFromObjectsSession& p = *pp;
   std::vector<alignment::SourceSegment> segs;
   bool zSeen = false;
   if (!GatherSourceSegments(st, &segs, &zSeen, why)) return false;
@@ -1168,13 +1182,14 @@ bool PreviewFromObjects(const AppCommandState& st, alignment::Alignment* out, st
 }
 
 void PromptDirection(AppCommandState& st, std::vector<std::string>& log) {
-  assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
-  st.alignmentFromObjects.phase = AppCommandState::AlignmentFromObjectsPick::Phase::WaitDirection;
+  auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return;
+  pp->phase = stepengine::AlignmentFromObjectsPhase::WaitDirection;
   alignment::Alignment preview;
   std::string why;
   if (!PreviewFromObjects(st, &preview, &why)) {
     log.push_back("CREATEALIGNMENTFROMOBJECTS - " + why + ". No alignment was created.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     st.selection.clear();
     return;
   }
@@ -1186,20 +1201,23 @@ void PromptDirection(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void FinishFromObjectsPicks(AppCommandState& st, std::vector<std::string>& log) {
-  assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
+  auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return;
   assert(!st.selection.empty());
-  st.active = AppCommandState::Kind::None;
+  st.alignmentFromObjectsLastPickArgs = FormatFromObjectsPickArgs(st, *pp);
+  stepengine::EndSession(st);
   if (st.createAlignmentDialogAvailable) {  // the dialog collects the name and options, then submits the command
     st.alignmentFromObjectsDialogRequested = true;
     return;
   }
-  RunCreateAlignmentFromObjects(st, NextAlignmentName(st) + AlignmentFromObjectsPickArgs(st), log);
+  RunCreateAlignmentFromObjects(st, NextAlignmentName(st) + st.alignmentFromObjectsLastPickArgs, log);
 }
 
 bool HandleFromObjectsText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  using P = AppCommandState::AlignmentFromObjectsPick::Phase;
-  AppCommandState::AlignmentFromObjectsPick& p = st.alignmentFromObjects;
-  assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
+  using P = stepengine::AlignmentFromObjectsPhase;
+  auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return false;
+  stepengine::AlignmentFromObjectsSession& p = *pp;
   const std::string t = Lower(Trim(line));
   assert(t.size() <= line.size());
   if (p.phase == P::WaitDirection) {
@@ -1226,14 +1244,15 @@ bool HandleFromObjectsText(AppCommandState& st, const std::string& line, std::ve
 /// A typed point for the layout: "x,y" (WORLD) or "@dx,dy" from the previous PI.
 bool ParseLayoutPoint(const AppCommandState& st, const std::string& text, alignment::Point2* local) {
   assert(local != nullptr);
+  const auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
   const std::string t = Trim(text);
   const bool relative = !t.empty() && t[0] == '@';
   const std::vector<std::string> f = SplitFields(relative ? t.substr(1) : t);
   double x = 0.0, y = 0.0;
   if (f.size() != 2 || !ParseNum(f[0], &x) || !ParseNum(f[1], &y)) return false;
   if (relative) {
-    if (st.alignmentLayout.pis.empty()) return false;
-    *local = {st.alignmentLayout.pis.back().x + x, st.alignmentLayout.pis.back().y + y};
+    if (!sp || sp->pis.empty()) return false;
+    *local = {sp->pis.back().x + x, sp->pis.back().y + y};
   } else {
     CadCoord::LocalFromWorld(st, x, y, &local->x, &local->y);
   }
@@ -1242,12 +1261,14 @@ bool ParseLayoutPoint(const AppCommandState& st, const std::string& text, alignm
 }
 
 bool HandleLayoutText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  AppCommandState::AlignmentLayoutSession& s = st.alignmentLayout;
-  assert(st.active == AppCommandState::Kind::AlignmentLayout);
+  auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
+  if (!sp) return false;
+  stepengine::AlignmentLayoutSession& s = *sp;
   const std::string t = Lower(Trim(line));
   assert(t.size() <= line.size());
   if (t.empty()) {
-    FinishLayout(st, log);
+    const std::string nm = s.name;
+    FinishLayout(st, nm, log);
     return true;
   }
   if (t == "u" || t == "undo") {
@@ -1273,8 +1294,9 @@ bool HandleLayoutText(AppCommandState& st, const std::string& line, std::vector<
 void StartAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& log) {
   assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   const std::vector<SelectedEntity> preselected = st.selection;
-  if (!BeginInteractive(st, AppCommandState::Kind::AlignmentFromObjects, "CREATEALIGNMENTFROMOBJECTS", log)) return;
-  st.alignmentFromObjects = {};
+  auto sess = std::make_unique<stepengine::AlignmentFromObjectsSession>();
+  if (!BeginInteractive(st, std::move(sess), "CREATEALIGNMENTFROMOBJECTS", log)) return;
+  st.alignmentFromObjectsLastPickArgs.clear();
   st.selection = preselected;
   assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
   if (!st.selection.empty()) {  // pick-first: the selection is the source; its first free end starts the alignment
@@ -1286,9 +1308,10 @@ void StartAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& lo
 }
 
 bool SubmitFromObjectsPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log) {
-  using P = AppCommandState::AlignmentFromObjectsPick::Phase;
-  AppCommandState::AlignmentFromObjectsPick& p = st.alignmentFromObjects;
-  assert(st.active == AppCommandState::Kind::AlignmentFromObjects);
+  using P = stepengine::AlignmentFromObjectsPhase;
+  auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return false;
+  stepengine::AlignmentFromObjectsSession& p = *pp;
   if (p.phase == P::WaitDirection) {
     log.push_back("CREATEALIGNMENTFROMOBJECTS - press Enter to accept the direction, or R to reverse it.");
     return false;
@@ -1328,8 +1351,8 @@ bool SubmitFromObjectsPick(AppCommandState& st, double lx, double ly, std::vecto
 
 bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out) {
   assert(out != nullptr);
-  if (st.active != AppCommandState::Kind::AlignmentFromObjects ||
-      st.alignmentFromObjects.phase != AppCommandState::AlignmentFromObjectsPick::Phase::WaitDirection)
+  const auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp || pp->phase != stepengine::AlignmentFromObjectsPhase::WaitDirection)
     return false;
   std::string why;
   const bool ok = PreviewFromObjects(st, out, &why);
@@ -1338,15 +1361,9 @@ bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment
 }
 
 std::string AlignmentFromObjectsPickArgs(const AppCommandState& st) {
-  const AppCommandState::AlignmentFromObjectsPick& p = st.alignmentFromObjects;
-  std::string out;
-  if (p.hasPick)
-    out += ", PICK=" + FormatWorldNumber(p.pickX + CadCoord::WorldOriginX(st)) + " " +
-           FormatWorldNumber(p.pickY + CadCoord::WorldOriginY(st));
-  if (p.reverse) out += ", REVERSE";
-  assert(out.size() < 200);
-  assert(!p.reverse || !out.empty());
-  return out;
+  if (const auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>())
+    return FormatFromObjectsPickArgs(st, *pp);
+  return st.alignmentFromObjectsLastPickArgs;
 }
 
 // ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<azimuth deg>]   (REQ-485.1)
@@ -1376,15 +1393,16 @@ void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vecto
   }
   const std::string name = a->name;
   const alignment::Alignment base = *a;
-  if (!BeginInteractive(st, AppCommandState::Kind::AlignmentLayout, "ALIGNMENTLAYOUT", log)) return;
-  st.alignmentLayout = {};
-  st.alignmentLayout.name = name;
-  st.alignmentLayout.base = base;
+  auto sess = std::make_unique<stepengine::AlignmentLayoutSession>();
+  sess->name = name;
+  sess->base = base;
+  if (!BeginInteractive(st, std::move(sess), "ALIGNMENTLAYOUT", log)) return;
+  auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
   st.alignmentLayoutToolsName = name;
   if (curves) st.alignmentCurveSettings.addCurves = *curves;
   const char* mode = st.alignmentCurveSettings.addCurves ? "with curves" : "no curves";
   if (!base.Empty()) {
-    st.alignmentLayout.pis = {base.EndPoint()};
+    sp->pis = {base.EndPoint()};
     log.push_back("ALIGNMENTLAYOUT - Tangent-Tangent (" + std::string(mode) + ") continues \"" + name + "\" from station " +
                   Sta(st, base, base.EndStation()) + ". Specify the next point or [Undo]:");
     return;
@@ -1392,9 +1410,9 @@ void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vecto
   if (from) {
     alignment::Point2 lp;
     CadCoord::LocalFromWorld(st, from->x, from->y, &lp.x, &lp.y);
-    st.alignmentLayout.pis = {lp};
-    st.alignmentLayout.fixedDirection = direction.has_value();
-    st.alignmentLayout.directionAzimuth = direction.value_or(0.0);
+    sp->pis = {lp};
+    sp->fixedDirection = direction.has_value();
+    sp->directionAzimuth = direction.value_or(0.0);
   }
   log.push_back("ALIGNMENTLAYOUT - Tangent-Tangent (" + std::string(mode) + ", radius " +
                 Lin(st, EffectiveAlignmentCurveRadius(st)) + ") for \"" + name + "\". " +
@@ -1446,26 +1464,30 @@ bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, st
 }
 
 void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log) {
-  assert(st.active == AppCommandState::Kind::AlignmentLayout || st.active == AppCommandState::Kind::AlignmentFromObjects);
   if (st.active == AppCommandState::Kind::AlignmentLayout) {
-    FinishLayout(st, log);  // Civil 3D keeps what was laid out
+    // Note: when called from AlignmentLayoutSession::onCancel, activeSession has already been moved out,
+    // so st.alignmentLayoutToolsName holds the active layout name.
+    const auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
+    const std::string nm = sp ? sp->name : st.alignmentLayoutToolsName;
+    FinishLayout(st, nm, log);  // Civil 3D keeps what was laid out
     return;
   }
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   st.selection.clear();
-  st.alignmentFromObjects = {};
+  st.alignmentFromObjectsLastPickArgs.clear();
   assert(st.active == AppCommandState::Kind::None);
   log.push_back("CREATEALIGNMENTFROMOBJECTS canceled - nothing was created.");
 }
 
 const char* AlignmentCommandPrompt(const AppCommandState& st) {
-  using P = AppCommandState::AlignmentFromObjectsPick::Phase;
-  if (st.active == AppCommandState::Kind::AlignmentLayout)
-    return st.alignmentLayout.pis.empty()
+  using P = stepengine::AlignmentFromObjectsPhase;
+  if (const auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>())
+    return sp->pis.empty()
                ? "ALIGNMENTLAYOUT: Specify start point (click or X,Y) | ESC ends"
                : "ALIGNMENTLAYOUT: Specify next point or [Undo] (click, X,Y or @dx,dy) | Enter or ESC ends";
-  if (st.active != AppCommandState::Kind::AlignmentFromObjects) return nullptr;
-  switch (st.alignmentFromObjects.phase) {
+  const auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
+  if (!pp) return nullptr;
+  switch (pp->phase) {
     case P::WaitFirst: return "CREATEALIGNMENTFROMOBJECTS: Select the first line/arc/polyline | ESC cancels";
     case P::WaitMore: return "CREATEALIGNMENTFROMOBJECTS: Select lines/arcs or polylines to create alignment | Enter when done";
     case P::WaitDirection: return "CREATEALIGNMENTFROMOBJECTS: Press Enter to accept alignment direction or [Reverse]";

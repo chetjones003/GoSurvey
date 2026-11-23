@@ -18,52 +18,15 @@
   float pickDisambiguationScreenX = 0.f;
   float pickDisambiguationScreenY = 0.f;
   bool pickDisambiguationShiftClick = false;
-  enum class SurveyInversePhase : std::uint8_t { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
-  float surveyInverseFromX = 0.f;
-  float surveyInverseFromY = 0.f;
 
-  /// REQ-105: DIST — two-point 3D distance (delta X/Y/Z + slope distance).
-  enum class DistPhase : std::uint8_t { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
-  float distFromX = 0.f;
-  float distFromY = 0.f;
-  float distFromZ = 0.f;
-
-  /// REQ-074 spot elevation / grade. The first pick is kept so the second can report grade against
-  /// it; the elevations are kept per surface, by name, because a point can be covered by more than
-  /// one surface (existing and proposed) and a grade must be computed within one surface, never
-  /// across two (Q1, TASK-055).
-  enum class SurfaceElevPhase : std::uint8_t { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
-  enum class QuickProfilePhase : std::uint8_t { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
-  std::string quickProfileSurfaceName;
-  double quickProfileFromX = 0.0;
-  double quickProfileFromY = 0.0;
-  double surfaceElevFromX = 0.0;
-  double surfaceElevFromY = 0.0;
-  std::vector<std::pair<std::string, double>> surfaceElevFromZ;
-
-  /// REQ-069: the surface DESIGNATEBREAKLINE/DESIGNATEBOUNDARY is adding to, captured when the
-  /// command starts (from its inline argument) so the single pick that follows knows where to add.
-  std::string designateSurfaceName;
-  /// REQ-069: which ring kind DESIGNATEBOUNDARY is adding — irrelevant to DESIGNATEBREAKLINE.
-  CadBoundaryKind designateBoundaryKind = CadBoundaryKind::Outer;
   /// REQ-075: the description / name the Add Breaklines and Add Boundaries dialogs collected before
   /// the pick, stamped onto the definition item on commit. Empty when the command was typed rather
   /// than started from the panel, which is the ordinary case for the command line.
   std::string designateBreaklineDescription;
   std::string designateBoundaryName;
-  bool designateContourSource = false;
 
-  /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
-  ///
-  /// A flag on the existing POLYLINE draft rather than a `Kind` of its own. The two commands differ
-  /// only in how a vertex's Z is obtained; a separate `Kind` would have to be added to both viewport
-  /// dispatch lists, the status text, the prompt table and the ESC path — the twelve-site tax
-  /// ADR-028 warns about, paid for no behavioural difference. `userPolylineVerts` is already
-  /// stride-3 XYZ, so the STORE needs nothing.
-  bool polylineDraft3d = false;
   /// Elevation peeled off a typed `x,y,z` for the vertex being submitted, consumed by
-  /// \ref SubmitPolylineVertex and cleared there. Invalid means "no Z was typed" — the vertex then
-  /// takes \ref CadCommitElevation, i.e. the snapped point's own Z or the work plane (REQ-058).
+  /// \ref SubmitPolylineVertex / FEATURELINE and cleared there.
   bool  polylineTypedZValid = false;
   bool  polylineTypedZRelative = false;  ///< `@dx,dy,dz` — dz is relative to the previous vertex.
   float polylineTypedZ = 0.f;

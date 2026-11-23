@@ -1,5 +1,6 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "GoSurvey/Document/cadpiperun.hpp"
 #include "CadBlocks.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
@@ -23,30 +24,28 @@ void RemoveLivePipeRun(AppCommandState& st);
 }  // namespace
 
 void CancelPipeRunCommand(AppCommandState& st) {
-  // Cancelling removes the provisional geometry too (D-2026-09-24-d) — it was never the user's, and
-  // leaving it would make Esc "keep the half-routed pipe", which is the opposite of cancel.
   RemoveLivePipeRun(st);
-  st.pipeRunDraftVerts.clear();
-  st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitNominalSize;
-  // Nominal size and pressure class deliberately SURVIVE the cancel — remembered for the next run,
-  // the same reason POLYSOLID's width/height/justify survive its own cancel.
+  if (auto* ps = st.sessionAs<stepengine::PipeRunSession>()) {
+    ps->draftVerts.clear();
+    ps->phase = stepengine::PipeRunPhase::WaitNominalSize;
+  }
 }
 
 std::string CadPipeRunPromptText(const AppCommandState& st) {
-  using PRP = AppCommandState::PipeRunPhase;
+  using PRP = stepengine::PipeRunPhase;
+  const auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  const PRP phase = ps ? ps->phase : PRP::WaitNominalSize;
   const std::string classSuffix =
       st.pipeRunPressureClassTag.empty() ? std::string() : (" " + st.pipeRunPressureClassTag);
   char buf[256];
-  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+  if (phase == PRP::WaitNominalSize) {
     if (st.pipeRunNominalSize.empty())
       return "PIPERUN - nominal size (e.g. 4in), optional pressure class (CS150/CS300):";
     std::snprintf(buf, sizeof(buf), "PIPERUN - nominal size [%s%s], Enter to keep:",
                   st.pipeRunNominalSize.c_str(), classSuffix.c_str());
     return buf;
   }
-  if (st.pipeRunPhase == PRP::WaitWallThickness) {
-    // The offered default is the schedule-40 wall for the size just chosen (D-2026-09-23-a), so the
-    // prompt states the number Enter will take rather than making the user know it.
+  if (phase == PRP::WaitWallThickness) {
     double sch40 = 0.0;
     if (CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &sch40))
       std::snprintf(buf, sizeof(buf),
@@ -57,7 +56,7 @@ std::string CadPipeRunPromptText(const AppCommandState& st) {
                     st.pipeRunNominalSize.c_str(), classSuffix.c_str());
     return buf;
   }
-  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+  if (phase == PRP::WaitFirstPoint) {
     std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s wall %.3fin] - start point, or ESC to cancel:",
                   st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunWallThicknessIn);
     return buf;
@@ -579,8 +578,11 @@ EntityAttributes MakeNewPipeRunAttrs(AppCommandState& st, std::string_view nomin
 /// a name — so this refuses rather than renumbering, leaving a stray provisional run the user can
 /// delete instead of silently corrupting references to other runs.
 void RemoveLivePipeRun(AppCommandState& st) {
-  const int idx = st.pipeRunLiveIndex;
-  st.pipeRunLiveIndex = -1;
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
+    return;
+  const int idx = ps->liveIndex;
+  ps->liveIndex = -1;
   if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadPipeRuns.size())
     return;
   if (static_cast<size_t>(idx) + 1 != st.drawing.cadPipeRuns.size())
@@ -591,88 +593,52 @@ void RemoveLivePipeRun(AppCommandState& st) {
   BumpCadGpuCache(st);
 }
 
-/// The draft, materialised as a REAL `CadPipeRun` in the drawing so it exists between clicks
-/// (D-2026-09-24-d, user request 2026-09-24).
-///
-/// `PIPERUN` used to keep its route entirely in `pipeRunDraftVerts` and build nothing until END, so
-/// anything that ended the command early — notably picking a part from the Pipe Fittings palette,
-/// which starts INSERT — took the whole route with it, and there was no pipe in the drawing to place
-/// a flange against. The requirement is the opposite: the pipe is there from the second click and
-/// keeps up as the route grows, which is what makes "route, then flange the end you just drew" work.
-///
-/// This is a PROVISIONAL entity, not the finished run. END still goes through
-/// \ref CommitPipeRunDraft, which is where auto-elbows split the route into pieces and branch tees
-/// tie into existing runs — work that must see the whole route and cannot be done a click at a time.
-/// So the provisional entity is removed again immediately before that commit, and the drawing ends up
-/// exactly as it always did. It carries no undo entry of its own for the same reason: it is scaffolding
-/// the user never owns, and \ref CommitPipeRunDraft's single "Create Pipe Run" snapshot is still the
-/// one undo step for the finished route.
-///
-/// A route whose solid cannot build yet (a corner too tight for its fillet radius) simply leaves the
-/// last good provisional geometry standing rather than erasing the pipe mid-route: the command says so
-/// at END, where the refusal is actionable, and REQ-201 is about what gets STORED — this stores
-/// nothing invalid, it declines to update.
 void SyncLivePipeRun(AppCommandState& st) {
-  const bool haveSegment = st.pipeRunDraftVerts.size() >= 6;  // two vertices
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
+    return;
+  const bool haveSegment = ps->draftVerts.size() >= 6;
   if (!haveSegment) {
     RemoveLivePipeRun(st);
     return;
   }
   CadPipeRun run;
-  run.vertsXyz = st.pipeRunDraftVerts;
+  run.vertsXyz = ps->draftVerts;
   run.nominalSize = st.pipeRunNominalSize;
   run.wallThicknessIn = st.pipeRunWallThicknessIn;
   run.pressureClassTag = st.pipeRunPressureClassTag;
 
-  // No probe build here. Storing the run makes the display path build its solid anyway, and building
-  // it twice per click doubled the most expensive thing in the command: a run's swept tube costs
-  // ~5.6 ms at two points and ~11 ms more per point after that. A route that cannot build a solid
-  // simply draws nothing until it can, and END still reports the reason, which is where it is
-  // actionable. REQ-201 is unaffected — a `CadPipeRun` stores a PATH, and an unbuildable path was
-  // always allowed to exist in the draft.
-
-  if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.drawing.cadPipeRuns.size()) {
-    st.drawing.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);
+  if (ps->liveIndex >= 0 && static_cast<size_t>(ps->liveIndex) < st.drawing.cadPipeRuns.size()) {
+    st.drawing.cadPipeRuns[static_cast<size_t>(ps->liveIndex)] = std::move(run);
   } else {
     st.drawing.cadPipeRuns.push_back(std::move(run));
     st.drawing.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
-    st.pipeRunLiveIndex = static_cast<int>(st.drawing.cadPipeRuns.size()) - 1;
+    ps->liveIndex = static_cast<int>(st.drawing.cadPipeRuns.size()) - 1;
   }
   BumpCadGpuCache(st);
 }
 
 void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps || ps->draftVerts.size() < 6) {
     log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
     return;
   }
 
-  // The provisional entity has served its purpose (D-2026-09-24-d): the finished route is built
-  // below from the draft, with the auto-elbow splitting and branch tees that need the WHOLE route.
-  // Retired before the undo snapshot, so the snapshot records the drawing as it was BEFORE routing
-  // began and one Ctrl+Z still removes the entire run.
   RemoveLivePipeRun(st);
 
   const CadPipePressureClass pressureClass = ParseCadPipePressureClass(st.pipeRunPressureClassTag);
   std::vector<std::vector<ray3d::Vec3>> pieces;
   std::vector<PlannedElbow> elbows;
-  PlanPipeRunAutoFittings(st, st.pipeRunDraftVerts, st.pipeRunNominalSize, pressureClass, &pieces,
+  PlanPipeRunAutoFittings(st, ps->draftVerts, st.pipeRunNominalSize, pressureClass, &pieces,
                           &elbows, log);
 
-  // Branch tees (issue #486 increment B6): only the draft's own two endpoints can qualify (see
-  // this function's own doc comment for why a mid-span tie-in is out of scope), tried AFTER the
-  // elbow pieces are known so the endpoints checked are the draft's true start/end regardless of
-  // how many interior bends split it. Each attempt mutates the affected piece's endpoint in place
-  // and/or is refused entirely on its own — never partially applied — before anything commits.
   std::vector<BranchFitPlan> branchFits;
   TryApplyBranchAtEndpoint(st, pieces.front(), /*atStart=*/true, st.pipeRunNominalSize,
                            pressureClass, branchFits, log);
   TryApplyBranchAtEndpoint(st, pieces.back(), /*atStart=*/false, st.pipeRunNominalSize,
                            pressureClass, branchFits, log);
 
-  // Validate EVERY piece can build a valid swept solid before committing anything (all-or-nothing —
-  // the same guarantee the pre-B5 single-run commit gave). A planned elbow's catalog import may
-  // already have happened (harmless/idempotent) but no CadPipeRun or CadBlockRef exists yet.
   std::vector<CadPipeRun> pieceRuns(pieces.size());
   for (size_t p = 0; p < pieces.size(); ++p) {
     CadPipeRun& run = pieceRuns[p];
@@ -683,12 +649,8 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       run.vertsXyz.push_back(pt.z);
     }
     run.nominalSize = st.pipeRunNominalSize;
-    run.wallThicknessIn = st.pipeRunWallThicknessIn;  // D-2026-09-23-a
+    run.wallThicknessIn = st.pipeRunWallThicknessIn;
     run.pressureClassTag = st.pipeRunPressureClassTag;
-    // The size itself was already validated when it was set (below), but the swept solid can still
-    // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
-    // own doc comment) has no valid geometry to build, so this is a real, reachable failure — not
-    // belt-and-braces — and the run stays open so U/Esc can fix the offending corner.
     std::vector<CadSolidPtr> preview;
     if (!CadBuildPipeRunSolids(run, &preview)) {
       log.push_back("PIPERUN - could not build a pipe solid — a corner may be too tight for this "
@@ -708,7 +670,6 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       run.vertsXyz[vi * 3 + 2] = bf.existingCut[k].z;
     }
   }
-  // Every piece, elbow and tee of this run is one line: one size colour, one layer (REQ-353).
   const EntityAttributes lineAttrs = MakeNewPipeRunAttrs(st, st.pipeRunNominalSize);
   size_t elbowIx = 0;
   size_t totalVerts = 0;
@@ -735,102 +696,96 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back(msg + " inserted.");
   }
   CancelPipeRunCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
-/// Append \p pt as the run's start (WaitFirstPoint) or next vertex (WaitNextPoint), refusing a
-/// point identical to the last one committed.
 void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std::string>& log) {
-  using PRP = AppCommandState::PipeRunPhase;
-  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
-    st.pipeRunDraftVerts = {pt.x, pt.y, pt.z};
-    st.pipeRunPhase = PRP::WaitNextPoint;
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
+    return;
+  using PRP = stepengine::PipeRunPhase;
+  if (ps->phase == PRP::WaitFirstPoint) {
+    ps->draftVerts = {pt.x, pt.y, pt.z};
+    ps->phase = PRP::WaitNextPoint;
     log.push_back(CadPipeRunPromptText(st));
     return;
   }
-  const size_t n = st.pipeRunDraftVerts.size();
+  const size_t n = ps->draftVerts.size();
   if (n >= 3) {
-    const double lx = st.pipeRunDraftVerts[n - 3];
-    const double ly = st.pipeRunDraftVerts[n - 2];
-    const double lz = st.pipeRunDraftVerts[n - 1];
+    const double lx = ps->draftVerts[n - 3];
+    const double ly = ps->draftVerts[n - 2];
+    const double lz = ps->draftVerts[n - 1];
     if (std::fabs(pt.x - lx) < 1e-9 && std::fabs(pt.y - ly) < 1e-9 && std::fabs(pt.z - lz) < 1e-9) {
       log.push_back("PIPERUN - that is the same point as the last one.");
       return;
     }
   }
-  st.pipeRunDraftVerts.push_back(pt.x);
-  st.pipeRunDraftVerts.push_back(pt.y);
-  st.pipeRunDraftVerts.push_back(pt.z);
-  ++st.pipeRunPerf.clicks;  // PIPEPERF
-  SyncLivePipeRun(st);  // D-2026-09-24-d — the pipe exists from the second click, and keeps up
+  ps->draftVerts.push_back(pt.x);
+  ps->draftVerts.push_back(pt.y);
+  ps->draftVerts.push_back(pt.z);
+  ++st.pipeRunPerf.clicks;
+  SyncLivePipeRun(st);
   log.push_back(CadPipeRunPromptText(st));
 }
 
 } // namespace
 
 bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::PipeRun)
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
     return false;
-  // Enough route to be a run: finish it properly — the same commit END performs, with its
-  // auto-elbows, its branch tees and its single undo entry. Anything less is not a pipe, so the
-  // draft is dropped; either way the command ends cleanly rather than being left half-open behind
-  // whatever is taking over (D-2026-09-24-d).
-  if (st.pipeRunDraftVerts.size() >= 6) {
+  if (ps->draftVerts.size() >= 6) {
     CommitPipeRunDraft(st, log);
     return true;
   }
   CancelPipeRunCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("PIPERUN - ended (a run needs at least two points).");
   return true;
 }
 
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelPipeRunCommand(st);
-  st.pipeRunPerf.Reset();  // PIPEPERF always describes the run about to be drawn
-  st.active = AppCommandState::Kind::PipeRun;
-  // REQ-350 (a) — the palette opens with routing, and deliberately does NOT close with it: the parts
-  // a user reaches for (a flange on the end just routed) are wanted immediately after the run is
-  // committed, not only during it.
+  stepengine::BeginSession(st, std::make_unique<stepengine::PipeRunSession>(), false);
+  st.pipeRunWallThicknessIn = 0.0;
+  st.pipeRunPerf.Reset();
   CadPipePaletteSetOpen(st, true, log);
   log.push_back(CadPipeRunPromptText(st));
 }
 
 void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size) {
-  // A size typed alone at the prompt clears the class (HandlePipeRunTextInput), and a class belongs
-  // to a size's catalog parts — so keeping the old one would look fittings up for a class the user
-  // never chose at this size.
   st.pipeRunNominalSize = size;
   st.pipeRunPressureClassTag.clear();
 }
 
 void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log) {
-  CancelPipeRunCommand(st);
+  auto sess = std::make_unique<stepengine::PipeRunSession>();
+  auto* ps = sess.get();
+  stepengine::BeginSession(st, std::move(sess), false);
+  st.pipeRunWallThicknessIn = 0.0;
   st.pipeRunPerf.Reset();
-  st.active = AppCommandState::Kind::PipeRun;
-  CadPipePaletteSetOpen(st, true, log);  // REQ-350 (a), as typed PIPERUN does
-  // The two answers the typed prompts would take on a blank Enter — keep the size, standard wall —
-  // given without asking (D-2026-09-28-k). A size the table cannot find, or one with no standard
-  // wall, has nothing to give, so the typed prompts ask instead of the run starting on a guess.
+  CadPipePaletteSetOpen(st, true, log);
   double wallIn = 0.0;
   if (CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &wallIn)) {
     st.pipeRunWallThicknessIn = wallIn;
-    st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitFirstPoint;
+    ps->phase = stepengine::PipeRunPhase::WaitFirstPoint;
   }
   log.push_back(CadPipeRunPromptText(st));
 }
 
 bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  using PRP = AppCommandState::PipeRunPhase;
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
+    return false;
+  using PRP = stepengine::PipeRunPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+  if (ps->phase == PRP::WaitNominalSize) {
     if (line.empty()) {
       if (st.pipeRunNominalSize.empty()) {
         log.push_back("PIPERUN - a nominal size is required, e.g. 4in.");
         return true;
       }
-      st.pipeRunPhase = PRP::WaitWallThickness;
+      ps->phase = PRP::WaitWallThickness;
       log.push_back(CadPipeRunPromptText(st));
       return true;
     }
@@ -855,20 +810,15 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     }
     st.pipeRunNominalSize = sizeTok;
     st.pipeRunPressureClassTag = classTag;
-    st.pipeRunPhase = PRP::WaitWallThickness;
+    ps->phase = PRP::WaitWallThickness;
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
 
-  // The wall the pipe is hollow to (D-2026-09-23-a). Prompted right after the size, because the
-  // answer is only meaningful against a size: blank Enter takes the schedule-40 wall for THIS size,
-  // and anything typed is validated against this size's own OD.
-  if (st.pipeRunPhase == PRP::WaitWallThickness) {
+  if (ps->phase == PRP::WaitWallThickness) {
     double odFeet = 0.0;
     if (!CadPipeNominalOdFeet(st.pipeRunNominalSize, &odFeet)) {
-      // Unreachable through the size prompt, which refuses an unknown size; kept because the phase
-      // is reachable from state the command does not own (a restored draft, a future caller).
-      st.pipeRunPhase = PRP::WaitNominalSize;
+      ps->phase = PRP::WaitNominalSize;
       log.push_back("PIPERUN - nominal size is not set; type one first, e.g. 4in.");
       return true;
     }
@@ -898,16 +848,16 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
       return true;
     }
     st.pipeRunWallThicknessIn = wallIn;
-    st.pipeRunPhase = PRP::WaitFirstPoint;
+    ps->phase = PRP::WaitFirstPoint;
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
 
   if (line.empty()) {
-    if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    if (ps->phase == PRP::WaitFirstPoint) {
       log.push_back("PIPERUN canceled — no points picked.");
       CancelPipeRunCommand(st);
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return true;
     }
     CommitPipeRunDraft(st, log);
@@ -916,54 +866,42 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
 
   const std::string low = StringUtil::toLowerAsciiCopy(line);
   if (low == "end") {
-    if (st.pipeRunPhase != PRP::WaitNextPoint)
+    if (ps->phase != PRP::WaitNextPoint)
       log.push_back("PIPERUN END - need at least one segment after the start point.");
     else
       CommitPipeRunDraft(st, log);
     return true;
   }
   if (low == "u" || low == "undo") {
-    // Mirrors POLYLINE's own U guard: cannot undo past the first point (that's what ESC is for).
-    if (st.pipeRunPhase != PRP::WaitNextPoint || st.pipeRunDraftVerts.size() < 6) {
+    if (ps->phase != PRP::WaitNextPoint || ps->draftVerts.size() < 6) {
       log.push_back("PIPERUN - nothing to undo yet.");
       return true;
     }
-    st.pipeRunDraftVerts.resize(st.pipeRunDraftVerts.size() - 3);
-    SyncLivePipeRun(st);  // D-2026-09-24-d — the drawn pipe shortens with the route
+    ps->draftVerts.resize(ps->draftVerts.size() - 3);
+    SyncLivePipeRun(st);
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
   if (low == "compass") {
-    // Scoped to this command only (REQ-346) — does not touch st.polarMode, which governs ordinary
-    // POLAR tracking in every other command.
     st.pipeRunCompassOn = !st.pipeRunCompassOn;
     log.push_back(st.pipeRunCompassOn ? "PIPERUN - compass ON." : "PIPERUN - compass OFF.");
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
 
-  // Compass typed-distance entry (REQ-346): a bare number, while a direction is snapped, commits a
-  // segment of exactly that length along the snapped ray — the same "direction from the compass,
-  // distance from the keyboard" idea AutoCAD's own direct-distance entry uses for ORTHO/POLAR.
-  if (st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunCompassOn && st.pipeRunDraftVerts.size() >= 3) {
+  if (ps->phase == PRP::WaitNextPoint && st.pipeRunCompassOn && ps->draftVerts.size() >= 3) {
     char* distEnd = nullptr;
     const double dist = std::strtod(line.c_str(), &distEnd);
     if (distEnd && *distEnd == '\0' && !line.empty() && std::isfinite(dist) && dist > 0.0) {
-      const size_t n = st.pipeRunDraftVerts.size();
-      const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
-      const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
-      const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
-      // Prefer a live object-snap point over the raw cursor, matching SubmitPipeRunViewportPick and
-      // the compass overlay (CadUi.cpp) — the three must agree on what "the current direction" is.
+      const size_t n = ps->draftVerts.size();
+      const float lastX = static_cast<float>(ps->draftVerts[n - 3]);
+      const float lastY = static_cast<float>(ps->draftVerts[n - 2]);
+      const float lastZ = static_cast<float>(ps->draftVerts[n - 1]);
       float wx = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalX) : st.uiCursorWorldX;
       float wy = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalY) : st.uiCursorWorldY;
       float wz = lastZ;
       const float targetZ = static_cast<float>(CadCommitElevation(st));
       ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
-      // The FULL 3D direction, not just X/Y: under a Front/Left/Right-style UCS the snapped ray runs
-      // along world Z (or another axis carried entirely by the resolved wz), so an X/Y-only length
-      // came out ~0 and fell through to the point parser below — which is what produced "could not
-      // read the base point" for a plain typed distance under those UCS orientations.
       const double dx = static_cast<double>(wx) - lastX;
       const double dy = static_cast<double>(wy) - lastY;
       const double dz = static_cast<double>(wz) - lastZ;
@@ -980,48 +918,39 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
   }
 
   ray3d::Vec3 pt{};
-  // `@dx,dy[,dz]` from the last vertex (REQ-354) — the base the dynamic input's ΔX / ΔY measure from.
   ray3d::Vec3 lastVertex{};
-  const bool haveLast = st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunDraftVerts.size() >= 3;
+  const bool haveLast = ps->phase == PRP::WaitNextPoint && ps->draftVerts.size() >= 3;
   if (haveLast) {
-    const size_t n = st.pipeRunDraftVerts.size();
-    lastVertex = {st.pipeRunDraftVerts[n - 3], st.pipeRunDraftVerts[n - 2], st.pipeRunDraftVerts[n - 1]};
+    const size_t n = ps->draftVerts.size();
+    lastVertex = {ps->draftVerts[n - 3], ps->draftVerts[n - 2], ps->draftVerts[n - 1]};
   }
   if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN", haveLast ? &lastVertex : nullptr, /*zInUcs=*/true))
-    return true;  // the reason has been reported; the prompt stands
+    return true;
   AddPipeRunPoint(st, pt, log);
   return true;
 }
 
 void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  using PRP = AppCommandState::PipeRunPhase;
-  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+  auto* ps = st.sessionAs<stepengine::PipeRunSession>();
+  if (!ps)
+    return;
+  using PRP = stepengine::PipeRunPhase;
+  if (ps->phase == PRP::WaitNominalSize) {
     log.push_back("PIPERUN - type a nominal size first (e.g. 4in), optionally followed by a "
                   "pressure class.");
     return;
   }
-  if (st.pipeRunPhase == PRP::WaitWallThickness) {
+  if (ps->phase == PRP::WaitWallThickness) {
     log.push_back("PIPERUN - answer the wall thickness first (Enter takes the standard schedule-40 "
                   "wall for this size).");
     return;
   }
-  // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
-  const size_t n = st.pipeRunDraftVerts.size();
-  // The compass resolves a FULL 3D point, so its `wz` has to be carried into the commit — it is not
-  // an X/Y-only constraint. Under a Front/Left/Right-style UCS (and under any view where the cursor
-  // moves in elevation) the snapped ray runs along world Z, and that component lives ENTIRELY in
-  // `wz`; dropping it and re-reading the raw cursor elevation put the committed vertex back off the
-  // snapped ray, so segments did not lock to the UCS axes even with the compass on.
-  //
-  // This is the "preview must use the commit point" failure in its purest form: the rubber preview
-  // (CadRubberPreview.cpp) and the typed-distance path (HandlePipeRunTextInput) both already pass
-  // `&wz`, so the ghost showed a locked segment and the click then committed an unlocked one. All
-  // three call sites now agree.
+  const size_t n = ps->draftVerts.size();
   float wz = static_cast<float>(CadCommitElevation(st));
-  if (st.pipeRunPhase == PRP::WaitNextPoint && n >= 3) {
-    const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
-    const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
-    const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
+  if (ps->phase == PRP::WaitNextPoint && n >= 3) {
+    const float lastX = static_cast<float>(ps->draftVerts[n - 3]);
+    const float lastY = static_cast<float>(ps->draftVerts[n - 2]);
+    const float lastZ = static_cast<float>(ps->draftVerts[n - 1]);
     const float targetZ = wz;
     ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
   }
@@ -1448,28 +1377,35 @@ void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, st
     log.push_back("PIPEFIT - unknown part type \"" + partTypeTok + "\".");
     return;
   }
-  st.pipeFitRunIndex = picked[0];
-  st.pipeFitPartType = partType;
-  st.active = AppCommandState::Kind::PipeFit;
+  auto sess = std::make_unique<stepengine::PipeFitSession>();
+  sess->runIndex = picked[0];
+  sess->partType = partType;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("PIPEFIT - pick a point on the selected run, or ESC to cancel.");
 }
 
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  auto* pf = st.sessionAs<stepengine::PipeFitSession>();
+  if (!pf)
+    return;
+  const int runIdx = pf->runIndex;
+  const CadPipePartType partType = pf->partType;
   const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
-  TrySplicePipeFit(st, st.pipeFitRunIndex, st.pipeFitPartType, pt, log);
-  st.pipeFitRunIndex = -1;
-  st.pipeFitPartType = CadPipePartType::None;
-  st.active = AppCommandState::Kind::None;
+  TrySplicePipeFit(st, runIdx, partType, pt, log);
+  stepengine::EndSession(st);
 }
 
 bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  auto* pf = st.sessionAs<stepengine::PipeFitSession>();
+  if (!pf)
+    return false;
   ray3d::Vec3 pt{};
   if (!ParseSolidBasePoint(st, line, &pt, log, "PIPEFIT"))
-    return true;  // the reason has been reported; command state is left as-is
-  TrySplicePipeFit(st, st.pipeFitRunIndex, st.pipeFitPartType, pt, log);
-  st.pipeFitRunIndex = -1;
-  st.pipeFitPartType = CadPipePartType::None;
-  st.active = AppCommandState::Kind::None;
+    return true;
+  const int runIdx = pf->runIndex;
+  const CadPipePartType partType = pf->partType;
+  TrySplicePipeFit(st, runIdx, partType, pt, log);
+  stepengine::EndSession(st);
   return true;
 }
 
@@ -1495,8 +1431,9 @@ void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PIPESPLIT - select exactly one pipe run first.");
     return;
   }
-  st.pipeSplitRunIndex = picked[0];
-  st.active = AppCommandState::Kind::PipeSplit;
+  auto sess = std::make_unique<stepengine::PipeSplitSession>();
+  sess->runIndex = picked[0];
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("PIPESPLIT - pick a point on the selected run, or ESC to cancel.");
 }
 
@@ -1574,19 +1511,25 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
 } // namespace
 
 void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PipeSplitSession>();
+  if (!ps)
+    return;
+  const int runIdx = ps->runIndex;
   const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
-  TrySplitPipeRun(st, st.pipeSplitRunIndex, pt, log);
-  st.pipeSplitRunIndex = -1;
-  st.active = AppCommandState::Kind::None;
+  TrySplitPipeRun(st, runIdx, pt, log);
+  stepengine::EndSession(st);
 }
 
 bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PipeSplitSession>();
+  if (!ps)
+    return false;
   ray3d::Vec3 pt{};
   if (!ParseSolidBasePoint(st, line, &pt, log, "PIPESPLIT"))
     return true;
-  TrySplitPipeRun(st, st.pipeSplitRunIndex, pt, log);
-  st.pipeSplitRunIndex = -1;
-  st.active = AppCommandState::Kind::None;
+  const int runIdx = ps->runIndex;
+  TrySplitPipeRun(st, runIdx, pt, log);
+  stepengine::EndSession(st);
   return true;
 }
 

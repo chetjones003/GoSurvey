@@ -87,9 +87,13 @@ static bool CommitPaperTrimGeometry(AppCommandState& st, const AppCommandState& 
   return true;
 }
 
-static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol,
+static float TrimWorldTolFromPixels(float viewportHeightPx, float orthoHalfHeightWorld, float pixels) {
+  return pixels * ((2.f * orthoHalfHeightWorld) / std::max(viewportHeightPx, 1.f));
+}
+
+static bool SubmitPaperTrimPick(AppCommandState& st, stepengine::TrimSession& trim, float x, float y, float tol,
                                 std::vector<std::string>& log) {
-  using TP = AppCommandState::TrimPhase;
+  using TP = stepengine::TrimPhase;
   PaperLayout* layout = ActivePaperGeometryTarget(st);
   if (!layout) {
     log.push_back("TRIM — active paper layout is unavailable; nothing changed.");
@@ -98,30 +102,28 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
   AppCommandState staged;
   StagePaperTrimGeometry(*layout, &staged);
   staged.trimState = st.trimState;
-  staged.trimCutters.clear();
 
-  if (st.trimPhase == TP::CuttingLine_WaitP1) {
-    st.trimCutInfP1x = x; st.trimCutInfP1y = y; st.trimCutInfP1z = 0.f;
-    st.trimPhase = TP::CuttingLine_WaitP2;
+  if (trim.phase == TP::CuttingLine_WaitP1) {
+    trim.cutInfP1x = x; trim.cutInfP1y = y; trim.cutInfP1z = 0.f;
+    trim.phase = TP::CuttingLine_WaitP2;
     log.push_back("TRIM — second point: finishes trim on nearest paper edge along your line.");
     return true;
   }
-  if (st.trimPhase == TP::CuttingLine_WaitP2) {
+  if (trim.phase == TP::CuttingLine_WaitP2) {
     float x2 = x, y2 = y;
     if (st.orthoMode) {
-      if (std::fabs(x2 - st.trimCutInfP1x) >= std::fabs(y2 - st.trimCutInfP1y)) y2 = st.trimCutInfP1y;
-      else x2 = st.trimCutInfP1x;
+      if (std::fabs(x2 - trim.cutInfP1x) >= std::fabs(y2 - trim.cutInfP1y)) y2 = trim.cutInfP1y;
+      else x2 = trim.cutInfP1x;
     }
-    if (std::hypot(x2 - st.trimCutInfP1x, y2 - st.trimCutInfP1y) < 1e-9f) {
+    if (std::hypot(x2 - trim.cutInfP1x, y2 - trim.cutInfP1y) < 1e-9f) {
       log.push_back("TRIM — line too short.");
       return false;
     }
     const auto oldLines = staged.drawing.userLinesFlat;
     const auto oldVerts = staged.drawing.userPolylineVerts;
     const auto oldOffsets = staged.drawing.userPolylineOffsets;
-    ExecuteDrawnSegmentTrimOnce(staged, st.trimCutInfP1x, st.trimCutInfP1y, x2, y2, tol, log);
-    st.trimPhase = TP::SelectCuttingEdges;
-    st.active = AppCommandState::Kind::None;
+    ExecuteDrawnSegmentTrimOnce(staged, trim.cutInfP1x, trim.cutInfP1y, x2, y2, tol, log);
+    stepengine::EndSession(st);
     if (oldLines != staged.drawing.userLinesFlat || oldVerts != staged.drawing.userPolylineVerts || oldOffsets != staged.drawing.userPolylineOffsets) {
       PushUndoSnapshot(st, "Trim paper geometry");
       CommitPaperTrimGeometry(st, staged);
@@ -139,18 +141,18 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
            t == PaperEntityRef::Type::Arc || t == PaperEntityRef::Type::Ellipse ||
            t == PaperEntityRef::Type::Polyline;
   };
-  if (st.trimPhase == TP::SelectCuttingEdges) {
+  if (trim.phase == TP::SelectCuttingEdges) {
     if (!isCuttable(hit.type)) {
       log.push_back("TRIM — text or block cannot be a cutting edge; pick a line, circle, arc, ellipse, or polyline.");
       return false;
     }
-    if (std::find_if(st.paperTrimCutters.begin(), st.paperTrimCutters.end(), [&](const auto& c) {
+    if (std::find_if(trim.paperCutters.begin(), trim.paperCutters.end(), [&](const auto& c) {
           return c.type == hit.type && c.index == hit.index;
-        }) != st.paperTrimCutters.end()) {
+        }) != trim.paperCutters.end()) {
       log.push_back("TRIM — already a cutting edge.");
       return true;
     }
-    st.paperTrimCutters.push_back(hit);
+    trim.paperCutters.push_back(hit);
     log.push_back("TRIM — paper cutting edge added.");
     return true;
   }
@@ -168,8 +170,8 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
     return false;
   }
   std::vector<SelectedEntity> cutters;
-  cutters.reserve(st.paperTrimCutters.size());
-  for (const auto& c : st.paperTrimCutters) cutters.push_back(PaperTrimEntity(c));
+  cutters.reserve(trim.paperCutters.size());
+  for (const auto& c : trim.paperCutters) cutters.push_back(PaperTrimEntity(c));
   std::vector<std::array<double, 4>> cuts;
   BuildTrimCutSegments(staged, cutters, &target, &cuts);
   if (cuts.empty()) {
@@ -189,71 +191,62 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
 bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld,
                             std::vector<std::string>& log, const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
-  using K = AppCommandState::Kind;
-  using TP = AppCommandState::TrimPhase;
-  if (st.active != K::Trim)
+  auto* trim = st.sessionAs<stepengine::TrimSession>();
+  if (!trim)
     return false;
+  using TP = stepengine::TrimPhase;
 
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st))
-    return SubmitPaperTrimPick(st, wx, wy, tolWorld, log);
+    return SubmitPaperTrimPick(st, *trim, wx, wy, tolWorld, log);
 
-  // issue #399 increment 4: an orbited camera / non-world UCS carries a valid pick ray. The drawn
-  // trim line's two points then keep their real elevation (the committed cursor or snap Z), and the
-  // trim resolves in true 3D via \ref Try3DDrawnLineTrim. Plan view (pickRay null) is byte-identical
-  // to before — the fields' Z stays 0 and the flat \ref ExecuteDrawnSegmentTrimOnce path runs.
   const bool trim3d = pickRay && pickRay->valid();
   const float commitZ = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalZ) : static_cast<float>(st.uiCursorWorldZ);
 
-  if (st.trimPhase == TP::CuttingLine_WaitP1) {
-    st.trimCutInfP1x = wx;
-    st.trimCutInfP1y = wy;
-    st.trimCutInfP1z = trim3d ? commitZ : 0.f;
-    st.trimPhase = TP::CuttingLine_WaitP2;
+  if (trim->phase == TP::CuttingLine_WaitP1) {
+    trim->cutInfP1x = wx;
+    trim->cutInfP1y = wy;
+    trim->cutInfP1z = trim3d ? commitZ : 0.f;
+    trim->phase = TP::CuttingLine_WaitP2;
     log.push_back("TRIM — second point: finishes trim on nearest edge along your line (dashed preview).");
     return true;
   }
 
-  if (st.trimPhase == TP::CuttingLine_WaitP2) {
+  if (trim->phase == TP::CuttingLine_WaitP2) {
     float p2x = wx;
     float p2y = wy;
     float p2z = trim3d ? commitZ : 0.f;
     if (trim3d) {
-      // ORTHO / POLAR in the active UCS plane, carrying Z (issue #371's helper) — the flat branch
-      // below stays exactly as it was for the plan-view regression guard.
-      ApplyOrthoConstrainFromAnchor(st, st.trimCutInfP1x, st.trimCutInfP1y, &p2x, &p2y, st.orthoMode,
-                                    st.trimCutInfP1z, p2z, &p2z);
+      ApplyOrthoConstrainFromAnchor(st, trim->cutInfP1x, trim->cutInfP1y, &p2x, &p2y, st.orthoMode,
+                                    trim->cutInfP1z, p2z, &p2z);
     } else if (st.orthoMode) {
-      const float dx = p2x - st.trimCutInfP1x;
-      const float dy = p2y - st.trimCutInfP1y;
+      const float dx = p2x - trim->cutInfP1x;
+      const float dy = p2y - trim->cutInfP1y;
       if (std::fabs(dx) >= std::fabs(dy))
-        p2y = st.trimCutInfP1y;
+        p2y = trim->cutInfP1y;
       else
-        p2x = st.trimCutInfP1x;
+        p2x = trim->cutInfP1x;
     }
-    const float ddx = p2x - st.trimCutInfP1x;
-    const float ddy = p2y - st.trimCutInfP1y;
-    const float ddz = p2z - st.trimCutInfP1z;
+    const float ddx = p2x - trim->cutInfP1x;
+    const float ddy = p2y - trim->cutInfP1y;
+    const float ddz = p2z - trim->cutInfP1z;
     if (ddx * ddx + ddy * ddy + ddz * ddz < 1e-18f) {
       log.push_back("TRIM — line too short.");
       return false;
     }
-    st.trimCutInfP2x = p2x;
-    st.trimCutInfP2y = p2y;
-    st.trimCutInfP2z = p2z;
+    trim->cutInfP2x = p2x;
+    trim->cutInfP2y = p2y;
+    trim->cutInfP2z = p2z;
     if (trim3d) {
-      Try3DDrawnLineTrim(st, ray3d::Vec3{st.trimCutInfP1x, st.trimCutInfP1y, st.trimCutInfP1z},
+      Try3DDrawnLineTrim(st, ray3d::Vec3{trim->cutInfP1x, trim->cutInfP1y, trim->cutInfP1z},
                          ray3d::Vec3{p2x, p2y, p2z}, tolWorld, log);
     } else {
-      ExecuteDrawnSegmentTrimOnce(st, st.trimCutInfP1x, st.trimCutInfP1y, p2x, p2y, tolWorld, log);
+      ExecuteDrawnSegmentTrimOnce(st, trim->cutInfP1x, trim->cutInfP1y, p2x, p2y, tolWorld, log);
     }
-    st.trimCutters.clear();
-    st.paperTrimCutters.clear();
-    st.trimPhase = TP::SelectCuttingEdges;
-    st.active = K::None;
+    stepengine::EndSession(st);
     return true;
   }
 
-  if (st.trimPhase == TP::SelectCuttingEdges) {
+  if (trim->phase == TP::SelectCuttingEdges) {
     SelectedEntity hit{};
     float d2 = 0.f;
     if (!PickClosestCadEntity(st, wx, wy, tolWorld, &hit, &d2, pickRay)) {
@@ -264,17 +257,11 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       log.push_back("TRIM — use a line, circle, arc, ellipse, or polyline as a cutting edge.");
       return false;
     }
-    // REQ-087 / REQ-201. Same reasoning as the Annotation refusal above it: a feature line is
-    // pickable, so it would otherwise be accepted as a cutting edge and then contribute no cut
-    // segments, leaving the user with "no cutting segments" and no idea why.
     if (hit.type == SelectedEntity::Type::FeatureLine) {
       log.push_back("TRIM — 1 feature line ignored: a feature line cannot be a cutting edge. Use a "
                     "line, circle, arc, ellipse, or polyline.");
       return false;
     }
-    // REQ-068 / ADR-036 (c). Same class as the two refusals above: a surface is pickable now, so it
-    // would otherwise be accepted as a cutting edge, contribute no cut segments, and leave the user
-    // with "no cutting segments" and nothing to explain it.
     if (hit.type == SelectedEntity::Type::Surface) {
       log.push_back("TRIM — 1 surface ignored: a surface cannot be a cutting edge. Use a line, "
                     "circle, arc, ellipse, or polyline.");
@@ -284,20 +271,17 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       log.push_back("TRIM — splines cannot be cutting edges; nothing changed.");
       return false;
     }
-    for (const auto& c : st.trimCutters) {
+    for (const auto& c : trim->cutters) {
       if (SelectedEntityMatches(c, hit)) {
         log.push_back("TRIM — already a cutting edge.");
         return true;
       }
     }
-    st.trimCutters.push_back(hit);
+    trim->cutters.push_back(hit);
     log.push_back("TRIM — cutting edge added.");
     return true;
   }
 
-  // issue #399 increments 1-2: an orbited camera resolves through a real pick ray (\ref
-  // Try3DLineTrim); plan view / world UCS (pickRay null) falls through to the original,
-  // byte-identical flat-XY path below.
   if (pickRay && pickRay->valid())
     return Try3DLineTrim(st, wx, wy, tolWorld, *pickRay, log);
 
@@ -305,9 +289,6 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
   float d2 = 0.f;
   if (!PickClosestTrimTarget(st, wx, wy, tolWorld, &tgt, &ax, &ay, &bx, &by, &d2)) {
-    // REQ-087 / REQ-201. "Nothing to trim" is a lie when there plainly IS something under the
-    // cursor and it happens to be a feature line. Say which it is: trimming one is undefined —
-    // the new end would need an elevation, and neither REQ-087 nor REQ-088 says where it comes from.
     SelectedEntity under{};
     float ud2 = 0.f;
     if (PickClosestCadEntity(st, wx, wy, tolWorld, &under, &ud2) &&
@@ -322,7 +303,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   }
 
   std::vector<std::array<double, 4>> cuts;
-  BuildTrimCutSegments(st, st.trimCutters, &tgt, &cuts);
+  BuildTrimCutSegments(st, trim->cutters, &tgt, &cuts);
   if (cuts.empty()) {
     log.push_back("TRIM — no cutting segments (check cutting edges).");
     return false;
@@ -335,22 +316,79 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   return true;
 }
 
+void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1x, float fenceP1y, float fenceP2x,
+                                        float fenceP2y, float pickPreviewX, float pickPreviewY,
+                                        std::vector<float>* previewLinesOut) {
+  if (!previewLinesOut)
+    return;
+  float matchTol = std::max(TrimWorldTolFromPixels(st.viewportLastSurveyLayoutHeightPx,
+                                                   st.viewportLastSurveyLayoutOrthoHalfH,
+                                                   st.objectSnapAperturePx) * 4.f,
+                            1e-6f);
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
+
+  TrimTargetEdge tgt{};
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float dEdge = 0.f;
+  if (!PickTrimTargetClosestToDrawnSegment(st, fenceP1x, fenceP1y, fenceP2x, fenceP2y, matchTol, &tgt, &ax, &ay,
+                                           &bx, &by, &dEdge))
+    return;
+
+  std::vector<std::array<double, 4>> cuts;
+  CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
+  if (cuts.empty())
+    return;
+
+  double ix = 0.0, iy = 0.0;
+  bool trimA = false;
+  if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickPreviewX, pickPreviewY, cuts, st, fenceP1x, fenceP1y,
+                                    fenceP2x, fenceP2y, true, &ix, &iy, &trimA, nullptr))
+    return;
+
+  const double rx = trimA ? ax : ix;
+  const double ry = trimA ? ay : iy;
+  const double sx = trimA ? ix : bx;
+  const double sy = trimA ? iy : by;
+  previewLinesOut->push_back(static_cast<float>(rx));
+  previewLinesOut->push_back(static_cast<float>(ry));
+  previewLinesOut->push_back(0.f);
+  previewLinesOut->push_back(static_cast<float>(sx));
+  previewLinesOut->push_back(static_cast<float>(sy));
+  previewLinesOut->push_back(0.f);
+}
+
+void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                                          std::vector<float>* previewLinesOut) {
+  if (!previewLinesOut)
+    return;
+  const float tolWorld = TrimWorldTolFromPixels(
+      st.viewportLastSurveyLayoutHeightPx, st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
+  DrawnLineTrimSolution s;
+  if (!Solve3DDrawnLineTrim(st, f0, f1, tolWorld, &s, nullptr))
+    return;
+  const ray3d::Vec3 a = s.trimA ? s.ta : s.cut;
+  const ray3d::Vec3 b = s.trimA ? s.cut : s.tb;
+  previewLinesOut->push_back(static_cast<float>(a.x));
+  previewLinesOut->push_back(static_cast<float>(a.y));
+  previewLinesOut->push_back(static_cast<float>(a.z));
+  previewLinesOut->push_back(static_cast<float>(b.x));
+  previewLinesOut->push_back(static_cast<float>(b.y));
+  previewLinesOut->push_back(static_cast<float>(b.z));
+}
 
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Trim;
-  st.trimCutters.clear();
-  st.paperTrimCutters.clear();
-  st.selBoxWaitingSecond = false;
-  // TRIMSTATE picks the starting mode (REQ-056). 0 is smart trim: no cutting edges to pick, just draw a
-  // line across what should go.
+  const auto initialPhase = (st.trimState == 1)
+                                ? stepengine::TrimPhase::SelectCuttingEdges
+                                : stepengine::TrimPhase::CuttingLine_WaitP1;
+  stepengine::BeginSession(st, std::make_unique<stepengine::TrimSession>(initialPhase), false);
   if (st.trimState == 1) {
-    st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
     log.push_back(
         "TRIM — pick cutting edges, Enter, then click the pieces to trim (L switches to line trim). ESC cancels.");
   } else {
-    st.trimPhase = AppCommandState::TrimPhase::CuttingLine_WaitP1;
     log.push_back(
         "TRIM — draw a line across what should go: first point (T picks cutting edges instead). ESC cancels.");
   }
@@ -358,9 +396,8 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
-  using K = AppCommandState::Kind;
-  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 3)
-    st.active = K::None;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    stepengine::EndSession(st);
     st.paperExtendPhase = 1;
     st.paperExtendBoundaries.clear();
     log.push_back("EXTEND — click a boundary edge (Enter when done picking edges). Esc cancels.");
@@ -368,11 +405,7 @@ void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Extend;
-  st.lastCommand = K::Extend;
-  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
-  st.extendBoundaries.clear();
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ExtendSession>(), true);
   log.push_back("EXTEND — pick boundary edges, Enter, then click objects to extend (near the end to "
                 "stretch). ESC cancels.");
 }
@@ -380,7 +413,7 @@ void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::TrimState;
+  stepengine::BeginSession(st, std::make_unique<stepengine::TrimStateSession>(), false);
   char buf[128];
   std::snprintf(buf, sizeof(buf), "Enter new value for TRIMSTATE <%d>:  (0 = draw a line to trim, 1 = pick cutting edges)",
                 st.trimState);

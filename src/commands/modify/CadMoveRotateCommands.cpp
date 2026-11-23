@@ -1,5 +1,7 @@
 #include "CadCommandsInternal.hpp"
 #include "modify/CadModifyInternal.hpp"
+#include "modify/CadModifySessions.hpp"
+#include "engine/StepEngine.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include <GoSurvey/Geometry/spline.hpp>
@@ -685,57 +687,6 @@ bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut) {
 /// behaves exactly as it did (REQ-322 item 4).
 
 
-bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  using MP = AppCommandState::ModifyPhase;
-  const char* verb = isCopy ? "COPY" : "MOVE";
-  if (st.modifyPhase == MP::NeedBase) {
-    // REQ-322 item 4 / REQ-329 increment 1: a base point may carry an elevation, and under a
-    // rotated/tilted UCS the whole point is read in the UCS axes.
-    float bx = 0.f;
-    float by = 0.f;
-    float bwz = 0.f;
-    bool consumed = false;
-    if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, verb, &bx, &by, &bwz, &consumed, log))
-      return consumed;
-    st.modifyBaseX = bx;
-    st.modifyBaseY = by;
-    st.modifyBaseZ = bwz;
-    st.modifyPhase = MP::NeedDestination;
-    log.push_back(isCopy ? "COPY — specify second point (destination)." : "MOVE — specify second point (destination).");
-    return true;
-  }
-  if (st.modifyPhase == MP::NeedDestination) {
-    float px = 0.f;
-    float py = 0.f;
-    float dwz = 0.f;
-    bool consumed = false;
-    if (!ResolveTypedModifyPoint(st, line, true, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, verb,
-                                 &px, &py, &dwz, &consumed, log))
-      return consumed;
-    const float dx = px - st.modifyBaseX;
-    const float dy = py - st.modifyBaseY;
-    // ResolveTypedModifyPoint returns the destination as a resolved point (relative offsets already
-    // folded into the base), so the delta is always the difference. An omitted Z leaves dz at zero
-    // for a plain `MOVE 0,0 / 10,0` (REQ-322 item 4).
-    const float dz = dwz - st.modifyBaseZ;
-    PushUndoSnapshot(st, isCopy ? "Copy" : "Move");
-    if (isCopy)
-      FinalizeCopyTranslation(st, dx, dy, dz, log);
-    else {
-      ApplyTranslationToSelection(st, dx, dy, dz, log);
-      // Stay in MOVE — same selection at new position, ready for another base+destination.
-      st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
-      log.push_back("MOVE complete — base point (ESC to exit):");
-    }
-    return true;
-  }
-  (void)log;
-  return false;
-}
-
-
-
 void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
                             std::vector<std::string>& log) {
   // REQ-329 increment 2: ROTATE turns the selection about an axis through the base point PARALLEL
@@ -761,138 +712,6 @@ void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
   RotateSelectionInPlaceAboutAxis(st, axisPoint, ray3d::Normalize(axisUnit), rad, log);
 }
 
-
-namespace {
-static bool TryRotateCopyToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(lineIn));
-  if (low != "c" && low != "copy")
-    return false;
-  st.rotateCopyMode = !st.rotateCopyMode;
-  log.push_back(st.rotateCopyMode ? "ROTATE — copy mode on (original kept)." : "ROTATE — copy mode off.");
-  return true;
-}
-}  // namespace
-
-bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  using RP = AppCommandState::RotatePhase;
-  constexpr float kDegToRad = 0.01745329251994329577f;
-
-  if (st.rotatePhase == RP::NeedBase) {
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.rotateBaseX = px;
-    st.rotateBaseY = py;
-    // REQ-329 increment 2: the axis passes through the base point's elevation. Under a non-World UCS
-    // `ParseStoragePoint` publishes the typed point's own Z through `resolvedPointZ`, which
-    // `CadCommitElevation` reads; under the World UCS it is the flat work-plane elevation.
-    st.rotateBaseZ = CadCommitElevation(st);
-    st.rotatePhase = RP::NeedAngleOrReference;
-    log.push_back("ROTATE — ° clockwise from north (decimal/DMS), R reference, C copy — click-drag preview.");
-    return true;
-  }
-
-  if (st.rotatePhase == RP::NeedAngleOrReference) {
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    std::string low = StringUtil::toLowerAsciiCopy(line);
-    if (low == "r" || low == "ref" || low == "reference") {
-      st.rotatePhase = RP::Ref_WaitP1;
-      log.push_back("Reference — first point:");
-      return true;
-    }
-    float deg = 0.f;
-    if (!ParseAngleDegreesInternal(line, &deg))
-      return false;
-    // Clockwise-from-north degrees → internal CCW-positive rotation used by RotateAroundBase.
-    FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, -deg * kDegToRad, log);
-    return true;
-  }
-
-  if (st.rotatePhase == RP::Ref_WaitP1) {
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.rotateRefX1 = px;
-    st.rotateRefY1 = py;
-    st.rotatePhase = RP::Ref_WaitP2;
-    log.push_back("Reference — second point:");
-    return true;
-  }
-
-  if (st.rotatePhase == RP::Ref_WaitP2) {
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.rotateRefX2 = px;
-    st.rotateRefY2 = py;
-    st.rotatePhase = RP::AfterReference_WaitAngleOrP;
-    log.push_back(
-        "Enter new bearing from north ° (decimal/DMS — matches properties), or P for two-point line (C toggles copy).");
-    return true;
-  }
-
-  if (st.rotatePhase == RP::AfterReference_WaitAngleOrP) {
-    std::string low = StringUtil::toLowerAsciiCopy(line);
-    if (low == "p") {
-      st.rotatePhase = RP::AnglePoints_WaitP1;
-      log.push_back("Angle — first point:");
-      return true;
-    }
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    float deg = 0.f;
-    if (!ParseAngleDegreesInternal(line, &deg))
-      return false;
-    const float thetaRef =
-        std::atan2(st.rotateRefY2 - st.rotateRefY1, st.rotateRefX2 - st.rotateRefX1);
-    // Degrees are clockwise-from-north bearing (same as properties), matching atan2(dx,dy) convention.
-    const float targetMath = MathAngleRadFromBearingCwNorthDeg(deg);
-    const float delta = NormalizeAngleRadMinusPiToPi(targetMath - thetaRef);
-    FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, delta, log);
-    return true;
-  }
-
-  if (st.rotatePhase == RP::AnglePoints_WaitP1) {
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.rotateAnglePt1X = px;
-    st.rotateAnglePt1Y = py;
-    st.rotatePhase = RP::AnglePoints_WaitP2;
-    log.push_back("Angle — second point:");
-    return true;
-  }
-
-  if (st.rotatePhase == RP::AnglePoints_WaitP2) {
-    if (TryRotateCopyToggle(st, line, log))
-      return true;
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    const float delta = RotateDeltaFromReferenceAndNewSegment(st.rotateRefX1, st.rotateRefY1, st.rotateRefX2,
-                                                               st.rotateRefY2, st.rotateAnglePt1X,
-                                                               st.rotateAnglePt1Y, px, py);
-    FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, delta, log);
-    return true;
-  }
-
-  return false;
-}
-
-
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: move viewports
     StartPaperMoveCopyViewports(st, /*copy=*/false, log);
@@ -900,14 +719,13 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Move;
-  st.lastCommand = AppCommandState::Kind::Move;
-  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  st.selBoxWaitingSecond = false;
-  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
-    st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+  const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::MoveCopySession>(false, initialPhase), true);
+  if (haveSel)
     log.push_back("MOVE — specify base point (click or type X,Y). ESC to cancel.");
-  } else
+  else
     log.push_back(kSelectObjectsPrompt);
 }
 
@@ -918,14 +736,13 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Copy;
-  st.lastCommand = AppCommandState::Kind::Copy;
-  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  st.selBoxWaitingSecond = false;
-  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
-    st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+  const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::MoveCopySession>(true, initialPhase), true);
+  if (haveSel)
     log.push_back("COPY — specify base point (click or type X,Y). ESC to cancel.");
-  } else
+  else
     log.push_back(kSelectObjectsPrompt);
 }
 
@@ -942,15 +759,13 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Rotate;
-  st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
-  st.rotateBaseX = st.rotateBaseY = st.rotateBaseZ = 0.f;
-  st.rotateCopyMode = false;
   st.pendingSurveyDupIsRotate = false;
-  st.selBoxWaitingSecond = false;
-  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
-    st.rotatePhase = AppCommandState::RotatePhase::NeedBase;
+  const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::RotatePhase::NeedBase : stepengine::RotatePhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::RotateSession>(initialPhase), true);
+  if (haveSel)
     log.push_back("ROTATE — specify base point (click or type X,Y). ESC to cancel.");
-  } else
+  else
     log.push_back(kSelectObjectsPrompt);
 }

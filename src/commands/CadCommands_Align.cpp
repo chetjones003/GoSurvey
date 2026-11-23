@@ -287,7 +287,6 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
 
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log) {
   CancelActiveCommand(st, log);
-  st.active = AppCommandState::Kind::Align;
   st.alignControlPts.clear();
   st.alignSelectionSnapshot.clear();
   st.alignSurveySnapshot.clear();
@@ -297,15 +296,14 @@ void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.alignSelectionSnapshot = st.selection;
     st.alignSurveySnapshot    = st.selectedSurveyPointIndices;
     st.alignHasSelection      = true;
-    st.alignPhase             = AppCommandState::AlignPhase::PickSrc;
+    stepengine::BeginSession(st, std::make_unique<stepengine::AlignSession>(stepengine::AlignPhase::PickSrc), false);
     log.push_back("ALIGN — " + std::to_string(st.alignSelectionSnapshot.size()) + " CAD, " +
                   std::to_string(st.alignSurveySnapshot.size()) +
                   " survey point(s) selected. Pick SOURCE survey point 1 in drawing, then its real-world destination. "
                   "≥ 2 pairs → Enter to solve. ESC cancels.");
   } else {
     st.alignHasSelection = false;
-    st.alignPhase        = AppCommandState::AlignPhase::PickSelection;
-    st.selBoxWaitingSecond = false;
+    stepengine::BeginSession(st, std::make_unique<stepengine::AlignSession>(stepengine::AlignPhase::PickSelection), false);
     log.push_back(kSelectObjectsPrompt);
   }
 }
@@ -452,7 +450,6 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
   st.surveyReportSelectLatestPending = true;
 
   st.alignControlPts.clear();
-  st.alignPhase             = AppCommandState::AlignPhase::PickSrc;
   st.showAlignResultsWindow = false;
   log.push_back(std::string("ALIGN applied (") + (applyScale ? "scale+rot+trans" : "rot+trans only") +
                 ") — report in the Reports tab.");
@@ -469,17 +466,6 @@ void ExecuteAlignCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   st.showAlignResultsWindow = true;
-  st.active                 = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("ALIGN — solution ready. Review pairs in the results window, then click Apply.");
-}
-
-const char* AlignCommandFooterHint(const AppCommandState& st) {
-  if (st.active != AppCommandState::Kind::Align)
-    return "";
-  using AP = AppCommandState::AlignPhase;
-  if (st.alignPhase == AP::PickSelection)
-    return kSelectObjectsPrompt;  // REQ-121
-  if (st.alignPhase == AP::PickSrc)
-    return "ALIGN: pick SOURCE survey point in drawing (snap to it) — Enter to solve";
-  return "ALIGN: pick/type DESTINATION real-world X,Y for this source point";
 }

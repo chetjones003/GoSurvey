@@ -1013,12 +1013,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     document.drawContents(&painter);
     painter.restore();
   }
-  if ((state.active == AppCommandState::Kind::DimAligned &&
-       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
-      (state.active == AppCommandState::Kind::DimLinear &&
-       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
-      (state.active == AppCommandState::Kind::DimAngular &&
-       state.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)) {
+  const auto* dimSess = state.sessionAs<stepengine::DimSession>();
+  const auto* angSess = state.sessionAs<stepengine::DimAngularSession>();
+  if ((dimSess && dimSess->phase == stepengine::DimPhase::WaitDimLinePt) ||
+      (angSess && angSess->phase == stepengine::DimAngularPhase::WaitArc)) {
     CadAnnotation draft{};
     bool hasDraft = false;
     float cursorLocalX = 0.f;
@@ -1304,7 +1302,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   // TABLE remains in its own command state until insertion. Show the same layout
   // the user is about to place, anchored at the current cursor, so placement is
   // visible before the click instead of leaving a stale prompt as the only cue.
-  if (state.active == AppCommandState::Kind::Table && state.tableStage == 3) {
+  if (const auto* ts = state.sessionAs<stepengine::TableSession>(); ts && ts->stage == 3) {
     if (const CadTableStyle* style = CadTableFindStyle(state.drawing.tableStyles, state.tablePendingStyle)) {
       CadTable preview;
       CadTableStyle sizing = *style;

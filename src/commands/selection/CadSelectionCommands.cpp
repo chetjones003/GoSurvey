@@ -2355,10 +2355,10 @@ bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocal
   const bool modelSpace = st.activeSpaceIndex == kModelSpaceIndex;
   const bool gizmoMoveSubObject =
       st.active == K::Move3d && st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
-  if (modelSpace && ctrlModifier &&
-      ((st.active == K::PressPull &&
-        st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
-       gizmoMoveSubObject)) {
+  const bool pressPullSelectTarget =
+      st.sessionAs<stepengine::PressPullSession>() &&
+      st.sessionAs<stepengine::PressPullSession>()->phase == stepengine::PressPullPhase::SelectTarget;
+  if (modelSpace && ctrlModifier && (pressPullSelectTarget || gizmoMoveSubObject)) {
     AbortMtextGripInteraction(st);
     ClearDimGripInteraction(st);
     solidpick::Tolerance subTol;

@@ -107,8 +107,7 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, fl
     PushCircleNormal(st.drawing.userCircleNormals, nx, ny, nz);
   }
   BumpCadGpuCache(st);
-  ResetCircleDraft(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("Circle complete.");
 }
 
@@ -193,13 +192,16 @@ void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string
 
 
 bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  auto* cs = st.sessionAs<stepengine::CircleSession>();
+  if (!cs)
+    return false;
   std::string line = StringUtil::trimCopy(lineIn);
 
-  switch (st.circlePhase) {
-  case AppCommandState::CirclePhase::WaitCenterOrMode: {
+  switch (cs->phase) {
+  case stepengine::CirclePhase::WaitCenterOrMode: {
     if (StringUtil::toLowerAsciiCopy(line) == "3p") {
-      st.circleStyle = AppCommandState::CircleStyle::ThreePoint;
-      st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP1;
+      cs->style = stepengine::CircleStyle::ThreePoint;
+      cs->phase = stepengine::CirclePhase::ThreeP_WaitP1;
       log.push_back("Three-point circle — specify first point.");
       return true;
     }
@@ -207,56 +209,54 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    st.circleCx = px;
-    st.circleCy = py;
-    st.circleCz = CadCommitElevation(st);
-    st.circlePhase = AppCommandState::CirclePhase::WaitRadius;
+    cs->cx = px;
+    cs->cy = py;
+    cs->cz = CadCommitElevation(st);
+    cs->phase = stepengine::CirclePhase::WaitRadius;
     log.push_back("Center set — radius (click), type value, or D + diameter.");
     return true;
   }
-  case AppCommandState::CirclePhase::WaitRadius: {
+  case stepengine::CirclePhase::WaitRadius: {
     float rad = 0.f;
     if (!ParseRadiusOrDiameter(line, &rad, log))
       return false;
-    // A typed radius is already measured in the work plane, so the plane itself is all that is new.
     float nx = 0.f, ny = 0.f, nz = 1.f;
     const bool flat = CadWorkPlaneIsWorldXy(st);
     if (!flat)
       CadActiveDrawPlaneNormal(st, &nx, &ny, &nz);
-    CommitCircle(st, st.circleCx, st.circleCy, flat ? CadCommitElevation(st) : st.circleCz, rad, nx, ny, nz,
-                 log);
+    CommitCircle(st, cs->cx, cs->cy, flat ? CadCommitElevation(st) : cs->cz, rad, nx, ny, nz, log);
     return true;
   }
-  case AppCommandState::CirclePhase::ThreeP_WaitP1: {
+  case stepengine::CirclePhase::ThreeP_WaitP1: {
     float px = 0.f;
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    st.c3p1x = px;
-    st.c3p1y = py;
-    st.c3p1z = CadCommitElevation(st);
-    st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP2;
+    cs->c3p1x = px;
+    cs->c3p1y = py;
+    cs->c3p1z = CadCommitElevation(st);
+    cs->phase = stepengine::CirclePhase::ThreeP_WaitP2;
     log.push_back("Second point:");
     return true;
   }
-  case AppCommandState::CirclePhase::ThreeP_WaitP2: {
+  case stepengine::CirclePhase::ThreeP_WaitP2: {
     float px = 0.f;
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    st.c3p2x = px;
-    st.c3p2y = py;
-    st.c3p2z = CadCommitElevation(st);
-    st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP3;
+    cs->c3p2x = px;
+    cs->c3p2y = py;
+    cs->c3p2z = CadCommitElevation(st);
+    cs->phase = stepengine::CirclePhase::ThreeP_WaitP3;
     log.push_back("Third point:");
     return true;
   }
-  case AppCommandState::CirclePhase::ThreeP_WaitP3: {
+  case stepengine::CirclePhase::ThreeP_WaitP3: {
     float px = 0.f;
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    if (!CommitCircleThreePoints(st, st.c3p1x, st.c3p1y, st.c3p1z, st.c3p2x, st.c3p2y, st.c3p2z, px, py,
+    if (!CommitCircleThreePoints(st, cs->c3p1x, cs->c3p1y, cs->c3p1z, cs->c3p2x, cs->c3p2y, cs->c3p2z, px, py,
                                  CadCommitElevation(st), log))
       log.push_back("Points are collinear — no circle.");
     return true;
@@ -425,13 +425,9 @@ bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  ResetSegmentAngleLock(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Line;
-  st.lastCommand = AppCommandState::Kind::Line;
-  st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
-  st.lineDraftSegments = 0;
+  stepengine::BeginSession(st, std::make_unique<stepengine::LineSession>(), /*recordAsLastCommand=*/true);
   log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
 }
 
@@ -440,8 +436,7 @@ void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Circle;
-  st.lastCommand = AppCommandState::Kind::Circle;
+  stepengine::BeginSession(st, std::make_unique<stepengine::CircleSession>(), /*recordAsLastCommand=*/true);
   log.push_back(
       "CIRCLE — center + radius: click/type center, then radius (click edge), type radius, or D + diameter.");
   log.push_back("Or type 3P first for a three-point circle. ESC to cancel.");
@@ -450,23 +445,20 @@ void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  ResetSegmentAngleLock(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Polyline;
-  st.polylinePhase = AppCommandState::PolylinePhase::NeedFirstPoint;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PolylineSession>(false), /*recordAsLastCommand=*/true);
   log.push_back("POLYLINE — click points; click the FIRST point to close, Enter to finish open. "
                 "(CLOSE/CL, END still work.) A / 2P bearing lock; ortho; ESC cancels.");
 }
 
 
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
-  // REQ-085. Same draft as POLYLINE — the store is already stride-3 XYZ — with per-vertex elevation
-  // entry switched on. ResetAllCadDraftTools inside StartPolylineCommand clears the flag, so it is
-  // set afterwards, not before.
-  StartPolylineCommand(st, log);
-  log.pop_back();  // replace POLYLINE's prompt rather than printing both
-  st.polylineDraft3d = true;
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PolylineSession>(true), /*recordAsLastCommand=*/false);
   log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
                 "X,Y alone uses the snapped point's elevation, else ELEV. Click the FIRST point to "
                 "close, Enter to finish open. (CLOSE/CL, END still work.) ESC cancels.");
@@ -477,8 +469,7 @@ void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Arc;
-  st.arcPhase = AppCommandState::ArcPhase::WaitStart;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ArcSession>(), /*recordAsLastCommand=*/false);
   log.push_back("ARC — three picks: start, point on arc, end. ESC cancels.");
 }
 
@@ -487,8 +478,7 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Ellipse;
-  st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
+  stepengine::BeginSession(st, std::make_unique<stepengine::EllipseSession>(), /*recordAsLastCommand=*/false);
   log.push_back("ELLIPSE — center, major axis endpoint, then minor/major ratio (0-1] on command line (Enter=0.5).");
 }
 
@@ -497,10 +487,7 @@ void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Spline;
-  st.lastCommand = AppCommandState::Kind::Spline;
-  st.splineMethod = AppCommandState::SplineMethod::Fit;
-  st.splineDraftPoints.clear();
+  stepengine::BeginSession(st, std::make_unique<stepengine::SplineSession>(), /*recordAsLastCommand=*/true);
   log.push_back("SPLINE — Fit points (curve passes through them). Type CV for control vertices. Pick or type X,Y; Close / End / Undo:");
 }
 
@@ -510,15 +497,10 @@ void StartRectCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Rect;
-  st.lastCommand = AppCommandState::Kind::Rect;
-  st.rectPhase = AppCommandState::RectPhase::WaitFirstCorner;
+  stepengine::BeginSession(st, std::make_unique<stepengine::RectSession>(), /*recordAsLastCommand=*/true);
   log.push_back("RECT — pick the first corner (or type X,Y):");
 }
 
-// REQ-053: a rectangle is a 4-vertex CLOSED polyline, matching AutoCAD's RECTANG (which produces an
-// LWPOLYLINE). Storing it that way means DXF/DWG write, grips, snaps — including the geometric center —
-// and the offset/trim/join paths all work on it with no new entity type.
 void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2,
                      std::vector<std::string>& log) {
   const float mnX = std::min(x1, x2);
@@ -527,7 +509,8 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
   const float mxY = std::max(y1, y2);
   if (mxX - mnX < 1.e-9f || mxY - mnY < 1.e-9f) {
     log.push_back("RECT — corners give a zero-width or zero-height rectangle; pick again.");
-    st.rectPhase = AppCommandState::RectPhase::WaitFirstCorner;
+    if (auto* rs = st.sessionAs<stepengine::RectSession>())
+      rs->phase = stepengine::RectPhase::WaitFirstCorner;
     return;
   }
 
@@ -536,7 +519,6 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
 
   PushUndoSnapshot(st, "Rectangle");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
-    // Paper-space RECT (REQ-037): the corners are paper inches; commit to the layout's paper store.
     const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
     for (int i = 0; i < 4; ++i) {
       L->paperPolyVerts.push_back(xs[i]);
@@ -552,13 +534,11 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
     if (st.drawing.userPolylineOffsets.empty())
       st.drawing.userPolylineOffsets.push_back(0);
     const int baseVert = st.drawing.userPolylineOffsets.back();
-    for (int i = 0; i < 4; ++i) {
-      // Lands on the active work plane (REQ-058) — see SubmitLineVertex.
+    for (int i = 0; i < 4; ++i)
       st.drawing.pushVertex(CadPolyVertex{xs[i], ys[i], CadCommitElevation(st)});
-    }
     st.drawing.userPolylineOffsets.push_back(baseVert + 4);
-    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // REQ-316: RECT is straight
-    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
     st.drawing.userPolylineClosed.push_back(1u);
     st.drawing.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -568,16 +548,15 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
                 static_cast<double>(mxX - mnX), static_cast<double>(mxY - mnY));
   log.push_back(msg);
 
-  st.active = AppCommandState::Kind::None;
-  ResetRectDraft(st);
+  stepengine::EndSession(st);
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
 }
 
 
 void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log) {
-  st.active = AppCommandState::Kind::Hatch;
-  st.lastCommand = AppCommandState::Kind::Hatch;
+  ResetAllCadDraftTools(st);
+  stepengine::BeginSession(st, std::make_unique<stepengine::HatchSession>(), /*recordAsLastCommand=*/true);
   st.hatchPreviewValid = false;
   st.hatchPreviewLoop.clear();
   ClearCadSelection(st);
@@ -708,7 +687,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Elev;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ElevSession>(), /*recordAsLastCommand=*/false);
   char buf[160];
   std::snprintf(buf, sizeof(buf), "Specify new default elevation <%.4f>:  (W = back to world Z 0)",
                 static_cast<double>(CadWorkPlaneElevation(st)));
@@ -746,14 +725,10 @@ void CommitCircleExternal(AppCommandState& st, float cx, float cy, float cz, flo
 
 
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Line)
+  auto* ln = st.sessionAs<stepengine::LineSession>();
+  if (!ln)
     return false;
 
-  // REQ-204 (`finite-coords`) / REQ-201 / issue #122: a point can be finite yet too large to store
-  // without downstream geometry math overflowing `float` to inf/NaN — an OFFSET of a segment whose
-  // endpoint sits near 1e38 wrote `-nan(ind)` into `userLinesFlat`. Refuse it here, at the command
-  // that accepts the point, rather than making every consumer guard — the same place and spirit as
-  // CIRCLE refusing a non-finite derived radius.
   if (!std::isfinite(x) || !std::isfinite(y) ||
       std::fabs(x) > static_cast<float>(CadCoord::kMaxStorableCoordinateMagnitude) ||
       std::fabs(y) > static_cast<float>(CadCoord::kMaxStorableCoordinateMagnitude)) {
@@ -761,18 +736,17 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     return false;
   }
 
-  if (st.linePhase == AppCommandState::LinePhase::NeedFirstPoint) {
+  if (ln->phase == stepengine::LinePhase::NeedFirstPoint) {
     st.anchorX = x;
     st.anchorZ = CadCommitElevation(st);
     st.anchorY = y;
-    st.linePhase = AppCommandState::LinePhase::NeedNextPoint;
+    ln->phase = stepengine::LinePhase::NeedNextPoint;
     log.push_back("First point set. Next: click; X, Y; @dx,dy; [A]zimuth, [2P];");
     return true;
   }
 
   PushUndoSnapshot(st, "Line segment");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
-    // Paper-space LINE (REQ-037): anchor/x,y are paper inches; commit to the layout's paper store.
     L->paperLines.push_back(st.anchorX);
     L->paperLines.push_back(st.anchorY);
     L->paperLines.push_back(0.f);
@@ -781,9 +755,6 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     L->paperLines.push_back(0.f);
     L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    // New geometry lands on the active work plane (REQ-058); ELEV moves that plane, and the
-    // default is world XY, so this is 0 until the user changes it.
-    // Anchor's own elevation, then this end's (snap overrides ELEV).
     st.drawing.pushLine(CadLineRecord{st.anchorX, st.anchorY, st.anchorZ, x, y, CadCommitElevation(st)});
     st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -792,23 +763,21 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
   st.anchorX = x;
   st.anchorZ = CadCommitElevation(st);
   st.anchorY = y;
-  ++st.lineDraftSegments;
+  ++ln->draftSegments;
   log.push_back("Segment added — next point or ESC to finish.");
   return true;
 }
 
-// REQ-316 / ADR-047: the bulge for the segment leaving the last draft vertex, given a new point
-// (x,y). In LINE mode the answer is always 0. In ARC mode the arc is tangent to the previous
-// segment's end direction unless a radius or an included angle was typed for this pick.
 float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y) {
-  if (!st.polylineArcMode)
+  const auto* pl = st.sessionAs<stepengine::PolylineSession>();
+  if (!pl || !pl->arcMode)
     return 0.f;
-  const size_t nv = st.polylineDraftVerts.size() / 3;
+  const size_t nv = pl->draftVerts.size() / 3;
   if (nv < 1)
     return 0.f;
   const size_t li = nv - 1;
-  const float ax = st.polylineDraftVerts[li * 3 + 0];
-  const float ay = st.polylineDraftVerts[li * 3 + 1];
+  const float ax = pl->draftVerts[li * 3 + 0];
+  const float ay = pl->draftVerts[li * 3 + 1];
   const double chx = static_cast<double>(x) - ax;
   const double chy = static_cast<double>(y) - ay;
   const double chord = std::hypot(chx, chy);
@@ -816,13 +785,12 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
     return 0.f;
   constexpr double kPi = 3.14159265358979323846;
 
-  // Incoming direction at the last vertex: the previous arc's end tangent, or the previous chord.
   double dx = 0.0, dy = 0.0;
   bool haveDir = false;
   if (nv >= 2) {
-    const float px = st.polylineDraftVerts[(li - 1) * 3 + 0];
-    const float py = st.polylineDraftVerts[(li - 1) * 3 + 1];
-    const float pb = (li - 1) < st.polylineDraftBulge.size() ? st.polylineDraftBulge[li - 1] : 0.f;
+    const float px = pl->draftVerts[(li - 1) * 3 + 0];
+    const float py = pl->draftVerts[(li - 1) * 3 + 1];
+    const float pb = (li - 1) < pl->draftBulge.size() ? pl->draftBulge[li - 1] : 0.f;
     const BulgeArcSpan prev = BulgeArc(px, py, ax, ay, static_cast<double>(pb));
     if (prev.valid) {
       const double endA = prev.startAngle + prev.sweep;
@@ -837,26 +805,23 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
     if (dn > 1e-12) { dx /= dn; dy /= dn; haveDir = true; }
   }
 
-  const double side = haveDir ? (dx * chy - dy * chx) : 0.0;  // + = P is left of the incoming dir
+  const double side = haveDir ? (dx * chy - dy * chx) : 0.0;
   const double sgn = side >= 0.0 ? 1.0 : -1.0;
 
-  double theta = 0.0;  // signed included (central) angle; + = CCW
-  if (st.polylineArcAngleValid) {
-    // Typed magnitude; direction follows which side of the tangent the pick is (a negative typed
-    // angle flips it), matching AutoCAD's PLINE Angle option.
-    const double mag = std::fabs(static_cast<double>(st.polylineArcAngleDeg)) * kPi / 180.0;
-    const double flip = st.polylineArcAngleDeg < 0.f ? -1.0 : 1.0;
+  double theta = 0.0;
+  if (pl->arcAngleValid) {
+    const double mag = std::fabs(static_cast<double>(pl->arcAngleDeg)) * kPi / 180.0;
+    const double flip = pl->arcAngleDeg < 0.f ? -1.0 : 1.0;
     theta = mag * flip * (haveDir ? sgn : 1.0);
-  } else if (st.polylineArcRadius > 1e-9f) {
-    const double r = static_cast<double>(st.polylineArcRadius);
+  } else if (pl->arcRadius > 1e-9f) {
+    const double r = static_cast<double>(pl->arcRadius);
     const double s = std::min(1.0, chord / (2.0 * r));
     theta = 2.0 * std::asin(s) * (haveDir ? sgn : 1.0);
   } else if (haveDir) {
-    // Tangent arc: the tangent/chord angle is half the central angle.
     const double alpha = std::atan2(dx * chy - dy * chx, dx * chx + dy * chy);
     theta = 2.0 * alpha;
   } else {
-    return 0.f;  // first segment, no direction, no radius/angle -> straight
+    return 0.f;
   }
   if (std::fabs(theta) < 1e-9)
     return 0.f;
@@ -864,38 +829,32 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
 }
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Polyline)
+  auto* pl = st.sessionAs<stepengine::PolylineSession>();
+  if (!pl)
     return false;
 
-  using PP = AppCommandState::PolylinePhase;
-
-  // The vertex elevation, in priority order (REQ-085): an elevation typed on this line, then the
-  // ordinary rule — the snapped point's own Z, else the work plane (REQ-058). A typed Z is consumed
-  // here so it cannot leak into the NEXT vertex, which would silently repeat the last elevation.
   float vz = CadCommitElevation(st);
   if (st.polylineTypedZValid) {
     vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
     st.polylineTypedZValid = false;
     st.polylineTypedZRelative = false;
   }
-  const char* who = st.polylineDraft3d ? "3DPOLY" : "POLYLINE";
+  const char* who = pl->draft3d ? "3DPOLY" : "POLYLINE";
 
-  if (st.polylinePhase == PP::NeedFirstPoint) {
-    st.polylineDraftVerts.clear();
-    st.polylineDraftVerts.push_back(x);
-    st.polylineDraftVerts.push_back(y);
-    st.polylineDraftVerts.push_back(vz);
-    st.polylineDraftBulge.assign(1, 0.f);  // REQ-316 / ADR-047
+  if (pl->phase == stepengine::PolylinePhase::NeedFirstPoint) {
+    pl->draftVerts.clear();
+    pl->draftVerts.push_back(x);
+    pl->draftVerts.push_back(y);
+    pl->draftVerts.push_back(vz);
+    pl->draftBulge.assign(1, 0.f);
     st.anchorX = x;
     st.anchorZ = vz;
     st.anchorY = y;
-    st.polyFirstX = x;
-    st.polyFirstY = y;
-    st.polyDraftSegments = 0;
-    st.polylinePhase = PP::NeedNextPoint;
-    if (st.polylineDraft3d) {
-      // Reported for the same reason every later vertex is: the elevation is the thing 3DPOLY exists
-      // to control, and it is otherwise invisible until the drawing is saved (REQ-201).
+    pl->firstX = x;
+    pl->firstY = y;
+    pl->draftSegments = 0;
+    pl->phase = stepengine::PolylinePhase::NeedNextPoint;
+    if (pl->draft3d) {
       char buf[96];
       std::snprintf(buf, sizeof(buf), "3DPOLY first vertex at elevation %.3f.", static_cast<double>(vz));
       log.push_back(buf);
@@ -906,48 +865,32 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
     return true;
   }
 
-  // REQ-118: a vertex that lands on the STARTING vertex closes the polyline instead of being added.
-  //
-  // The test is coincidence with the stored first vertex, NOT "the snap system said so". CadSnap
-  // returns the stored coordinate verbatim, so a snapped point compares equal here; a typed
-  // coordinate or an exact click closes it too, which is what a user means by clicking the start
-  // and is what a snap-gated rule would refuse whenever OSNAP is off (D-2026-08-25-j).
-  //
-  // The tolerance is deliberately tight — "the same point", not "near it". A near-miss click stays
-  // an ordinary vertex, because without landing on the start the user has not indicated it; the
-  // snap candidate (CadSnap, offered from three vertices on) is what makes landing on it easy.
-  //
-  // Guarded at three vertices, matching CommitPolylineDraft's own CLOSE minimum, so the second
-  // vertex of a two-point draft is an ordinary vertex even if it sits on the first.
   constexpr float kCloseEps = 1e-4f;
-  if (st.polylineDraftVerts.size() >= 9 && std::fabs(x - st.polyFirstX) <= kCloseEps &&
-      std::fabs(y - st.polyFirstY) <= kCloseEps) {
-    // REQ-316 / ADR-047: an arc-mode close bows the closing segment too.
-    if (!st.polylineDraftBulge.empty())
-      st.polylineDraftBulge.back() = CadPolylineDraftBulgeForNextPoint(st, st.polyFirstX, st.polyFirstY);
+  if (pl->draftVerts.size() >= 9 && std::fabs(x - pl->firstX) <= kCloseEps &&
+      std::fabs(y - pl->firstY) <= kCloseEps) {
+    if (!pl->draftBulge.empty())
+      pl->draftBulge.back() = CadPolylineDraftBulgeForNextPoint(st, pl->firstX, pl->firstY);
     CommitPolylineDraft(st, true, log);
     return true;
   }
 
-  // REQ-316 / ADR-047: the bulge of the segment LEAVING the previous vertex, then a 0 for the new
-  // one (set when the segment after it is drawn, or left 0 at commit). Consume the arc radius/angle.
   {
     const float b = CadPolylineDraftBulgeForNextPoint(st, x, y);
-    if (!st.polylineDraftBulge.empty())
-      st.polylineDraftBulge.back() = b;
-    st.polylineArcRadius = 0.f;
-    st.polylineArcAngleValid = false;
-    st.polylineArcAngleDeg = 0.f;
+    if (!pl->draftBulge.empty())
+      pl->draftBulge.back() = b;
+    pl->arcRadius = 0.f;
+    pl->arcAngleValid = false;
+    pl->arcAngleDeg = 0.f;
   }
-  st.polylineDraftVerts.push_back(x);
-  st.polylineDraftVerts.push_back(y);
-  st.polylineDraftVerts.push_back(vz);
-  st.polylineDraftBulge.push_back(0.f);
-  ++st.polyDraftSegments;
+  pl->draftVerts.push_back(x);
+  pl->draftVerts.push_back(y);
+  pl->draftVerts.push_back(vz);
+  pl->draftBulge.push_back(0.f);
+  ++pl->draftSegments;
   st.anchorX = x;
   st.anchorZ = vz;
   st.anchorY = y;
-  if (st.polylineDraft3d) {
+  if (pl->draft3d) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "3DPOLY vertex added at elevation %.3f.", static_cast<double>(vz));
     log.push_back(buf);

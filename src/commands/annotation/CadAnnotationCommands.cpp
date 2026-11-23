@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "annotation/CadAnnotationInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
@@ -65,10 +66,10 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
 }
 
 bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
-  if (!out || st.active != AppCommandState::Kind::DimAligned ||
-      st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+  const auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!out || !ds || ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return false;
-  const float x1 = st.dimE1x, y1 = st.dimE1y, x2 = st.dimE2x, y2 = st.dimE2y;
+  const float x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
   const float lx = cursorWx, ly = cursorWy;
   float vx = x2 - x1;
   float vy = y2 - y1;
@@ -93,7 +94,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
-  d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
+  d.insZ = CadCommitElevation(st);
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
   d.dimExt2X = x2;
@@ -110,58 +111,60 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
 }
 
 void CadDimLinearUpdateDraftOrientation(AppCommandState& st, float cursorWx, float cursorWy) {
-  if (st.active != AppCommandState::Kind::DimLinear || st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+  auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!ds || !ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return;
-  const float cmx = 0.5f * (st.dimE1x + st.dimE2x);
-  const float cmy = 0.5f * (st.dimE1y + st.dimE2y);
-  const float chord = std::hypot(st.dimE2x - st.dimE1x, st.dimE2y - st.dimE1y);
+  const float cmx = 0.5f * (ds->e1x + ds->e2x);
+  const float cmy = 0.5f * (ds->e1y + ds->e2y);
+  const float chord = std::hypot(ds->e2x - ds->e1x, ds->e2y - ds->e1y);
   const float unlockTol = 1.e-3f * std::max(1.f, chord);
 
-  const float dxSpan = std::fabs(st.dimE2x - st.dimE1x);
-  const float dySpan = std::fabs(st.dimE2y - st.dimE1y);
+  const float dxSpan = std::fabs(ds->e2x - ds->e1x);
+  const float dySpan = std::fabs(ds->e2y - ds->e1y);
   const float spanTol =
-      std::max(1e-8f, 1e-12f * std::max(std::max(std::fabs(st.dimE1x), std::fabs(st.dimE1y)),
-                                        std::max(std::fabs(st.dimE2x), std::fabs(st.dimE2y))));
+      std::max(1e-8f, 1e-12f * std::max(std::max(std::fabs(ds->e1x), std::fabs(ds->e1y)),
+                                        std::max(std::fabs(ds->e2x), std::fabs(ds->e2y))));
   const bool mustVertical = dxSpan <= spanTol && dySpan > spanTol;
   const bool mustHorizontal = dySpan <= spanTol && dxSpan > spanTol;
   if (mustVertical || mustHorizontal) {
-    st.dimLinearDraftVertical = mustVertical;
-    st.dimLinearOrientUserLock = false;
+    ds->linearDraftVertical = mustVertical;
+    ds->linearOrientUserLock = false;
     return;
   }
 
-  if (st.dimLinearOrientUserLock) {
-    if (std::hypot(cursorWx - st.dimLinearLockCursorWx, cursorWy - st.dimLinearLockCursorWy) > unlockTol)
-      st.dimLinearOrientUserLock = false;
+  if (ds->linearOrientUserLock) {
+    if (std::hypot(cursorWx - ds->lockCursorWx, cursorWy - ds->lockCursorWy) > unlockTol)
+      ds->linearOrientUserLock = false;
   }
-  if (!st.dimLinearOrientUserLock) {
+  if (!ds->linearOrientUserLock) {
     const float adx = std::fabs(cursorWx - cmx);
     const float ady = std::fabs(cursorWy - cmy);
-    st.dimLinearDraftVertical = adx > ady;
+    ds->linearDraftVertical = adx > ady;
   }
 }
 
 void CadDimLinearApplyHVHotkey(AppCommandState& st, bool vertical, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::DimLinear || st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+  auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!ds || !ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return;
-  st.dimLinearDraftVertical = vertical;
-  st.dimLinearOrientUserLock = true;
-  st.dimLinearLockCursorWx = st.uiCursorWorldX;
-  st.dimLinearLockCursorWy = st.uiCursorWorldY;
+  ds->linearDraftVertical = vertical;
+  ds->linearOrientUserLock = true;
+  ds->lockCursorWx = st.uiCursorWorldX;
+  ds->lockCursorWy = st.uiCursorWorldY;
   log.push_back(vertical ? "DIMLINEAR — vertical span (V). Move crosshair to unlock orientation."
                          : "DIMLINEAR — horizontal span (H). Move crosshair to unlock orientation.");
   BumpCadGpuCache(st);
 }
 
 bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
-  if (!out || st.active != AppCommandState::Kind::DimLinear ||
-      st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+  auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!out || !ds || !ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return false;
   CadDimLinearUpdateDraftOrientation(st, cursorWx, cursorWy);
-  const float x1 = st.dimE1x, y1 = st.dimE1y, x2 = st.dimE2x, y2 = st.dimE2y;
+  const float x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
   const float cmx = 0.5f * (x1 + x2);
   const float cmy = 0.5f * (y1 + y2);
-  const bool vert = st.dimLinearDraftVertical;
+  const bool vert = ds->linearDraftVertical;
   const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
   if (meas < 1.e-8f)
     return false;
@@ -304,20 +307,20 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
 }
 
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
-  if (!out || st.active != AppCommandState::Kind::DimAngular ||
-      st.dimAngularPhase != AppCommandState::DimAngularPhase::WaitArc)
+  const auto* ds = st.sessionAs<stepengine::DimAngularSession>();
+  if (!out || !ds || ds->phase != stepengine::DimAngularPhase::WaitArc)
     return false;
-  const float vx = st.dimAngVx, vy = st.dimAngVy;
+  const float vx = ds->vx, vy = ds->vy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
-  d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
+  d.insZ = CadCommitElevation(st);
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
-  d.dimExt1X = st.dimE1x;
-  d.dimExt1Y = st.dimE1y;
-  d.dimExt2X = st.dimE2x;
-  d.dimExt2Y = st.dimE2y;
+  d.dimExt1X = ds->e1x;
+  d.dimExt1Y = ds->e1y;
+  d.dimExt2X = ds->e2x;
+  d.dimExt2Y = ds->e2y;
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return false;
@@ -466,8 +469,8 @@ void StartTextCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Text;
-  st.textPhase = AppCommandState::TextCmdPhase::WaitInsertion;
+  stepengine::BeginSession(st, std::make_unique<stepengine::TextSession>(DefaultAnnotationTextHeightWorld(st)),
+                           /*recordAsLastCommand=*/false);
   log.push_back(
       "TEXT — pick insertion, then height / rotation / string on command line (defaults from plot scale). ESC "
       "cancels.");
@@ -478,8 +481,7 @@ void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Mtext;
-  st.mtextPhase = AppCommandState::MtextPhase::WaitCorner1;
+  stepengine::BeginSession(st, std::make_unique<stepengine::MtextSession>(), /*recordAsLastCommand=*/false);
   log.push_back("MTEXT — two corners for box, then type in the on-screen editor (Ctrl+Enter reformats; Save to place). ESC cancels.");
 }
 
@@ -545,7 +547,8 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
     return;
   using K = AppCommandState::Kind;
   if (st.mtextRichEditorPlacement) {
-    if (st.active != K::Mtext || st.mtextPhase != AppCommandState::MtextPhase::WaitString) {
+    auto* ms = st.sessionAs<stepengine::MtextSession>();
+    if (!ms || ms->phase != stepengine::MtextPhase::WaitString) {
       CloseMtextRichEditorUi(st);
       return;
     }
@@ -554,24 +557,23 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       PushUndoSnapshot(st, "MTEXT");
       CadAnnotation ann;
       ann.kind = CadAnnotation::Kind::Mtext;
-      ann.boxMinX = std::min(st.mtxtX1, st.mtxtX2);
-      ann.boxMinY = std::min(st.mtxtY1, st.mtxtY2);
-      ann.boxMaxX = std::max(st.mtxtX1, st.mtxtX2);
-      ann.boxMaxY = std::max(st.mtxtY1, st.mtxtY2);
+      ann.boxMinX = std::min(ms->x1, ms->x2);
+      ann.boxMinY = std::min(ms->y1, ms->y2);
+      ann.boxMaxX = std::max(ms->x1, ms->x2);
+      ann.boxMaxY = std::max(ms->y1, ms->y2);
       ann.insX = ann.boxMinX;
       ann.insY = ann.boxMinY;
       ann.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
       ann.text = normalized;
-      ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
-      StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new MTEXT adopts the active text style
+      ann.insZ = CadCommitElevation(st);
+      StampActiveTextStyleOnNewText(st, ann);
       st.drawing.cadAnnotations.push_back(std::move(ann));
       st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);
       log.push_back("MTEXT placed.");
     } else
       log.push_back("MTEXT — empty; canceled.");
-    st.active = K::None;
-    ResetMtextDraft(st);
+    stepengine::EndSession(st);
     CloseMtextRichEditorUi(st);
     return;
   }
@@ -626,16 +628,14 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log) {
     AbandonJustPlacedMultileader(st);
     if (log)
       log->push_back("MLEADER — canceled.");
-    st.active = AppCommandState::Kind::None;
-    ResetMleaderDraft(st);
+    stepengine::EndSession(st);
     CloseMtextRichEditorUi(st);
     return;
   }
   if (st.mtextRichEditorPlacement) {
     if (log)
       log->push_back("MTEXT — canceled.");
-    st.active = AppCommandState::Kind::None;
-    ResetMtextDraft(st);
+    stepengine::EndSession(st);
     CloseMtextRichEditorUi(st);
     return;
   }
@@ -647,9 +647,7 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::DimAligned;
-  st.lastCommand = AppCommandState::Kind::DimAligned;
-  st.dimPhase = AppCommandState::DimPhase::WaitExt1;
+  stepengine::BeginSession(st, std::make_unique<stepengine::DimSession>(false), /*recordAsLastCommand=*/true);
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
 }
 
@@ -658,9 +656,7 @@ void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::DimLinear;
-  st.lastCommand = AppCommandState::Kind::DimLinear;
-  st.dimPhase = AppCommandState::DimPhase::WaitExt1;
+  stepengine::BeginSession(st, std::make_unique<stepengine::DimSession>(true), /*recordAsLastCommand=*/true);
   log.push_back("DIMLINEAR — ortho distance in X or Y between extension points; third pick sets dimension line; "
                 "cursor or H/V chooses horizontal vs vertical. ESC cancels.");
 }
@@ -670,9 +666,7 @@ void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) 
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::DimAngular;
-  st.lastCommand = AppCommandState::Kind::DimAngular;
-  st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
+  stepengine::BeginSession(st, std::make_unique<stepengine::DimAngularSession>(), /*recordAsLastCommand=*/true);
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
                 "cancels.");
 }

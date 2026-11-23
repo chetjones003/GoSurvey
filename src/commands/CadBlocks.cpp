@@ -575,8 +575,7 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   if (st.active != AppCommandState::Kind::None && st.active != AppCommandState::Kind::InsertBlock)
     CancelActiveCommand(st, log);
   LoadBundledBlockLibrary(st, log);
-  st.active = AppCommandState::Kind::InsertBlock;
-  st.lastCommand = AppCommandState::Kind::InsertBlock;
+  stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/true);
   st.insertBlockDialogOpen = true;
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockSpecifyPoint = true;
@@ -1022,7 +1021,7 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
   if (di < 0)
     return;
   const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
-  st.active = AppCommandState::Kind::BlockFitting;
+  stepengine::BeginSession(st, std::make_unique<stepengine::BlockFittingSession>(), /*recordAsLastCommand=*/false);
   st.blockFittingPhase = Ph::WaitPartType;
   st.blockFittingPartTypePending = def.partType;
   st.blockFittingNominalSizePending = def.nominalSize;
@@ -1041,7 +1040,7 @@ void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BLOCKFITTING — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
@@ -1081,7 +1080,7 @@ void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std:
     def.partNumber = st.blockFittingPartNumberPending;
     st.blockEditorDirty = true;
     log.push_back("BLOCKFITTING — updated \"" + def.name + "\".");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
 }
@@ -1174,7 +1173,7 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   // The BCONNECT wizard (issue #496) keeps st.active == Kind::BConnect through the face-pick step
   // so ESC still cancels it as one command; release it now that the pick has committed.
   if (st.active == AppCommandState::Kind::BConnect)
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
   log.push_back("BCONNECT — added connection \"" + addedName + "\".");
   return true;
 }
@@ -1495,11 +1494,11 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
       if (CadPipeRunUnderPick(st, pick, &runIdx)) {
         st.insertBlockPipeSpliceArmed = false;
         st.insertBlockPhase = Ph::WaitInsertPoint;
-        st.active = AppCommandState::Kind::None;
+        stepengine::EndSession(st);
         if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
           return;
         // Refused, and said why. Re-arm just enough to finish the click as a placement.
-        st.active = AppCommandState::Kind::InsertBlock;
+        stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/false);
         st.insertBlockPhase = Ph::WaitInsertPoint;
       }
       st.insertBlockPipeSpliceArmed = false;

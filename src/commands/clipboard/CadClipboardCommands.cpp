@@ -1,4 +1,6 @@
 #include "CadCommandsInternal.hpp"
+#include "modify/CadModifySessions.hpp"
+#include "engine/StepEngine.hpp"
 #include "ProjectWarnings.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -396,8 +398,7 @@ void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector
       st.clipboardPasteResolving = false;
       st.pendingCopyDx = dx;
       st.pendingCopyDy = dy;
-      st.active = AppCommandState::Kind::None;
-      st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+      stepengine::EndSession(st);
       log.push_back("PASTE — point number conflict; choose overwrite, renumber, or cancel.");
       return;
     }
@@ -405,8 +406,7 @@ void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector
   st.clipboardPasteResolving = false;
   PushUndoSnapshot(st, st.clipboardPasteOriginal ? "Paste original" : "Paste");
   CommitPasteFromClipboard(st, dx, dy, log);
-  st.active = AppCommandState::Kind::None;
-  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  stepengine::EndSession(st);
   if (st.clipboardPasteOriginal) {
     log.push_back("PASTEORIG — clipboard contents pasted at original coordinates.");
     st.clipboardPasteOriginal = false;
@@ -972,12 +972,8 @@ void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.clipboardPasteOriginal = false;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Paste;
-  st.lastCommand = AppCommandState::Kind::Paste;
-  st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
-  st.modifyBaseX = st.clipboard.basePtX;
-  st.modifyBaseY = st.clipboard.basePtY;
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(
+      st, std::make_unique<stepengine::PasteSession>(st.clipboard.basePtX, st.clipboard.basePtY), true);
   log.push_back("PASTE — click destination point to place copied objects. ESC to cancel.");
 }
 

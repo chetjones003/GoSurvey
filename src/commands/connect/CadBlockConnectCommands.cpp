@@ -26,7 +26,7 @@ void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std:
     log.push_back("BCONNECTMODE — open a block with BEDIT first.");
     return;
   }
-  st.active = AppCommandState::Kind::BConnectMode;
+  stepengine::BeginSession(st, std::make_unique<stepengine::BConnectModeSession>(), /*recordAsLastCommand=*/false);
   st.bconnectModePhase = Ph::WaitConnName;
   st.bconnectModeConnName.clear();
   st.bconnectModeModeName.clear();
@@ -50,7 +50,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BCONNECTMODE — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
@@ -63,7 +63,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
     const int ci = CadBlockFindConnection(def, line);
     if (ci < 0) {
       log.push_back("BCONNECTMODE — no connection named \"" + line + "\" on \"" + st.blockEditorName + "\".");
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     st.bconnectModeConnName = line;
@@ -87,7 +87,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   const int ci = CadBlockFindConnection(def, st.bconnectModeConnName);
   if (ci < 0) {
     log.push_back("BCONNECTMODE — connection \"" + st.bconnectModeConnName + "\" is gone; canceled.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
@@ -135,7 +135,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
         st.blockEditorDirty = true;
         log.push_back("BCONNECTMODE — removed mode \"" + st.bconnectModeModeName + "\".");
       }
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     st.bconnectModePhase = Ph::WaitTarget;
@@ -210,7 +210,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       conn.modes.front().isDefault = true;
     log.push_back("BCONNECTMODE — set mode \"" + st.bconnectModeModeName + "\" on \"" + st.bconnectModeConnName +
                   "\".");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
 }
@@ -221,7 +221,7 @@ void BConnectStart(AppCommandState& st, const std::string& nameArg, std::vector<
     log.push_back("BCONNECT — open a block with BEDIT first.");
     return;
   }
-  st.active = AppCommandState::Kind::BConnect;
+  stepengine::BeginSession(st, std::make_unique<stepengine::BConnectSession>(), /*recordAsLastCommand=*/false);
   st.bconnectPhase = Ph::WaitName;
   st.bconnectNameBuf[0] = '\0';
   st.bconnectSizeBuf[0] = '\0';
@@ -304,7 +304,7 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
     const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0) {
       log.push_back("BCONNECT — the block being edited no longer exists.");
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     CadBlockConnection conn;
@@ -323,7 +323,7 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
     st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
     st.blockEditorDirty = true;
     log.push_back("BCONNECT — added connection \"" + addedName + "\".");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
 }
@@ -342,7 +342,7 @@ void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std:
     log.push_back("BCONNECTEDIT — \"" + st.blockEditorName + "\" has no connection points yet (use BCONNECT).");
     return;
   }
-  st.active = AppCommandState::Kind::BConnectEdit;
+  stepengine::BeginSession(st, std::make_unique<stepengine::BConnectEditSession>(), /*recordAsLastCommand=*/false);
   st.bconnectEditPhase = Ph::WaitConnName;
   st.bconnectEditConnName.clear();
   st.bconnectEditNominalSizePending.clear();
@@ -369,7 +369,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BCONNECTEDIT — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
@@ -382,7 +382,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
     const int ci = CadBlockFindConnection(def, line);
     if (ci < 0) {
       log.push_back("BCONNECTEDIT — no connection named \"" + line + "\" on \"" + st.blockEditorName + "\".");
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     st.bconnectEditConnName = line;
@@ -399,7 +399,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   const int ci = CadBlockFindConnection(def, st.bconnectEditConnName);
   if (ci < 0) {
     log.push_back("BCONNECTEDIT — connection \"" + st.bconnectEditConnName + "\" is gone; canceled.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
   CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
@@ -409,7 +409,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       def.connections.erase(def.connections.begin() + ci);
       st.blockEditorDirty = true;
       log.push_back("BCONNECTEDIT — removed \"" + st.bconnectEditConnName + "\".");
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return;
     }
     st.bconnectEditPhase = Ph::WaitNominalSize;
@@ -463,7 +463,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
     c.compatibilityTag = st.bconnectEditCompatTagPending;
     st.blockEditorDirty = true;
     log.push_back("BCONNECTEDIT — updated \"" + st.bconnectEditConnName + "\".");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
 }

@@ -179,10 +179,8 @@
   DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2018;  ///< Format for the pending Export DWG (issue #600, D-2026-10-08-c).
 
   // -------------------------------------------------------------------------
-  // ALIGN command state (Helmert transformation)
+  // ALIGN results dialog state (survives after ALIGN session ends)
   // -------------------------------------------------------------------------
-  enum class AlignPhase : std::uint8_t { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
-
   struct AlignControlPt { float srcX = 0.f, srcY = 0.f, dstX = 0.f, dstY = 0.f; };
   std::vector<AlignControlPt> alignControlPts;
 

@@ -1,9 +1,6 @@
 inline void ResetSegmentAngleLock(AppCommandState& st) {
-  st.segmentAngleLockActive = false;
-  st.segmentLockUx = 1.f;
-  st.segmentLockUy = 0.f;
-  st.segmentAnglePickPhase = AppCommandState::SegmentAnglePickPhase::Idle;
-  st.segmentAngleKeyboardAwaitBearing = false;
+  if (auto* ang = stepengine::ActiveSegmentAngleState(st))
+    ang->reset();
 }
 
 

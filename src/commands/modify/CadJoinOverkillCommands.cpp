@@ -1187,8 +1187,7 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
       ExecuteJoinSelection(st, log);
       return;
     }
-    st.active = AppCommandState::Kind::Join;
-    st.selBoxWaitingSecond = false;
+    stepengine::BeginSession(st, std::make_unique<stepengine::JoinSession>(), false);
     log.push_back("JOIN — click paper objects or drag a selection window (Enter when done) to join "
                   "connected lines/polylines. ESC cancels.");
     return;
@@ -1197,8 +1196,7 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
     ExecuteJoinSelection(st, log);
     return;
   }
-  st.active = AppCommandState::Kind::Join;
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::JoinSession>(), false);
   log.push_back("JOIN — click objects or drag a selection window (Enter when done) to join lines/"
                 "polylines that meet at endpoints. ESC cancels.");
 }

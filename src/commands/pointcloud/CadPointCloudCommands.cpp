@@ -2,7 +2,11 @@
 #include "CadCoordinateFrame.hpp"
 #include "GoSurvey/PointCloud/Octree.hpp"
 #include "GoSurvey/PointCloud/CylinderFit.hpp"
-#include "GoSurvey/IO/PointCloudCacheImport.hpp"
+#include <GoSurvey/IO/PointCloudCacheImport.hpp>
+#include <GoSurvey/IO/PointCloudFormats.hpp>
+#include <GoSurvey/IO/ModelImport.hpp>
+#include "DwgMeshConvert.hpp"
+#include "DwgIo.hpp"
 #include <GoSurvey/UI/FileDialogs.hpp>
 #include <algorithm>
 #include <array>
@@ -398,8 +402,7 @@ bool PointCloudVisible(const AppCommandState& st, size_t index) {
 }
 
 void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>& log) {
-  st.active = AppCommandState::Kind::ExtractCenterline;
-  st.lastCommand = AppCommandState::Kind::ExtractCenterline;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ExtractCenterlineSession>(), /*recordAsLastCommand=*/true);
   st.extractCenterlineHoverValid = false;
   st.extractCenterlineHoverDiag = "not hovering yet";
   st.pointCloudOpenCaches.clear();
@@ -635,4 +638,192 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
   st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("EXTRACTCENTERLINE — line placed along the fitted cylinder axis.");
+}
+
+bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitScale, double insX, double insY,
+                     double insZ, std::vector<std::string>& log) {
+  modelimport::Options opt;
+  opt.unitScale = unitScale;
+  opt.insertX = insX;
+  opt.insertY = insY;
+  opt.insertZ = insZ;
+
+  std::string ext = std::filesystem::u8path(path).extension().u8string();
+  ext = StringUtil::toLowerAsciiCopy(ext);
+
+  modelimport::Result r;
+  if (ext == ".dwg") {
+    std::string whyNot;
+    if (!dwgmesh::ConversionAvailable(&whyNot)) {
+      log.push_back("Cannot import a DWG model — " + whyNot);
+      return false;
+    }
+    log.push_back("Converting the DWG's 3D solids via " + FindDwgConverter().displayName +
+                  " — this can take a few minutes on a large model.");
+    const dwgmesh::ConvertResult cr = dwgmesh::ConvertDwgToMesh(path, opt);
+    if (!cr.ok) {
+      log.push_back("Model import failed — " + cr.error);
+      return false;
+    }
+    r = cr.model;
+  } else if (ext == ".stl") {
+    r = stl::ImportStlFile(path, opt);
+  } else {
+    r = gltf::ImportGltfFile(path, opt);
+  }
+
+  if (!r.ok) {
+    log.push_back("Model import failed — " + r.error);
+    return false;
+  }
+
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->vertsXyz = r.vertsXyz;
+  mesh->normalsXyz = r.normalsXyz;
+  mesh->indices = r.indices;
+  mesh->sourceName = std::filesystem::u8path(path).filename().u8string();
+  mesh->parts.reserve(r.parts.size());
+  for (const modelimport::Part& p : r.parts) {
+    CadMeshPart cp;
+    cp.name = p.name;
+    cp.indexBegin = p.indexBegin;
+    cp.indexCount = p.indexCount;
+    cp.r = p.r;
+    cp.g = p.g;
+    cp.b = p.b;
+    mesh->parts.push_back(std::move(cp));
+  }
+
+  PushUndoSnapshot(st, "Import model");
+  st.drawing.cadMeshes.push_back(std::move(mesh));
+  st.drawing.cadMeshAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+
+  char msg[320];
+  std::snprintf(msg, sizeof(msg), "Imported %s — %d triangles, %d parts, scale %.6g.",
+                st.drawing.cadMeshes.back()->sourceName.c_str(), r.triangleCount(),
+                static_cast<int>(r.parts.size()), unitScale);
+  log.push_back(msg);
+  if (!r.skipped.empty()) {
+    std::string s = "Not imported (geometry only): ";
+    for (size_t i = 0; i < r.skipped.size(); ++i)
+      s += (i ? ", " : "") + r.skipped[i];
+    log.push_back(s + ".");
+  }
+  return true;
+}
+
+bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
+                                std::vector<std::string>& log) {
+  if (st.pointCloudImportAsync && !st.pointCloudImportAsync->done.load(std::memory_order_acquire)) {
+    log.push_back("POINTCLOUDATTACH — an import is already in progress; wait for it to finish.");
+    return false;
+  }
+  st.pointCloudImportAsync.reset();
+
+  auto job = std::make_unique<AppCommandState::PointCloudImportAsync>();
+  job->sourcePath = path;
+  job->cachePath = path + ".gscloud";
+  using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
+  const std::string ext =
+      StringUtil::toLowerAsciiCopy(std::filesystem::path(path).extension().string());
+  job->format = (ext == ".pts") ? Format::Pts
+              : (ext == ".ptx") ? Format::Ptx
+              : (ext == ".las") ? Format::Las
+              : (ext == ".laz") ? Format::Laz
+                                 : Format::E57;
+  job->totalPointsEstimate = (job->format == Format::Pts)
+                                 ? pointcloud_pts::QuickPointCountEstimate(path)
+                             : (job->format == Format::Ptx)
+                                 ? pointcloud_ptx::QuickPointCountEstimate(path)
+                             : (job->format == Format::Las)
+                                 ? pointcloud_las::QuickPointCountEstimate(path)
+                             : (job->format == Format::Laz)
+                                 ? pointcloud_laz::QuickPointCountEstimate(path)
+                                 : pointcloud_e57::QuickPointCountEstimate(path);
+  job->startTime = std::chrono::steady_clock::now();
+
+  AppCommandState::PointCloudImportAsync* jobPtr = job.get();
+  job->thread = std::thread(RunPointCloudImportWorker, jobPtr);
+  st.pointCloudImportAsync = std::move(job);
+
+  log.push_back("POINTCLOUDATTACH — importing " +
+                std::filesystem::u8path(path).filename().u8string() + "...");
+  return true;
+}
+
+bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
+                             const std::string& pathUtf8, std::vector<std::string>& log) {
+  const std::string name = PointCloudExportCommandName(format);
+  if (st.drawing.cadPointClouds.empty()) {
+    log.push_back(name + " — the drawing has no point clouds.");
+    return false;
+  }
+
+  std::set<int> resolved;
+  std::vector<double> xyz;
+  std::vector<float> colors, intensity;
+  std::int64_t totalCount = 0;
+  CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
+
+  if (xyz.empty()) {
+    log.push_back(name + " — the selected point cloud(s) have no points to export.");
+    return false;
+  }
+
+  std::string error;
+  bool ok = false;
+  switch (format) {
+    case PointCloudExportFormat::Pts: {
+      const auto wr = pointcloud_pts::WritePtsFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Ptx: {
+      const auto wr = pointcloud_ptx::WritePtxFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Las: {
+      const auto wr = pointcloud_las::WriteLasFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Laz: {
+      const auto wr = pointcloud_laz::WriteLazFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+  }
+  if (!ok) {
+    log.push_back(name + " — " + error);
+    return false;
+  }
+  char msg[384];
+  std::snprintf(msg, sizeof(msg), " — wrote %lld point(s) from %zu cloud(s) to %s.",
+                static_cast<long long>(totalCount), resolved.size(),
+                std::filesystem::u8path(pathUtf8).filename().u8string().c_str());
+  log.push_back(name + msg);
+  return true;
+}
+
+void ExportSelectedPointClouds(AppCommandState& st, PointCloudExportFormat format,
+                               std::vector<std::string>& log) {
+  const std::string name = PointCloudExportCommandName(format);
+  if (st.drawing.cadPointClouds.empty()) {
+    log.push_back(name + " — the drawing has no point clouds.");
+    return;
+  }
+  const PointCloudExportPlan plan = PlanPointCloudExport(st, format);
+  if (plan.pointCount <= 0) {
+    log.push_back(name + " — the selected point cloud(s) have no points to export.");
+    return;
+  }
+  const std::string& defaultName = plan.defaultFileName;
+  char buf[1024]{};
+  const bool picked = format == PointCloudExportFormat::Pts ? BrowseSaveFilePtsUtf8(buf, sizeof(buf), defaultName.c_str())
+                    : format == PointCloudExportFormat::Ptx ? BrowseSaveFilePtxUtf8(buf, sizeof(buf), defaultName.c_str())
+                    : format == PointCloudExportFormat::Las ? BrowseSaveFileLasUtf8(buf, sizeof(buf), defaultName.c_str())
+                                                            : BrowseSaveFileLazUtf8(buf, sizeof(buf), defaultName.c_str());
+  if (!picked) {
+    log.push_back(name + " — cancelled.");
+    return;
+  }
+  ExportPointCloudsToFile(st, format, buf, log);
 }

@@ -36,16 +36,19 @@ static void CadDimAlignedPlaceTextBeyondDimLine(float chordMidX, float chordMidY
 
 
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  auto* ds = st.sessionAs<stepengine::DimAngularSession>();
+  if (!ds)
+    return;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
-  d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
-  d.dimAngVertexX = st.dimAngVx;
-  d.dimAngVertexY = st.dimAngVy;
-  d.dimExt1X = st.dimE1x;
-  d.dimExt1Y = st.dimE1y;
-  d.dimExt2X = st.dimE2x;
-  d.dimExt2Y = st.dimE2y;
+  d.insZ = CadCommitElevation(st);
+  d.dimAngVertexX = ds->vx;
+  d.dimAngVertexY = ds->vy;
+  d.dimExt1X = ds->e1x;
+  d.dimExt1Y = ds->e1y;
+  d.dimExt2X = ds->e2x;
+  d.dimExt2Y = ds->e2y;
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
     log.push_back("DIMANGULAR — points are degenerate or collinear.");
@@ -55,8 +58,8 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
     log.push_back("DIMANGULAR — angle is zero (ray points coincide with vertex direction).");
     return;
   }
-  const float vx = st.dimAngVx, vy = st.dimAngVy;
-  const float leg = std::min(std::hypot(st.dimE1x - vx, st.dimE1y - vy), std::hypot(st.dimE2x - vx, st.dimE2y - vy));
+  const float vx = ds->vx, vy = ds->vy;
+  const float leg = std::min(std::hypot(ds->e1x - vx, ds->e1y - vy), std::hypot(ds->e2x - vx, ds->e2y - vy));
   const float rMax = std::max(1.e-4f, 0.92f * leg);
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
@@ -71,8 +74,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   st.drawing.cadAnnotations.push_back(std::move(d));
   st.drawing.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
-  ResetDimAngularDraft(st);
-  ResetDimDraft(st);
+  ds->resetDraft();
   log.push_back("DIMANGULAR complete.");
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position. ESC to exit.");
 }
@@ -87,8 +89,11 @@ static std::string DimStyleEntityColor(const DimensionStyle& sty, const EntityAt
 }
 
 static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
-  const float x1 = st.dimE1x, y1 = st.dimE1y;
-  const float x2 = st.dimE2x, y2 = st.dimE2y;
+  auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!ds)
+    return;
+  const float x1 = ds->e1x, y1 = ds->e1y;
+  const float x2 = ds->e2x, y2 = ds->e2y;
   float vx = x2 - x1;
   float vy = y2 - y1;
   const float len = std::hypot(vx, vy);
@@ -114,7 +119,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
   ann.dimensionStyleName = st.drawing.activeDimensionStyle.name;
-  ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
+  ann.insZ = CadCommitElevation(st);
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
   ann.dimExt2X = x2;
@@ -137,18 +142,21 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ClearCadSelection(st);
   st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.drawing.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
-  ResetDimDraft(st);
+  ds->resetDraft();
   log.push_back("DIMALIGNED complete.");
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset. ESC to exit.");
 }
 
 static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
+  auto* ds = st.sessionAs<stepengine::DimSession>();
+  if (!ds)
+    return;
   CadDimLinearUpdateDraftOrientation(st, lx, ly);
-  const float x1 = st.dimE1x, y1 = st.dimE1y;
-  const float x2 = st.dimE2x, y2 = st.dimE2y;
+  const float x1 = ds->e1x, y1 = ds->e1y;
+  const float x2 = ds->e2x, y2 = ds->e2y;
   const float cmx = 0.5f * (x1 + x2);
   const float cmy = 0.5f * (y1 + y2);
-  const bool vert = st.dimLinearDraftVertical;
+  const bool vert = ds->linearDraftVertical;
   const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
   if (meas < 1e-8f) {
     log.push_back(vert ? "DIMLINEAR — extension points have the same Y (zero vertical span)."
@@ -172,7 +180,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
   ann.dimensionStyleName = st.drawing.activeDimensionStyle.name;
-  ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
+  ann.insZ = CadCommitElevation(st);
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
   ann.dimExt2X = x2;
@@ -204,7 +212,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   ClearCadSelection(st);
   st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.drawing.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
-  ResetDimDraft(st);
+  ds->resetDraft();
   log.push_back("DIMLINEAR complete.");
   log.push_back("DIMLINEAR — extension 1, extension 2, then dimension line. ESC to exit.");
 }

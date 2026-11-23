@@ -60,9 +60,6 @@
   // 1->2, the same "done picking edges" signal model-space TRIM/EXTEND get from a real Enter.
   int   paperExtendPhase = 0;
   std::vector<PaperEntityRef> paperExtendBoundaries;
-  // Paper-space TRIM cutting edges (REQ-039). Kept separate from model `trimCutters`, whose
-  // SelectedEntity indices address model stores and must never be interpreted as paper indices.
-  std::vector<PaperEntityRef> paperTrimCutters;
   // Paper-space BREAK of native paper entities (REQ-103 step 4): 0 idle, 1 waiting for the
   // entity+first-point pick, 2 waiting for the second point (applies, loops back to 1). Pure click
   // flow like paper EXTEND — no typed value, so not simplified away.
@@ -95,6 +92,8 @@
   int   paperFilletFirstPolySeg = -1;
   float paperFilletFirstPickX = 0.f;
   float paperFilletFirstPickY = 0.f;
+  bool  paperFilletAwaitingRadius = false;
+  bool  paperFilletAwaitingTrim = false;
   // Paper-space CHAMFER of native paper entities (REQ-103 step 6b): same shape as paper FILLET
   // above.
   int   paperChamferPhase = 0;
@@ -102,6 +101,10 @@
   int   paperChamferFirstPolySeg = -1;
   float paperChamferFirstPickX = 0.f;
   float paperChamferFirstPickY = 0.f;
+  bool  paperChamferAwaitingFirstValue = false;
+  bool  paperChamferAwaitingSecondDist = false;
+  bool  paperChamferAwaitingAngle = false;
+  bool  paperChamferAwaitingTrim = false;
   float paperSelBoxLastMnXIn = 0.f, paperSelBoxLastMxXIn = 0.f;
   float paperSelBoxLastMnYIn = 0.f, paperSelBoxLastMxYIn = 0.f;
   // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays

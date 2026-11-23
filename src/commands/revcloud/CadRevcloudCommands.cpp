@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 
 #include <cstdio>
 
@@ -68,18 +69,20 @@ bool CommitRevcloud(AppCommandState& st, const std::vector<double>& corners, dou
 }  // namespace
 
 void CancelRevcloudCommand(AppCommandState& st) {
-  st.revcloudPhase = AppCommandState::RevcloudPhase::WaitFirstPoint;
-  st.revcloudDraft.clear();
-  st.revcloudPending = 0;
-  // Arc length, Reverse and Delete-original deliberately SURVIVE the cancel: they are the settings
-  // the next cloud will want.
+  if (auto* s = st.sessionAs<stepengine::RevcloudSession>()) {
+    s->phase = stepengine::RevcloudPhase::WaitFirstPoint;
+    s->draft.clear();
+    s->pending = 0;
+  }
 }
 
 std::string CadRevcloudPromptText(const AppCommandState& st) {
-  using P = AppCommandState::RevcloudPhase;
+  using P = stepengine::RevcloudPhase;
+  const auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  const P phase = s ? s->phase : P::WaitFirstPoint;
   const std::string opts = std::string("[Arc length=") + RevcloudNumber(st.revcloudArcLength) +
                            (st.revcloudReverse ? " Reverse=on" : "") + "]";
-  switch (st.revcloudPhase) {
+  switch (phase) {
   case P::WaitObject:
     return std::string("REVCLOUD - select a closed polyline, rectangle or circle to turn into a cloud ") +
            opts + (st.revcloudDeleteOriginal ? " (original will be deleted)" : " (original is kept)");
@@ -100,15 +103,16 @@ void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  CancelRevcloudCommand(st);
-  st.active = AppCommandState::Kind::Revcloud;
-  st.lastCommand = AppCommandState::Kind::Revcloud;
+  stepengine::BeginSession(st, std::make_unique<stepengine::RevcloudSession>());
   log.push_back(CadRevcloudPromptText(st));
 }
 
 std::vector<double> CadRevcloudPreviewPolyline(const AppCommandState& st, double curX, double curY,
                                                std::vector<float>* outBulge) {
-  std::vector<double> corners = st.revcloudDraft;
+  const auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  if (!s)
+    return {};
+  std::vector<double> corners = s->draft;
   corners.push_back(curX);
   corners.push_back(curY);
   std::vector<double> xy;
@@ -197,43 +201,46 @@ void ConvertRevcloudObjectAt(AppCommandState& st, float wx, float wy, std::vecto
     return;
   if (!CommitRevcloud(st, corners, z, st.revcloudDeleteOriginal ? &hit : nullptr, log))
     return;  // the reason is logged; the command stays open at the Object prompt
-  CancelRevcloudCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 /// Close the draft path into a cloud and end the command; stays open (reason logged) if it cannot.
 void FinishRevcloudPath(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.revcloudDraft.size() < 6) {
+  auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  if (!s)
+    return;
+  if (s->draft.size() < 6) {
     log.push_back("REVCLOUD - a cloud needs at least three corners.");
     return;
   }
-  if (!CommitRevcloud(st, st.revcloudDraft, st.revcloudZ, nullptr, log))
+  if (!CommitRevcloud(st, s->draft, s->z, nullptr, log))
     return;
-  CancelRevcloudCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 void AddRevcloudCorner(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
-  using P = AppCommandState::RevcloudPhase;
-  if (st.revcloudPhase == P::WaitFirstPoint) {
-    st.revcloudDraft.assign({x, y});
-    st.revcloudZ = static_cast<double>(CadCommitElevation(st));
-    st.revcloudPhase = P::WaitNextPoint;
+  auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  if (!s)
+    return;
+  using P = stepengine::RevcloudPhase;
+  if (s->phase == P::WaitFirstPoint) {
+    s->draft.assign({x, y});
+    s->z = static_cast<double>(CadCommitElevation(st));
+    s->phase = P::WaitNextPoint;
     log.push_back(CadRevcloudPromptText(st));
     return;
   }
-  const std::size_t n = st.revcloudDraft.size();
-  // Coming back to the start - within one scallop of it - closes the cloud, as the prompt says.
-  if (n >= 6 && std::hypot(x - st.revcloudDraft[0], y - st.revcloudDraft[1]) < st.revcloudArcLength * 0.5) {
+  const std::size_t n = s->draft.size();
+  if (n >= 6 && std::hypot(x - s->draft[0], y - s->draft[1]) < st.revcloudArcLength * 0.5) {
     FinishRevcloudPath(st, log);
     return;
   }
-  if (std::hypot(x - st.revcloudDraft[n - 2], y - st.revcloudDraft[n - 1]) < 1e-9) {
+  if (std::hypot(x - s->draft[n - 2], y - s->draft[n - 1]) < 1e-9) {
     log.push_back("REVCLOUD - that is the same point as the last corner.");
     return;
   }
-  st.revcloudDraft.push_back(x);
-  st.revcloudDraft.push_back(y);
+  s->draft.push_back(x);
+  s->draft.push_back(y);
   log.push_back(CadRevcloudPromptText(st));
 }
 
@@ -253,12 +260,14 @@ bool SetRevcloudArcLength(AppCommandState& st, const std::string& text, std::vec
 }  // namespace
 
 bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  using P = AppCommandState::RevcloudPhase;
+  auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  if (!s)
+    return false;
+  using P = stepengine::RevcloudPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  // `A` on its own line takes the next line as its value.
-  if (st.revcloudPending != 0) {
-    st.revcloudPending = 0;
+  if (s->pending != 0) {
+    s->pending = 0;
     if (!line.empty())
       (void)SetRevcloudArcLength(st, line, log);
     log.push_back(CadRevcloudPromptText(st));
@@ -266,15 +275,12 @@ bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std
   }
 
   if (line.empty()) {
-    // Enter closes a path under way; with nothing started there is nothing to close, so it ends
-    // the command rather than reporting a refusal for something the user never began.
-    if (st.revcloudPhase == P::WaitNextPoint) {
+    if (s->phase == P::WaitNextPoint) {
       FinishRevcloudPath(st, log);
       return true;
     }
     log.push_back("REVCLOUD canceled.");
-    CancelRevcloudCommand(st);
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return true;
   }
 
@@ -282,10 +288,9 @@ bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std
   const std::string rest = StringUtil::trimCopy(line.substr(1));
   const bool bareLetter = rest.empty();
 
-  // No coordinate begins with one of these letters, so there is nothing to disambiguate against.
   if (head == 'A') {
     if (bareLetter) {
-      st.revcloudPending = 'A';
+      s->pending = 'A';
       log.push_back("REVCLOUD - arc length?");
       return true;
     }
@@ -308,16 +313,16 @@ bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std
     return true;
   }
   if (head == 'O' && bareLetter) {
-    if (st.revcloudPhase == P::WaitNextPoint) {
+    if (s->phase == P::WaitNextPoint) {
       log.push_back("REVCLOUD - Object converts a shape already drawn; it cannot join a path already under way.");
       return true;
     }
-    st.revcloudPhase = P::WaitObject;
+    s->phase = P::WaitObject;
     log.push_back(CadRevcloudPromptText(st));
     return true;
   }
   if (head == 'C' && bareLetter) {
-    if (st.revcloudPhase != P::WaitNextPoint) {
+    if (s->phase != P::WaitNextPoint) {
       log.push_back("REVCLOUD - nothing to close yet.");
       return true;
     }
@@ -325,38 +330,39 @@ bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std
     return true;
   }
   if (head == 'U' && bareLetter) {
-    if (st.revcloudPhase != P::WaitNextPoint) {
+    if (s->phase != P::WaitNextPoint) {
       log.push_back("REVCLOUD - nothing to undo yet.");
       return true;
     }
-    st.revcloudDraft.resize(st.revcloudDraft.size() - 2);
-    if (st.revcloudDraft.empty()) {
-      st.revcloudPhase = P::WaitFirstPoint;
+    s->draft.resize(s->draft.size() - 2);
+    if (s->draft.empty()) {
+      s->phase = P::WaitFirstPoint;
       log.push_back("REVCLOUD - back to the first corner.");
     }
     log.push_back(CadRevcloudPromptText(st));
     return true;
   }
 
-  // Anything else is a coordinate - except at the Object prompt, which wants something already
-  // drawn; typing a point there would silently start an ordinary path instead.
-  if (st.revcloudPhase == P::WaitObject) {
+  if (s->phase == P::WaitObject) {
     log.push_back("REVCLOUD - click the closed polyline, rectangle or circle to turn into a cloud (Esc cancels).");
     return true;
   }
   ray3d::Vec3 last{};
-  const bool haveLast = st.revcloudPhase == P::WaitNextPoint;
+  const bool haveLast = s->phase == P::WaitNextPoint;
   if (haveLast)
-    last = ray3d::Vec3{st.revcloudDraft[st.revcloudDraft.size() - 2], st.revcloudDraft.back(), st.revcloudZ};
+    last = ray3d::Vec3{s->draft[s->draft.size() - 2], s->draft.back(), s->z};
   ray3d::Vec3 pt{};
   if (!ParseSolidBasePoint(st, line, &pt, log, "REVCLOUD", haveLast ? &last : nullptr))
-    return true;  // the reason has been reported; the prompt stands
+    return true;
   AddRevcloudCorner(st, pt.x, pt.y, log);
   return true;
 }
 
 void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject) {
+  auto* s = st.sessionAs<stepengine::RevcloudSession>();
+  if (!s)
+    return;
+  if (s->phase == stepengine::RevcloudPhase::WaitObject) {
     ConvertRevcloudObjectAt(st, wx, wy, log);
     return;
   }

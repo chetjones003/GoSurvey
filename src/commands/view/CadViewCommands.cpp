@@ -1170,8 +1170,7 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) 
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  ResetModifyRotateDraft(st);
-  st.active = K::Zoom;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ZoomSession>(), /*recordAsLastCommand=*/false);
   st.selBoxWaitingSecond = false;
   log.push_back(
       "ZOOM WINDOW — click two corners (crossing window corners use cursor position, not object snap). ESC "
@@ -1186,9 +1185,7 @@ void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ResetAllCadDraftTools(st);
-  ResetModifyRotateDraft(st);
-  st.active      = K::Pan;
-  st.lastCommand = K::Pan;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PanSession>(), /*recordAsLastCommand=*/true);
   st.selBoxWaitingSecond = false;
   log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
 }
@@ -1206,9 +1203,7 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ResetAllCadDraftTools(st);
-  ResetModifyRotateDraft(st);
-  st.active      = K::Orbit;
-  st.lastCommand = K::Orbit;
+  stepengine::BeginSession(st, std::make_unique<stepengine::OrbitSession>(), /*recordAsLastCommand=*/true);
   st.selBoxWaitingSecond = false;
   log.push_back("ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-click to exit.");
 }

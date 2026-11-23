@@ -145,21 +145,10 @@ EntityAttributes MakeNewEntityAttrs(const AppCommandState& st);
 void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a);
 
 // --- Draft-state resets (defined together as a cluster in CadCommands.cpp) ---
-void ResetCircleDraft(AppCommandState& st);
-void ResetPolylineDraft(AppCommandState& st);
-void ResetFeatureLineDraft(AppCommandState& st);
-void ResetArcDraft(AppCommandState& st);
-void ResetEllipseDraft(AppCommandState& st);
-void ResetRectDraft(AppCommandState& st);
-void ResetTextCmdDraft(AppCommandState& st);
-void ResetMtextDraft(AppCommandState& st);
-void ResetDimDraft(AppCommandState& st);
-void ResetDimAngularDraft(AppCommandState& st);
-void ResetSurveyInverseDraft(AppCommandState& st);
-void ResetDistDraft(AppCommandState& st);
 /// Resets every in-progress draft/prompt tool. Call on command start, cancel, or
 /// clear-geometry so no half-collected state leaks into the next command.
 void ResetAllCadDraftTools(AppCommandState& st);
+void WriteUndoHistoryLogLine(const std::string& msg);
 
 static void CommitSurfSwapEdgeLocal(AppCommandState& st, CadSurface& s, double x, double y,
                                     std::vector<std::string>& log) {
@@ -540,11 +529,10 @@ float MinDistSqSegSeg(float ax, float ay, float bx, float by, float cx, float cy
 } // namespace CadCmdGeom
 void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
 void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
-bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log);
-bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
-bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
+void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, float x1, float y1, float z1,
+                           bool eraseSource, std::vector<std::string>& log);
 
 using PaperRef = PaperEntityRef;
 
@@ -555,9 +543,9 @@ static void ResetPaperModifyDrafts(AppCommandState& st) {
   st.paperFilletPhase = st.paperChamferPhase = 0;
   st.paperFilletFirstEntity = PaperEntityRef{}; st.paperFilletFirstPolySeg = -1;
   st.paperChamferFirstEntity = PaperEntityRef{}; st.paperChamferFirstPolySeg = -1;
-  st.filletTextAwaitingRadius = st.filletTextAwaitingTrim = false;
-  st.chamferTextAwaitingFirstValue = st.chamferTextAwaitingSecondDist = false;
-  st.chamferTextAwaitingAngle = st.chamferTextAwaitingTrim = false;
+  st.paperFilletAwaitingRadius = st.paperFilletAwaitingTrim = false;
+  st.paperChamferAwaitingFirstValue = st.paperChamferAwaitingSecondDist = false;
+  st.paperChamferAwaitingAngle = st.paperChamferAwaitingTrim = false;
 }
 
 static bool RayAtElevation(const ray3d::Ray& ray, double z, float* x, float* y) {
@@ -567,34 +555,6 @@ static bool RayAtElevation(const ray3d::Ray& ray, double z, float* x, float* y) 
   *x = static_cast<float>(ray.origin.x + t * ray.dir.x);
   *y = static_cast<float>(ray.origin.y + t * ray.dir.y);
   return true;
-}
-
-static void ResetModifyRotateDraft(AppCommandState& st) {
-  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  st.modifyBaseX = st.modifyBaseY = 0.f;
-  st.scaleRefDist = 1.f;
-  st.scalePhase = AppCommandState::ScalePhase::FactorPick;
-  st.scaleRefP1X = st.scaleRefP1Y = 0.f;
-  st.scaleNewLenP1X = st.scaleNewLenP1Y = 0.f;
-  st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
-  st.rotateBaseX = st.rotateBaseY = st.rotateBaseZ = 0.f;
-  st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
-  st.rotateAnglePt1X = st.rotateAnglePt1Y = 0.f;
-  st.rotateCopyMode = false;
-  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
-  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
-  st.mirrorP1Z = st.mirrorP2Z = 0.f;
-  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
-  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
-  // TASK-099 F4. The phase enums above were reset without the collections and latched entities
-  // that go with them, so this left EXTEND's boundary list and BREAK's pending entity behind.
-  // CancelActiveCommand happened to reset those itself immediately after calling this, which hid
-  // it; every other caller (FinishMirrorCommand, LENGTHEN's Enter finish) did not.
-  st.extendBoundaries.clear();
-  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
-  st.breakEntity = SelectedEntity{};
-  st.lengthenPendingEntity = SelectedEntity{};
-  st.lengthenPendingApplyOnValue = false;
 }
 
 static float ReflectAngleAcrossLine(float x0, float y0, float x1, float y1, float angle) {

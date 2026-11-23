@@ -9150,13 +9150,12 @@ TEST_CASE("Dimension text rotation is normalised so text reads upright (REQ-477)
 
 TEST_CASE("DIMLINEAR picked right to left stores upright text (REQ-477)", "[dim][issue804]") {
   AppCommandState st;
+  auto ds = std::make_unique<stepengine::DimSession>(true);
+  ds->phase = stepengine::DimPhase::WaitDimLinePt;
+  ds->e1x = 10.f; ds->e1y = 0.f; ds->e2x = 0.f; ds->e2y = 0.f;
+  ds->linearDraftVertical = false;
+  st.activeSession = std::move(ds);
   st.active = AppCommandState::Kind::DimLinear;
-  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
-  st.dimE1x = 10.f;
-  st.dimE1y = 0.f;
-  st.dimE2x = 0.f;
-  st.dimE2y = 0.f;
-  st.dimLinearDraftVertical = false;
   CadAnnotation d{};
   REQUIRE(CadDimLinearBuildDraft(st, 5.f, 5.f, &d));
   REQUIRE(d.rotationRad == Catch::Approx(0.f));
@@ -9164,12 +9163,11 @@ TEST_CASE("DIMLINEAR picked right to left stores upright text (REQ-477)", "[dim]
 
 TEST_CASE("DIMLINEAR draft adds visible strokes to viewport rubber preview", "[dim][issue804][preview]") {
   AppCommandState st;
+  auto ds = std::make_unique<stepengine::DimSession>(true);
+  ds->phase = stepengine::DimPhase::WaitDimLinePt;
+  ds->e1x = 0.f; ds->e1y = 0.f; ds->e2x = 10.f; ds->e2y = 0.f;
+  st.activeSession = std::move(ds);
   st.active = AppCommandState::Kind::DimLinear;
-  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
-  st.dimE1x = 0.f;
-  st.dimE1y = 0.f;
-  st.dimE2x = 10.f;
-  st.dimE2y = 0.f;
   std::vector<float> rubber;
   AppendCadDraftRubberLines(st, 5.f, 3.f, false, 0., 0., 100.f, 800, rubber);
   REQUIRE_FALSE(rubber.empty());

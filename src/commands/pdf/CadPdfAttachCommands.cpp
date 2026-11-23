@@ -39,7 +39,7 @@ void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active              = AppCommandState::Kind::PdfAttach;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PdfAttachSession>(), /*recordAsLastCommand=*/false);
   st.pdfAttachPhase      = AppCommandState::PdfAttachPhase::WaitDialog;
   st.pdfAttachDialogOpen = true;
   log.push_back("PDFATTACH — select PDF file and options in the dialog, then place the underlay.");
@@ -116,7 +116,7 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     log.push_back("PDFATTACH — failed to rasterize page.");
   }
 
-  st.active         = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
 }
 
@@ -133,7 +133,7 @@ void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) 
     }).detach();
   }
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<std::string>& log) {

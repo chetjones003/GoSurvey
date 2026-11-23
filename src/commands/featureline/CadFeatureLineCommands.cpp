@@ -1,33 +1,30 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <limits>
 
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
-  // REQ-087 / TASK-082. Drawn like LINE: a click gives X and Y, then the command PROMPTS for the
-  // elevation. That is the difference from POLYLINE and 3DPOLY, which take Z from the work plane
-  // without asking — right for tracing linework, wrong for a grading design, where every elevation
-  // is a decision. Typing X,Y,Z still commits in one go, since it already answers the prompt.
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);  // clears the feature-line draft, including any pending point
+  ResetAllCadDraftTools(st);
   ResetSegmentAngleLock(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::FeatureLine;
-  st.featureLineDraftName = name;
-  st.polylineTypedZValid = false;   // shared with the 3DPOLY peel below
+  auto sess = std::make_unique<stepengine::FeatureLineSession>();
+  sess->draftName = name;
+  stepengine::BeginSession(st, std::move(sess), false);
+  st.polylineTypedZValid = false;
   st.polylineTypedZRelative = false;
   log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
                 " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
                 "E marks the next point an elevation point. CLOSE/CL, END, ESC cancels.");
 }
 
-/// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
-/// than a PI (ADR-035 (a)) — geometrically it lies on the line either way.
 bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
                              std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::FeatureLine)
+  auto* s = st.sessionAs<stepengine::FeatureLineSession>();
+  if (!s)
     return false;
 
   float vz = CadCommitElevation(st);
@@ -36,66 +33,54 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
     st.polylineTypedZValid = false;
     st.polylineTypedZRelative = false;
   }
-  st.featureLineDraftVerts.push_back(x);
-  st.featureLineDraftVerts.push_back(y);
-  st.featureLineDraftVerts.push_back(vz);
-  st.featureLineDraftElevPt.push_back(isElevPoint ? 1u : 0u);
+  s->draftVerts.push_back(x);
+  s->draftVerts.push_back(y);
+  s->draftVerts.push_back(vz);
+  s->draftElevPt.push_back(isElevPoint ? 1u : 0u);
   st.anchorX = x;
   st.anchorY = y;
   st.anchorZ = vz;
   char buf[128];
   std::snprintf(buf, sizeof(buf), "FEATURELINE %s %zu at elevation %.3f.",
                 isElevPoint ? "elevation point" : "PI",
-                st.featureLineDraftElevPt.size(), static_cast<double>(vz));
+                s->draftElevPt.size(), static_cast<double>(vz));
   log.push_back(buf);
   return true;
 }
 
-/// TASK-082: take an X,Y that arrived WITHOUT an elevation — a viewport click, or a typed `X,Y` —
-/// and hold it while the command prompts for one.
-///
-/// This is the difference between FEATURELINE and POLYLINE/3DPOLY. Those take Z from the work plane
-/// silently, which is right for linework being traced; a feature line is a grading design, where
-/// every elevation is a decision and the user asked to be asked.
 bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::FeatureLine)
+  auto* s = st.sessionAs<stepengine::FeatureLineSession>();
+  if (!s)
     return false;
 
-  // ASSUMPTION-1, in order. The snap override is CadCommitElevation's existing REQ-058 rule: an
-  // object snap returns the object's real 3D point, and offering anything else as the default would
-  // make snapping to a 3D object silently ignore the object. Otherwise the previous vertex, because
-  // grading a line means most points sit near the last one.
   float defZ = CadWorkPlaneElevation(st);
   if (st.viewportSnapPickValid)
     defZ = static_cast<float>(st.viewportSnapPickLocalZ);
-  else if (st.featureLineDraftVerts.size() >= 3)
-    defZ = st.featureLineDraftVerts[st.featureLineDraftVerts.size() - 1];
+  else if (s->draftVerts.size() >= 3)
+    defZ = s->draftVerts[s->draftVerts.size() - 1];
 
-  st.featureLinePendingPoint = true;
-  st.featureLinePendingX = x;
-  st.featureLinePendingY = y;
-  st.featureLinePendingDefaultZ = defZ;
+  s->pendingPoint = true;
+  s->pendingX = x;
+  s->pendingY = y;
+  s->pendingDefaultZ = defZ;
 
   char buf[192];
   std::snprintf(buf, sizeof(buf), "FEATURELINE — elevation for %s %zu <%.3f>:",
-                st.featureLineNextIsElevPoint ? "elevation point" : "point",
-                st.featureLineDraftElevPt.size() + 1, static_cast<double>(defZ));
+                s->nextIsElevPoint ? "elevation point" : "point",
+                s->draftElevPt.size() + 1, static_cast<double>(defZ));
   log.push_back(buf);
   return true;
 }
 
-/// TASK-082: resolve the pending point at \p z and add it to the draft.
 void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std::string>& log) {
-  if (!st.featureLinePendingPoint)
+  auto* s = st.sessionAs<stepengine::FeatureLineSession>();
+  if (!s || !s->pendingPoint)
     return;
-  const float x = st.featureLinePendingX;
-  const float y = st.featureLinePendingY;
-  const bool isElevPt = st.featureLineNextIsElevPoint;
-  st.featureLinePendingPoint = false;
-  st.featureLineNextIsElevPoint = false;
-  // Route through SubmitFeatureLineVertex rather than pushing here, so the draft is appended in
-  // exactly one place: typed X,Y,Z and click-then-elevation must not be able to disagree about what
-  // a vertex is.
+  const float x = s->pendingX;
+  const float y = s->pendingY;
+  const bool isElevPt = s->nextIsElevPoint;
+  s->pendingPoint = false;
+  s->nextIsElevPoint = false;
   st.polylineTypedZ = z;
   st.polylineTypedZRelative = false;
   st.polylineTypedZValid = true;
@@ -103,7 +88,10 @@ void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std
 }
 
 void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log) {
-  const size_t nvert = st.featureLineDraftVerts.size() / 3;
+  auto* s = st.sessionAs<stepengine::FeatureLineSession>();
+  if (!s)
+    return;
+  const size_t nvert = s->draftVerts.size() / 3;
   if (closed ? nvert < 3 : nvert < 2) {
     log.push_back(std::string("FEATURELINE — need at least ") + (closed ? "three" : "two") +
                   " vertices.");
@@ -113,22 +101,19 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
   if (st.drawing.featureLineOffsets.empty())
     st.drawing.featureLineOffsets.push_back(0);
   const int baseVert = st.drawing.featureLineOffsets.back();
-  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), st.featureLineDraftVerts.begin(),
-                             st.featureLineDraftVerts.end());
-  st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
-                              st.featureLineDraftElevPt.end());
+  st.drawing.featureLineVerts.insert(st.drawing.featureLineVerts.end(), s->draftVerts.begin(),
+                                     s->draftVerts.end());
+  st.drawing.featureLineElevPt.insert(st.drawing.featureLineElevPt.end(), s->draftElevPt.begin(),
+                                      s->draftElevPt.end());
   st.drawing.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
   st.drawing.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
   CadFeatureLineInfo info;
-  info.name = st.featureLineDraftName;
+  info.name = s->draftName;
   st.drawing.featureLineInfo.push_back(std::move(info));
   st.drawing.featureLineAttrs.push_back(
-      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.drawing.featureLineInfo.back().name));  // REQ-361
+      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.drawing.featureLineInfo.back().name));
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
-  st.featureLineDraftVerts.clear();
-  st.featureLineDraftElevPt.clear();
-  st.featureLineDraftName.clear();
+  stepengine::EndSession(st);
   log.push_back(std::string("FEATURELINE ") + (closed ? "closed" : "complete") + " — " +
                 std::to_string(nvert) + " vertices.");
 }

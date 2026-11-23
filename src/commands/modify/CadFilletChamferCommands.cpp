@@ -736,10 +736,8 @@ static std::string FilletPromptSuffix(const AppCommandState& st) {
 
 void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
-  using K = AppCommandState::Kind;
-  using FP = AppCommandState::FilletPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
-    st.active = K::None;  // pure paper-space click flow, like EXTEND/BREAK's own paper paths
+    stepengine::EndSession(st);
     st.paperFilletPhase = 1;
     st.paperFilletFirstEntity = PaperEntityRef{};
     st.paperFilletFirstPolySeg = -1;
@@ -748,39 +746,22 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Fillet;
-  st.lastCommand = K::Fillet;
-  st.filletPhase = FP::WaitFirstEntity;
-  st.filletFirstEntity = SelectedEntity{};
-  st.filletFirstPolySeg = -1;
-  st.filletSolidAwaitingRadius = false;
-  st.filletTextAwaitingRadius = false;
-  st.filletTextAwaitingTrim = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::FilletSession>(false), true);
   log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
 }
 
-/// Model-space + floating-model-space viewport-pick handler for FILLET — called from
-/// SubmitViewportPickImpl. First pick latches a curve; second pick resolves whether the two curves
-/// are the SAME polyline's adjacent segments (Case A, \ref ApplyFilletPolylineCorner) or two
-/// different curves (Case B), computes the tangent arc (or the parallel-lines semicircle special
-/// case), applies the trim/extend (Trim mode only), and loops back to "select first object".
 void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
                               const ray3d::Ray* pickRay) {
-  using FP = AppCommandState::FilletPhase;
-  // The solid-edge fillet's radius prompt (REQ-323) borrows `K::Fillet` and `FP::WaitFirstEntity`,
-  // but its contract is "type a radius or ESC" — the edges are already chosen. A stray viewport
-  // click must not start a 2D first-object pick on top of it, which would leave the command in a
-  // mixed state the user cannot see.
-  if (st.filletSolidAwaitingRadius) {
+  auto* sess = st.sessionAs<stepengine::FilletSession>();
+  if (!sess)
+    return;
+  using FP = stepengine::FilletPhase;
+  if (sess->solidAwaitingRadius) {
     log.push_back("FILLET — type a fillet radius for the selected edge(s), or ESC to cancel.");
     return;
   }
   SelectedEntity hit{};
   float d2 = 0.f;
-  // issue #373 follow-up: `wx,wy` alone is the click's flattened work-plane intersection, which is
-  // nowhere near a line that does not lie on the current work plane (e.g. a vertical run seen from
-  // an orbited camera or an ortho Front/Left view) — the TRUE 3D ray-to-segment distance is what has
-  // to decide the hit whenever the camera provides one.
   if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2, pickRay)) {
     log.push_back("FILLET — no object at pick.");
     return;
@@ -789,36 +770,31 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
   if (!FilletEligibility(st, hit, wx, wy, &polySeg, log))
     return;
 
-  if (st.filletPhase == FP::WaitFirstEntity) {
-    st.filletFirstEntity = hit;
-    st.filletFirstPolySeg = polySeg;
-    st.filletFirstPickX = wx;
-    st.filletFirstPickY = wy;
-    st.filletFirstPickRay = pickRay ? *pickRay : ray3d::Ray{};
-    st.filletPhase = FP::WaitSecondEntity;
+  if (sess->phase == FP::WaitFirstEntity) {
+    sess->firstEntity = hit;
+    sess->firstPolySeg = polySeg;
+    sess->firstPickX = wx;
+    sess->firstPickY = wy;
+    sess->firstPickRay = pickRay ? *pickRay : ray3d::Ray{};
+    sess->phase = FP::WaitSecondEntity;
     log.push_back("FILLET — select second object:");
     return;
   }
 
-  const bool sameEntity = (hit.type == st.filletFirstEntity.type && hit.index == st.filletFirstEntity.index);
+  const bool sameEntity = (hit.type == sess->firstEntity.type && hit.index == sess->firstEntity.index);
   if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
     log.push_back("FILLET — select two different objects.");
     return;
   }
-  if (sameEntity && polySeg == st.filletFirstPolySeg) {
+  if (sameEntity && polySeg == sess->firstPolySeg) {
     log.push_back("FILLET — select two different segments.");
     return;
   }
 
   if (sameEntity) {
-    // Case A: same polyline, two segments — ApplyFilletPolylineCorner refuses if not adjacent.
-    ApplyFilletPolylineCorner(st, hit.index, st.filletFirstPolySeg, polySeg, st.filletRadius,
-                              st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
+    ApplyFilletPolylineCorner(st, hit.index, sess->firstPolySeg, polySeg, st.filletRadius,
+                              sess->firstPickX, sess->firstPickY, wx, wy, log);
   } else {
-    // Case B: two different entities. A Polyline is only eligible here through its own end segment
-    // (adjacent to a free/open end) — an interior segment, or any segment of a CLOSED polyline, has
-    // no single endpoint that can move without silently disturbing an uninvolved neighboring
-    // segment sharing that vertex (REQ-201).
     auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
       if (e.type != SelectedEntity::Type::Polyline)
         return true;
@@ -843,40 +819,36 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
       }
       return true;
     };
-    if (!polylineIsEndSegmentOnly(st.filletFirstEntity, st.filletFirstPolySeg) ||
+    if (!polylineIsEndSegmentOnly(sess->firstEntity, sess->firstPolySeg) ||
         !polylineIsEndSegmentOnly(hit, polySeg)) {
       return;
     }
 
-    // issue #373: two straight curves (Line, or a Polyline's own free-end segment) whose endpoints
-    // are not all flat at world Z=0 go through the dedicated 3D solve above instead of the legacy
-    // 2D-only path below, which silently drops Z. Arc/Circle stay on the legacy path unconditionally
-    // — REQ-201's "refuse rather than guess" for what the 3D solve does not explicitly cover.
     auto isFilletStraightType = [](SelectedEntity::Type t) {
       return t == SelectedEntity::Type::LineSeg || t == SelectedEntity::Type::Polyline;
     };
-    if (isFilletStraightType(st.filletFirstEntity.type) && isFilletStraightType(hit.type)) {
+    if (isFilletStraightType(sess->firstEntity.type) && isFilletStraightType(hit.type)) {
       Fillet3DCurve probe1, probe2;
-      const bool haveCurves = ReadFillet3DCurve(st, st.filletFirstEntity, st.filletFirstPolySeg, &probe1) &&
+      const bool haveCurves = ReadFillet3DCurve(st, sess->firstEntity, sess->firstPolySeg, &probe1) &&
                               ReadFillet3DCurve(st, hit, polySeg, &probe2);
       auto flatZero = [](const ray3d::Vec3& p0, const ray3d::Vec3& p1) {
         return p0.z == 0.0 && p1.z == 0.0;
       };
       if (haveCurves &&
           (!flatZero(probe1.p0, probe1.p1) || !flatZero(probe2.p0, probe2.p1))) {
-        HandleFillet3DLineLine(st, st.filletFirstEntity, st.filletFirstPolySeg, hit, polySeg,
-                               st.filletFirstPickX, st.filletFirstPickY, st.filletFirstPickRay, wx, wy,
+        HandleFillet3DLineLine(st, sess->firstEntity, sess->firstPolySeg, hit, polySeg,
+                               sess->firstPickX, sess->firstPickY, sess->firstPickRay, wx, wy,
                                pickRay, log);
-        st.filletPhase = FP::WaitFirstEntity;
-        st.filletFirstEntity = SelectedEntity{};
-        st.filletFirstPolySeg = -1;
+        sess->phase = FP::WaitFirstEntity;
+        sess->firstEntity = SelectedEntity{};
+        sess->firstPolySeg = -1;
         log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
         return;
       }
     }
 
     FilletCurve c1{}, c2{};
-    if (!BuildFilletCurveFromEntity(st, st.filletFirstEntity, st.filletFirstPolySeg, &c1) ||
+    if (!BuildFilletCurveFromEntity(st, sess->firstEntity, sess->firstPolySeg, &c1) ||
         !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
       log.push_back("FILLET — could not resolve the picked geometry; refused.");
       return;
@@ -884,13 +856,9 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
 
     if (c1.isLine && c2.isLine &&
         FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
-      // Documented AutoCAD special case: two parallel, non-collinear lines get a semicircle
-      // regardless of the current radius setting. Curve 1's picked endpoint is the anchor and is
-      // never moved (it is already exactly where the semicircle meets it, by construction); only
-      // curve 2 is trimmed/extended to the perpendicular projection.
       float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
-      FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, st.filletFirstPickX,
-                               st.filletFirstPickY, &anchorX, &anchorY, &projX, &projY);
+      FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, sess->firstPickX,
+                               sess->firstPickY, &anchorX, &anchorY, &projX, &projY);
       const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
       if (semiR < 1e-4f) {
         log.push_back("FILLET — the two lines coincide; refused.");
@@ -904,11 +872,10 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
           arc.cy = cy;
           arc.r = semiR;
           arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
-          arc.sweepRad = 3.14159265358979323846f;  // exact semicircle
-          // Same rule as the ordinary fillet arc (issue 01): the elevation of what it joins.
+          arc.sweepRad = 3.14159265358979323846f;
           {
             BreakPoint ba{}, bb{};
-            const float za = ClosestPointOnEntity(st, st.filletFirstEntity, anchorX, anchorY, &ba) ? ba.z : 0.f;
+            const float za = ClosestPointOnEntity(st, sess->firstEntity, anchorX, anchorY, &ba) ? ba.z : 0.f;
             const float zb = ClosestPointOnEntity(st, hit, projX, projY, &bb) ? bb.z : 0.f;
             arc.z = 0.5f * (za + zb);
           }
@@ -921,7 +888,7 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
       }
     } else {
       float cx = 0.f, cy = 0.f;
-      if (!SolveFilletCenter(c1, c2, st.filletRadius, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &cx,
+      if (!SolveFilletCenter(c1, c2, st.filletRadius, sess->firstPickX, sess->firstPickY, wx, wy, &cx,
                              &cy)) {
         log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
       } else {
@@ -935,16 +902,11 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
         else
           FilletTangentPointOnCircle(c2, cx, cy, &t2x, &t2y);
 
-        // "Radius too large" check needs the TRUE corner (radius-0 intersection), not the offset
-        // candidate `cx,cy` above — reuses the same radius-0 solve the sharp-corner case already
-        // proves correct (tests/FilletGeomTests.cpp). If it fails for an unrelated reason (e.g. a
-        // Line-Circle/Circle-Circle pairing with no radius-0 analogue), skip this validation rather
-        // than blocking on it.
         float p0x = 0.f, p0y = 0.f;
-        const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &p0x,
+        const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, sess->firstPickX, sess->firstPickY, wx, wy, &p0x,
                                               &p0y);
         if (haveP0 &&
-            (!FilletRadiusFitsCurve(st, st.filletFirstEntity, p0x, p0y, t1x, t1y) ||
+            (!FilletRadiusFitsCurve(st, sess->firstEntity, p0x, p0y, t1x, t1y) ||
              !FilletRadiusFitsCurve(st, hit, p0x, p0y, t2x, t2y))) {
           log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
                         " is too large for the selected objects; refused.");
@@ -952,7 +914,7 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
           PushUndoSnapshot(st, "Fillet");
           bool ok1 = true, ok2 = true;
           if (st.cornerTrimMode) {
-            ok1 = ApplyFilletTrimSingle(st, st.filletFirstEntity, st.filletFirstPolySeg, t1x, t1y, log);
+            ok1 = ApplyFilletTrimSingle(st, sess->firstEntity, sess->firstPolySeg, t1x, t1y, log);
             ok2 = ApplyFilletTrimSingle(st, hit, polySeg, t2x, t2y, log);
           }
           if (ok1 && ok2) {
@@ -971,13 +933,9 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
               arc.r = st.filletRadius;
               arc.startRad = thetaA;
               arc.sweepRad = sweep;
-              // The fillet arc takes the elevation of the two curves it joins (issue 01); it used to
-              // be born at datum while both trimmed originals kept theirs. One elevation only -
-              // CadArc stays parallel to XY (REQ-057 / ADR-025) - so the two tangent points' midpoint
-              // is used, which is exact whenever they are level with each other.
               {
                 BreakPoint bt1{}, bt2{};
-                const float za = ClosestPointOnEntity(st, st.filletFirstEntity, t1x, t1y, &bt1) ? bt1.z : 0.f;
+                const float za = ClosestPointOnEntity(st, sess->firstEntity, t1x, t1y, &bt1) ? bt1.z : 0.f;
                 const float zb = ClosestPointOnEntity(st, hit, t2x, t2y, &bt2) ? bt2.z : 0.f;
                 arc.z = 0.5f * (za + zb);
               }
@@ -993,33 +951,27 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
     }
   }
 
-  st.filletPhase = FP::WaitFirstEntity;
-  st.filletFirstEntity = SelectedEntity{};
-  st.filletFirstPolySeg = -1;
+  sess->phase = FP::WaitFirstEntity;
+  sess->firstEntity = SelectedEntity{};
+  sess->firstPolySeg = -1;
   log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
 }
 
-/// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands, only meaningful at
-/// WaitFirstEntity — mirrors LENGTHEN's mode-letter shape (`TryLengthenModeToggle`), simplified:
-/// FILLET has no pending-pick-awaiting-a-value latch, since R/T only ever change a persisted
-/// setting, never apply to an already-picked object.
 bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using FP = AppCommandState::FilletPhase;
+  auto* sess = st.sessionAs<stepengine::FilletSession>();
+  const bool paperMode = !sess && st.paperFilletPhase != 0;
+  if (!sess && !paperMode)
+    return false;
+  using FP = stepengine::FilletPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string low = StringUtil::toLowerAsciiCopy(line);
-  if (st.filletPhase != FP::WaitFirstEntity) {
+  if (sess && sess->phase != FP::WaitFirstEntity) {
     log.push_back("FILLET — pick the second object in the viewport, or ESC to cancel.");
     return false;
   }
-  // The solid-edge fillet's radius prompt (REQ-323). Checked FIRST: the edges are already chosen, so
-  // there is no "select first object" loop to fall back into.
-  //
-  // **The prompt STAYS UP on a bad answer, and on a refused one.** A mistyped character or a radius
-  // that does not fit would otherwise end the command and drop the user back at the idle command
-  // line - which is the exact trap the argument-only form set, where the next keystroke ran RECT.
-  // The selection survives both cases (nothing is built until the kernel accepts), so re-typing is
-  // all that is needed.
-  if (st.filletSolidAwaitingRadius) {
+  bool& awaitingRadius = sess ? sess->textAwaitingRadius : st.paperFilletAwaitingRadius;
+  bool& awaitingTrim = sess ? sess->textAwaitingTrim : st.paperFilletAwaitingTrim;
+  if (sess && sess->solidAwaitingRadius) {
     double want = static_cast<double>(st.filletRadius);
     if (!line.empty()) {
       float v = 0.f;
@@ -1030,30 +982,25 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
       want = static_cast<double>(v);
     }
     if (!CadApplyFilletToSelectedEdges(st, want, log)) {
-      // Already reported by name, and the solid is untouched. Ask again rather than giving up.
       log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
-      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
-      // simply untrue and would contradict the sentence just logged (TASK-224).
       return true;
     }
     st.filletRadius = static_cast<float>(want);
-    st.filletSolidAwaitingRadius = false;
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return true;
   }
-  if (st.filletTextAwaitingRadius) {
+  if (awaitingRadius) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
       log.push_back("FILLET — radius must be a non-negative finite number.");
       return false;
     }
     st.filletRadius = v;
-    st.filletTextAwaitingRadius = false;
+    awaitingRadius = false;
     log.push_back("FILLET — radius set to " + std::to_string(v) + ". Select first object or [Radius/Trim]:");
     return true;
   }
-  if (st.filletTextAwaitingTrim) {
+  if (awaitingTrim) {
     if (low == "t" || low == "trim") {
       st.cornerTrimMode = 1;
     } else if (low == "n" || low == "notrim" || low == "no trim") {
@@ -1062,16 +1009,12 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
       log.push_back("FILLET — type T (Trim) or N (No trim).");
       return false;
     }
-    st.filletTextAwaitingTrim = false;
+    awaitingTrim = false;
     log.push_back(std::string("FILLET — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
                   ". Select first object or [Radius/Trim]:");
     return true;
   }
-  // Solid EDGES gathered by Ctrl+click while FILLET is running (user request, 2026-09-08). A bare
-  // Enter or a typed number rounds them; `R` and `T` below still do what they always did, so the
-  // 2D command is intact underneath. Checked before those options because a number typed here can
-  // only mean a radius - the 2D flow has nothing to do with one at "select first object".
-  if (CadSubObjectSelectionIsAllEdges(st)) {
+  if (sess && CadSubObjectSelectionIsAllEdges(st)) {
     double want = static_cast<double>(st.filletRadius);
     bool answered = line.empty();
     if (!line.empty()) {
@@ -1084,28 +1027,24 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
     if (answered) {
       if (!CadApplyFilletToSelectedEdges(st, want, log)) {
         log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-        // Understood and refused, not unparsed - see the note in the prompt branch above. The
-        // prompt stays up either way; nothing was built, so the edges are still selected.
         return true;
       }
       st.filletRadius = static_cast<float>(want);
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return true;
     }
-    // Not a number. `R`/`T` still fall through to their handlers below; anything else is a
-    // mistyped radius, so say that here rather than letting it reach the generic 2D-pick message.
     if (!line.empty() && low != "r" && low != "radius" && low != "t" && low != "trim") {
       log.push_back("FILLET - radius must be a number. Type one, or ESC to cancel:");
       return false;
     }
   }
   if (low == "r" || low == "radius") {
-    st.filletTextAwaitingRadius = true;
+    awaitingRadius = true;
     log.push_back("FILLET — specify fillet radius <" + std::to_string(st.filletRadius) + ">:");
     return true;
   }
   if (low == "t" || low == "trim") {
-    st.filletTextAwaitingTrim = true;
+    awaitingTrim = true;
     log.push_back(std::string("FILLET — Enter Trim mode option [Trim/No trim] <") +
                   (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
     return true;
@@ -1793,10 +1732,8 @@ static std::string ChamferPromptSuffix(const AppCommandState& st) {
 
 void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
-  using K = AppCommandState::Kind;
-  using CP = AppCommandState::ChamferPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
-    st.active = K::None;
+    stepengine::EndSession(st);
     st.paperChamferPhase = 1;
     st.paperChamferFirstEntity = PaperEntityRef{};
     st.paperChamferFirstPolySeg = -1;
@@ -1805,26 +1742,16 @@ void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Chamfer;
-  st.lastCommand = K::Chamfer;
-  st.chamferPhase = CP::WaitFirstEntity;
-  st.chamferFirstEntity = SelectedEntity{};
-  st.chamferFirstPolySeg = -1;
-  st.chamferTextAwaitingFirstValue = false;
-  st.chamferTextAwaitingSecondDist = false;
-  st.chamferTextAwaitingAngle = false;
-  st.chamferTextAwaitingTrim = false;
-  st.chamferSolidAwaitingDistance = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ChamferSession>(false), true);
   log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
                ". ESC cancels.");
 }
 
-/// Model-space + floating-model-space viewport-pick handler for CHAMFER — mirrors
-/// `HandleFilletViewportPick`'s Case A/B split exactly, minus the Arc/parallel-semicircle branches
-/// (CHAMFER has neither: Arc is refused upstream by `ChamferEligibility`, and parallel lines are a
-/// real, stated refusal here — REQ-103's own acceptance text names this asymmetry explicitly).
 void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  using CP = AppCommandState::ChamferPhase;
+  auto* sess = st.sessionAs<stepengine::ChamferSession>();
+  if (!sess)
+    return;
+  using CP = stepengine::ChamferPhase;
   SelectedEntity hit{};
   float d2 = 0.f;
   if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
@@ -1835,29 +1762,29 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
   if (!ChamferEligibility(st, hit, wx, wy, &polySeg, log))
     return;
 
-  if (st.chamferPhase == CP::WaitFirstEntity) {
-    st.chamferFirstEntity = hit;
-    st.chamferFirstPolySeg = polySeg;
-    st.chamferFirstPickX = wx;
-    st.chamferFirstPickY = wy;
-    st.chamferPhase = CP::WaitSecondEntity;
+  if (sess->phase == CP::WaitFirstEntity) {
+    sess->firstEntity = hit;
+    sess->firstPolySeg = polySeg;
+    sess->firstPickX = wx;
+    sess->firstPickY = wy;
+    sess->phase = CP::WaitSecondEntity;
     log.push_back("CHAMFER — select second object:");
     return;
   }
 
-  const bool sameEntity = (hit.type == st.chamferFirstEntity.type && hit.index == st.chamferFirstEntity.index);
+  const bool sameEntity = (hit.type == sess->firstEntity.type && hit.index == sess->firstEntity.index);
   if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
     log.push_back("CHAMFER — select two different objects.");
     return;
   }
-  if (sameEntity && polySeg == st.chamferFirstPolySeg) {
+  if (sameEntity && polySeg == sess->firstPolySeg) {
     log.push_back("CHAMFER — select two different segments.");
     return;
   }
 
   if (sameEntity) {
-    ApplyChamferPolylineCorner(st, hit.index, st.chamferFirstPolySeg, polySeg, st.chamferFirstPickX,
-                               st.chamferFirstPickY, wx, wy, log);
+    ApplyChamferPolylineCorner(st, hit.index, sess->firstPolySeg, polySeg, sess->firstPickX,
+                               sess->firstPickY, wx, wy, log);
   } else {
     auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
       if (e.type != SelectedEntity::Type::Polyline)
@@ -1883,47 +1810,39 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
       }
       return true;
     };
-    if (!polylineIsEndSegmentOnly(st.chamferFirstEntity, st.chamferFirstPolySeg) ||
+    if (!polylineIsEndSegmentOnly(sess->firstEntity, sess->firstPolySeg) ||
         !polylineIsEndSegmentOnly(hit, polySeg)) {
       return;
     }
 
     FilletCurve c1{}, c2{};
-    if (!BuildFilletCurveFromEntity(st, st.chamferFirstEntity, st.chamferFirstPolySeg, &c1) ||
+    if (!BuildFilletCurveFromEntity(st, sess->firstEntity, sess->firstPolySeg, &c1) ||
         !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
       log.push_back("CHAMFER — could not resolve the picked geometry; refused.");
       return;
     }
 
     float px = 0.f, py = 0.f;
-    if (!SolveFilletCenter(c1, c2, 0.f, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &px, &py)) {
-      // No AutoCAD analogue to FILLET's parallel-lines semicircle here — a real, stated asymmetry
-      // (REQ-103's own CHAMFER acceptance text).
+    if (!SolveFilletCenter(c1, c2, 0.f, sess->firstPickX, sess->firstPickY, wx, wy, &px, &py)) {
       log.push_back("CHAMFER — those two curves are parallel; no corner exists; refused.");
     } else {
       float d1x = 0.f, d1y = 0.f, d2x = 0.f, d2y = 0.f;
-      if (!ChamferResolvePoints(st, c1, c2, px, py, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &d1x, &d1y,
+      if (!ChamferResolvePoints(st, c1, c2, px, py, sess->firstPickX, sess->firstPickY, wx, wy, &d1x, &d1y,
                                 &d2x, &d2y)) {
         log.push_back("CHAMFER — that angle does not reach the second curve; refused.");
       } else {
         PushUndoSnapshot(st, "Chamfer");
         bool ok1 = true, ok2 = true;
         if (st.cornerTrimMode) {
-          ok1 = ApplyFilletTrimSingle(st, st.chamferFirstEntity, st.chamferFirstPolySeg, d1x, d1y, log);
+          ok1 = ApplyFilletTrimSingle(st, sess->firstEntity, sess->firstPolySeg, d1x, d1y, log);
           ok2 = ApplyFilletTrimSingle(st, hit, polySeg, d2x, d2y, log);
         }
         if (ok1 && ok2) {
           const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
                                                        : (st.chamferDist1 < 1e-4f);
           if (!bothZero) {
-            // The new segment takes the elevation of the two curves it actually joins (issue 01).
-            // It used to be written at datum while the trimmed originals kept their height, which
-            // left a corner with both ends at grade and its connector hundreds of feet below -
-            // geometrically impossible, and invisible in plan, which is where a chamfer is checked.
-            // ClosestPointOnEntity resolves the elevation the same way for a line, an arc or a
-            // polyline, so this needs no per-kind branch.
             BreakPoint bz1{}, bz2{};
-            const float z1 = ClosestPointOnEntity(st, st.chamferFirstEntity, d1x, d1y, &bz1) ? bz1.z : 0.f;
+            const float z1 = ClosestPointOnEntity(st, sess->firstEntity, d1x, d1y, &bz1) ? bz1.z : 0.f;
             const float z2 = ClosestPointOnEntity(st, hit, d2x, d2y, &bz2) ? bz2.z : 0.f;
             st.drawing.pushLine(CadLineRecord{d1x, d1y, z1, d2x, d2y, z2});
             st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
@@ -1936,28 +1855,30 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
     }
   }
 
-  st.chamferPhase = CP::WaitFirstEntity;
-  st.chamferFirstEntity = SelectedEntity{};
-  st.chamferFirstPolySeg = -1;
+  sess->phase = CP::WaitFirstEntity;
+  sess->firstEntity = SelectedEntity{};
+  sess->firstPolySeg = -1;
   log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
                ". ESC cancels.");
 }
 
-/// Typed command-line handling for CHAMFER's D(istance)/A(ngle)/T(rim) sub-commands, only
-/// meaningful at WaitFirstEntity — mirrors `HandleFilletText`'s shape.
 bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using CP = AppCommandState::ChamferPhase;
+  auto* sess = st.sessionAs<stepengine::ChamferSession>();
+  const bool paperMode = !sess && st.paperChamferPhase != 0;
+  if (!sess && !paperMode)
+    return false;
+  using CP = stepengine::ChamferPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string low = StringUtil::toLowerAsciiCopy(line);
-  if (st.chamferPhase != CP::WaitFirstEntity) {
+  if (sess && sess->phase != CP::WaitFirstEntity) {
     log.push_back("CHAMFER — pick the second object in the viewport, or ESC to cancel.");
     return false;
   }
-  // The solid-edge chamfer's distance prompt (REQ-331). Checked FIRST, exactly as the fillet's is:
-  // the edges are already chosen, so there is no "select first object" loop to fall back into, and
-  // the prompt STAYS UP on a bad or refused answer rather than dropping the user at the idle command
-  // line. Nothing is built until the kernel accepts, so the selection survives both cases.
-  if (st.chamferSolidAwaitingDistance) {
+  bool& awaitingFirst = sess ? sess->textAwaitingFirstValue : st.paperChamferAwaitingFirstValue;
+  bool& awaitingSecond = sess ? sess->textAwaitingSecondDist : st.paperChamferAwaitingSecondDist;
+  bool& awaitingAngle = sess ? sess->textAwaitingAngle : st.paperChamferAwaitingAngle;
+  bool& awaitingTrim = sess ? sess->textAwaitingTrim : st.paperChamferAwaitingTrim;
+  if (sess && sess->solidAwaitingDistance) {
     double want = static_cast<double>(st.chamferDist1);
     if (!line.empty()) {
       float v = 0.f;
@@ -1968,58 +1889,53 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
       want = static_cast<double>(v);
     }
     if (!CadApplyChamferToSelectedEdges(st, want, log)) {
-      // Already reported by name, and the solid is untouched. Ask again rather than giving up.
       log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
-      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
-      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
-      // simply untrue and would contradict the sentence just logged (TASK-224).
       return true;
     }
     st.chamferDist1 = static_cast<float>(want);
-    st.chamferSolidAwaitingDistance = false;
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return true;
   }
-  if (st.chamferTextAwaitingFirstValue) {
+  if (awaitingFirst) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
       log.push_back("CHAMFER — must be a non-negative finite number.");
       return false;
     }
     st.chamferDist1 = v;
-    st.chamferTextAwaitingFirstValue = false;
+    awaitingFirst = false;
     if (st.chamferMode == 0) {
-      st.chamferTextAwaitingSecondDist = true;
+      awaitingSecond = true;
       log.push_back("CHAMFER — specify second distance <" + std::to_string(st.chamferDist2) + ">:");
     } else {
-      st.chamferTextAwaitingAngle = true;
+      awaitingAngle = true;
       log.push_back("CHAMFER — specify angle in degrees <" + std::to_string(st.chamferAngle) + ">:");
     }
     return true;
   }
-  if (st.chamferTextAwaitingSecondDist) {
+  if (awaitingSecond) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
       log.push_back("CHAMFER — must be a non-negative finite number.");
       return false;
     }
     st.chamferDist2 = v;
-    st.chamferTextAwaitingSecondDist = false;
+    awaitingSecond = false;
     log.push_back("CHAMFER — distances set. Select first object or [Distance/Angle/Trim]:");
     return true;
   }
-  if (st.chamferTextAwaitingAngle) {
+  if (awaitingAngle) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v) || v <= 0.f || v >= 180.f) {
       log.push_back("CHAMFER — angle must be a finite number strictly between 0 and 180 degrees.");
       return false;
     }
     st.chamferAngle = v;
-    st.chamferTextAwaitingAngle = false;
+    awaitingAngle = false;
     log.push_back("CHAMFER — distance/angle set. Select first object or [Distance/Angle/Trim]:");
     return true;
   }
-  if (st.chamferTextAwaitingTrim) {
+  if (awaitingTrim) {
     if (low == "t" || low == "trim") {
       st.cornerTrimMode = 1;
     } else if (low == "n" || low == "notrim" || low == "no trim") {
@@ -2028,17 +1944,12 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
       log.push_back("CHAMFER — type T (Trim) or N (No trim).");
       return false;
     }
-    st.chamferTextAwaitingTrim = false;
+    awaitingTrim = false;
     log.push_back(std::string("CHAMFER — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
                  ". Select first object or [Distance/Angle/Trim]:");
     return true;
   }
-  // Solid EDGES gathered by Ctrl+click while CHAMFER is running (REQ-331, the shape TASK-220 gave
-  // FILLET). A bare Enter or a typed number bevels them; `D`, `A` and `T` below still do what they
-  // always did, so the 2D command is intact underneath. Checked before those options because a
-  // number typed here can only mean a distance — the 2D flow has nothing to do with a bare number at
-  // "select first object".
-  if (CadSubObjectSelectionIsAllEdges(st)) {
+  if (sess && CadSubObjectSelectionIsAllEdges(st)) {
     double want = static_cast<double>(st.chamferDist1);
     bool answered = line.empty();
     if (!line.empty()) {
@@ -2051,30 +1962,27 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
     if (answered) {
       if (!CadApplyChamferToSelectedEdges(st, want, log)) {
         log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
-        // Understood and refused, not unparsed - see the note in the prompt branch above. The
-        // prompt stays up either way; nothing was built, so the edges are still selected.
         return true;
       }
       st.chamferDist1 = static_cast<float>(want);
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return true;
     }
-    // Not a number - fall through so Distance/Angle/Trim still work with edges selected.
   }
   if (low == "d" || low == "distance") {
     st.chamferMode = 0;
-    st.chamferTextAwaitingFirstValue = true;
+    awaitingFirst = true;
     log.push_back("CHAMFER Distance — specify first distance <" + std::to_string(st.chamferDist1) + ">:");
     return true;
   }
   if (low == "a" || low == "angle") {
     st.chamferMode = 1;
-    st.chamferTextAwaitingFirstValue = true;
+    awaitingFirst = true;
     log.push_back("CHAMFER Angle — specify distance <" + std::to_string(st.chamferDist1) + ">:");
     return true;
   }
   if (low == "t" || low == "trim") {
-    st.chamferTextAwaitingTrim = true;
+    awaitingTrim = true;
     log.push_back(std::string("CHAMFER — Enter Trim mode option [Trim/No trim] <") +
                  (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
     return true;

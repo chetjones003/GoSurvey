@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "surface/CadSurfaceInternal.hpp"
 #include "layers/CadLayerInternal.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -6,6 +7,7 @@
 #include <GoSurvey/Terrain/surfacequery.hpp>
 #include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
+#include <GoSurvey/IO/RasterImage.hpp>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -672,8 +674,11 @@ std::string PadSolidDefaultSurface(const AppCommandState& st) {
 /// The options prompt PADSOLID sits on, naming what it already has — the shape every other command
 /// with keywords uses, so a user can see the current surface rather than having to remember it.
 void PadSolidPrompt(AppCommandState& st, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PadSolidSession>();
+  if (!ps)
+    return;
   const std::string surf = PadSolidDefaultSurface(st);
-  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitOptions;
+  ps->phase = stepengine::PadSolidPhase::WaitOptions;
   log.push_back("PADSOLID - specify pad elevation, or [Surface]" +
                 (surf.empty() ? std::string(" (no surface chosen yet)") : " <" + surf + ">") +
                 ". ESC cancels.");
@@ -702,20 +707,19 @@ std::uint64_t PadSolidSelectedBoundary(AppCommandState& st, int* outCount) {
 void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::PadSolid;
-  st.lastCommand = AppCommandState::Kind::PadSolid;
-  st.padSolidBoundaryId = 0;
-  EnsureEntityIds(st);  // so a ring drawn moments ago already has the id the pad will remember it by
+  auto sess = std::make_unique<stepengine::PadSolidSession>();
+  auto* ps = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
+  EnsureEntityIds(st);
 
   int n = 0;
   const std::uint64_t id = PadSolidSelectedBoundary(st, &n);
   if (n == 1) {
-    // A pre-selection is honoured, the way MOVE and ROTATE honour one.
-    st.padSolidBoundaryId = id;
+    ps->boundaryId = id;
     PadSolidPrompt(st, log);
     return;
   }
-  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitBoundary;
+  ps->phase = stepengine::PadSolidPhase::WaitBoundary;
   log.push_back(n > 1 ? "PADSOLID - select ONE closed polyline for the boundary. ESC cancels."
                       : "PADSOLID - select the closed polyline that bounds the pad. ESC cancels.");
 }
@@ -723,11 +727,14 @@ void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 /// One typed line while PADSOLID is running: a pad elevation, or `S` to name the surface.
 void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  using P = AppCommandState::PadSolidPhase;
+  auto* ps = st.sessionAs<stepengine::PadSolidSession>();
+  if (!ps)
+    return;
+  using P = stepengine::PadSolidPhase;
   const std::string tr = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(tr);
 
-  if (st.padSolidPhase == P::WaitSurfaceName) {
+  if (ps->phase == P::WaitSurfaceName) {
     if (tr.empty()) {
       PadSolidPrompt(st, log);
       return;
@@ -738,27 +745,27 @@ void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vecto
         names += (names.empty() ? "" : ", ") + s.name;
       log.push_back("PADSOLID - no surface named \"" + tr + "\"." +
                     (names.empty() ? "" : " Surfaces: " + names + "."));
-      return;  // stay on this prompt rather than throwing the command away
+      return;
     }
     st.padSolidSurface = tr;
     PadSolidPrompt(st, log);
     return;
   }
 
-  if (st.padSolidPhase != P::WaitOptions)
+  if (ps->phase != P::WaitOptions)
     return;
 
   if (low == "s" || low == "surface") {
     std::string names;
     for (const CadSurface& s : st.drawing.cadSurfaces)
       names += (names.empty() ? "" : ", ") + s.name;
-    st.padSolidPhase = P::WaitSurfaceName;
+    ps->phase = P::WaitSurfaceName;
     log.push_back(names.empty() ? "PADSOLID - the drawing has no surfaces."
                                 : "PADSOLID - enter surface name. Surfaces: " + names + ".");
     return;
   }
   if (tr.empty()) {
-    PadSolidPrompt(st, log);  // a bare Enter re-states what it is waiting for
+    PadSolidPrompt(st, log);
     return;
   }
 
@@ -773,14 +780,17 @@ void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vecto
     log.push_back("PADSOLID - choose a surface first: type S.");
     return;
   }
+  const std::uint64_t bid = ps->boundaryId;
   st.padSolidSurface = surf;
-  BuildPadSolids(st, surf, st.padSolidBoundaryId, padZ, log);
-  st.active = AppCommandState::Kind::None;
-  st.padSolidPhase = P::WaitBoundary;
+  BuildPadSolids(st, surf, bid, padZ, log);
+  stepengine::EndSession(st);
 }
 
 /// A viewport pick while PADSOLID is waiting for its boundary.
 void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PadSolidSession>();
+  if (!ps)
+    return;
   SelectedEntity hit{};
   float d2 = 0.f;
   if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2) ||
@@ -798,7 +808,7 @@ void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<s
     log.push_back("PADSOLID - that polyline is not closed; the boundary must be a closed ring.");
     return;
   }
-  st.padSolidBoundaryId = id;
+  ps->boundaryId = id;
   ClearCadSelection(st);
   st.selection.push_back(hit);
   PadSolidPrompt(st, log);
@@ -994,4 +1004,31 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
                   "\" and were not extracted.");
   log.push_back("EXTRACT — the new polylines are ordinary geometry and are not linked to the "
                 "surface: rebuilding or erasing it leaves them unchanged.");
+}
+
+bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float x, float y,
+                            float width, float height, float rotationRad, std::vector<std::string>& log) {
+  if (path.empty() || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || !std::isfinite(rotationRad) || width <= 0.f || height <= 0.f) {
+    log.push_back("IMAGEATTACH — path and finite placement with positive width and height are required; no image was added.");
+    return false;
+  }
+  CadRasterImage image;
+  std::string why;
+  double localX = 0.0, localY = 0.0;
+  CadCoord::LocalFromWorld(st, x, y, &localX, &localY);
+  if (!MakeSheetRasterImage(path, static_cast<float>(localX), static_cast<float>(localY),
+                            width, height, rotationRad, &image, &why)) {
+    log.push_back("IMAGEATTACH — image \"" + path + "\" could not be read (" + why + "); no image was added.");
+    return false;
+  }
+  EnsureEntityIds(st);
+  image.id = AllocEntityId(st);
+  image.layer = st.drawing.currentLayer.empty() ? "0" : st.drawing.currentLayer;
+  PushUndoSnapshot(st, "Attach image");
+  st.drawing.cadRasterImages.push_back(std::move(image));
+  BumpCadGpuCache(st);
+  log.push_back("IMAGEATTACH — attached \"" + path + "\" as image " +
+                std::to_string(st.drawing.cadRasterImages.back().id) + ".");
+  return true;
 }

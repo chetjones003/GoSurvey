@@ -1352,7 +1352,6 @@ static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, flo
   st.pendingSurveyDupIsRotate = false;
   DuplicateCadSelectionTranslated(st, dx, dy, dz);
   // Stay in COPY — same selection + base, ready for another destination.
-  st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
   if (!st.selectedSurveyPointIndices.empty()) {
     st.pendingCopyDx = dx;
     st.pendingCopyDy = dy;
@@ -1646,267 +1645,25 @@ static float ComputeScaleReferenceDistance(const AppCommandState& st, float bx, 
 }
 
 
-/// REQ-103 STRETCH typed-entry path — mirrors \c HandleModifyText's NeedBase/NeedDestination shape,
-/// but calls \c ApplyStretchToSelection with the box captured by this invocation's own box-select
-/// instead of \c ApplyTranslationToSelection.
-static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  using MP = AppCommandState::ModifyPhase;
-  if (st.modifyPhase == MP::NeedBase) {
-    // REQ-329 increment 4: base/second points carry an elevation and are read in the active UCS axes,
-    // the same shared helper HandleModifyText (MOVE/COPY) uses.
-    float bx = 0.f, by = 0.f, bwz = 0.f;
-    bool consumed = false;
-    if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, "STRETCH", &bx, &by, &bwz, &consumed, log))
-      return consumed;
-    st.modifyBaseX = bx;
-    st.modifyBaseY = by;
-    st.modifyBaseZ = bwz;
-    st.modifyPhase = MP::NeedDestination;
-    log.push_back("STRETCH — specify second point (destination).");
-    return true;
-  }
-  if (st.modifyPhase == MP::NeedDestination) {
-    float px = 0.f, py = 0.f, dwz = 0.f;
-    bool consumed = false;
-    if (!ResolveTypedModifyPoint(st, line, true, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, "STRETCH",
-                                 &px, &py, &dwz, &consumed, log))
-      return consumed;
-    const float dx = px - st.modifyBaseX;
-    const float dy = py - st.modifyBaseY;
-    const float dz = dwz - st.modifyBaseZ;
-    PushUndoSnapshot(st, "Stretch");
-    ApplyStretchToSelection(st, dx, dy, dz, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
-                            st.stretchRectMxY, st.stretchRectInUcsPlane, log);
-    st.modifyPhase = MP::NeedBase;
-    log.push_back("STRETCH complete — base point (ESC to exit):");
-    return true;
-  }
-  return false;
-}
-
-// The surrounding anonymous namespace is closed for these TWO functions and reopened after them.
-//
-// Both are the COMPLETE typed transform — the dispatch included, not just its inner half — and both
-// are public because REQ-060 requires a gizmo drag and the equivalent typed command to produce the
-// same coordinates. The only way to make that a property rather than a hope is for one function to
-// be what both call, which means the gizmo's translation unit and the test that asserts the
-// agreement each have to be able to name it. This is the same move `ApplyTranslationToSelection`
-// made for the translate handle in slice 4b.
-
-
-static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
-  PushUndoSnapshot(st, "Scale");
-  const float s = std::max(scaleFactor, 1e-6f);
-  ApplyUniformScaleAboutBase(st, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, s, log);
-  st.active = AppCommandState::Kind::None;
-  ResetModifyRotateDraft(st);
-  log.push_back("SCALE complete.");
-}
-
-static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  using MP = AppCommandState::ModifyPhase;
-  using SP = AppCommandState::ScalePhase;
-  if (st.modifyPhase == MP::NeedBase) {
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.modifyBaseX = px;
-    st.modifyBaseY = py;
-    st.modifyBaseZ = CadCommitElevation(st);  // REQ-329 (SCALE): the scale is about this elevation too
-    st.scaleRefDist = ComputeScaleReferenceDistance(st, px, py);
-    st.scalePhase = SP::FactorPick;
-    st.modifyPhase = MP::NeedDestination;
-    log.push_back(
-        "SCALE — pick second point or type factor (>0), or R / REFERENCE for two-point reference length then new "
-        "length.");
-    return true;
-  }
-  if (st.modifyPhase != MP::NeedDestination)
-    return false;
-
-  switch (st.scalePhase) {
-  case SP::FactorPick: {
-    const std::string low = StringUtil::toLowerAsciiCopy(line);
-    if (low == "r" || low == "ref" || low == "reference") {
-      st.scalePhase = SP::Ref_WaitP1;
-      log.push_back("SCALE ref — first point of reference length:");
-      return true;
-    }
-    float sf = 0.f;
-    if (ParseOneFloat(line, &sf)) {
-      if (!(sf > 0.f) || !std::isfinite(sf)) {
-        log.push_back("SCALE — scale factor must be a positive finite number.");
-        return false;
-      }
-      FinishScaleCommand(st, sf, log);
-      return true;
-    }
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
-      return false;
-    const float d = std::hypot(px - st.modifyBaseX, py - st.modifyBaseY);
-    FinishScaleCommand(st, d / std::max(st.scaleRefDist, 1e-20f), log);
-    return true;
-  }
-  case SP::Ref_WaitP1: {
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.scaleRefP1X = px;
-    st.scaleRefP1Y = py;
-    st.scalePhase = SP::Ref_WaitP2;
-    log.push_back("SCALE ref — second point of reference length:");
-    return true;
-  }
-  case SP::Ref_WaitP2: {
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    const float refLen = std::hypot(px - st.scaleRefP1X, py - st.scaleRefP1Y);
-    if (!(refLen > 1e-8f) || !std::isfinite(refLen)) {
-      log.push_back("SCALE ref — reference length is too small; pick two distinct points.");
-      return false;
-    }
-    st.scaleRefDist = refLen;
-    st.scalePhase = SP::NewLength_WaitTypedOrP1;
-    log.push_back("SCALE ref — type new length (model units) or pick first point of new length segment.");
-    return true;
-  }
-  case SP::NewLength_WaitTypedOrP1: {
-    float L = 0.f;
-    if (ParseOneFloat(line, &L)) {
-      if (!(L > 0.f) || !std::isfinite(L)) {
-        log.push_back("SCALE ref — new length must be a positive finite number.");
-        return false;
-      }
-      FinishScaleCommand(st, L / std::max(st.scaleRefDist, 1e-20f), log);
-      return true;
-    }
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.scaleNewLenP1X = px;
-    st.scaleNewLenP1Y = py;
-    st.scalePhase = SP::NewLength_WaitP2;
-    log.push_back("SCALE ref — second point of new length segment:");
-    return true;
-  }
-  case SP::NewLength_WaitP2: {
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    const float newLen = std::hypot(px - st.scaleNewLenP1X, py - st.scaleNewLenP1Y);
-    if (!(newLen > 1e-8f) || !std::isfinite(newLen)) {
-      log.push_back("SCALE ref — new length is too small; pick two distinct points.");
-      return false;
-    }
-    FinishScaleCommand(st, newLen / std::max(st.scaleRefDist, 1e-20f), log);
-    return true;
-  }
-  default:
-    return false;
-  }
-}
-
-
-
-static void FinishRotateCommand(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
-  PushUndoSnapshot(st, st.rotateCopyMode ? "Rotate-copy" : "Rotate");
-  using K = AppCommandState::Kind;
-
-  // REQ-329 increment 2 (GitHub issue #402): ROTATE turns the selection about an axis through the
-  // picked base point PARALLEL TO THE ACTIVE UCS Z. When that axis is world-Z-parallel — plan view,
-  // or any UCS merely rotated/translated in plan — this is identical to the old world-Z rotation
-  // through (bx, by), so the pre-REQ-329 path runs unchanged and the result is byte-identical. Only
-  // a genuinely tilted UCS takes the axis-aware branch (REQ-328's `RotateSelectionAboutAxis` for a
-  // copy, its new in-place sibling otherwise).
-  const bool tilted = !CadWorkPlaneIsWorldXy(st);
-
-  if (st.rotateCopyMode) {
-    if (tilted) {
-      DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-      DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
-      DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
-      const ucs::Ucs u = CadActiveUcsStorage(st);
-      const ray3d::Vec3 axisUnit =
-          ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
-      RotateSelectionAboutAxis(st, {static_cast<double>(bx), static_cast<double>(by),
-                                    static_cast<double>(st.rotateBaseZ)},
-                               axisUnit, rad, log, "ROTATE");
-      if (!st.selectedSurveyPointIndices.empty())
-        log.push_back("ROTATE COPY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
-                      " survey point(s) not duplicated: rotation about a tilted axis is not"
-                      " supported yet (REQ-328).");
-    } else {
-      DuplicateCadSelectionRotated(st, bx, by, rad, log);
-    }
-    st.rotateCopyMode = false;
-    st.active = K::None;
-    ResetModifyRotateDraft(st);
-    if (!tilted && !st.selectedSurveyPointIndices.empty()) {
-      st.pendingSurveyDupIsRotate = true;
-      st.pendingRotateCopyBx = bx;
-      st.pendingRotateCopyBy = by;
-      st.pendingRotateCopyRad = rad;
-      st.copySurveyDupModalOpen = true;
-      st.copySurveyDupModalOpenRequested = true;
-      log.push_back("ROTATE COPY — CAD duplicated; choose survey ID policy.");
-    } else {
-      log.push_back("ROTATE COPY complete.");
-    }
-  } else {
-    ApplyRotationAboutUcsZ(st, bx, by, st.rotateBaseZ, rad, log);
-    st.active = K::None;
-    ResetModifyRotateDraft(st);
-    log.push_back("ROTATE complete.");
-  }
-}
-
-
 // REQ-305 ARRAY -------------------------------------------------------------------------------
 
-static void ResetArrayDraft(AppCommandState& st) {
-  using AP = AppCommandState::ArrayPhase;
-  st.arrayPhase = AP::PickSelection;
-  st.arrayType = AppCommandState::ArrayType::Rectangular;
-  st.arrayCols = st.arrayRows = 0;
-  st.arrayColSpacing = st.arrayRowSpacing = 0.f;
-  st.arrayLevels = 1;
-  st.arrayLevelSpacing = 0.f;
-  st.arrayAnchorX = st.arrayAnchorY = st.arrayAnchorZ = 0.f;
-  st.arrayCenterX = st.arrayCenterY = st.arrayCenterZ = 0.f;
-  st.arrayItemCount = 0;
-  st.arrayFillAngleDeg = 360.f;
-  st.arrayRotateItems = true;
-  st.arrayOnPaper = false;
-}
-
-/// The rigid reference point ARRAY hangs the pattern on: the selection centroid in X/Y, and the
-/// selection's own 3D bounds centre in Z (\c CadGizmoAnchorWorld, the same anchor the MOVE gizmo
-/// uses). Z must be the geometry's real elevation, NOT the work-plane elevation
-/// (\c CadCommitElevation): the polar no-rotate path rotates THIS point about the array axis and
-/// translates the selection by the result, so an anchor sitting at Z 0 while the geometry is 20 ft
-/// up rotates at a 20-ft-inflated radius and the copies fly out (GitHub issue #400 increment 4).
-/// Falls back to the work-plane elevation only when the selection bounds nothing measurable.
 static void SetArrayAnchorFromSelection(AppCommandState& st) {
-  ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+  auto* arr = st.sessionAs<stepengine::ArraySession>();
+  if (!arr)
+    return;
+  ComputeSelectionCentroidWorld(st, &arr->anchorX, &arr->anchorY);
   ray3d::Vec3 anchor3{};
-  st.arrayAnchorZ = CadGizmoAnchorWorld(st, &anchor3) ? static_cast<float>(anchor3.z)
-                                                      : CadCommitElevation(st);
+  arr->anchorZ = CadGizmoAnchorWorld(st, &anchor3) ? static_cast<float>(anchor3.z)
+                                                   : CadCommitElevation(st);
 }
 
 static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
+  auto* arr = st.sessionAs<stepengine::ArraySession>();
+  if (!arr)
+    return;
   PaperLayout* layout = ActivePaperGeometryTarget(st);
   if (!layout || st.selectedPaperEntities.empty()) {
-    st.arrayAnchorX = st.arrayAnchorY = 0.f;
+    arr->anchorX = arr->anchorY = 0.f;
     return;
   }
   const PaperEntityRef ref = st.selectedPaperEntities.front();
@@ -1914,8 +1671,8 @@ static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
   case PaperEntityRef::Type::Line: {
     const size_t i = static_cast<size_t>(ref.index) * 6;
     if (i + 4 < layout->paperLines.size()) {
-      st.arrayAnchorX = (layout->paperLines[i] + layout->paperLines[i + 3]) * .5f;
-      st.arrayAnchorY = (layout->paperLines[i + 1] + layout->paperLines[i + 4]) * .5f;
+      arr->anchorX = (layout->paperLines[i] + layout->paperLines[i + 3]) * .5f;
+      arr->anchorY = (layout->paperLines[i + 1] + layout->paperLines[i + 4]) * .5f;
       return;
     }
     break;
@@ -1923,20 +1680,20 @@ static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
   case PaperEntityRef::Type::Circle: {
     const size_t i = static_cast<size_t>(ref.index) * 3;
     if (i + 1 < layout->paperCircles.size()) {
-      st.arrayAnchorX = layout->paperCircles[i]; st.arrayAnchorY = layout->paperCircles[i + 1]; return;
+      arr->anchorX = layout->paperCircles[i]; arr->anchorY = layout->paperCircles[i + 1]; return;
     }
     break;
   }
   case PaperEntityRef::Type::Arc:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperArcs.size()) {
       const auto& a = layout->paperArcs[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = a.cx; st.arrayAnchorY = a.cy; return;
+      arr->anchorX = a.cx; arr->anchorY = a.cy; return;
     }
     break;
   case PaperEntityRef::Type::Ellipse:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperEllipses.size()) {
       const auto& e = layout->paperEllipses[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = e.cx; st.arrayAnchorY = e.cy; return;
+      arr->anchorX = e.cx; arr->anchorY = e.cy; return;
     }
     break;
   case PaperEntityRef::Type::Polyline:
@@ -1944,47 +1701,41 @@ static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
       const int first = layout->paperPolyOffsets[static_cast<size_t>(ref.index)];
       const size_t i = static_cast<size_t>(std::max(first, 0)) * 3;
       if (i + 1 < layout->paperPolyVerts.size()) {
-        st.arrayAnchorX = layout->paperPolyVerts[i]; st.arrayAnchorY = layout->paperPolyVerts[i + 1]; return;
+        arr->anchorX = layout->paperPolyVerts[i]; arr->anchorY = layout->paperPolyVerts[i + 1]; return;
       }
     }
     break;
   case PaperEntityRef::Type::Text:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTexts.size()) {
       const auto& a = layout->paperTexts[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = a.insX; st.arrayAnchorY = a.insY; return;
+      arr->anchorX = a.insX; arr->anchorY = a.insY; return;
     }
     break;
   case PaperEntityRef::Type::Block:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperBlockRefs.size()) {
       const auto& b = layout->paperBlockRefs[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = static_cast<float>(b.xf.x); st.arrayAnchorY = static_cast<float>(b.xf.y); return;
+      arr->anchorX = static_cast<float>(b.xf.x); arr->anchorY = static_cast<float>(b.xf.y); return;
     }
     break;
   case PaperEntityRef::Type::Leader:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperMultileaders.size()) {
       const auto& l = layout->paperMultileaders[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = l.label.insX; st.arrayAnchorY = l.label.insY; return;
+      arr->anchorX = l.label.insX; arr->anchorY = l.label.insY; return;
     }
     break;
   case PaperEntityRef::Type::Table:
     if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTables.size()) {
       const auto& t = layout->paperTables[static_cast<size_t>(ref.index)];
-      st.arrayAnchorX = t.insX; st.arrayAnchorY = t.insY; return;
+      arr->anchorX = t.insX; arr->anchorY = t.insY; return;
     }
     break;
   case PaperEntityRef::Type::Spline:
   case PaperEntityRef::Type::Point:
     break;
   }
-  st.arrayAnchorX = st.arrayAnchorY = 0.f;
+  arr->anchorX = arr->anchorY = 0.f;
 }
 
-/// Resolve a viewport click onto the active UCS work plane, anchored at (\p ax,\p ay,\p az) — the
-/// same camera-ray-onto-plane pattern \c CadSolveCircleThreePoints uses. Used by ARRAY's spatial
-/// phases (GitHub issue #400 increment 1) and by ROTATE's base/angle picks (REQ-329 increment 2).
-/// In plan view / under the World UCS this is exactly the flat \p wx,\p wy pick (regression guard,
-/// REQ-305 acceptance 10 / REQ-329): the anchored plane's axes ARE world X/Y there, so the
-/// ray/plane intersection reproduces the same point the old flat code read directly off the cursor.
 static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float wx, float wy,
                                            const ray3d::Ray* pickRay, float ax, float ay, float az,
                                            float* outX, float* outY, float* outZ) {
@@ -2012,24 +1763,15 @@ static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float w
 
 static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& log, int instanceCount,
                                const char* shapeDesc) {
-  using K = AppCommandState::Kind;
-  st.active = K::None;
-  ResetArrayDraft(st);
+  stepengine::EndSession(st);
   log.push_back("ARRAY — " + std::to_string(instanceCount) + " total instance(s)" +
                 (shapeDesc[0] ? std::string(" (") + shapeDesc + ")." : std::string(".")));
 }
 
-/// GitHub issue #400 increment 1: a grid cell's offset is measured along the active UCS X/Y axes
-/// (colSpacing/rowSpacing are UCS-local distances — see \c CadResolvePickOnWorkPlaneAnchored), then
-/// converted to a world (dx,dy,dz) via the same anchored frame \c CadSolveCircleThreePoints uses
-/// for its own plane-vs-flat split. Under the World UCS the frame's axes ARE world X/Y/Z, so this
-/// reduces to \p colOffset,\p rowOffset,0 exactly — the REQ-305 acceptance 10 regression guard.
-// levelOffset defaults to 0 (GitHub issue #400 increment 2's "levels" is the UCS-Z local
-// component of the same vector this always computed) so increment 1's two-argument call sites are
-// untouched.
-static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, float rowOffset,
+static void ArrayCellWorldDelta(const AppCommandState& st, const stepengine::ArraySession& arr,
+                                float colOffset, float rowOffset,
                                 float* dx, float* dy, float* dz, float levelOffset = 0.f) {
-  const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
+  const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, arr.anchorX, arr.anchorY, arr.anchorZ);
   const ray3d::Vec3 local{static_cast<double>(colOffset), static_cast<double>(rowOffset),
                           static_cast<double>(levelOffset)};
   const ray3d::Vec3 world = ucs::UcsVectorToWorld(frame, local);
@@ -2038,15 +1780,19 @@ static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, floa
   *dz = static_cast<float>(world.z);
 }
 
-/// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
-/// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
-/// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-305 acceptance 8).
 static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>& log) {
-  const int cols = std::max(st.arrayCols, 1);
-  const int rows = std::max(st.arrayRows, 1);
-  const int levels = std::max(st.arrayLevels, 1);  // GitHub issue #400 increment 2
+  const auto* arr = st.sessionAs<stepengine::ArraySession>();
+  if (!arr)
+    return;
+  const int cols = std::max(arr->cols, 1);
+  const int rows = std::max(arr->rows, 1);
+  const int levels = std::max(arr->levels, 1);
+  const float colSpacing = arr->colSpacing;
+  const float rowSpacing = arr->rowSpacing;
+  const float levelSpacing = arr->levelSpacing;
+  const bool onPaper = arr->onPaper;
   PushUndoSnapshot(st, "Array-Rectangular");
-  if (st.arrayOnPaper) {
+  if (onPaper) {
     const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
     std::vector<std::string> transformLog;
     for (int r = 0; r < rows; ++r) {
@@ -2054,8 +1800,8 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
         if (r == 0 && c == 0)
           continue;
         st.selectedPaperEntities = source;
-        TranslateSelectedPaperEntities(st, static_cast<float>(c) * st.arrayColSpacing,
-                                       static_cast<float>(r) * st.arrayRowSpacing, true, transformLog, false);
+        TranslateSelectedPaperEntities(st, static_cast<float>(c) * colSpacing,
+                                       static_cast<float>(r) * rowSpacing, true, transformLog, false);
       }
     }
     st.selectedPaperEntities = source;
@@ -2067,12 +1813,12 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
     for (int r = 0; r < rows; ++r) {
       for (int c = 0; c < cols; ++c) {
         if (lv == 0 && r == 0 && c == 0)
-          continue;  // the original selection IS cell (0,0,0) — REQ-305 acceptance 3
+          continue;
         float dx = 0.f, dy = 0.f, dz = 0.f;
-        ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
-                           static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz,
-                           static_cast<float>(lv) * st.arrayLevelSpacing);
-        DuplicateCadSelectionTranslated(st, dx, dy, dz);  // solids and pipe runs too (REQ-351)
+        ArrayCellWorldDelta(st, *arr, static_cast<float>(c) * colSpacing,
+                            static_cast<float>(r) * rowSpacing, &dx, &dy, &dz,
+                            static_cast<float>(lv) * levelSpacing);
+        DuplicateCadSelectionTranslated(st, dx, dy, dz);
       }
     }
   }

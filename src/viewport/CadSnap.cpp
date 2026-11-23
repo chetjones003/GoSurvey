@@ -857,52 +857,52 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
 }
 
 [[nodiscard]] bool PerpendicularReference(const AppCommandState& cmd, float* refX, float* refY) {
-  using K = AppCommandState::Kind;
-  using LP = AppCommandState::LinePhase;
-  using CP = AppCommandState::CirclePhase;
-
-  if (cmd.active == K::Line && cmd.linePhase == LP::NeedNextPoint) {
+  if (const auto* ls = cmd.sessionAs<stepengine::LineSession>();
+      ls && ls->phase == stepengine::LinePhase::NeedNextPoint) {
     *refX = cmd.anchorX;
     *refY = cmd.anchorY;
     return true;
   }
-  if (cmd.active == K::Polyline && cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
+  if (const auto* pls = cmd.sessionAs<stepengine::PolylineSession>();
+      pls && pls->phase == stepengine::PolylinePhase::NeedNextPoint) {
     *refX = cmd.anchorX;
     *refY = cmd.anchorY;
     return true;
   }
-  if (cmd.active == K::Arc) {
-    switch (cmd.arcPhase) {
-    case AppCommandState::ArcPhase::WaitMid:
-      *refX = cmd.arcAx;
-      *refY = cmd.arcAy;
+  if (const auto* as = cmd.sessionAs<stepengine::ArcSession>()) {
+    switch (as->phase) {
+    case stepengine::ArcPhase::WaitMid:
+      *refX = as->ax;
+      *refY = as->ay;
       return true;
-    case AppCommandState::ArcPhase::WaitEnd:
-      *refX = cmd.arcBx;
-      *refY = cmd.arcBy;
+    case stepengine::ArcPhase::WaitEnd:
+      *refX = as->bx;
+      *refY = as->by;
       return true;
     default:
       break;
     }
   }
-  if (cmd.active == K::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd) {
-    *refX = cmd.ellCx;
-    *refY = cmd.ellCy;
+  if (const auto* es = cmd.sessionAs<stepengine::EllipseSession>();
+      es && es->phase == stepengine::EllipsePhase::WaitMajorEnd) {
+    *refX = es->cx;
+    *refY = es->cy;
     return true;
   }
-  if (cmd.active == K::Circle) {
-    switch (cmd.circlePhase) {
+  if (const auto* cs = cmd.sessionAs<stepengine::CircleSession>()) {
+    using CP = stepengine::CirclePhase;
+    switch (cs->phase) {
     case CP::WaitRadius:
-      *refX = cmd.circleCx;
-      *refY = cmd.circleCy;
+      *refX = cs->cx;
+      *refY = cs->cy;
       return true;
     case CP::ThreeP_WaitP2:
-      *refX = cmd.c3p1x;
-      *refY = cmd.c3p1y;
+      *refX = cs->c3p1x;
+      *refY = cs->c3p1y;
       return true;
     case CP::ThreeP_WaitP3:
-      *refX = cmd.c3p2x;
-      *refY = cmd.c3p2y;
+      *refX = cs->c3p2x;
+      *refY = cs->c3p2y;
       return true;
     default:
       break;
@@ -1121,10 +1121,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   //
   // This does NOT decide the close. SubmitPolylineVertex compares the committed point against the
   // stored first vertex; the snap only makes that point reachable (D-2026-08-25-j).
-  if (cmd.active == AppCommandState::Kind::Polyline && wantEndpoint &&
-      cmd.polylineDraftVerts.size() >= 9) {
-    Consider(&acc, wx, wy, cmd.polylineDraftVerts[0], cmd.polylineDraftVerts[1], Kind::Endpoint,
-             tolWorld, cmd.polylineDraftVerts[2]);
+  if (const auto* pls = cmd.sessionAs<stepengine::PolylineSession>();
+      pls && wantEndpoint && pls->draftVerts.size() >= 9) {
+    Consider(&acc, wx, wy, pls->draftVerts[0], pls->draftVerts[1], Kind::Endpoint,
+             tolWorld, pls->draftVerts[2]);
   }
 
   if (cmd.drawing.lineStoreWellFormed()) {
@@ -1313,11 +1313,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // other endpoint rather than a separate mechanism. SubmitViewportPickImpl reads this back by exact
   // equality against polyFirstX/Y, which is safe because Consider() below copies px/py through with
   // no arithmetic.
-  if (commandActive && wantEndpoint && cmd.active == AppCommandState::Kind::Polyline &&
-      cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint &&
-      cmd.polylineDraftVerts.size() >= 3) {
-    Consider(&acc, wx, wy, cmd.polyFirstX, cmd.polyFirstY, Kind::Endpoint, tolWorld,
-             cmd.polylineDraftVerts[2]);
+  if (const auto* pls = cmd.sessionAs<stepengine::PolylineSession>();
+      commandActive && wantEndpoint && pls &&
+      pls->phase == stepengine::PolylinePhase::NeedNextPoint &&
+      pls->draftVerts.size() >= 3) {
+    Consider(&acc, wx, wy, pls->firstX, pls->firstY, Kind::Endpoint, tolWorld,
+             pls->draftVerts[2]);
   }
 
   constexpr int kArcSnapSeg = 24;

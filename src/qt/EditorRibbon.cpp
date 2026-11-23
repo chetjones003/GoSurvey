@@ -1588,7 +1588,8 @@ void EditorWindow::RefreshRibbon() {
   if (auto* fov = ribbon->findChild<QSpinBox*>("ribbonFov")) { const QSignalBlocker block(fov); fov->setValue(qRound(m_State.viewportFovDeg)); fov->setEnabled(m_State.viewportProjection == Camera::Projection::Perspective); }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonPipeSize")) {
     const QSignalBlocker block(combo); combo->setCurrentText(Text(m_State.pipeRunNominalSize.c_str()));
-    combo->setEnabled(m_State.active != AppCommandState::Kind::PipeRun || m_State.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNominalSize);
+    const auto* pr = m_State.sessionAs<stepengine::PipeRunSession>();
+    combo->setEnabled(!pr || pr->phase == stepengine::PipeRunPhase::WaitNominalSize);
   }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonUcs")) {
     const QSignalBlocker block(combo); while (combo->count() > 7) combo->removeItem(7);
