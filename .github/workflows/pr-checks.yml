@@ -9,8 +9,13 @@ on:
     branches: [master, beta]
     types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
+# Label and edit events only matter when they change what CI checks: the docs-only and
+# refactor proof labels, or a new base branch. Other label/edit events (status labels,
+# title/body edits) get their own concurrency group so they never cancel a real run, and
+# the `ci-event` job below skips every check. Keep this list in sync with `ci-event`.
 concurrency:
-  group: pr-checks-${{ github.event.pull_request.number }}
+  group: >-
+    pr-checks-${{ github.event.pull_request.number }}${{ ((github.event.action == 'edited' && !github.event.changes.base) || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'), github.event.label.name))) && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -25,8 +30,39 @@ defaults:
     shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; . '{0}'"
 
 jobs:
+  # Decides whether this PR event can change a check result (see the concurrency comment).
+  # When it cannot, every job below is skipped under a name that is never a required check,
+  # so a skipped run never stands in for the required check of the same name.
+  ci-event:
+    name: policy / CI-relevant event
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.decide.outputs.relevant }}
+      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
+      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
+    steps:
+      - name: Decide whether this event changes CI results
+        id: decide
+        shell: bash
+        env:
+          IGNORED: >-
+            ${{ (github.event.action == 'edited' && !github.event.changes.base) ||
+              ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+               !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'),
+                         github.event.label.name)) }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          relevant=true
+          if [ "$IGNORED" = "true" ]; then relevant=false; fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Event '$ACTION' (label '$LABEL'): CI relevant = $relevant"
+
   architecture-dependencies:
-    name: architecture / dependency ratchet
+    name: architecture / dependency ratchet${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event]
+    if: >-
+      !cancelled() && needs.ci-event.outputs.relevant != 'false'
     runs-on: [self-hosted, Windows, X64]
     steps:
       - name: Check out source
@@ -51,7 +87,10 @@ jobs:
         run: python -m unittest tools.test_system_dependency_diagrams
 
   classify-docs-only:
-    name: policy / docs-only classification
+    name: policy / docs-only classification${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event]
+    if: >-
+      !cancelled() && needs.ci-event.outputs.relevant != 'false'
     runs-on: [self-hosted, Windows, X64]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
@@ -71,10 +110,10 @@ jobs:
         run: python .github/scripts/classify_docs_only.py
 
   fast-pr-gate:
-    name: PR gate
-    needs: classify-docs-only
+    name: PR gate${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event, classify-docs-only]
     if: >-
-      always() &&
+      always() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64]
@@ -125,7 +164,10 @@ jobs:
   # Advisory: the size step is continue-on-error, so its failure stays visible in the log but the job
   # (and the PR check) passes while legacy oversized files are split down.
   file-size-gate:
-    name: PR gate / file size
+    name: PR gate / file size${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event]
+    if: >-
+      !cancelled() && needs.ci-event.outputs.relevant != 'false'
     runs-on: [self-hosted, Windows, X64]
     steps:
       - name: Check out PR changes
@@ -149,10 +191,10 @@ jobs:
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:
-    name: security / gitleaks
-    needs: classify-docs-only
+    name: security / gitleaks${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event, classify-docs-only]
     if: >-
-      always() &&
+      always() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64]
@@ -171,10 +213,10 @@ jobs:
           & $gitleaks git --redact --verbose --no-banner "--log-opts=--no-merges --first-parent $env:BASE_SHA..$env:HEAD_SHA" .
 
   security-dependency-scan:
-    name: security / dependency-scan
-    needs: classify-docs-only
+    name: security / dependency-scan${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event, classify-docs-only]
     if: >-
-      always() &&
+      always() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64]

@@ -15,8 +15,13 @@ on:
     branches: [master, beta]
     types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
+# Label and edit events only matter when they change what CI checks: the docs-only and
+# refactor proof labels, or a new base branch. Other label/edit events (status labels,
+# title/body edits) get their own concurrency group so they never cancel a real run, and
+# the `ci-event` job below skips every check. Keep this list in sync with `ci-event`.
 concurrency:
-  group: full-validation-${{ github.event.pull_request.number }}
+  group: >-
+    full-validation-${{ github.event.pull_request.number }}${{ ((github.event.action == 'edited' && !github.event.changes.base) || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'), github.event.label.name))) && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -28,13 +33,44 @@ env:
   NINJA_STATUS: '[%f/%t; %r running; %e s] '
 
 jobs:
+  # Decides whether this PR event can change a check result (see the concurrency comment).
+  # When it cannot, every job below is skipped under a name that is never a required check,
+  # so a skipped run never stands in for the required check of the same name.
+  ci-event:
+    name: policy / CI-relevant event
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.decide.outputs.relevant }}
+      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
+      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
+    steps:
+      - name: Decide whether this event changes CI results
+        id: decide
+        shell: bash
+        env:
+          IGNORED: >-
+            ${{ (github.event.action == 'edited' && !github.event.changes.base) ||
+              ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+               !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'),
+                         github.event.label.name)) }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          relevant=true
+          if [ "$IGNORED" = "true" ]; then relevant=false; fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Event '$ACTION' (label '$LABEL'): CI relevant = $relevant"
+
   # ---------------------------------------------------------------------------
   # docs-only classification — fail closed: an API/classification error leaves the output empty,
   # causing every validation job below to run. Shared with CodeQL via a repository script. Only
   # the `docs-only` label plus documentation-only paths can skip CI.
   # ---------------------------------------------------------------------------
   classify-docs-only:
-    name: full / docs-only policy
+    name: full / docs-only policy${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event]
+    if: >-
+      !cancelled() && needs.ci-event.outputs.relevant != 'false'
     runs-on: [self-hosted, Windows, X64]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
@@ -86,10 +122,10 @@ jobs:
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-    name: full / build all targets
-    needs: classify-docs-only
+    name: full / build all targets${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event, classify-docs-only]
     if: >-
-      always() &&
+      always() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     # Self-hosted Victus build runner; fork PRs wait for maintainer approval before running here.
