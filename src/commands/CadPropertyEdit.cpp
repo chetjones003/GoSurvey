@@ -111,8 +111,8 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
     return Store(st, ann.plottedHeightInches, kDefaultPlottedTextHeightInches, "Edit text height",
                  "A text height must be positive; it was reset to 0.0625 in.");
   case F::RotationBearingDeg:
-    if (!isText)
-      return Rejected("Only single-line text has a rotation.");
+    if (!isText && !isMtext)
+      return Rejected("Only text has a rotation.");
     return Store(st, ann.rotationRad, MathAngleRadFromBearingCwNorthDeg(static_cast<float>(value)),
                  "Edit text rotation");
   case F::BoxMinX: case F::BoxMinY: case F::BoxMaxX: case F::BoxMaxY: {

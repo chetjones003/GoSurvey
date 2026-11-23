@@ -104,6 +104,10 @@ private:
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
   QTimer m_GripMenuTimer;
+  SelectedEntity::Type m_GripMenuType = SelectedEntity::Type::LineSeg;
+  ray3d::Vec3 m_GripMenuPoint{};
+  std::uint64_t m_HatchRevision = ~0ull;
+  std::vector<std::vector<float>> m_HatchSegments;
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;

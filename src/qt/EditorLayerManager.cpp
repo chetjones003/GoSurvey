@@ -288,7 +288,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   }
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setSelectionMode(QAbstractItemView::SingleSelection);
-  table->setAlternatingRowColors(false);
+  table->setAlternatingRowColors(true);
   table->setItemDelegateForColumn(Name, new NameDelegate(table));
   table->setShowGrid(false);
   table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -316,7 +316,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
     int visibleRows = 0;
     for (int row = 0; row < table->rowCount(); ++row) visibleRows += table->isRowHidden(row) ? 0 : 1;
     const int rowCount = std::min(visibleRows, 8);
-    table->setFixedHeight(header->sizeHint().height() + 4 + rowCount * kRowHeight);
+    table->setMinimumHeight(header->sizeHint().height() + 4 + std::max(1, std::min(rowCount, 3)) * kRowHeight);
   };
   auto* noMatches = new QLabel("No layers match this search.", &dialog);
   noMatches->setObjectName("layerManagerNoMatches");
@@ -326,6 +326,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
 
   auto* hint = new QLabel("Click a column heading to sort. Right-click a heading to show or hide columns, or drag it to reorder.", &dialog);
   hint->setObjectName("layerManagerHint");
+  hint->setWordWrap(true);
   layout->addWidget(hint);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
   layout->addWidget(buttons);

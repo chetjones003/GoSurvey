@@ -463,13 +463,7 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     if (mts->phase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      // MTEXT is a single-elevation planar entity — both corners land at zc (REQ-058), so that is the
-      // real Z for BOTH ends, not the "no Z available" NaN default. Passing NaN here (as before) sent
-      // ApplyOrthoConstrainFromAnchor's UCS branch into the broken plane-equation fallback under a
-      // Front/Left/Right-style UCS (issue #371's edge-on-plane defect), which can derive the WRONG
-      // world Z for each end and therefore pick the WRONG axis to lock — not just render wrong, the
-      // rectangle itself could come out square to the wrong side.
-      ApplyOrthoConstrainFromAnchor(cmd, mts->x1, mts->y1, &lx, &ly, orthoEnabled, zc, zc);
+      // A box needs both coordinates; ORTHO constrains segments, not opposite corners.
       AppendWorldRectRubberViewRel(rubberLines, mts->x1, mts->y1, lx, ly, 0., 0., zc);
     } else if (mts->phase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, mts->x1, mts->y1, mts->x2, mts->y2, 0., 0.,
@@ -820,7 +814,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       float wy = static_cast<float>(curY);
       float wz = static_cast<float>(gz);
       const float targetZ = static_cast<float>(gz);
-      ApplyPipeRunCompassFromAnchor(cmd, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      if (!cmd.viewportSnapPickValid)
+        ApplyPipeRunCompassFromAnchor(cmd, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
       gx = static_cast<double>(wx);
       gy = static_cast<double>(wy);
       gz = static_cast<double>(wz);

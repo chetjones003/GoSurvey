@@ -32,3 +32,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 /// \param ray As \ref PickCadAnnotationAt: when non-null, each region is tested where the ray meets
 ///        its own plane (the elevation of its first vertex) — issue #564 §2.
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
+
+// Build clipped hatch pattern linework for presentation without exposing pattern parser internals.
+void CadBuildHatchPatternSegments(const std::vector<CadFilledRegion>& regions, const std::string& source,
+                                  std::vector<std::vector<float>>* segments);

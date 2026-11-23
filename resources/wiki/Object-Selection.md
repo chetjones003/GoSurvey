@@ -10,7 +10,7 @@ With no command active:
 |---|---|
 | **Move the cursor over an object** | It highlights, so you can see what you are about to pick |
 | **Click an object** | Selects it. Grips appear and the Properties panel fills in |
-| **Click, then click again in empty space** | The two clicks define a **selection window** over everything inside |
+| **Click empty space, then click the opposite corner** | The two clicks define a **selection window** over everything inside |
 | **Drag from empty space and release** | Adds the window's hits to the current selection; hold **Shift** to remove hits |
 | **Click empty space once and press Esc** | Clears the selection (`Selection cleared.`) |
 
@@ -28,10 +28,14 @@ Commands that need objects (MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, ALIGN) beha
   the selection step.
 - **If nothing is selected**, the prompt says **Select objects, ENTER to continue**. Click objects,
   drag a box, or click two empty corners. Selections accumulate until **Enter**; **Shift** removes hits.
-  An ordinary object click after an empty click picks the object rather than consuming it as a box corner.
+  Once the first box corner is placed, the next click completes the box, including over an object.
 
 TRIM and OFFSET are different — they take individual picks as part of their own workflow rather
 than a window.
+
+A left-to-right window selects fully enclosed objects. A right-to-left crossing box also selects
+objects it touches. Rotated text is tested against its rotated footprint, and objects on off or
+frozen layers are excluded.
 
 ---
 
@@ -59,6 +63,10 @@ Selected objects show **grips** — small blue squares at their endpoints, centr
 | **Ortho** | Constrains the drag to horizontal or vertical from the grip start — a snap still wins |
 | **Grips as snap targets** | Grips of selected objects are themselves snappable, regardless of the OSNAP toggle, and they beat every geometry snap |
 | **Esc** | Cancels the drag and restores the original position |
+
+Hover over a line, circle or polyline grip to open its editing popup. Line endpoints offer
+**Lengthen** and **Stretch**; circle and polyline grips offer **Stretch**. Rectangles and joined
+linework stored as polylines use the same popup, including 3D polylines.
 
 Grip size is set in **Settings → Selection → Grip size (px)**, from 2 to 20 pixels.
 

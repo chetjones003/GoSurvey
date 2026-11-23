@@ -2,6 +2,7 @@
 #include "draw/CadDrawInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "HatchGeom.hpp"
+#include "HatchPattern.hpp"
 #include <GoSurvey/Geometry/HatchBoundary.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Geometry/spline.hpp>
@@ -901,3 +902,13 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 }
 
 // localX/localY are LOCAL storage coordinates, not world — see the declaration in CadCommands.hpp.
+
+void CadBuildHatchPatternSegments(const std::vector<CadFilledRegion>& regions, const std::string& source,
+                                  std::vector<std::vector<float>>* segments) {
+  std::vector<hatchpat::Def> patterns;
+  hatchpat::Parse(source, &patterns);
+  segments->clear(); segments->resize(regions.size());
+  for (std::size_t i = 0; i < regions.size(); ++i)
+    if (const auto* pattern = hatchpat::Find(patterns, regions[i].patternName))
+      hatchpattern::BuildSegments(regions[i], *pattern, &(*segments)[i]);
+}
