@@ -34,13 +34,15 @@ env:
 
 jobs:
   # Decides whether this PR event can change a check result (see the concurrency comment).
-  # When it cannot, every job below is skipped and reports under an "(ignored event)" name,
+  # When it cannot, every job below is skipped under a name that is never a required check,
   # so a skipped run never stands in for the required check of the same name.
   ci-event:
     name: policy / CI-relevant event
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.decide.outputs.relevant }}
+      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
+      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
     steps:
       - name: Decide whether this event changes CI results
         id: decide
@@ -65,7 +67,7 @@ jobs:
   # the `docs-only` label plus documentation-only paths can skip CI.
   # ---------------------------------------------------------------------------
   classify-docs-only:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'full / docs-only policy (ignored event)' || 'full / docs-only policy' }}
+    name: full / docs-only policy${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
@@ -120,7 +122,7 @@ jobs:
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'full / build all targets (ignored event)' || 'full / build all targets' }}
+    name: full / build all targets${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
       always() && needs.ci-event.outputs.relevant != 'false' &&

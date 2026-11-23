@@ -31,13 +31,15 @@ defaults:
 
 jobs:
   # Decides whether this PR event can change a check result (see the concurrency comment).
-  # When it cannot, every job below is skipped and reports under an "(ignored event)" name,
+  # When it cannot, every job below is skipped under a name that is never a required check,
   # so a skipped run never stands in for the required check of the same name.
   ci-event:
     name: policy / CI-relevant event
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.decide.outputs.relevant }}
+      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
+      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
     steps:
       - name: Decide whether this event changes CI results
         id: decide
@@ -57,7 +59,7 @@ jobs:
           echo "Event '$ACTION' (label '$LABEL'): CI relevant = $relevant"
 
   architecture-dependencies:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'architecture / dependency ratchet (ignored event)' || 'architecture / dependency ratchet' }}
+    name: architecture / dependency ratchet${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
@@ -85,7 +87,7 @@ jobs:
         run: python -m unittest tools.test_system_dependency_diagrams
 
   classify-docs-only:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'policy / docs-only classification (ignored event)' || 'policy / docs-only classification' }}
+    name: policy / docs-only classification${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
@@ -108,7 +110,7 @@ jobs:
         run: python .github/scripts/classify_docs_only.py
 
   fast-pr-gate:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'PR gate (ignored event)' || 'PR gate' }}
+    name: PR gate${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
       always() && needs.ci-event.outputs.relevant != 'false' &&
@@ -162,7 +164,7 @@ jobs:
   # Advisory: the size step is continue-on-error, so its failure stays visible in the log but the job
   # (and the PR check) passes while legacy oversized files are split down.
   file-size-gate:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'PR gate / file size (ignored event)' || 'PR gate / file size' }}
+    name: PR gate / file size${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
@@ -189,7 +191,7 @@ jobs:
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'security / gitleaks (ignored event)' || 'security / gitleaks' }}
+    name: security / gitleaks${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
       always() && needs.ci-event.outputs.relevant != 'false' &&
@@ -211,7 +213,7 @@ jobs:
           & $gitleaks git --redact --verbose --no-banner "--log-opts=--no-merges --first-parent $env:BASE_SHA..$env:HEAD_SHA" .
 
   security-dependency-scan:
-    name: ${{ needs.ci-event.outputs.relevant == 'false' && 'security / dependency-scan (ignored event)' || 'security / dependency-scan' }}
+    name: security / dependency-scan${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
       always() && needs.ci-event.outputs.relevant != 'false' &&
