@@ -4,7 +4,7 @@
   "src/io/src/DxfIo.cpp": 6683,
   "src/io/src/GsIo.cpp": 5999,
   "src/io/src/LibreDwgCad.cpp": 9327,
-  "src/qt/EditorWindow.cpp": 3674,
+  "src/qt/EditorWindow.cpp": 3670,
   "src/qt/PdfWindow.cpp": 3296,
   "src/renderer/src/ViewportRenderer.cpp": 4256,
   "tests/BrepTests.cpp": 9427,
