@@ -117,7 +117,7 @@ static bool CreateMviewPreset(AppCommandState& st, const std::string& option, st
   st.selectedViewportLayout = created.empty() ? -1 : st.activeSpaceIndex;
   st.paperVpMode = 0;
   st.paperVpPhase = 0;
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("MVIEW " + (option == "fit" ? std::string("Fit") : option) + " — " +
                 std::to_string(created.size()) + " viewport(s) created.");
   return !created.empty();
@@ -155,13 +155,11 @@ static bool HandlePaperPhaseText(AppCommandState& st, const std::string& line, s
   const bool paperModify = HasPaperModifyPhase(st);
   if (paperModify && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
     if (st.paperFilletPhase) {
-      st.filletPhase = AppCommandState::FilletPhase::WaitFirstEntity;
       if (line.empty() && st.paperFilletPhase == 1) { st.paperFilletPhase = 0; return true; }
       if (line.empty()) { log.push_back("FILLET — pick the second object, or ESC to cancel."); return true; }
       return HandleFilletText(st, line, log);
     }
     if (st.paperChamferPhase) {
-      st.chamferPhase = AppCommandState::ChamferPhase::WaitFirstEntity;
       if (line.empty() && st.paperChamferPhase == 1) { st.paperChamferPhase = 0; return true; }
       if (line.empty()) { log.push_back("CHAMFER — pick the second object, or ESC to cancel."); return true; }
       return HandleChamferText(st, line, log);

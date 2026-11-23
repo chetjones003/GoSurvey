@@ -885,7 +885,10 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
                   " targets not yet supported in an orbited view or non-world UCS; refused.");
     return false;
   }
-  for (const SelectedEntity& c : st.trimCutters) {
+  const auto* trimSess = st.sessionAs<stepengine::TrimSession>();
+  if (!trimSess)
+    return false;
+  for (const SelectedEntity& c : trimSess->cutters) {
     if (!isSupportedCutter(c.type)) {
       log.push_back(std::string("TRIM — 3D ") + typeName(c.type) +
                     " cutting edges not yet supported in an orbited view or non-world UCS; refused.");
@@ -928,7 +931,7 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
   const double epsT = std::clamp(epsGeom / targetLen, 1e-9, 0.05);
 
   std::vector<double> ts;
-  Collect3DTrimCrossings(st, st.trimCutters, ta, tb, targetIsPoly, hit.index, targetVi, epsGeom, epsT, &ts);
+  Collect3DTrimCrossings(st, trimSess->cutters, ta, tb, targetIsPoly, hit.index, targetVi, epsGeom, epsT, &ts);
   if (ts.empty()) {
     log.push_back("TRIM — segment does not cross a cutting edge.");
     return false;

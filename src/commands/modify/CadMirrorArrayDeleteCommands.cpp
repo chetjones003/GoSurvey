@@ -1,5 +1,7 @@
 #include "CadCommandsInternal.hpp"
 #include "modify/CadModifyInternal.hpp"
+#include "modify/CadModifySessions.hpp"
+#include "engine/StepEngine.hpp"
 #include "surface/CadSurfaceInternal.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -359,29 +361,34 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
 /// the resulting 3D delta — this path has no per-entity-type orientation gap at all (nothing's
 /// orientation changes), so it already worked under a tilted UCS before REQ-328 existed.
 static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log) {
+  const auto* arr = st.sessionAs<stepengine::ArraySession>();
+  if (!arr)
+    return;
   constexpr float kTwoPi = 6.28318530717958647692f;
-  const int n = std::max(st.arrayItemCount, 1);
-  // Full-turn fill angles divide by N (no duplicate instance at 0==360, REQ-305 acceptance 4);
-  // a partial arc divides by N-1 so the first and last instances land exactly at the two ends.
-  const bool fullTurn = std::fabs(std::fmod(st.arrayFillAngleDeg, 360.f)) < 1e-3f && n > 0;
-  const float fillRad = st.arrayFillAngleDeg * (kTwoPi / 360.f);
+  const int n = std::max(arr->itemCount, 1);
+  const float fillAngleDeg = arr->fillAngleDeg;
+  const bool fullTurn = std::fabs(std::fmod(fillAngleDeg, 360.f)) < 1e-3f && n > 0;
+  const float fillRad = fillAngleDeg * (kTwoPi / 360.f);
   const float step = (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n)
                                                 : fillRad / static_cast<float>(n - 1));
-  const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY, anchorZ = st.arrayAnchorZ;
-  if (st.arrayOnPaper) {
+  const float anchorX = arr->anchorX, anchorY = arr->anchorY, anchorZ = arr->anchorZ;
+  const float centerX = arr->centerX, centerY = arr->centerY, centerZ = arr->centerZ;
+  const bool rotateItems = arr->rotateItems;
+  const bool onPaper = arr->onPaper;
+  if (onPaper) {
     const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
     std::vector<std::string> transformLog;
     PushUndoSnapshot(st, "Array-Polar");
     for (int i = 1; i < n; ++i) {
       const float angle = step * static_cast<float>(i);
-      const float dx = anchorX - st.arrayCenterX;
-      const float dy = anchorY - st.arrayCenterY;
-      const float targetX = st.arrayCenterX + dx * std::cos(angle) - dy * std::sin(angle);
-      const float targetY = st.arrayCenterY + dx * std::sin(angle) + dy * std::cos(angle);
+      const float dx = anchorX - centerX;
+      const float dy = anchorY - centerY;
+      const float targetX = centerX + dx * std::cos(angle) - dy * std::sin(angle);
+      const float targetY = centerY + dx * std::sin(angle) + dy * std::cos(angle);
       st.selectedPaperEntities = source;
-      if (st.arrayRotateItems) {
+      if (rotateItems) {
         TranslateSelectedPaperEntities(st, 0.f, 0.f, true, transformLog, false);
-        RotateSelectedPaperEntities(st, st.arrayCenterX, st.arrayCenterY, angle, transformLog, false);
+        RotateSelectedPaperEntities(st, centerX, centerY, angle, transformLog, false);
       } else {
         TranslateSelectedPaperEntities(st, targetX - anchorX, targetY - anchorY, true, transformLog, false);
       }
@@ -390,14 +397,14 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
     FinishArrayCommand(st, log, n, "polar");
     return;
   }
-  const ray3d::Vec3 axisPoint{static_cast<double>(st.arrayCenterX), static_cast<double>(st.arrayCenterY),
-                              static_cast<double>(st.arrayCenterZ)};
+  const ray3d::Vec3 axisPoint{static_cast<double>(centerX), static_cast<double>(centerY),
+                              static_cast<double>(centerZ)};
   const ucs::Ucs frame = CadActiveUcsStorage(st);
   const ray3d::Vec3 axisUnit = ray3d::Normalize(ray3d::Vec3{frame.zAxis.x, frame.zAxis.y, frame.zAxis.z});
   PushUndoSnapshot(st, "Array-Polar");
   for (int i = 1; i < n; ++i) {
     const float ang = step * static_cast<float>(i);
-    if (st.arrayRotateItems) {
+    if (rotateItems) {
       RotateSelectionAboutAxis(st, axisPoint, axisUnit, ang, log);
     } else {
       const ray3d::Vec3 rotated = ray3d::RotatePointAboutAxis({anchorX, anchorY, anchorZ}, axisPoint, axisUnit, ang);
@@ -409,164 +416,147 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
   FinishArrayCommand(st, log, n, "polar");
 }
 
-/// Typed command-line entry for ARRAY, mirroring \c HandleModifyText/\c HandleRotateText's shape —
-/// one phase-gated block per \ref AppCommandState::ArrayPhase. Interactive (click-driven) entry for
-/// the spatial phases (column/row spacing, polar center, fill angle) is handled by the viewport
-/// click path, not here — matching how CIRCLE/OFFSET/ROTATE split typed vs. clicked entry.
 bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using AP = AppCommandState::ArrayPhase;
-  using AT = AppCommandState::ArrayType;
+  auto* arr = st.sessionAs<stepengine::ArraySession>();
+  if (!arr)
+    return false;
+  using AP = stepengine::ArrayPhase;
+  using AT = stepengine::ArrayType;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string low = StringUtil::toLowerAsciiCopy(line);
 
-  if (st.arrayPhase == AP::WaitType) {
+  if (arr->phase == AP::WaitType) {
     if (low == "r" || low == "rectangular") {
-      st.arrayType = AT::Rectangular;
-      st.arrayPhase = AP::Rect_WaitColumns;
+      arr->type = AT::Rectangular;
+      arr->phase = AP::Rect_WaitColumns;
       log.push_back("ARRAY Rectangular — number of columns:");
       return true;
     }
     if (low == "p" || low == "polar") {
-      // REQ-328 lifted the old blanket tilted-UCS refusal here: `RotateSelectionAboutAxis` now
-      // rotates most entity types about any axis. What remains is refused per-entity-type, at
-      // COMMIT time (`RotateSelectionAboutAxis`'s own log line), for the handful of types with no
-      // stored plane normal (Ellipse/Annotation/Table/BlockRef/FeatureLine) — not here, since
-      // whether that refusal even applies depends on Rotate-items (Yes rotates orientation and
-      // needs it; No only translates and has no such gap), which is not chosen until later.
-      //
-      // Solids and pipe runs are arrayed too (REQ-351, lifting D-2026-09-07-c's Polar refusal):
-      // `RotateSelectionAboutAxis` and `DuplicateCadSelectionTranslated` copy both.
-      st.arrayType = AT::Polar;
-      st.arrayPhase = AP::Polar_WaitCenter;
+      arr->type = AT::Polar;
+      arr->phase = AP::Polar_WaitCenter;
       log.push_back("ARRAY Polar — specify center point:");
       return true;
     }
     return false;
   }
 
-  if (st.arrayPhase == AP::Rect_WaitColumns) {
+  if (arr->phase == AP::Rect_WaitColumns) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — number of columns must be a positive whole number.");
       return false;
     }
-    st.arrayCols = static_cast<int>(std::lround(v));
-    st.arrayPhase = AP::Rect_WaitColumnSpacing;
+    arr->cols = static_cast<int>(std::lround(v));
+    arr->phase = AP::Rect_WaitColumnSpacing;
     log.push_back("ARRAY Rectangular — column spacing (type a distance, or click):");
     return true;
   }
-  if (st.arrayPhase == AP::Rect_WaitColumnSpacing) {
+  if (arr->phase == AP::Rect_WaitColumnSpacing) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — column spacing must be a finite number (may be negative).");
       return false;
     }
-    st.arrayColSpacing = v;
-    st.arrayPhase = AP::Rect_WaitRows;
+    arr->colSpacing = v;
+    arr->phase = AP::Rect_WaitRows;
     log.push_back("ARRAY Rectangular — number of rows:");
     return true;
   }
-  if (st.arrayPhase == AP::Rect_WaitRows) {
+  if (arr->phase == AP::Rect_WaitRows) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — number of rows must be a positive whole number.");
       return false;
     }
-    st.arrayRows = static_cast<int>(std::lround(v));
-    st.arrayPhase = AP::Rect_WaitRowSpacing;
+    arr->rows = static_cast<int>(std::lround(v));
+    arr->phase = AP::Rect_WaitRowSpacing;
     log.push_back("ARRAY Rectangular — row spacing (type a distance, or click):");
     return true;
   }
-  if (st.arrayPhase == AP::Rect_WaitRowSpacing) {
+  if (arr->phase == AP::Rect_WaitRowSpacing) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — row spacing must be a finite number (may be negative).");
       return false;
     }
-    st.arrayRowSpacing = v;
-    if (st.arrayOnPaper) {
-      // Paper layouts are 2D sheets; a third UCS level has no supported placement transform here.
-      // Commit the 2D grid instead of accepting a level count that would stack coincident copies.
-      st.arrayLevels = 1;
+    arr->rowSpacing = v;
+    if (arr->onPaper) {
+      arr->levels = 1;
       CommitArrayRectangular(st, log);
       return true;
     }
-    st.arrayPhase = AP::Rect_WaitLevels;
+    arr->phase = AP::Rect_WaitLevels;
     log.push_back("ARRAY Rectangular — number of levels <1 = 2D>:");
     return true;
   }
-  if (st.arrayPhase == AP::Rect_WaitLevels) {
-    // GitHub issue #400 increment 2 / REQ-305 acceptance 12: a blank Enter means "1 level" — the
-    // pre-#400 2D grid — so an ordinary 2D rectangular array is not forced through a level-spacing
-    // prompt it will never use. A blank line never reaches HERE, though: ProcessCommandLineSubmit's
-    // own `line.empty()` dispatcher consumes it first (the same convention FEATURELINE/UCS/Solid use)
-    // — this handler only ever sees a non-empty line.
+  if (arr->phase == AP::Rect_WaitLevels) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — number of levels must be a positive whole number (Enter for 1 = 2D).");
       return false;
     }
-    st.arrayLevels = static_cast<int>(std::lround(v));
-    if (st.arrayLevels <= 1) {
+    arr->levels = static_cast<int>(std::lround(v));
+    if (arr->levels <= 1) {
       CommitArrayRectangular(st, log);
       return true;
     }
-    st.arrayPhase = AP::Rect_WaitLevelSpacing;
+    arr->phase = AP::Rect_WaitLevelSpacing;
     log.push_back("ARRAY Rectangular — level spacing (type a distance):");
     return true;
   }
-  if (st.arrayPhase == AP::Rect_WaitLevelSpacing) {
+  if (arr->phase == AP::Rect_WaitLevelSpacing) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — level spacing must be a finite number (may be negative).");
       return false;
     }
-    st.arrayLevelSpacing = v;
+    arr->levelSpacing = v;
     CommitArrayRectangular(st, log);
     return true;
   }
 
-  if (st.arrayPhase == AP::Polar_WaitCenter) {
+  if (arr->phase == AP::Polar_WaitCenter) {
     float px = 0.f, py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    st.arrayCenterX = px;
-    st.arrayCenterY = py;
-    st.arrayCenterZ = CadCommitElevation(st);  // issue #400: for a horizontal, non-World UCS's elevation
-    st.arrayPhase = AP::Polar_WaitItemCount;
+    arr->centerX = px;
+    arr->centerY = py;
+    arr->centerZ = CadCommitElevation(st);
+    arr->phase = AP::Polar_WaitItemCount;
     log.push_back("ARRAY Polar — number of items (total, including the original):");
     return true;
   }
-  if (st.arrayPhase == AP::Polar_WaitItemCount) {
+  if (arr->phase == AP::Polar_WaitItemCount) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
       log.push_back("ARRAY Polar — number of items must be a positive whole number.");
       return false;
     }
-    st.arrayItemCount = static_cast<int>(std::lround(v));
-    st.arrayPhase = AP::Polar_WaitAngle;
+    arr->itemCount = static_cast<int>(std::lround(v));
+    arr->phase = AP::Polar_WaitAngle;
     log.push_back("ARRAY Polar — angle to fill in degrees (type, or click) <360>:");
     return true;
   }
-  if (st.arrayPhase == AP::Polar_WaitAngle) {
+  if (arr->phase == AP::Polar_WaitAngle) {
     float deg = 0.f;
     if (!ParseAngleDegreesInternal(line, &deg) || !std::isfinite(deg)) {
       log.push_back("ARRAY Polar — angle to fill must be a finite number of degrees.");
       return false;
     }
-    st.arrayFillAngleDeg = deg;
-    st.arrayPhase = AP::Polar_WaitRotateAnswer;
+    arr->fillAngleDeg = deg;
+    arr->phase = AP::Polar_WaitRotateAnswer;
     log.push_back("ARRAY Polar — rotate items? [Y]es / [N]o:");
     return true;
   }
-  if (st.arrayPhase == AP::Polar_WaitRotateAnswer) {
+  if (arr->phase == AP::Polar_WaitRotateAnswer) {
     if (low == "y" || low == "yes") {
-      st.arrayRotateItems = true;
+      arr->rotateItems = true;
       CommitArrayPolar(st, log);
       return true;
     }
     if (low == "n" || low == "no") {
-      st.arrayRotateItems = false;
+      arr->rotateItems = false;
       CommitArrayPolar(st, log);
       return true;
     }
@@ -1588,41 +1578,29 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
     BumpCadGpuCache(st);
 }
 
-/// REQ-103 MIRROR. \c eraseSource decides what happens to the PRE-mirror selection after the
-/// duplicate commits — MIRROR always duplicates first (ASSUMPTION-2, TASK-094 — the reverse of
-/// ROTATE/SCALE, where duplication is the opt-in "copy" mode and in-place is the default).
-static void FinishMirrorCommand(AppCommandState& st, float x0, float y0, float x1, float y1, bool eraseSource,
-                                std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
+void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, float x1, float y1, float z1,
+                           bool eraseSource, std::vector<std::string>& log) {
   PushUndoSnapshot(st, eraseSource ? "Mirror-erase" : "Mirror");
-  // Survey points ride the 2D duplicate-ID modal (pendingMirrorX0..Y1); a tilted mirror plane has
-  // no 2D line to hand it, so survey-point mirroring is left to the flat path (REQ-329 increment 5).
   const bool hadSurveySelection =
       !st.selectedSurveyPointIndices.empty() && CadWorkPlaneIsWorldXy(st);
-  // REQ-329 increment 5: a tilted work plane reflects across the plane that contains the picked
-  // line, not a world-vertical one. World / plan-rotated UCS keeps the flat path byte-for-byte.
   if (CadWorkPlaneIsWorldXy(st)) {
     DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
   } else {
-    const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(st.mirrorP1Z)};
-    const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(st.mirrorP2Z)};
+    const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(z0)};
+    const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(z1)};
     const ucs::Ucs u = CadActiveUcsStorage(st);
     const ray3d::Vec3 normal = ray3d::Cross(ray3d::Sub(p2, p1), {u.zAxis.x, u.zAxis.y, u.zAxis.z});
     if (ray3d::Length(normal) < 1e-9) {
       log.push_back("MIRROR — the mirror line must lie in the work plane (it is parallel to the UCS Z"
                     " axis here); pick two points on the plane.");
-      st.active = K::None;
-      ResetModifyRotateDraft(st);
+      stepengine::EndSession(st);
       return;
     }
     DuplicateCadSelectionReflectedAcrossPlane(st, p1, ray3d::Normalize(normal), log);
   }
-  // st.selection now holds exactly what was mirrored (exclusions already logged) — erase THAT, not
-  // the original selection, so an excluded Surface/hatch/underlay/mesh is left untouched either way.
   if (eraseSource && !st.selection.empty())
     EraseMirroredSourceNoUndo(st);
-  st.active = K::None;
-  ResetModifyRotateDraft(st);
+  stepengine::EndSession(st);
   if (hadSurveySelection) {
     st.pendingSurveyDupIsMirror = true;
     st.pendingMirrorX0 = x0;
@@ -1636,52 +1614,6 @@ static void FinishMirrorCommand(AppCommandState& st, float x0, float y0, float x
   } else {
     log.push_back(eraseSource ? "MIRROR complete (source erased)." : "MIRROR complete.");
   }
-}
-
-bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  using MP = AppCommandState::MirrorPhase;
-  if (st.mirrorPhase == MP::NeedP1) {
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.mirrorP1X = px;
-    st.mirrorP1Y = py;
-    st.mirrorP1Z = CadCommitElevation(st);  // REQ-329 increment 5: the mirror line lies on the work plane
-    st.mirrorPhase = MP::NeedP2;
-    log.push_back("MIRROR — specify second point of mirror line:");
-    return true;
-  }
-  if (st.mirrorPhase == MP::NeedP2) {
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    if (std::hypot(px - st.mirrorP1X, py - st.mirrorP1Y) < 1e-8f) {
-      log.push_back("MIRROR — mirror line needs two distinct points; try again.");
-      return false;
-    }
-    st.mirrorP2X = px;
-    st.mirrorP2Y = py;
-    st.mirrorP2Z = CadCommitElevation(st);  // REQ-329 increment 5
-    st.mirrorPhase = MP::NeedEraseAnswer;
-    log.push_back("Erase source objects? [Yes/No] <N>:");
-    return true;
-  }
-  if (st.mirrorPhase == MP::NeedEraseAnswer) {
-    const std::string low = StringUtil::toLowerAsciiCopy(line);
-    bool eraseSource = false;
-    if (low.empty() || low == "n" || low == "no")
-      eraseSource = false;
-    else if (low == "y" || low == "yes")
-      eraseSource = true;
-    else {
-      log.push_back("MIRROR — answer Yes or No (Enter defaults to No).");
-      return false;
-    }
-    FinishMirrorCommand(st, st.mirrorP1X, st.mirrorP1Y, st.mirrorP2X, st.mirrorP2Y, eraseSource, log);
-    return true;
-  }
-  return false;
 }
 
 
@@ -1751,10 +1683,7 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
     ExecuteDeleteSelection(st, log);
     return;
   }
-  st.active = AppCommandState::Kind::Delete;
-  st.selBoxWaitingSecond = false;
-  // Wording matches the siblings above (D-2026-08-26-d): DELETE accumulates and Enter is what
-  // erases, so a message describing a two-click box would now be as wrong as the old prompt was.
+  stepengine::BeginSession(st, std::make_unique<stepengine::DeleteSession>(), false);
   log.push_back("DELETE — click objects or drag a selection window (Enter when done) to erase them. "
                 "ESC cancels.");
 }
@@ -1775,17 +1704,14 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Mirror;
-  st.lastCommand = AppCommandState::Kind::Mirror;
-  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
-  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
-  st.mirrorP1Z = st.mirrorP2Z = 0.f;
   st.pendingSurveyDupIsMirror = false;
-  st.selBoxWaitingSecond = false;
-  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
-    st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
+  const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::MirrorPhase::NeedP1 : stepengine::MirrorPhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::MirrorSession>(initialPhase), true);
+  if (haveSel)
     log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
-  } else
+  else
     log.push_back(kSelectObjectsPrompt);
 }
 
@@ -1795,14 +1721,13 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Array;
-  st.lastCommand = AppCommandState::Kind::Array;
-  ResetArrayDraft(st);
-  st.arrayOnPaper = ActivePaperGeometryTarget(st) != nullptr;
-  st.selBoxWaitingSecond = false;
-  if (st.arrayOnPaper) {
-    if (!st.selectedPaperEntities.empty()) {
-      st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
+  const bool onPaper = ActivePaperGeometryTarget(st) != nullptr;
+  if (onPaper) {
+    const bool haveSel = !st.selectedPaperEntities.empty();
+    const auto initialPhase =
+        haveSel ? stepengine::ArrayPhase::WaitType : stepengine::ArrayPhase::PickSelection;
+    stepengine::BeginSession(st, std::make_unique<stepengine::ArraySession>(true, initialPhase), true);
+    if (haveSel) {
       SetArrayAnchorFromPaperSelection(st);
       log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
     } else {
@@ -1811,12 +1736,16 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   DropArrayUnsupportedFromSelection(st, log);
-  if (!st.selection.empty()) {
-    st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
+  const bool haveSel = !st.selection.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::ArrayPhase::WaitType : stepengine::ArrayPhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ArraySession>(false, initialPhase), true);
+  if (haveSel) {
     SetArrayAnchorFromSelection(st);
     log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
-  } else
+  } else {
     log.push_back(kSelectObjectsPrompt);
+  }
 }
 
 

@@ -1,5 +1,7 @@
 #include "CadCommandsInternal.hpp"
 #include "modify/CadModifyInternal.hpp"
+#include "modify/CadModifySessions.hpp"
+#include "engine/StepEngine.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include <GoSurvey/Geometry/spline.hpp>
@@ -367,46 +369,42 @@ static void RotatePtForAnnotationPreview(float bx, float by, float rad, float* x
 }
 
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad) {
-  using K = AppCommandState::Kind;
-  using RP = AppCommandState::RotatePhase;
-  if (cmd.active != K::Rotate || !outThetaRad)
+  const auto* rs = cmd.sessionAs<stepengine::RotateSession>();
+  if (!rs || !outThetaRad)
     return false;
-  if (cmd.rotatePhase == RP::NeedAngleOrReference) {
-    const float dx = curX - cmd.rotateBaseX;
-    const float dy = curY - cmd.rotateBaseY;
-    // Match typed convention: bearing CW from north (−atan2(dx,dy) equals −bearing_rad for RotateAroundBase).
+  using RP = stepengine::RotatePhase;
+  if (rs->phase == RP::NeedAngleOrReference) {
+    const float dx = curX - rs->baseX;
+    const float dy = curY - rs->baseY;
     *outThetaRad = -std::atan2(dx, dy);
-  }
-  else if (cmd.rotatePhase == RP::AfterReference_WaitAngleOrP) {
-    const float thetaRef =
-        std::atan2(cmd.rotateRefY2 - cmd.rotateRefY1, cmd.rotateRefX2 - cmd.rotateRefX1);
-    *outThetaRad = std::atan2(curY - cmd.rotateBaseY, curX - cmd.rotateBaseX) - thetaRef;
-  } else if (cmd.rotatePhase == RP::AnglePoints_WaitP2)
-    *outThetaRad = RotateDeltaFromReferenceAndNewSegment(cmd.rotateRefX1, cmd.rotateRefY1, cmd.rotateRefX2,
-                                                         cmd.rotateRefY2, cmd.rotateAnglePt1X,
-                                                         cmd.rotateAnglePt1Y, curX, curY);
-  else
+  } else if (rs->phase == RP::AfterReference_WaitAngleOrP) {
+    const float thetaRef = std::atan2(rs->refY2 - rs->refY1, rs->refX2 - rs->refX1);
+    *outThetaRad = std::atan2(curY - rs->baseY, curX - rs->baseX) - thetaRef;
+  } else if (rs->phase == RP::AnglePoints_WaitP2) {
+    *outThetaRad = RotateDeltaFromReferenceAndNewSegment(rs->refX1, rs->refY1, rs->refX2, rs->refY2,
+                                                         rs->anglePt1X, rs->anglePt1Y, curX, curY);
+  } else {
     return false;
+  }
   return true;
 }
 
 bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale) {
-  using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
-  using SP = AppCommandState::ScalePhase;
-  if (cmd.active != K::Scale || !outScale)
+  const auto* ss = cmd.sessionAs<stepengine::ScaleSession>();
+  if (!ss || !outScale)
     return false;
-  if (cmd.modifyPhase != MP::NeedDestination)
+  if (ss->phase != stepengine::ModifyPhase::NeedDestination)
     return false;
-  if (cmd.scalePhase == SP::FactorPick) {
-    const float d = std::hypot(curX - cmd.modifyBaseX, curY - cmd.modifyBaseY);
-    float s = d / std::max(cmd.scaleRefDist, 1e-20f);
+  using SP = stepengine::ScalePhase;
+  if (ss->scalePhase == SP::FactorPick) {
+    const float d = std::hypot(curX - ss->baseX, curY - ss->baseY);
+    const float s = d / std::max(ss->refDist, 1e-20f);
     *outScale = std::max(s, 1e-6f);
     return true;
   }
-  if (cmd.scalePhase == SP::NewLength_WaitP2) {
-    const float d = std::hypot(curX - cmd.scaleNewLenP1X, curY - cmd.scaleNewLenP1Y);
-    float s = d / std::max(cmd.scaleRefDist, 1e-20f);
+  if (ss->scalePhase == SP::NewLength_WaitP2) {
+    const float d = std::hypot(curX - ss->newLenP1X, curY - ss->newLenP1Y);
+    const float s = d / std::max(ss->refDist, 1e-20f);
     *outScale = std::max(s, 1e-6f);
     return true;
   }
@@ -568,12 +566,13 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   if (!out)
     return;
   out->clear();
-  using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
-  using MirP = AppCommandState::MirrorPhase;
-  if ((cmd.active == K::Move || cmd.active == K::Copy) && cmd.modifyPhase == MP::NeedDestination) {
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+  using MP = stepengine::ModifyPhase;
+  using MirP = stepengine::MirrorPhase;
+  if (const auto* mc = cmd.sessionAs<stepengine::MoveCopySession>()) {
+    if (mc->phase != MP::NeedDestination)
+      return;
+    const float dx = curX - mc->baseX;
+    const float dy = curY - mc->baseY;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
@@ -586,9 +585,9 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     }
     return;
   }
-  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+  if (const auto* ps = cmd.sessionAs<stepengine::PasteSession>()) {
+    const float dx = curX - ps->baseX;
+    const float dy = curY - ps->baseY;
     for (const auto& ann : cmd.clipboard.content.cadAnnotations) {
       CadAnnotation p{};
       CadAnnotationPreviewTranslated(ann, dx, dy, &p);
@@ -597,11 +596,11 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     return;
   }
   float sc = 1.f;
-  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
-    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
+  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>()) {
+    if (ss->phase != MP::NeedDestination || !CadScalePreviewFactor(cmd, curX, curY, &sc))
       return;
-    const float bx = cmd.modifyBaseX;
-    const float by = cmd.modifyBaseY;
+    const float bx = ss->baseX;
+    const float by = ss->baseY;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
@@ -614,10 +613,12 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     }
     return;
   }
-  if (cmd.active == K::Mirror && (cmd.mirrorPhase == MirP::NeedP2 || cmd.mirrorPhase == MirP::NeedEraseAnswer)) {
-    const float mx0 = cmd.mirrorP1X, my0 = cmd.mirrorP1Y;
-    const float mx1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
-    const float my1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>()) {
+    if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
+      return;
+    const float mx0 = ms->p1X, my0 = ms->p1Y;
+    const float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    const float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
@@ -630,13 +631,14 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     }
     return;
   }
-  if (cmd.active != K::Rotate)
+  const auto* rs = cmd.sessionAs<stepengine::RotateSession>();
+  if (!rs)
     return;
   float theta = 0.f;
   if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
     return;
-  const float bx = cmd.rotateBaseX;
-  const float by = cmd.rotateBaseY;
+  const float bx = rs->baseX;
+  const float by = rs->baseY;
   for (const auto& e : cmd.selection) {
     if (e.type != SelectedEntity::Type::Annotation)
       continue;
@@ -654,17 +656,18 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
   if (!out)
     return;
   out->clear();
-  using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
-  using MirP = AppCommandState::MirrorPhase;
+  using MP = stepengine::ModifyPhase;
+  using MirP = stepengine::MirrorPhase;
   auto take = [&](const CadTable& src, auto&& xform) {
     CadTable p = src;
     xform(&p);
     out->push_back(std::move(p));
   };
-  if ((cmd.active == K::Move || cmd.active == K::Copy) && cmd.modifyPhase == MP::NeedDestination) {
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+  if (const auto* mc = cmd.sessionAs<stepengine::MoveCopySession>()) {
+    if (mc->phase != MP::NeedDestination)
+      return;
+    const float dx = curX - mc->baseX;
+    const float dy = curY - mc->baseY;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Table)
         continue;
@@ -675,16 +678,16 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
     }
     return;
   }
-  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
-    const float dx = curX - cmd.modifyBaseX;
-    const float dy = curY - cmd.modifyBaseY;
+  if (const auto* ps = cmd.sessionAs<stepengine::PasteSession>()) {
+    const float dx = curX - ps->baseX;
+    const float dy = curY - ps->baseY;
     for (const auto& t : cmd.clipboard.content.cadTables)
       take(t, [&](CadTable* p) { CadTableTranslate(p, dx, dy); });
     return;
   }
   float sc = 1.f;
-  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
-    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
+  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>()) {
+    if (ss->phase != MP::NeedDestination || !CadScalePreviewFactor(cmd, curX, curY, &sc))
       return;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Table)
@@ -692,14 +695,16 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.drawing.cadTables.size())
         continue;
-      take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableScaleAround(t, cmd.modifyBaseX, cmd.modifyBaseY, sc); });
+      take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableScaleAround(t, ss->baseX, ss->baseY, sc); });
     }
     return;
   }
-  if (cmd.active == K::Mirror && (cmd.mirrorPhase == MirP::NeedP2 || cmd.mirrorPhase == MirP::NeedEraseAnswer)) {
-    const float mx0 = cmd.mirrorP1X, my0 = cmd.mirrorP1Y;
-    const float mx1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
-    const float my1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>()) {
+    if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
+      return;
+    const float mx0 = ms->p1X, my0 = ms->p1Y;
+    const float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    const float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Table)
         continue;
@@ -710,7 +715,8 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
     }
     return;
   }
-  if (cmd.active != K::Rotate)
+  const auto* rs = cmd.sessionAs<stepengine::RotateSession>();
+  if (!rs)
     return;
   float theta = 0.f;
   if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
@@ -721,7 +727,7 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.drawing.cadTables.size())
       continue;
-    take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableRotateAround(t, cmd.rotateBaseX, cmd.rotateBaseY, theta); });
+    take(cmd.drawing.cadTables[k], [&](CadTable* t) { CadTableRotateAround(t, rs->baseX, rs->baseY, theta); });
   }
 }
 
@@ -739,14 +745,12 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Scale;
-  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  st.selBoxWaitingSecond = false;
-  st.scaleRefDist = 1.f;
-  st.scalePhase = AppCommandState::ScalePhase::FactorPick;
-  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
-    st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+  const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
+  const auto initialPhase =
+      haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;
+  stepengine::BeginSession(st, std::make_unique<stepengine::ScaleSession>(initialPhase), true);
+  if (haveSel)
     log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
-  } else
+  else
     log.push_back(kSelectObjectsPrompt);
 }

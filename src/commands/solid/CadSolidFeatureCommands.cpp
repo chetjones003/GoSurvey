@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -74,65 +75,70 @@ void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vect
 
 
 void CancelExtrudeCommand(AppCommandState& st) {
-  st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
-  st.extrudeProfiles.clear();
-  st.extrudeHeightPickValid = false;
-  st.extrudeHeightPick = 0.0;
+  if (auto* es = st.sessionAs<stepengine::ExtrudeSession>()) {
+    es->phase = stepengine::ExtrudePhase::SelectProfiles;
+    es->profiles.clear();
+    es->heightPickValid = false;
+    es->heightPick = 0.0;
+  }
 }
 
 std::string CadExtrudePromptText(const AppCommandState& st) {
-  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+  const auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es || es->phase == stepengine::ExtrudePhase::SelectProfiles) {
     return "EXTRUDE — select closed polylines or circles, Enter when done. ESC cancels.";
   }
   std::string s = "EXTRUDE — specify height of extrusion";
-  if (st.extrudeHeightPickValid) {
+  if (es->heightPickValid) {
     char buf[48];
-    std::snprintf(buf, sizeof(buf), " <%.4g>", st.extrudeHeightPick);
+    std::snprintf(buf, sizeof(buf), " <%.4g>", es->heightPick);
     s += buf;
   }
   s += ": type a value or click. ESC cancels.";
   return s;
 }
 
-/// Move to the height phase if the selection holds at least one profile; otherwise report and stay.
 static void ExtrudeEnterHeightPhase(AppCommandState& st, std::vector<std::string>& log) {
+  auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es)
+    return;
   int skipped = 0;
-  const int n = GatherExtrudeProfiles(st, &st.extrudeProfiles, &skipped);
+  const int n = GatherExtrudeProfiles(st, &es->profiles, &skipped);
   if (n == 0) {
     log.push_back("EXTRUDE — nothing selected can be extruded (need a closed polyline or a circle).");
-    st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
+    es->phase = stepengine::ExtrudePhase::SelectProfiles;
     return;
   }
   if (skipped > 0)
     log.push_back("EXTRUDE — " + std::to_string(skipped) + " selected object(s) are not profiles and were ignored.");
-  st.extrudePhase = AppCommandState::ExtrudePhase::WaitHeight;
-  st.extrudeHeightPickValid = false;
+  es->phase = stepengine::ExtrudePhase::WaitHeight;
+  es->heightPickValid = false;
   log.push_back(CadExtrudePromptText(st));
 }
 
 void StartExtrudeCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelExtrudeCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Extrude;
-  st.lastCommand = AppCommandState::Kind::Extrude;
   st.selBoxWaitingSecond = false;
+  auto sess = std::make_unique<stepengine::ExtrudeSession>();
+  auto* es = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
 
   if (!st.selection.empty()) {
     ExtrudeEnterHeightPhase(st, log);
-    if (st.extrudePhase == AppCommandState::ExtrudePhase::WaitHeight)
+    if (es->phase == stepengine::ExtrudePhase::WaitHeight)
       return;
-    // fell back to SelectProfiles — nothing usable was selected; drop that selection and ask.
     st.selection.clear();
   }
-  st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
+  es->phase = stepengine::ExtrudePhase::SelectProfiles;
   log.push_back(CadExtrudePromptText(st));
 }
 
 bool CadBuildExtrudeSolids(const AppCommandState& st, double height, std::vector<brep::Solid>* out) {
   out->clear();
-  if (st.extrudeProfiles.empty() || !std::isfinite(height) || height == 0.0)
+  const auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es || es->profiles.empty() || !std::isfinite(height) || height == 0.0)
     return false;
-  for (const brep::Profile& p : st.extrudeProfiles) {
+  for (const brep::Profile& p : es->profiles) {
     brep::Solid s;
     brep::Problem why = brep::Problem::Ok;
     if (!brep::Extrude(p, height, &s, &why)) {
@@ -145,19 +151,17 @@ bool CadBuildExtrudeSolids(const AppCommandState& st, double height, std::vector
 }
 
 void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
-  st.extrudeHeightPickValid = false;
-  if (st.active != AppCommandState::Kind::Extrude ||
-      st.extrudePhase != AppCommandState::ExtrudePhase::WaitHeight || st.extrudeProfiles.empty())
+  auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es)
+    return;
+  es->heightPickValid = false;
+  if (es->phase != stepengine::ExtrudePhase::WaitHeight || es->profiles.empty())
     return;
 
-  // The extrusion axis: the first profile's plane normal, through its plane origin. Height is the
-  // closest approach between that axis and the cursor ray — exactly the maths SolidPickKind::Height
-  // uses, and for the same reason: the cursor sits ON the work plane, so its offset along the axis
-  // is only readable from the ray. Plan view has no ray, so it has no answer; the prompt says so.
   (void)cursorOnPlane;
   if (!ray || !ray->valid())
     return;
-  const ucs::Ucs& plane = st.extrudeProfiles.front().plane;
+  const ucs::Ucs& plane = es->profiles.front().plane;
   const ray3d::Vec3 axisDir = plane.zAxis;
   const ray3d::Vec3 w0 = ray3d::Sub(plane.origin, ray->origin);
   const double b = ray3d::Dot(axisDir, ray->dir);
@@ -169,8 +173,8 @@ void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane
   const double h = (b * ev - dv) / den;
   if (!std::isfinite(h) || std::fabs(h) <= 1e-9)
     return;
-  st.extrudeHeightPick = h;
-  st.extrudeHeightPickValid = true;
+  es->heightPick = h;
+  es->heightPickValid = true;
 }
 
 static void CommitExtrude(AppCommandState& st, double height, std::vector<std::string>& log) {
@@ -183,23 +187,23 @@ static void CommitExtrude(AppCommandState& st, double height, std::vector<std::s
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));
   }
   BumpCadGpuCache(st);
   st.selection.clear();
-  CancelExtrudeCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Extrude)
+  auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+  if (es->phase == stepengine::ExtrudePhase::SelectProfiles) {
     if (!line.empty())
-      return false;  // a name / coordinate here means nothing; leave the command running
+      return false;
     if (st.selection.empty()) {
       log.push_back("EXTRUDE — nothing selected. Click a closed polyline or circle, or ESC.");
       return true;
@@ -208,10 +212,9 @@ bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std:
     return true;
   }
 
-  // WaitHeight.
   if (line.empty()) {
-    if (st.extrudeHeightPickValid) {
-      CommitExtrude(st, st.extrudeHeightPick, log);
+    if (es->heightPickValid) {
+      CommitExtrude(st, es->heightPick, log);
     } else {
       log.push_back("EXTRUDE — type a height, or move the cursor to a view where one can be read.");
     }
@@ -223,7 +226,7 @@ bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std:
     log.push_back("EXTRUDE — \"" + line + "\" is not a height. Type a non-zero number, or ESC.");
     return true;
   }
-  const double signedH = st.extrudeHeightPickValid ? std::copysign(h, st.extrudeHeightPick) : h;
+  const double signedH = es->heightPickValid ? std::copysign(h, es->heightPick) : h;
   CommitExtrude(st, signedH, log);
   return true;
 }
@@ -231,30 +234,21 @@ bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std:
 void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   (void)wx;
   (void)wy;
-  if (st.active != AppCommandState::Kind::Extrude)
+  auto* es = st.sessionAs<stepengine::ExtrudeSession>();
+  if (!es)
     return;
-  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
-    // Selection accumulation itself is handled by the shared click path; a click here only advances
-    // once the user presses Enter. Nothing to do.
+  if (es->phase == stepengine::ExtrudePhase::SelectProfiles)
     return;
-  }
-  if (!st.extrudeHeightPickValid) {
+  if (!es->heightPickValid) {
     log.push_back("EXTRUDE — no height under the cursor here; type a value, or orbit the view.");
     return;
   }
-  CommitExtrude(st, st.extrudeHeightPick, log);
+  CommitExtrude(st, es->heightPick, log);
 }
 
-// -------------------------------------------------------------------------------------------------
-// The LOFT command (REQ-315 / ADR-048, GitHub issue #241). Select two or more closed polylines /
-// circles IN LOFTING ORDER, Enter to build. `brep::Loft` skins the solid with SurfaceKind::Nurbs
-// side faces. The ghost and the commit both go through CadBuildLoftSolid — one source of truth, the
-// same rule the other prompted solid commands follow. There is no height / axis phase; a click in
-// the one phase only accumulates the selection, exactly like EXTRUDE's SelectProfiles step.
-// -------------------------------------------------------------------------------------------------
-
 void CancelLoftCommand(AppCommandState& st) {
-  st.loftPhase = AppCommandState::LoftPhase::SelectProfiles;
+  if (auto* ls = st.sessionAs<stepengine::LoftSession>())
+    ls->phase = stepengine::LoftPhase::SelectProfiles;
 }
 
 std::string CadLoftPromptText(const AppCommandState& st) {
@@ -293,41 +287,35 @@ static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Loft");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
+  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));
   if (skipped > 0)
     log.push_back("LOFT — " + std::to_string(skipped) +
                   " selected object(s) are not profiles and were ignored.");
   BumpCadGpuCache(st);
   st.selection.clear();
-  CancelLoftCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 void StartLoftCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelLoftCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Loft;
-  st.lastCommand = AppCommandState::Kind::Loft;
   st.selBoxWaitingSecond = false;
-  st.loftPhase = AppCommandState::LoftPhase::SelectProfiles;
+  stepengine::BeginSession(st, std::make_unique<stepengine::LoftSession>());
 
-  // A ready-made selection of two or more profiles builds straight away, the way a bare EXTRUDE on
-  // a selection jumps past the "select objects" prompt.
   if (st.selection.size() >= 2) {
     CommitLoft(st, log);
     if (st.active != AppCommandState::Kind::Loft)
-      return;  // committed (or the selection was cleared on success)
+      return;
   }
   log.push_back(CadLoftPromptText(st));
 }
 
 bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Loft)
+  if (!st.sessionAs<stepengine::LoftSession>())
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   if (!line.empty())
-    return false;  // LOFT takes no typed value; leave the command running
+    return false;
   if (st.selection.size() < 2) {
     log.push_back("LOFT — select at least two profiles, in lofting order, then Enter. ESC cancels.");
     return true;
@@ -540,21 +528,27 @@ bool GatherSweepInputs(const AppCommandState& st, brep::Profile* profOut, brep::
 /// already carries both; this only plumbs the two `AppCommandState` fields into a `SweepOptions`.
 brep::SweepOptions SweepOptionsFrom(const AppCommandState& st) {
   constexpr double kSweepDegToRad = 3.14159265358979323846 / 180.0;
+  const auto* sws = st.sessionAs<stepengine::SweepSession>();
   brep::SweepOptions o;
-  o.twistRad = st.sweepTwistDeg * kSweepDegToRad;
-  o.alignToPath = st.sweepAlignToPath;
+  o.twistRad = (sws ? sws->twistDeg : 0.0) * kSweepDegToRad;
+  o.alignToPath = sws ? sws->alignToPath : true;
   return o;
 }
 
 } // namespace
 
 void CancelSweepCommand(AppCommandState& st) {
-  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
-  st.sweepTwistDeg = 0.0;
-  st.sweepAlignToPath = true;
+  if (auto* sws = st.sessionAs<stepengine::SweepSession>()) {
+    sws->phase = stepengine::SweepPhase::SelectInputs;
+    sws->twistDeg = 0.0;
+    sws->alignToPath = true;
+  }
 }
 
 std::string CadSweepPromptText(const AppCommandState& st) {
+  const auto* sws = st.sessionAs<stepengine::SweepSession>();
+  const double twistDeg = sws ? sws->twistDeg : 0.0;
+  const bool alignToPath = sws ? sws->alignToPath : true;
   brep::Profile prof;
   brep::SweepPath path;
   bool hp = false;
@@ -568,10 +562,10 @@ std::string CadSweepPromptText(const AppCommandState& st) {
     s += ")";
   }
   s += ". Enter builds; T <deg> twist, A toggles path-alignment. ESC cancels.";
-  if (st.sweepTwistDeg != 0.0 || !st.sweepAlignToPath) {
+  if (twistDeg != 0.0 || !alignToPath) {
     char b[80];
-    std::snprintf(b, sizeof(b), " [twist %g°, align %s]", st.sweepTwistDeg,
-                  st.sweepAlignToPath ? "on" : "off");
+    std::snprintf(b, sizeof(b), " [twist %g°, align %s]", twistDeg,
+                  alignToPath ? "on" : "off");
     s += b;
   }
   return s;
@@ -608,21 +602,17 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Sweep");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+  st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
+  log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));
   BumpCadGpuCache(st);
   st.selection.clear();
-  CancelSweepCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelSweepCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Sweep;
-  st.lastCommand = AppCommandState::Kind::Sweep;
   st.selBoxWaitingSecond = false;
-  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+  stepengine::BeginSession(st, std::make_unique<stepengine::SweepSession>());
 
   brep::Profile prof;
   brep::SweepPath path;
@@ -638,7 +628,8 @@ void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
                           std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Sweep)
+  auto* sws = st.sessionAs<stepengine::SweepSession>();
+  if (!sws)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   if (line.empty()) {
@@ -646,7 +637,6 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
     return true;
   }
 
-  // A keyword token and an optional value: "T 45", "TWIST 45", "T45", "A", "A N".
   std::string tok = line;
   std::string rest;
   const std::size_t sp = line.find_first_of(" \t");
@@ -657,7 +647,7 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
   std::string low = StringUtil::toLowerAsciiCopy(tok);
   if (rest.empty() && low.size() > 1 && low[0] == 't' &&
       (std::isdigit(static_cast<unsigned char>(low[1])) || low[1] == '-' || low[1] == '+' ||
-       low[1] == '.')) {  // "T45" — the letter then the number, no space
+       low[1] == '.')) {
     rest = tok.substr(1);
     low = "t";
   }
@@ -673,20 +663,20 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
       log.push_back("SWEEP — \"" + rest + "\" is not an angle. Type degrees, e.g. \"T 45\".");
       return true;
     }
-    st.sweepTwistDeg = deg;
+    sws->twistDeg = deg;
     log.push_back(CadSweepPromptText(st));
     return true;
   }
 
   if (low == "a" || low == "align" || low == "alignment") {
     if (rest.empty()) {
-      st.sweepAlignToPath = !st.sweepAlignToPath;
+      sws->alignToPath = !sws->alignToPath;
     } else {
       const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(rest[0])));
       if (c == 'y')
-        st.sweepAlignToPath = true;
+        sws->alignToPath = true;
       else if (c == 'n')
-        st.sweepAlignToPath = false;
+        sws->alignToPath = false;
       else {
         log.push_back("SWEEP — alignment is \"A Y\" or \"A N\" (bare \"A\" toggles).");
         return true;
@@ -696,14 +686,8 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
     return true;
   }
 
-  return false;  // not a SWEEP keyword — let the generic path (and issue #233) have it
+  return false;
 }
-
-// -------------------------------------------------------------------------------------------------
-// The prompted REVOLVE command (REQ-314 / ADR-046 increment 2b). Select a closed polyline or circle,
-// then the two ends of the revolve axis, then an angle in degrees (default a full turn). The ghost
-// and the commit both go through CadBuildRevolveSolids.
-// -------------------------------------------------------------------------------------------------
 
 namespace {
 
@@ -712,24 +696,29 @@ constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 } // namespace
 
 void CancelRevolveCommand(AppCommandState& st) {
-  st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
-  st.revolveProfiles.clear();
-  st.revolveAxisStartSet = false;
-  st.revolveAngleDeg = 360.0;
+  if (auto* rvs = st.sessionAs<stepengine::RevolveSession>()) {
+    rvs->phase = stepengine::RevolvePhase::SelectProfiles;
+    rvs->profiles.clear();
+    rvs->axisStartSet = false;
+    rvs->angleDeg = 360.0;
+  }
 }
 
 std::string CadRevolvePromptText(const AppCommandState& st) {
-  switch (st.revolvePhase) {
-  case AppCommandState::RevolvePhase::SelectProfiles:
+  const auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs)
+    return "REVOLVE";
+  switch (rvs->phase) {
+  case stepengine::RevolvePhase::SelectProfiles:
     return "REVOLVE — select closed polylines or circles, Enter when done. ESC cancels.";
-  case AppCommandState::RevolvePhase::WaitAxisStart:
+  case stepengine::RevolvePhase::WaitAxisStart:
     return "REVOLVE — specify axis start point (click or type X,Y). ESC cancels.";
-  case AppCommandState::RevolvePhase::WaitAxisEnd:
+  case stepengine::RevolvePhase::WaitAxisEnd:
     return "REVOLVE — specify axis end point (click or type X,Y). ESC cancels.";
-  case AppCommandState::RevolvePhase::WaitAngle: {
+  case stepengine::RevolvePhase::WaitAngle: {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "REVOLVE — angle of revolution in degrees <%g>: ",
-                  st.revolveAngleDeg);
+                  rvs->angleDeg);
     return std::string(buf) + "Enter for the default. ESC cancels.";
   }
   }
@@ -737,42 +726,46 @@ std::string CadRevolvePromptText(const AppCommandState& st) {
 }
 
 static void RevolveEnterAxisPhase(AppCommandState& st, std::vector<std::string>& log) {
+  auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs)
+    return;
   int skipped = 0;
-  const int n = GatherExtrudeProfiles(st, &st.revolveProfiles, &skipped);
+  const int n = GatherExtrudeProfiles(st, &rvs->profiles, &skipped);
   if (n == 0) {
     log.push_back("REVOLVE — nothing selected can be revolved (need a closed polyline or a circle).");
-    st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
+    rvs->phase = stepengine::RevolvePhase::SelectProfiles;
     return;
   }
   if (skipped > 0)
     log.push_back("REVOLVE — " + std::to_string(skipped) + " selected object(s) are not profiles and were ignored.");
-  st.revolvePhase = AppCommandState::RevolvePhase::WaitAxisStart;
-  st.revolveAxisStartSet = false;
+  rvs->phase = stepengine::RevolvePhase::WaitAxisStart;
+  rvs->axisStartSet = false;
   log.push_back(CadRevolvePromptText(st));
 }
 
 void StartRevolveCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelRevolveCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Revolve;
-  st.lastCommand = AppCommandState::Kind::Revolve;
   st.selBoxWaitingSecond = false;
+  auto sess = std::make_unique<stepengine::RevolveSession>();
+  auto* rvs = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
 
   if (!st.selection.empty()) {
     RevolveEnterAxisPhase(st, log);
-    if (st.revolvePhase != AppCommandState::RevolvePhase::SelectProfiles)
+    if (rvs->phase != stepengine::RevolvePhase::SelectProfiles)
       return;
     st.selection.clear();
   }
-  st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
+  rvs->phase = stepengine::RevolvePhase::SelectProfiles;
   log.push_back(CadRevolvePromptText(st));
 }
 
 bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg, std::vector<brep::Solid>* out) {
   out->clear();
-  if (st.revolveProfiles.empty() || !st.revolveAxisStartSet)
+  const auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs || rvs->profiles.empty() || !rvs->axisStartSet)
     return false;
-  const ray3d::Vec3 dir = ray3d::Sub(st.revolveAxisEnd, st.revolveAxisStart);
+  const ray3d::Vec3 dir = ray3d::Sub(rvs->axisEnd, rvs->axisStart);
   if (!(ray3d::Length(dir) > 1e-9))
     return false;
   double ang = angleDeg * kDegToRad;
@@ -780,10 +773,10 @@ bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg, std::vect
     return false;
   if (std::fabs(ang) > 2.0 * 3.14159265358979323846)
     ang = (ang > 0.0 ? 1.0 : -1.0) * 2.0 * 3.14159265358979323846;
-  for (const brep::Profile& p : st.revolveProfiles) {
+  for (const brep::Profile& p : rvs->profiles) {
     brep::Solid s;
     brep::Problem why = brep::Problem::Ok;
-    if (!brep::Revolve(p, st.revolveAxisStart, dir, ang, &s, &why)) {
+    if (!brep::Revolve(p, rvs->axisStart, dir, ang, &s, &why)) {
       out->clear();
       return false;
     }
@@ -793,19 +786,21 @@ bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg, std::vect
 }
 
 static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std::string>& log) {
-  // Report the kernel's own reason when the numbers do not make a solid (REQ-201).
-  const ray3d::Vec3 dir = ray3d::Sub(st.revolveAxisEnd, st.revolveAxisStart);
+  auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs)
+    return;
+  const ray3d::Vec3 dir = ray3d::Sub(rvs->axisEnd, rvs->axisStart);
   double ang = angleDeg * kDegToRad;
   if (std::fabs(ang) > 2.0 * 3.14159265358979323846)
     ang = (ang > 0.0 ? 1.0 : -1.0) * 2.0 * 3.14159265358979323846;
   std::vector<brep::Solid> built;
-  bool ok = !st.revolveProfiles.empty() && ray3d::Length(dir) > 1e-9;
+  bool ok = !rvs->profiles.empty() && ray3d::Length(dir) > 1e-9;
   brep::Problem lastWhy = brep::Problem::Ok;
   if (ok) {
-    for (const brep::Profile& p : st.revolveProfiles) {
+    for (const brep::Profile& p : rvs->profiles) {
       brep::Solid s;
       brep::Problem why = brep::Problem::Ok;
-      if (brep::Revolve(p, st.revolveAxisStart, dir, ang, &s, &why))
+      if (brep::Revolve(p, rvs->axisStart, dir, ang, &s, &why))
         built.push_back(std::move(s));
       else {
         lastWhy = why;
@@ -823,22 +818,22 @@ static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std:
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
-    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
+    st.drawing.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));
+    log.push_back(SolidCreatedMessage(st.drawing.cadSolids.back()->recipe.kind, mp));
   }
   BumpCadGpuCache(st);
   st.selection.clear();
-  CancelRevolveCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 bool HandleRevolveTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Revolve)
+  auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
-  using RP = AppCommandState::RevolvePhase;
+  using RP = stepengine::RevolvePhase;
 
-  if (st.revolvePhase == RP::SelectProfiles) {
+  if (rvs->phase == RP::SelectProfiles) {
     if (!line.empty())
       return false;
     if (st.selection.empty()) {
@@ -849,9 +844,9 @@ bool HandleRevolveTextInput(const std::string& lineIn, AppCommandState& st, std:
     return true;
   }
 
-  if (st.revolvePhase == RP::WaitAxisStart || st.revolvePhase == RP::WaitAxisEnd) {
+  if (rvs->phase == RP::WaitAxisStart || rvs->phase == RP::WaitAxisEnd) {
     if (line.empty())
-      return true;  // a bare Enter has nothing to act on here; the prompt stands
+      return true;
     float lx = 0.f, ly = 0.f;
     double wz = 0.0;
     if (!ParseStoragePointZ(st, line, &lx, &ly, &wz, /*allowRelative=*/false, 0.f, 0.f)) {
@@ -859,21 +854,20 @@ bool HandleRevolveTextInput(const std::string& lineIn, AppCommandState& st, std:
       return true;
     }
     const ray3d::Vec3 p{static_cast<double>(lx), static_cast<double>(ly), wz};
-    if (st.revolvePhase == RP::WaitAxisStart) {
-      st.revolveAxisStart = p;
-      st.revolveAxisStartSet = true;
-      st.revolvePhase = RP::WaitAxisEnd;
+    if (rvs->phase == RP::WaitAxisStart) {
+      rvs->axisStart = p;
+      rvs->axisStartSet = true;
+      rvs->phase = RP::WaitAxisEnd;
     } else {
-      st.revolveAxisEnd = p;
-      st.revolvePhase = RP::WaitAngle;
+      rvs->axisEnd = p;
+      rvs->phase = RP::WaitAngle;
     }
     log.push_back(CadRevolvePromptText(st));
     return true;
   }
 
-  // WaitAngle.
   if (line.empty()) {
-    CommitRevolve(st, st.revolveAngleDeg, log);
+    CommitRevolve(st, rvs->angleDeg, log);
     return true;
   }
   char* end = nullptr;
@@ -882,29 +876,29 @@ bool HandleRevolveTextInput(const std::string& lineIn, AppCommandState& st, std:
     log.push_back("REVOLVE — \"" + line + "\" is not an angle. Type degrees, or ESC.");
     return true;
   }
-  st.revolveAngleDeg = deg;
+  rvs->angleDeg = deg;
   CommitRevolve(st, deg, log);
   return true;
 }
 
 void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Revolve)
+  auto* rvs = st.sessionAs<stepengine::RevolveSession>();
+  if (!rvs)
     return;
-  using RP = AppCommandState::RevolvePhase;
+  using RP = stepengine::RevolvePhase;
   const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
                       static_cast<double>(CadCommitElevation(st))};
-  if (st.revolvePhase == RP::WaitAxisStart) {
-    st.revolveAxisStart = p;
-    st.revolveAxisStartSet = true;
-    st.revolvePhase = RP::WaitAxisEnd;
+  if (rvs->phase == RP::WaitAxisStart) {
+    rvs->axisStart = p;
+    rvs->axisStartSet = true;
+    rvs->phase = RP::WaitAxisEnd;
     log.push_back(CadRevolvePromptText(st));
     return;
   }
-  if (st.revolvePhase == RP::WaitAxisEnd) {
-    st.revolveAxisEnd = p;
-    st.revolvePhase = RP::WaitAngle;
+  if (rvs->phase == RP::WaitAxisEnd) {
+    rvs->axisEnd = p;
+    rvs->phase = RP::WaitAngle;
     log.push_back(CadRevolvePromptText(st));
     return;
   }
-  // SelectProfiles is handled by the shared click path; WaitAngle takes a typed value.
 }

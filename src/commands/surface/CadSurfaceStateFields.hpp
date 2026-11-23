@@ -304,16 +304,6 @@
     std::vector<float> catchmentLines;
   };
   std::vector<SurfaceWatershedCacheEntry> surfaceWatershedCache;
-  std::string waterDropSurfaceName;
-  std::string catchmentSurfaceName;
-  std::string swapEdgeSurfaceName;
-  std::string addPointSurfaceName;
-  std::string delPointSurfaceName;
-  std::string movePointSurfaceName;
-  std::string delLineSurfaceName;
-  enum class MoveTinPointPhase : std::uint8_t { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
-  double moveTinFromX = 0.0;
-  double moveTinFromY = 0.0;
   std::vector<float> lastWaterDropPathXyz;
   std::vector<float> lastCatchmentPathXyz;
   /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so

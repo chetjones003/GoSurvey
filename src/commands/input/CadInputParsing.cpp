@@ -408,33 +408,38 @@ void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx
 
 
 void CancelSegmentAnglePick(AppCommandState& st, std::vector<std::string>* log) {
-  using SAP = AppCommandState::SegmentAnglePickPhase;
-  const bool hadPick = st.segmentAnglePickPhase != SAP::Idle;
-  st.segmentAnglePickPhase = SAP::Idle;
-  st.segmentAngleKeyboardAwaitBearing = false;
+  auto* ang = stepengine::ActiveSegmentAngleState(st);
+  if (!ang)
+    return;
+  const bool hadPick = ang->pickPhase != stepengine::SegmentAnglePickPhase::Idle;
+  ang->pickPhase = stepengine::SegmentAnglePickPhase::Idle;
+  ang->keyboardAwaitBearing = false;
   if (hadPick && log)
     log->push_back("Bearing pick — canceled.");
 }
 
 bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using SAP = AppCommandState::SegmentAnglePickPhase;
+  auto* ang = stepengine::ActiveSegmentAngleState(st);
+  if (!ang)
+    return false;
+  using SAP = stepengine::SegmentAnglePickPhase;
   const std::string s = StringUtil::trimCopy(lineIn);
   if (s.empty())
     return false;
   const std::string low = StringUtil::toLowerAsciiCopy(s);
   if (low == "2p" || low == "2 p" || low == "ap" || low == "anglepick" || low == "a p") {
-    ResetSegmentAngleLock(st);
-    st.segmentAngleKeyboardAwaitBearing = false;
-    st.segmentAnglePickPhase = SAP::WaitP1;
+    ang->reset();
+    ang->keyboardAwaitBearing = false;
+    ang->pickPhase = SAP::WaitP1;
     log.push_back("Bearing pick — first reference point (viewport click). ESC cancels pick.");
     return true;
   }
   if (low == "a" || low == "angle") {
-    if (st.segmentAngleLockActive || st.segmentAnglePickPhase != SAP::Idle) {
-      ResetSegmentAngleLock(st);
+    if (ang->lockActive || ang->pickPhase != SAP::Idle) {
+      ang->reset();
       log.push_back("Segment bearing lock — off.");
     } else {
-      st.segmentAngleKeyboardAwaitBearing = true;
+      ang->keyboardAwaitBearing = true;
       log.push_back("Bearing ° clockwise from north (decimal/DMS); blank Enter cancels.");
     }
     return true;
@@ -452,11 +457,11 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
     return false;
 
   if (rest.empty()) {
-    if (st.segmentAngleLockActive || st.segmentAnglePickPhase != SAP::Idle) {
-      ResetSegmentAngleLock(st);
+    if (ang->lockActive || ang->pickPhase != SAP::Idle) {
+      ang->reset();
       log.push_back("Segment bearing lock — off.");
     } else {
-      st.segmentAngleKeyboardAwaitBearing = true;
+      ang->keyboardAwaitBearing = true;
       log.push_back("Bearing ° clockwise from north (decimal/DMS); blank Enter cancels.");
     }
     return true;
@@ -465,10 +470,10 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
   if (!ParseBearingCwNorthStringWithOptionalDelta(rest, &combined, log))
     return true;
   const float theta = MathAngleRadFromBearingCwNorthDeg(combined);
-  st.segmentLockUx = std::cos(theta);
-  st.segmentLockUy = std::sin(theta);
-  st.segmentAngleLockActive = true;
-  st.segmentAnglePickPhase = SAP::Idle;
+  ang->lockUx = std::cos(theta);
+  ang->lockUy = std::sin(theta);
+  ang->lockActive = true;
+  ang->pickPhase = SAP::Idle;
   char buf[144];
   std::snprintf(buf, sizeof(buf),
                 "Bearing lock %.6g° clockwise from north — distance (+/- along ray) or click (A clears).",

@@ -332,8 +332,9 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
       log.push_back("GETSTATIONOFFSET - finish or cancel the active command first.");
       return;
     }
-    st.active = AppCommandState::Kind::StationOffsetPick;
-    st.stationOffsetPickArgs = a->name + (surfaceName.empty() ? std::string{} : ", SURFACE=" + surfaceName);
+    auto sess = std::make_unique<stepengine::StationOffsetPickSession>();
+    sess->pickArgs = a->name + (surfaceName.empty() ? std::string{} : ", SURFACE=" + surfaceName);
+    stepengine::BeginSession(st, std::move(sess), false);
     log.push_back("GETSTATIONOFFSET - pick a point (or type X,Y) to report its station and offset on \"" + a->name +
                   "\". ESC ends.");
     return;
@@ -388,14 +389,15 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
 }
 
 void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log) {
-  assert(st.active == AppCommandState::Kind::StationOffsetPick);
+  const auto* sess = st.sessionAs<stepengine::StationOffsetPickSession>();
+  if (!sess) return;
   assert(std::isfinite(lx) && std::isfinite(ly));
   double wx = 0.0, wy = 0.0;
   CadCoord::WorldFromLocal(st, static_cast<float>(lx), static_cast<float>(ly), &wx, &wy);
   std::array<char, 64> sx{}, sy{};
   std::snprintf(sx.data(), sx.size(), "%.17g", wx);
   std::snprintf(sy.data(), sy.size(), "%.17g", wy);
-  const std::vector<std::string> f = SplitFields(st.stationOffsetPickArgs);
+  const std::vector<std::string> f = SplitFields(sess->pickArgs);
   std::string args = f.empty() ? std::string{} : f[0];
   args += std::string(", ") + sx.data() + ", " + sy.data();
   for (size_t i = 1; i < f.size(); ++i) args += ", " + f[i];

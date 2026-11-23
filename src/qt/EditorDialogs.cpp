@@ -1083,7 +1083,6 @@ void EditorWindow::ShowAlignResultsDialog() {
   connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
   connect(&dialog, &QDialog::rejected, &dialog, [&] {
     m_State.alignControlPts.clear();
-    m_State.alignPhase = AppCommandState::AlignPhase::PickSrc;
     m_State.showAlignResultsWindow = false;
   });
 
@@ -1255,11 +1254,12 @@ void EditorWindow::ServiceUiRequests() {
       m_State.tablePendingRows = rows->value() + 2;  // title, header, and requested data rows
       m_State.tablePendingColumnWidthInches = static_cast<float>(columnWidth->value());
       m_State.tablePendingRowHeightInches = static_cast<float>(rowHeight->value());
-      m_State.tableStage = 3;
+      if (auto* ts = m_State.sessionAs<stepengine::TableSession>())
+        ts->stage = 3;
       m_Log.push_back("TABLE — specify the insertion point (upper-left corner):");
     } else {
+      m_State.activeSession.reset();
       m_State.active = AppCommandState::Kind::None;
-      m_State.tableStage = 0;
     }
     m_ModalOpen = false;
     Refresh();

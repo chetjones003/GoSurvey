@@ -1,5 +1,7 @@
 #include "CadCommandsInternal.hpp"
 #include "modify/CadModifyInternal.hpp"
+#include "modify/CadModifySessions.hpp"
+#include "engine/StepEngine.hpp"
 #include "modify/CadCurveEditInternal.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -333,7 +335,7 @@ void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037-style paper routing
-    st.active = K::None;
+    stepengine::EndSession(st);
     st.paperLengthenPhase = 1;
     log.push_back(std::string("LENGTHEN — click an object (mode: ") + LengthenModeName(st.lengthenMode) +
                   (st.lengthenModeValueSet ? "). Esc cancels." :
@@ -342,71 +344,66 @@ void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Lengthen;
-  st.lastCommand = K::Lengthen;
-  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::LengthenSession>(), true);
   log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <") +
                 LengthenModeName(st.lengthenMode) + ">. ESC cancels.");
 }
 
-static bool TryLengthenModeToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+static bool TryLengthenModeToggle(AppCommandState& st, stepengine::LengthenSession& sess,
+                                  const std::string& lineIn, std::vector<std::string>& log) {
   using LM = AppCommandState::LengthenMode;
-  using LP = AppCommandState::LengthenPhase;
+  using LP = stepengine::LengthenPhase;
   const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(lineIn));
   if (low == "de" || low == "delta") {
     st.lengthenMode = LM::Delta;
-    st.lengthenPhase = LP::WaitDeltaValue;
+    sess.phase = LP::WaitDeltaValue;
     log.push_back("LENGTHEN DElta — length to add (+) or subtract (-):");
     return true;
   }
   if (low == "p" || low == "percent") {
     st.lengthenMode = LM::Percent;
-    st.lengthenPhase = LP::WaitPercentValue;
+    sess.phase = LP::WaitPercentValue;
     log.push_back("LENGTHEN Percent — new length as a percentage of current (100 = unchanged):");
     return true;
   }
   if (low == "t" || low == "total") {
     st.lengthenMode = LM::Total;
-    st.lengthenPhase = LP::WaitTotalValue;
+    sess.phase = LP::WaitTotalValue;
     log.push_back("LENGTHEN Total — new total length:");
     return true;
   }
   if (low == "dy" || low == "dynamic") {
     st.lengthenMode = LM::Dynamic;
-    st.lengthenModeValueSet = true;  // Dynamic needs no typed value — it resolves from the drag
-    st.lengthenPhase = LP::WaitSelectOrMode;
+    st.lengthenModeValueSet = true;
+    sess.phase = LP::WaitSelectOrMode;
     log.push_back("LENGTHEN DYnamic — select object, then drag to the new length. ESC cancels.");
     return true;
   }
   return false;
 }
 
-/// REQ-103 LENGTHEN, pick-first entry (TASK-100). The user picked an object while the active
-/// sub-mode had no value yet. Latch the object, report what it currently measures, and open that
-/// mode's value prompt — `HandleLengthenText` applies the answer to this object rather than merely
-/// arming the mode. DYnamic never gets here (it needs no typed value and is handled before this).
-static void LengthenBeginValuePromptForPick(AppCommandState& st, const SelectedEntity& hit, bool nearFirst,
+static void LengthenBeginValuePromptForPick(AppCommandState& st, stepengine::LengthenSession& sess,
+                                            const SelectedEntity& hit, bool nearFirst,
                                             float curLen, std::vector<std::string>& log) {
   using LM = AppCommandState::LengthenMode;
-  using LP = AppCommandState::LengthenPhase;
-  st.lengthenPendingEntity = hit;
-  st.lengthenPendingNearFirst = nearFirst;
-  st.lengthenPendingCurrentLength = curLen;
-  st.lengthenPendingApplyOnValue = true;
+  using LP = stepengine::LengthenPhase;
+  sess.pendingEntity = hit;
+  sess.pendingNearFirst = nearFirst;
+  sess.pendingCurrentLength = curLen;
+  sess.pendingApplyOnValue = true;
   const char* prompt = "length to add (+) or subtract (-):";
   switch (st.lengthenMode) {
   case LM::Percent:
-    st.lengthenPhase = LP::WaitPercentValue;
+    sess.phase = LP::WaitPercentValue;
     prompt = "new length as a percentage of current (100 = unchanged):";
     break;
   case LM::Total:
-    st.lengthenPhase = LP::WaitTotalValue;
+    sess.phase = LP::WaitTotalValue;
     prompt = "new total length:";
     break;
   case LM::Delta:
-  case LM::Dynamic:  // unreachable — DYnamic resolves from the drag and returns before this call
-    st.lengthenPhase = LP::WaitDeltaValue;
+  case LM::Dynamic:
+    sess.phase = LP::WaitDeltaValue;
     break;
   }
   char buf[224];
@@ -415,57 +412,46 @@ static void LengthenBeginValuePromptForPick(AppCommandState& st, const SelectedE
   log.push_back(buf);
 }
 
-/// The other half of `LengthenBeginValuePromptForPick`: a value has just been parsed, so if a pick
-/// is waiting on it, apply it to that object now and clear the latch. Returns true when it applied
-/// (so the caller can log the "select object" prompt only when it did not).
-static bool LengthenApplyPendingPick(AppCommandState& st, std::vector<std::string>& log) {
-  if (!st.lengthenPendingApplyOnValue)
+static bool LengthenApplyPendingPick(AppCommandState& st, stepengine::LengthenSession& sess,
+                                     std::vector<std::string>& log) {
+  if (!sess.pendingApplyOnValue)
     return false;
-  const float curLen = st.lengthenPendingCurrentLength;
+  const float curLen = sess.pendingCurrentLength;
   const float newLen = LengthenResolveTargetLength(st, curLen);
-  if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+  if (ApplyLengthenToEntity(st, sess.pendingEntity, sess.pendingNearFirst, newLen, log)) {
     log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
     BumpCadGpuCache(st);
   }
-  // Cleared whether or not the apply succeeded: a refused length (collapse-to-zero, arc past a
-  // full circle) has already been explained by ApplyLengthenToEntity, and leaving the latch armed
-  // would silently re-apply to a stale object on the next value typed.
-  st.lengthenPendingApplyOnValue = false;
-  st.lengthenPendingEntity = SelectedEntity{};
+  sess.pendingApplyOnValue = false;
+  sess.pendingEntity = SelectedEntity{};
   return true;
 }
 
 bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::LengthenSession>();
+  if (!sess)
+    return false;
   std::string line = StringUtil::trimCopy(lineIn);
-  using LP = AppCommandState::LengthenPhase;
-  if (st.lengthenPhase == LP::WaitSelectOrMode) {
-    if (TryLengthenModeToggle(st, line, log))
+  using LP = stepengine::LengthenPhase;
+  if (sess->phase == LP::WaitSelectOrMode) {
+    if (TryLengthenModeToggle(st, *sess, line, log))
       return true;
-    // Anything else at this phase is not a point LENGTHEN accepts by typed coordinate — picking is
-    // viewport-only (there is no "type X,Y to select an object" convention anywhere in this
-    // codebase). An unrecognized line here is simply an unknown mode letter.
     log.push_back("LENGTHEN — type DE, P, T, or DY to set the mode, or pick an object in the viewport.");
     return false;
   }
-  // TASK-100. A mode letter is legal at a value prompt too, and it must not lose an object the
-  // user has already picked — otherwise "pick, then realise you wanted Percent" dead-ends on
-  // "must be a finite number", which is the same trap the pick-first entry was added to remove.
-  if (st.lengthenPendingApplyOnValue &&
-      (st.lengthenPhase == LP::WaitDeltaValue || st.lengthenPhase == LP::WaitPercentValue ||
-       st.lengthenPhase == LP::WaitTotalValue)) {
-    if (TryLengthenModeToggle(st, line, log)) {
-      // The toggle has already set the new mode's value phase and logged its prompt, and the latch
-      // survives untouched — so the next number still applies to the object already picked.
+  if (sess->pendingApplyOnValue &&
+      (sess->phase == LP::WaitDeltaValue || sess->phase == LP::WaitPercentValue ||
+       sess->phase == LP::WaitTotalValue)) {
+    if (TryLengthenModeToggle(st, *sess, line, log)) {
       if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
-        // DYnamic is the exception: it needs no typed value, so hand the object to the drag.
-        st.lengthenPendingApplyOnValue = false;
-        st.lengthenPhase = LP::WaitDynamicTarget;
+        sess->pendingApplyOnValue = false;
+        sess->phase = LP::WaitDynamicTarget;
         log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
       }
       return true;
     }
   }
-  if (st.lengthenPhase == LP::WaitDeltaValue) {
+  if (sess->phase == LP::WaitDeltaValue) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
       log.push_back("LENGTHEN DElta — must be a finite number (may be negative).");
@@ -473,13 +459,13 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     }
     st.lengthenDeltaValue = v;
     st.lengthenModeValueSet = true;
-    st.lengthenPhase = LP::WaitSelectOrMode;
-    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    sess->phase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, *sess, log);
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <DElta ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
   }
-  if (st.lengthenPhase == LP::WaitPercentValue) {
+  if (sess->phase == LP::WaitPercentValue) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
       log.push_back("LENGTHEN Percent — must be a positive finite number.");
@@ -487,13 +473,13 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     }
     st.lengthenPercentValue = v;
     st.lengthenModeValueSet = true;
-    st.lengthenPhase = LP::WaitSelectOrMode;
-    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    sess->phase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, *sess, log);
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Percent ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
   }
-  if (st.lengthenPhase == LP::WaitTotalValue) {
+  if (sess->phase == LP::WaitTotalValue) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
       log.push_back("LENGTHEN Total — must be a positive finite number.");
@@ -501,35 +487,32 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     }
     st.lengthenTotalValue = v;
     st.lengthenModeValueSet = true;
-    st.lengthenPhase = LP::WaitSelectOrMode;
-    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    sess->phase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, *sess, log);
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Total ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
   }
-  if (st.lengthenPhase == LP::WaitDynamicTarget) {
+  if (sess->phase == LP::WaitDynamicTarget) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
       log.push_back("LENGTHEN DYnamic — must be a positive finite new length, or click in the viewport.");
       return false;
     }
-    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, v, log)) {
+    if (ApplyLengthenToEntity(st, sess->pendingEntity, sess->pendingNearFirst, v, log)) {
       log.push_back("LENGTHEN — object updated.");
       BumpCadGpuCache(st);
     }
-    st.lengthenPhase = LP::WaitSelectOrMode;
+    sess->phase = LP::WaitSelectOrMode;
     return true;
   }
   return false;
 }
 
-/// DYnamic mode: resolves a live length from a cursor pick, projected onto the pending entity's
-/// own fixed extension direction — same non-mutating cursor-driven idiom as
-/// `CadOffsetAppendLivePreview`/`CadScalePreviewFactor`. Used by both the drag-commit below and
-/// (mirrored) by the live preview drawn in `TransformPreview.cpp` while the cursor moves.
-static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, float wy, float* outLen) {
-  const SelectedEntity& e = st.lengthenPendingEntity;
-  const bool nearFirst = st.lengthenPendingNearFirst;
+static bool LengthenDynamicTargetLength(const AppCommandState& st, const stepengine::LengthenSession& sess,
+                                        float wx, float wy, float* outLen) {
+  const SelectedEntity& e = sess.pendingEntity;
+  const bool nearFirst = sess.pendingNearFirst;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index);
@@ -595,23 +578,24 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
 /// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
 /// from.
 void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  using LP = AppCommandState::LengthenPhase;
-  if (st.lengthenPhase == LP::WaitDynamicTarget) {
-    // The picked point IS the new position for the moving end — resolve it to a length along the
-    // entity's own fixed direction, then apply through the same choke point DElta/Percent/Total use.
+  auto* sess = st.sessionAs<stepengine::LengthenSession>();
+  if (!sess)
+    return;
+  using LP = stepengine::LengthenPhase;
+  if (sess->phase == LP::WaitDynamicTarget) {
     float newLen = 0.f;
-    if (!LengthenDynamicTargetLength(st, wx, wy, &newLen)) {
+    if (!LengthenDynamicTargetLength(st, *sess, wx, wy, &newLen)) {
       log.push_back("LENGTHEN DYnamic — could not resolve a length from that pick; try again.");
       return;
     }
-    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+    if (ApplyLengthenToEntity(st, sess->pendingEntity, sess->pendingNearFirst, newLen, log)) {
       log.push_back("LENGTHEN — object updated.");
       BumpCadGpuCache(st);
     }
-    st.lengthenPhase = LP::WaitSelectOrMode;
+    sess->phase = LP::WaitSelectOrMode;
     return;
   }
-  if (st.lengthenPhase != LP::WaitSelectOrMode)
+  if (sess->phase != LP::WaitSelectOrMode)
     return;
   SelectedEntity hit{};
   float d2 = 0.f;
@@ -624,19 +608,15 @@ void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::ve
   if (!LengthenEligibility(st, hit, wx, wy, &nearFirst, &curLen, "LENGTHEN", log))
     return;
   if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
-    st.lengthenPendingEntity = hit;
-    st.lengthenPendingNearFirst = nearFirst;
-    st.lengthenPendingCurrentLength = curLen;
-    st.lengthenPhase = LP::WaitDynamicTarget;
+    sess->pendingEntity = hit;
+    sess->pendingNearFirst = nearFirst;
+    sess->pendingCurrentLength = curLen;
+    sess->phase = LP::WaitDynamicTarget;
     log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
     return;
   }
   if (!st.lengthenModeValueSet) {
-    // TASK-100. This used to refuse the pick ("type DE/P/T first"), which made the ribbon button a
-    // dead end: the prompt invited a pick, the pick was rejected, and the only way forward was to
-    // know that a mode letter AND a number had to be typed before picking anything. Latch the
-    // object instead and ask for the value now — the answer applies to this object straight away.
-    LengthenBeginValuePromptForPick(st, hit, nearFirst, curLen, log);
+    LengthenBeginValuePromptForPick(st, *sess, hit, nearFirst, curLen, log);
     return;
   }
   const float newLen = LengthenResolveTargetLength(st, curLen);
@@ -644,19 +624,14 @@ void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::ve
     log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
     BumpCadGpuCache(st);
   }
-  // Stays in WaitSelectOrMode — loop back for the next object, same shape as TRIM/OFFSET targets.
 }
 
-/// Model-space + floating-model-space viewport-pick handler for EXTEND — called from
-/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
-/// from. Boundary collection (SelectBoundaries) is TRIM's own cutting-edge flow, copy-adapted with
-/// EXTEND's own refusal wording; target extension (SelectTargets) reuses `LengthenEligibility` for
-/// eligibility/near-end/current-length, then `FindExtendLineTarget`/`FindExtendArcTarget` for the
-/// boundary hit, then `ApplyLengthenToEntity` — the exact TASK-095 mutation, unmodified — for the
-/// actual edit.
 void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  using EP = AppCommandState::ExtendPhase;
-  if (st.extendPhase == EP::SelectBoundaries) {
+  auto* ext = st.sessionAs<stepengine::ExtendSession>();
+  if (!ext)
+    return;
+  using EP = stepengine::ExtendPhase;
+  if (ext->phase == EP::SelectBoundaries) {
     SelectedEntity hit{};
     float d2 = 0.f;
     if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
@@ -681,13 +656,13 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
       log.push_back("EXTEND — splines cannot be boundary edges; nothing changed.");
       return;
     }
-    for (const auto& c : st.extendBoundaries) {
+    for (const auto& c : ext->boundaries) {
       if (c.type == hit.type && c.index == hit.index) {
         log.push_back("EXTEND — already a boundary edge.");
         return;
       }
     }
-    st.extendBoundaries.push_back(hit);
+    ext->boundaries.push_back(hit);
     log.push_back("EXTEND — boundary edge added.");
     return;
   }
@@ -706,7 +681,7 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
 
   std::vector<curveisect::Seg> segs;
   std::vector<curveisect::Conic> conics;
-  for (const auto& b : st.extendBoundaries)
+  for (const auto& b : ext->boundaries)
     AppendModelBoundaryShapes(st, b, &segs, &conics);
 
   float newLen = 0.f;
@@ -1434,31 +1409,24 @@ static void ApplyBreakToEntity(AppCommandState& st, const SelectedEntity& e, con
 
 void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
-  using K = AppCommandState::Kind;
-  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 4)
-    st.active = K::None;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    stepengine::EndSession(st);
     st.paperBreakPhase = 1;
     log.push_back("BREAK — click an object (the pick is break point 1). Esc cancels.");
     return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Break;
-  st.lastCommand = K::Break;
-  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
-  st.breakEntity = SelectedEntity{};
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::BreakSession>(), true);
   log.push_back("BREAK — select object (the pick is break point 1). ESC cancels.");
 }
 
-/// Model-space + floating-model-space viewport-pick handler for BREAK — called from
-/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
-/// from. Phase 1's pick both selects the entity (`PickClosestCadEntity`) and supplies break point
-/// 1 (`ClosestPointOnEntity`, not the raw pick); phase 2 resolves break point 2 on the SAME entity
-/// and applies, looping back to phase 1.
 void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  using BP = AppCommandState::BreakPhase;
-  if (st.breakPhase == BP::SelectFirstPoint) {
+  auto* brk = st.sessionAs<stepengine::BreakSession>();
+  if (!brk)
+    return;
+  using BP = stepengine::BreakPhase;
+  if (brk->phase == BP::SelectFirstPoint) {
     SelectedEntity hit{};
     float d2 = 0.f;
     if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
@@ -1486,22 +1454,22 @@ void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vecto
       log.push_back("BREAK — could not resolve a point on that object; try again.");
       return;
     }
-    st.breakEntity = hit;
-    st.breakP1 = p1;
-    st.breakPhase = BP::SelectSecondPoint;
+    brk->entity = hit;
+    brk->p1 = p1;
+    brk->phase = BP::SelectSecondPoint;
     log.push_back("BREAK — specify second break point:");
     return;
   }
 
   // SelectSecondPoint.
   BreakPoint p2{};
-  if (!ClosestPointOnEntity(st, st.breakEntity, wx, wy, &p2)) {
+  if (!ClosestPointOnEntity(st, brk->entity, wx, wy, &p2)) {
     log.push_back("BREAK — could not resolve a second point on that object; try again.");
     return;
   }
-  ApplyBreakToEntity(st, st.breakEntity, st.breakP1, p2, log);
-  st.breakPhase = BP::SelectFirstPoint;
-  st.breakEntity = SelectedEntity{};
+  ApplyBreakToEntity(st, brk->entity, brk->p1, p2, log);
+  brk->phase = BP::SelectFirstPoint;
+  brk->entity = SelectedEntity{};
 }
 
 /// Paper-space equivalent of `ClosestPointOnEntity`, against `PaperLayout`'s stores. Paper circles
@@ -2203,7 +2171,6 @@ void ApplyStretchToPaperSelection(AppCommandState& st, float dxIn, float dyIn, s
 void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
     if (st.selectedPaperEntities.empty()) {
       log.push_back("STRETCH — select paper object(s) first (a crossing/window box gives true "
@@ -2217,17 +2184,8 @@ void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = K::Stretch;
-  st.lastCommand = K::Stretch;
-  // Always a fresh, CLEAN box-select — unlike MOVE/COPY/ROTATE/SCALE, STRETCH's whole effect
-  // depends on capturing the box together with the selection, and ComputeSelectionFromRect only
-  // ADDS hits to st.selection (never clears stale entries first, by design — a real selection
-  // tool needs to accumulate across several drags). Without this clear, a leftover selection from
-  // whatever ran before STRETCH would be re-evaluated against THIS invocation's box/displacement
-  // too — found while writing this task's own headless transcripts (task log).
   ClearSelection(st);
-  st.modifyPhase = MP::PickSelection;
-  st.selBoxWaitingSecond = false;
+  stepengine::BeginSession(st, std::make_unique<stepengine::StretchSession>(), true);
   log.push_back(
       "STRETCH — click two corners to crossing/window-select objects (right-to-left = crossing), "
       "then base point and destination. ESC cancels.");

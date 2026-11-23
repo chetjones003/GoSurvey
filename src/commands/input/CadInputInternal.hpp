@@ -60,13 +60,15 @@ static bool ParseBearingCwNorthStringWithOptionalDelta(const std::string& raw, f
 }
 
 static void CommitSegmentAnglePickLock(AppCommandState& st, std::vector<std::string>& log) {
-  using SAP = AppCommandState::SegmentAnglePickPhase;
-  const float br = NormalizeBearingDegreesCwNorth(st.segmentPickDraftBearingDeg);
+  auto* ang = stepengine::ActiveSegmentAngleState(st);
+  if (!ang)
+    return;
+  const float br = NormalizeBearingDegreesCwNorth(ang->pickDraftBearingDeg);
   const float theta = MathAngleRadFromBearingCwNorthDeg(br);
-  st.segmentLockUx = std::cos(theta);
-  st.segmentLockUy = std::sin(theta);
-  st.segmentAngleLockActive = true;
-  st.segmentAnglePickPhase = SAP::Idle;
+  ang->lockUx = std::cos(theta);
+  ang->lockUy = std::sin(theta);
+  ang->lockActive = true;
+  ang->pickPhase = stepengine::SegmentAnglePickPhase::Idle;
   char buf[144];
   std::snprintf(buf, sizeof(buf),
                 "Bearing locked %.6g° clockwise from north — distance (+/-) or click on ray (A clears).",

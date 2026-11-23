@@ -1092,7 +1092,8 @@ TEST_CASE("Paper ARRAY rectangular copies are isolated and undo as one operation
 
   std::vector<std::string> log;
   SubmitText(state, "ARRAY", log);
-  REQUIRE(state.arrayOnPaper);
+  REQUIRE(state.sessionAs<stepengine::ArraySession>() != nullptr);
+  REQUIRE(state.sessionAs<stepengine::ArraySession>()->onPaper);
   REQUIRE(state.active == AppCommandState::Kind::Array);
   PaperEntityRef paperHit{};
   REQUIRE(PickPaperEntityAt(state.drawing.paperLayouts[0], 0.5f, 0.f, 0.12f, &paperHit));

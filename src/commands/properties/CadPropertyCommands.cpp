@@ -236,7 +236,7 @@ bool IsPropCommandKind(AppCommandState::Kind k) {
 }
 
 void EndPropCommand(AppCommandState& st) {
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
   st.selBoxWaitingSecond = false;
   st.selection.clear();
@@ -291,13 +291,14 @@ bool PropCommandModelSpaceOnly(AppCommandState& st, AppCommandState::Kind k, std
 }
 
 void BeginPropCommand(AppCommandState& st, AppCommandState::Kind k) {
-  if (IsPropCommandKind(st.active))
+  if (IsPropCommandKind(st.active)) {
+    st.activeSession.reset();
     st.active = AppCommandState::Kind::None;  // restarting keeps the held selection
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selBoxWaitingSecond = false;
-  st.active = k;
-  st.lastCommand = k;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PropCmdSession>(k), /*recordAsLastCommand=*/true);
   st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
 }
 

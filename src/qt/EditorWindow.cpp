@@ -3008,12 +3008,8 @@ void EditorWindow::Refresh() {
     const QSignalBlocker toolspaceBlock(toolspaceTabs);
     toolspaceTabs->setCurrentIndex(ToolspaceTabIndex(m_State.toolspaceTab));
   }
-  QString commandHint;
-  for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
-      ScaleCommandFooterHint(m_State), RotateCommandFooterHint(m_State), DeleteCommandFooterHint(m_State),
-      JoinCommandFooterHint(m_State), TrimCommandFooterHint(m_State), OffsetCommandFooterHint(m_State),
-      AlignCommandFooterHint(m_State), ZoomCommandFooterHint(m_State), DrawingExtrasFooterHint(m_State)})
-    if (hint && *hint) { commandHint = QString::fromUtf8(hint); break; }
+  const std::string activePrompt = ActiveCommandPromptHint(m_State);
+  const QString commandHint = QString::fromUtf8(activePrompt.data(), static_cast<int>(activePrompt.size()));
   m_CommandBar->SetHint(commandHint);
   RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {

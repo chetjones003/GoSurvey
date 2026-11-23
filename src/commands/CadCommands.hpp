@@ -4,6 +4,9 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "engine/CommandSession.hpp"
+#include "engine/StepEngine.hpp"
+#include "modify/CadModifySessions.hpp"
 #include "DrawingContent.hpp"  // ADR-0010: the fields undo frames and tabs share
 #include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
@@ -834,282 +837,20 @@ struct AppCommandState {
     drawing.alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();
   }
 
-  enum class Kind : std::uint8_t {
-    None,
-    Line,
-    Circle,
-    Polyline,
-    /// REQ-087. Its own command Kind, unlike 3DPOLY which is a mode of POLYLINE — a feature line
-    /// commits to a different store, so the two cannot share a commit path.
-    FeatureLine,
-    /// REQ-398 side slope grading. Picks a feature line as its baseline, then sits on an options
-    /// prompt until told to grade, projecting cut and fill slopes out to a surface until they
-    /// daylight. \ref gradingPhase drives it.
-    Grading,
-    Arc,
-    Ellipse,
-    Text,
-    Mtext,
-    /// Multileader (REQ-367 / issue #619): arrow tip, landing, then in-place MTEXT for the label.
-    Mleader,
-    /// Add a second (or further) arrow branch to the selected multileader.
-    MleaderAddLeader,
-    DimAligned,
-    DimLinear,
-    DimAngular,
-    Move,
-    Copy,
-    Rotate,
-    Scale,
-    /// ARRAY: rectangular or polar patterns of duplicated copies of the selection (REQ-305, issue #87).
-    Array,
-    /// MIRROR: reflect the selection across a two-point mirror line (REQ-103 step 1). Default
-    /// behavior duplicates-then-reflects (source kept); an "Erase source objects?" prompt lets the
-    /// user opt into replacing the source instead, mirroring AutoCAD's own default.
-    Mirror,
-    /// LENGTHEN: change a Line/open-Polyline/non-full-circle-Arc's length at the end nearest each
-    /// pick, by DElta / Percent / Total / DYnamic (REQ-103 step 2). One entity per pick, loops back
-    /// to "select object" until Enter/Esc — TRIM/OFFSET's target-picking shape, not a selection.
-    Lengthen,
-    /// EXTEND: select boundary edges, then stretch a Line/open-Polyline/non-full-circle-Arc's end
-    /// nearest each pick out to the nearest boundary (REQ-103 step 3) — TRIM's direct inverse,
-    /// copy-adapting its boundary-edge-selection shape (own state, not shared code).
-    Extend,
-    /// BREAK: pick an entity (the pick doubles as break point 1), then a second point; the material
-    /// between them is removed (REQ-103 step 4). Eligible: Line, Circle, Arc (any sweep), open and
-    /// closed Polyline. Two picks identical in position opens a closed entity at that point with
-    /// nothing removed ("break at point").
-    Break,
-    /// STRETCH: crossing/window box-select, then base+destination; only the definition points
-    /// (endpoints/vertices/center) that fell inside the box move (REQ-103 step 5). Arc endpoints
-    /// stretch with true AutoCAD parity (center/radius recomputed, included angle preserved).
-    /// Single-shot, one undo step for the whole apply — MOVE/ROTATE/SCALE's shape, not a loop.
-    Stretch,
-    /// FILLET: pick two curves (Line, non-full-circle Arc, or an open/closed Polyline segment);
-    /// constructs a tangent arc between them at the persisted radius and trims/extends each to its
-    /// tangent point (REQ-103 step 6a). Radius-0 and parallel-lines-semicircle are real special
-    /// cases. Loops back to "select first object" until Enter/Esc — TRIM/LENGTHEN/EXTEND/BREAK's
-    /// per-target shape, one undo step per fillet.
-    Fillet,
-    /// CHAMFER: pick two curves (Line or an open/closed Polyline segment — Arc excluded, no
-    /// standard chamfer-to-arc geometry) and connect them with a straight Line at Distance/Distance
-    /// or Distance/Angle from their intersection, trimming/extending each to meet it (REQ-103 step
-    /// 6b). Shares FILLET's Case A (same-polyline adjacent segments) / Case B split, its
-    /// `cornerTrimMode` toggle, and its per-target looping shape.
-    Chamfer,
-    Delete,
-    Zoom,
-    Join,
-    Trim,
-    Offset,
-    IdPoint,
-    /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
-    SurveyInverse,
-    /// REQ-105: two-point 3D distance — delta X/Y/Z and slope (true 3D) distance between picks.
-    Dist,
-    /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
-    SurfaceElevGrade,
-    /// REQ-133: one pick traces a water-drop path on a named surface.
-    WaterDrop,
-    /// REQ-134: one pick reports the catchment upstream of an outlet.
-    Catchment,
-    /// REQ-139: one pick swaps an interior TIN edge on a named surface.
-    SwapTinEdge,
-    /// REQ-144: one pick adds a definition vertex on a named TIN (Z = work plane).
-    AddTinPoint,
-    /// REQ-144: one pick deletes the nearest definition point on a named TIN.
-    DelTinPoint,
-    /// REQ-150: two picks move a definition point (from, then to).
-    MoveTinPoint,
-    /// REQ-150: one pick deletes the nearest interior TIN edge.
-    DelTinLine,
-    /// REQ-145: two picks sample a named surface into a session Quick Profile graph.
-    QuickProfile,
-    /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
-    DesignateBreakline,
-    /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
-    DesignateBoundary,
-    /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
-    PdfAttach,
-    /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
-    Align,
-    /// Clipboard paste — cursor-following preview; one viewport click places the pasted entities.
-    Paste,
-    /// Paper space: create a rectangular viewport by two clicks (REQ-033).
-    PaperRectViewport,
-    /// HATCH: pick an internal point; trace the enclosing boundary and fill it (REQ-043).
-    Hatch,
-    /// PAN: interactive view pan — left-drag pans the active view; Esc/Enter/right-click exits (REQ-045).
-    Pan,
-    /// VPFREEZE / VPTHAW: pick entities in the current viewport; their layers freeze/thaw in it (REQ-046).
-    VpFreeze,
-    VpThaw,
-    /// RECT: two opposite corners produce an axis-aligned rectangle, stored as a 4-vertex CLOSED polyline
-    /// exactly as AutoCAD's RECTANG produces an LWPOLYLINE (REQ-053).
-    Rect,
-    /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
-    TrimState,
-    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-341).
-    ///
-    /// The prompt exists so the three keywords can be CLICKED rather than typed: a bracketed
-    /// option in `CommandInputHint` becomes a link that submits its own shortcut, and that
-    /// submission is only meaningful while a command is waiting to consume it. Without a waiting
-    /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
-    SectionClip,
-    /// SECTIONPLANE: waiting for a solid FACE, or for the two points of a section LINE
-    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1; the point form is the 2026-09-18
-    /// revision, which AutoCAD's own prompt asks for in the same breath as the face).
-    ///
-    /// \ref AppCommandState::sectionPlanePhase says which of the two it is waiting for.
-    SectionPlane,
-    Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
-    /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
-    /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
-    /// Shift+middle-drag orbit math, so the shortcut menu's Free Orbit is a real command.
-    Orbit,
-    /// UCS: define or restore the active coordinate system (REQ-154). One command with a keyword
-    /// option set, driven through \ref ucsPhase — the phases exist because several options need
-    /// further picks (an origin, three points, an angle, a name) after the keyword.
-    Ucs,
-    /// PLAN: orient the view to the XY plane of a coordinate system, WITHOUT changing the UCS
-    /// (REQ-154). Autodesk documents that distinction explicitly and it is the whole point of the
-    /// command being separate from UCS.
-    Plan,
-    /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
-    InsertBlock,
-    /// The seven B-rep primitives, driven as a prompted command (REQ-313 as amended): pick or type
-    /// the base point, then set each named dimension by its letter — `R` radius, `H` height, and so
-    /// on — before Enter creates it.
-    ///
-    /// **One Kind for all seven**, not seven Kinds. They differ only in which named parameters they
-    /// carry, and that difference is data (\ref SolidParamSpec), not control flow — seven near-identical
-    /// state machines is exactly the duplication that lets one of them quietly miss a fix.
-    Solid,
-    /// EXTRUDE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, then give a
-    /// height — typed, or dragged from the cursor with a live ghost. Its own Kind because it has a
-    /// select-objects phase and then a height phase, neither of which the primitive `Solid` command
-    /// has.
-    Extrude,
-    /// REVOLVE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, pick the two
-    /// ends of the revolve axis, then an angle in degrees.
-    Revolve,
-    /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
-    /// points, then pick which side to keep (or both).
-    Slice,
-    /// SECTION: choose solids, then three points defining the plane (REQ-335 increment 2).
-    Section,
-    /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
-    /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
-    /// select-objects phase and nothing else — no height, no axis.
-    Loft,
-    /// SWEEP (REQ-315 / ADR-048, GitHub #241): select one closed profile and one line-or-arc path,
-    /// Enter to sweep the profile along the path. One select-objects phase; the closed loop is the
-    /// profile and the open curve is the path.
-    Sweep,
-    /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
-    /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
-    Boolean,
-    /// REQ-317 POLYSOLID: a wall swept along a picked path. Its OWN Kind, unlike the seven
-    /// primitives that share one - a polysolid is built from a PATH rather than from a fixed set of
-    /// named dimensions, so it has different state and a different state machine, and folding it
-    /// into `Solid` would mean a table with a variable-length entry no other row uses.
-    Polysolid,
-    /// REQ-444 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
-    /// closed polyline / circle. Its own Kind because it has a path-building state machine like
-    /// POLYSOLID, but it commits an ordinary closed bulge polyline (REQ-316), not a new entity.
-    Revcloud,
-    /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
-    /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
-    /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
-    /// distance phase with a live cursor-driven pick, neither of which the old one-shot
-    /// `CadPressPull(st, args, log)` free function had.
-    PressPull,
-    /// BCONNECTMODE (issue #496): prompted, one-value-at-a-time authoring of a connection point's
-    /// smart connection modes — connection name, then mode name, then (for a new/edited mode)
-    /// target/role/engagement/compatibility/default, each its own phase/prompt rather than one
-    /// comma-separated line.
-    BConnectMode,
-    /// BCONNECT (issue #496): prompted authoring of a new connection point — name, nominal size,
-    /// role, engagement, compatibility tag, then either pick a flat solid face or type coordinates.
-    BConnect,
-    /// BCONNECTEDIT (issue #496): prompted editing (or removal) of an existing connection point's
-    /// nominal size/role/engagement/compatibility tag.
-    BConnectEdit,
-    /// BLOCKFITTING (issue #496): prompted tagging of the block being edited as a piping catalog
-    /// part — part type, nominal size, pressure class, part number.
-    BlockFitting,
-    /// PIPERUN (issue #486 increment B2 / REQ-345): prompted routing of a `CadPipeRun` — nominal
-    /// size (+ optional pressure class) first, then click-to-add straight vertices with a live
-    /// rubber-band pipe preview, Undo/End/ESC. Its own Kind for the same reason POLYSOLID has one:
-    /// a path built from a variable number of points needs different state than a fixed-parameter
-    /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
-    PipeRun,
-    /// PIPEFIT (issue #486 increment B7 / REQ-345): manual fitting placement on an ALREADY-ROUTED
-    /// pipe run — pick a station point on the selected run, splice in a catalog part (valve,
-    /// flange, reducer, coupling, ...), snapped via its own connection ports. One phase: the part
-    /// type and target run are both fixed by the time the command starts (`StartPipeFitCommand`),
-    /// so all that remains is a single point pick.
-    PipeFit,
-    /// PIPESPLIT (issue #486 increment B8 / REQ-345): split an already-routed run at a station
-    /// point, no fitting inserted — `PIPEFIT`'s own splice, minus the catalog lookup and block
-    /// placement. Its own `Kind` for the same one-pick-left reason `PipeFit` has one.
-    PipeSplit,
-    /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
-    /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
-    /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
-    /// hover-then-act than to any multi-phase draw command.
-    ExtractCenterline,
-    /// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a): the REQ-060 gizmo,
-    /// summoned by a command instead of appearing on every selection. Three Kinds rather than one
-    /// with a stored op so the command line, right-click repeat and `KindName` each name the verb
-    /// the user typed; the op they drive is still \ref gizmoOp, set for the command's duration.
-    Move3d,
-    Rotate3d,
-    Scale3d,
-    /// CHPROP / MATCHPROP / LAYMCUR (REQ-356, GitHub issue #575): the property commands. One
-    /// phase field, \ref propCmdPhase, drives all three.
-    ChProp,
-    MatchProp,
-    LayMCur,
-    /// Geolocation tab (REQ-359, GitHub issue #582): Mark Position ▸ Point (one pick), Mark
-    /// Position ▸ Lat-Long (latitude, then longitude, typed), and Reorient Marker / Edit Geographic
-    /// Marker (design point, then north direction). \ref geoCmdPhase drives the two-step ones.
-    GeoMarkPoint,
-    GeoMarkLatLong,
-    GeoReorientMarker,
-    /// REQ-360: a point (or a direction) picked for the Drawing Settings Transformation tab while
-    /// its window is hidden. Started only by the tab's pick buttons; \ref drawingSettingsPick says
-    /// what for. The window comes back when it ends (Esc = no change).
-    DrawingSettingsPick,
-    /// REQ-364: Capture Area — the two corners of Pick Area (geoCmdPhase WaitFirst / WaitSecond),
-    /// then Capturing while the tiles are gathered (\ref mapCapture). Esc cancels, storing nothing.
-    GeoCaptureArea,
-    /// GitHub #150 (3D Phase 7). PADSOLID asks for its boundary, then loops on a prompt offering
-    /// Surface and Pad elevation, the way every other command with options does - it does not take
-    /// everything on one line and give up. padSolidPhase drives it.
-    PadSolid,
-    /// REQ-443: create a fit-point or control-vertex NURBS spline.
-    Spline,
-    /// REQ-456 / issue #1019.
-    Point,
-    Leader,
-    Pedit,
-    Measure,
-    Divide,
-    Area,
-    List,
-    DataExtract,
-    Table,
-    PointTable,
-    /// REQ-485.1 ALIGNMENTLAYOUT: Tangent-Tangent layout, one PI per click or typed point; `U` takes one back.
-    AlignmentLayout,
-    /// REQ-485.2 CREATEALIGNMENTFROMOBJECTS: pick the objects, then accept or reverse the direction.
-    AlignmentFromObjects,
-    /// REQ-484.4 GETSTATIONOFFSET <alignment> with no point: each click (or typed X,Y) reports a station and offset,
-    /// until ESC. \ref stationOffsetPickArgs holds the alignment and any SURFACE= option.
-    StationOffsetPick,
-  } active = Kind::None;
-  std::string stationOffsetPickArgs;
+  using Kind = CadCommandKind;
+  Kind active = Kind::None;
+  /// ADR-0012: Active command session holding the command's own phase and scratch state.
+  /// Dropped automatically on completion, Esc, or tool reset.
+  std::unique_ptr<stepengine::CommandSession> activeSession;
+
+  template <typename T>
+  [[nodiscard]] T* sessionAs() {
+    return activeSession ? dynamic_cast<T*>(activeSession.get()) : nullptr;
+  }
+  template <typename T>
+  [[nodiscard]] const T* sessionAs() const {
+    return activeSession ? dynamic_cast<const T*>(activeSession.get()) : nullptr;
+  }
 
   static const char* KindName(Kind k) {
     switch (k) {
@@ -1585,7 +1326,7 @@ struct AppCommandState {
 
 #include "draw/CadDrawStateFields.hpp"
 
-#include "solid/CadSolidStateFields.hpp"
+  // Solid command phase/transient state lives in stepengine::*Session (src/commands/solid/CadSolidSessions.hpp).
 
 #include "pipe/CadPipeRevcloudStateFields.hpp"
 
@@ -1879,6 +1620,17 @@ inline void BumpCadGpuCache(AppCommandState& st) {
   ++st.cadGpuCacheRevision;
 }
 inline void BumpCadGpuCacheOnly(AppCommandState& st) { ++st.cadGpuCacheRevision; }
+
+#include "modify/CadModifyRestSessions.hpp"
+#include "draw/CadDrawSessions.hpp"
+#include "solid/CadSolidSessions.hpp"
+#include "pipe/CadPipeSiteSessions.hpp"
+#include "surface/CadSurfaceSessions.hpp"
+#include "alignment/CadAlignmentSessions.hpp"
+#include "ucs/CadUcsViewSessions.hpp"
+#include "gizmo/CadGizmoGeoPropSessions.hpp"
+#include "blocks/CadBlocksSessions.hpp"
+#include "misc/CadMiscSessions.hpp"
 
 /// Keeps per-entity attribute vectors sized to match geometry counts (used by Properties and select-similar).
 void EnsureAttrCounts(AppCommandState& st);
@@ -2255,18 +2007,8 @@ std::string ResolveCommandLineSubmission(const std::string& typedText);
 /// Which command is active is already visible in the command line's own history.
 inline constexpr const char* kSelectObjectsPrompt = "Select objects, ENTER to continue | ESC cancel";
 
-const char* CircleCommandFooterHint(const AppCommandState& st);
-const char* ModifyCommandFooterHint(const AppCommandState& st);
-const char* RotateCommandFooterHint(const AppCommandState& st);
-const char* ScaleCommandFooterHint(const AppCommandState& st);
-const char* DeleteCommandFooterHint(const AppCommandState& st);
-const char* JoinCommandFooterHint(const AppCommandState& st);
-const char* TrimCommandFooterHint(const AppCommandState& st);
-const char* OffsetCommandFooterHint(const AppCommandState& st);
-const char* AlignCommandFooterHint(const AppCommandState& st);
-const char* ZoomCommandFooterHint(const AppCommandState& st);
-const char* LineCommandFooterHint(const AppCommandState& st);
-const char* DrawingExtrasFooterHint(const AppCommandState& st);
+/// Single prompt/footer hint query backed by the active CommandSession (ADR-0012).
+std::string ActiveCommandPromptHint(const AppCommandState& st);
 
 /// Model-space extents of everything drawable.
 ///

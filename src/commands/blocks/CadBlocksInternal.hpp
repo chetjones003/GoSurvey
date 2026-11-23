@@ -53,7 +53,7 @@ void FinishInsertCommand(AppCommandState& st) {
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 CadBlockRef* InsertAttrTarget(AppCommandState& st) {

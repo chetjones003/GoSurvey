@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "GoSurvey/Document/styleproperty.hpp"
 
 #include <cmath>
@@ -39,10 +40,8 @@ void InitMultileaderLabelAtLanding(CadMultileader* ml, float landX, float landY,
 
 }  // namespace
 
-void ResetMleaderDraft(AppCommandState& st) {
-  st.mleaderPhase = AppCommandState::MleaderPhase::WaitArrowTip;
-  st.mleaderTipX = st.mleaderTipY = st.mleaderTipZ = 0.f;
-  st.mleaderEditIndex = -1;
+void ResetMleaderDraft(AppCommandState&) {
+  // Draft state lives in MleaderSession / MleaderAddLeaderSession.
 }
 
 namespace {
@@ -91,7 +90,8 @@ void OpenMultileaderLabelEditor(AppCommandState& st, int multileaderIndex, bool 
 }
 
 void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log) {
-  if (st.mleaderPhase != AppCommandState::MleaderPhase::WaitLanding)
+  auto* mlSess = st.sessionAs<stepengine::MleaderSession>();
+  if (!mlSess || mlSess->phase != stepengine::MleaderPhase::WaitLanding)
     return;
   const float landZ = CadCommitElevation(st);
   PushUndoSnapshot(st, "MLEADER");
@@ -100,22 +100,21 @@ void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::
   ml.annotative = st.drawing.activeMultileaderStyle.annotativeDefault;
   ml.splinePath = StyleProperty(st.drawing.activeMultileaderStyle.props, "leaderType") == "Spline";
   ml.showArrow = StyleProperty(st.drawing.activeMultileaderStyle.props, "arrowSymbol") != "None";
-  AppendPathPoint(&ml, st.mleaderTipX, st.mleaderTipY, st.mleaderTipZ);
+  AppendPathPoint(&ml, mlSess->tipX, mlSess->tipY, mlSess->tipZ);
   AppendPathPoint(&ml, landX, landY, landZ);
   InitMultileaderLabelAtLanding(&ml, landX, landY, landZ, st);
   st.drawing.cadMultileaders.push_back(std::move(ml));
   st.drawing.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   const int ix = static_cast<int>(st.drawing.cadMultileaders.size()) - 1;
-  st.mleaderPhase = AppCommandState::MleaderPhase::WaitLabel;
+  mlSess->phase = stepengine::MleaderPhase::WaitLabel;
   log.push_back("MLEADER — edit the label (Save to finish; Esc cancels the whole multileader).");
   OpenMultileaderLabelEditor(st, ix, /*justPlaced=*/true);
 }
 
 void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.mtextRichEditorMultileaderJustPlaced = false;
-  st.active = AppCommandState::Kind::None;
-  ResetMleaderDraft(st);
+  stepengine::EndSession(st);
   CloseMtextRichEditorUi(st);
   log.push_back("MLEADER placed.");
 }
@@ -135,9 +134,7 @@ void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::Mleader;
-  st.lastCommand = AppCommandState::Kind::Mleader;
-  ResetMleaderDraft(st);
+  stepengine::BeginSession(st, std::make_unique<stepengine::MleaderSession>(), /*recordAsLastCommand=*/true);
   log.push_back("MLEADER — specify arrowhead location (click or type X,Y). ESC cancels.");
 }
 
@@ -159,9 +156,8 @@ void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>&
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selBoxWaitingSecond = false;
-  st.active = AppCommandState::Kind::MleaderAddLeader;
-  st.mleaderEditIndex = *ix;
-  st.mleaderPhase = AppCommandState::MleaderPhase::WaitArrowTip;
+  stepengine::BeginSession(st, std::make_unique<stepengine::MleaderAddLeaderSession>(*ix),
+                           /*recordAsLastCommand=*/false);
   log.push_back("Add Leader — specify arrowhead location for the new branch. ESC cancels.");
 }
 
@@ -183,9 +179,10 @@ void RemoveLeaderFromSelectedMultileader(AppCommandState& st, std::vector<std::s
 }
 
 void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::MleaderAddLeader || st.mleaderEditIndex < 0)
+  auto* addSess = st.sessionAs<stepengine::MleaderAddLeaderSession>();
+  if (!addSess || addSess->editIndex < 0)
     return;
-  const size_t mi = static_cast<size_t>(st.mleaderEditIndex);
+  const size_t mi = static_cast<size_t>(addSess->editIndex);
   if (mi >= st.drawing.cadMultileaders.size())
     return;
   CadMultileader& ml = st.drawing.cadMultileaders[mi];
@@ -199,7 +196,6 @@ void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::
   PushUndoSnapshot(st, "Add Leader");
   ml.extraLeaderPaths.push_back({tipX, tipY, tipZ, landX, landY, landZ});
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
-  ResetMleaderDraft(st);
+  stepengine::EndSession(st);
   log.push_back("Add Leader — branch added.");
 }

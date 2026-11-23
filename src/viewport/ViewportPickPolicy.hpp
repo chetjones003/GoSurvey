@@ -8,48 +8,7 @@
 /// When building a selection window (fence), picks should use **unsnapped** device-mapped world coordinates so the
 /// rectangle matches the drag. Drawing commands use snapped \p outCursor world coordinates instead.
 inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) {
-  using K = AppCommandState::Kind;
-  using MP = AppCommandState::ModifyPhase;
-  using RP = AppCommandState::RotatePhase;
-  using MirP = AppCommandState::MirrorPhase;
-  return cmd.active == K::None || cmd.active == K::Delete || cmd.active == K::Join || cmd.active == K::Trim ||
-         cmd.active == K::Zoom || (cmd.active == K::Move && cmd.modifyPhase == MP::PickSelection) ||
-         (cmd.active == K::Copy && cmd.modifyPhase == MP::PickSelection) ||
-         (cmd.active == K::Scale && cmd.modifyPhase == MP::PickSelection) ||
-         // REQ-103: MIRROR and STRETCH open with the same window-select MOVE/COPY/SCALE do, so their
-         // fence corners must come from the same unsnapped drag coordinates (TASK-099 F1).
-         (cmd.active == K::Mirror && cmd.mirrorPhase == MirP::PickSelection) ||
-         (cmd.active == K::Stretch && cmd.modifyPhase == MP::PickSelection) ||
-         (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection) ||
-         // REQ-305: ARRAY opens with the same window-select MOVE/COPY/SCALE do.
-         (cmd.active == K::Array && cmd.arrayPhase == AppCommandState::ArrayPhase::PickSelection) ||
-         // REQ-121: ALIGN was MISSING here. It routes its PickSelection phase to
-         // `SelectionAccumulate` alongside its six siblings (see `ViewportClickRouteFor` below), so
-         // its fence corners must come from the same unsnapped drag coordinates they do — but this
-         // list was never extended when ALIGN joined them, so ALIGN alone built its box from SNAPPED
-         // coordinates. Nobody decided that; it is the per-command accident an unstated rule
-         // produces, and closing it is part of REQ-121 rather than a separate fix.
-         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection) ||
-         // REQ-314: EXTRUDE's / REVOLVE's SelectProfiles step is the same accumulate-and-Enter shape.
-         (cmd.active == K::Extrude &&
-          cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
-         (cmd.active == K::PressPull &&
-          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
-         (cmd.active == K::Revolve &&
-          cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
-         (cmd.active == K::Loft &&
-          cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) ||
-         (cmd.active == K::Sweep &&
-          cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) ||
-         (cmd.active == K::Slice &&
-          cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
-         // REQ-335 increment 2: SECTION's selection step, the same accumulate-and-Enter shape as
-         // SLICE's directly above. Missing from this list is the ALIGN accident recorded above,
-         // repeated — a command whose state machine has a selection phase but whose CLICKS were
-         // never routed to it, so the prompt appears and nothing can be picked.
-         (cmd.active == K::Section &&
-          cmd.sectionPhase == AppCommandState::SectionPhase::SelectSolids) ||
-         cmd.active == K::Boolean;
+  return stepengine::ActiveUseRawWorldForSelectionRect(cmd);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -126,372 +85,36 @@ enum class ViewportClickRoute : std::uint8_t {
   GizmoHandlePick,
 };
 
+inline ViewportClickRoute ViewportClickRouteFromStepRoute(stepengine::StepClickRoute r) {
+  using S = stepengine::StepClickRoute;
+  using R = ViewportClickRoute;
+  switch (r) {
+  case S::Ignore:                   return R::Ignore;
+  case S::IdleSelection:            return R::IdleSelection;
+  case S::SelectionBox:             return R::SelectionBox;
+  case S::SelectionAccumulate:      return R::SelectionAccumulate;
+  case S::RawEntityPick:            return R::RawEntityPick;
+  case S::SnappedPointPick:         return R::SnappedPointPick;
+  case S::TrimPick:                 return R::TrimPick;
+  case S::HatchPick:                return R::HatchPick;
+  case S::PdfAttachInsertPoint:     return R::PdfAttachInsertPoint;
+  case S::InsertBlockPick:          return R::InsertBlockPick;
+  case S::InsertBlockAlignFacePick: return R::InsertBlockAlignFacePick;
+  case S::BconnectFacePick:         return R::BconnectFacePick;
+  case S::ExtractCenterlinePick:    return R::ExtractCenterlinePick;
+  case S::SubObjectFacePick:        return R::SubObjectFacePick;
+  case S::GizmoHandlePick:          return R::GizmoHandlePick;
+  }
+  return R::Ignore;
+}
+
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
 /// own click block, and is not routed through here.
+///
+/// ADR-0012: Every interactive command declares its click route on its active step descriptor, so
+/// this delegates directly to the shared step engine.
 inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
-  using K = AppCommandState::Kind;
-  using R = ViewportClickRoute;
-  using MP = AppCommandState::ModifyPhase;
-
-  if (cmd.blockEditActive && cmd.bconnectAwaitingFace)
-    return R::BconnectFacePick;
-
-  switch (cmd.active) {
-  case K::None:
-    return R::IdleSelection;
-
-  // --- Point-picking draw commands: the click is a coordinate, handed to the state machine. ---
-  case K::Line:
-  case K::Circle:
-  // The prompted solid primitives (REQ-313 as amended): the base point is an ordinary snapped
-  // coordinate pick, exactly like CIRCLE's centre. Past that the command wants typed numbers and
-  // says so rather than swallowing the click — see SubmitSolidViewportPick.
-  case K::Solid:
-  case K::Polyline:
-  case K::FeatureLine:
-  case K::Rect:
-  case K::Arc:
-  case K::Ellipse:
-  case K::Text:
-  case K::Mtext:
-  case K::DimAligned:
-  case K::DimLinear:
-  case K::DimAngular:
-  case K::IdPoint:
-  case K::StationOffsetPick:
-  case K::SurveyInverse:
-  case K::Dist:
-  case K::Paste:
-  case K::SurfaceElevGrade:
-  case K::WaterDrop:
-  case K::Catchment:
-  case K::SwapTinEdge:
-  case K::AddTinPoint:
-  case K::DelTinPoint:
-  case K::MoveTinPoint:
-  case K::DelTinLine:
-  case K::QuickProfile:
-  case K::GeoMarkPoint:       // REQ-359: Mark Position ▸ Point
-  case K::GeoReorientMarker:  // REQ-359: design point, then a point along north
-  case K::DrawingSettingsPick:  // REQ-360: the Transformation tab's reference / rotation point or direction
-  case K::GeoCaptureArea:       // REQ-364: Pick Area's two corners (a click while capturing is ignored)
-    return R::SnappedPointPick;
-
-  // REQ-485.1 ALIGNMENTLAYOUT: every click is a PI, snapped like any other coordinate.
-  case K::AlignmentLayout:
-    return R::SnappedPointPick;
-  // REQ-485.2 CREATEALIGNMENTFROMOBJECTS: each click names one source object; the direction prompt is typed.
-  case K::AlignmentFromObjects:
-    return cmd.alignmentFromObjects.phase == AppCommandState::AlignmentFromObjectsPick::Phase::WaitDirection
-               ? R::Ignore
-               : R::RawEntityPick;
-
-  // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
-  case K::Offset:
-  case K::DesignateBreakline:
-  case K::DesignateBoundary:
-    return R::RawEntityPick;
-
-  // REQ-371 GRADING: the only click it takes names the baseline FEATURE LINE, so it is an entity
-  // pick rather than a coordinate. Every later phase is typed at the options prompt, and routing a
-  // click there to `Ignore` would swallow it in silence — the TASK-082 failure, which no transcript
-  // can catch because a transcript types and never clicks.
-  case K::Grading:
-    return cmd.gradingPhase == AppCommandState::GradingPhase::WaitBaseline ? R::RawEntityPick
-                                                                           : R::Ignore;
-
-  // REQ-317 POLYSOLID: points, except at the `O`bject prompt, where the click names an existing
-  // Line, Arc, Circle or Polyline to sweep along instead of a coordinate.
-  case K::Polysolid:
-    return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
-                                                                             : R::SnappedPointPick;
-
-  // REQ-444 REVCLOUD: corners, except at the `O`bject prompt, where the click names the closed
-  // polyline, rectangle or circle to convert instead of a coordinate.
-  case K::Revcloud:
-    return cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject ? R::RawEntityPick
-                                                                           : R::SnappedPointPick;
-
-  // PIPERUN (issue #486 increment B2 / REQ-345): every phase past the size prompt wants an
-  // ordinary snapped coordinate — the start point, then each further vertex. At the
-  // WaitNominalSize phase a click still routes here and `SubmitPipeRunViewportPick` reports the
-  // refusal, rather than being silently swallowed by `Ignore`.
-  case K::PipeRun:
-    return R::SnappedPointPick;
-
-  // EXTRACTCENTERLINE (REQ-347): the click commits the hover's already-computed fit, not a fresh
-  // coordinate — its own route, matching TRIM/HATCH above.
-  case K::ExtractCenterline:
-    return R::ExtractCenterlinePick;
-
-  // --- Select-then-point modify commands: window-select first, then coordinates. ---
-  case K::Move:
-  case K::Copy:
-  case K::Scale:
-    return cmd.modifyPhase == MP::PickSelection ? R::SelectionAccumulate : R::SnappedPointPick;
-  case K::Stretch:
-    // REQ-103 step 5: the crossing/window box IS the operation's data (which vertices move), not
-    // just an object filter, so STRETCH keeps the plain two-corner \c SelectionBox shape rather
-    // than gaining click-select-and-accumulate the way its siblings just did.
-    return cmd.modifyPhase == MP::PickSelection ? R::SelectionBox : R::SnappedPointPick;
-  case K::Rotate:
-    return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
-                                                                          : R::SnappedPointPick;
-  // 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3): select objects, then the handles.
-  case K::Move3d:
-  case K::Rotate3d:
-  case K::Scale3d:
-    // The base point (D-2026-09-28-c) is an ordinary snapped coordinate, like MOVE's.
-    switch (cmd.gizmoCmdPhase) {
-    case AppCommandState::GizmoCmdPhase::SelectObjects:
-      return R::SelectionAccumulate;
-    case AppCommandState::GizmoCmdPhase::BasePoint:
-      return R::SnappedPointPick;
-    case AppCommandState::GizmoCmdPhase::Handles:
-      return R::GizmoHandlePick;
-    }
-    return R::Ignore;
-  // CHPROP / MATCHPROP / LAYMCUR (REQ-356): every pick step is a "select objects" step; CHPROP's
-  // typed property and value steps take no click.
-  case K::ChProp:
-    return cmd.propCmdPhase == AppCommandState::PropCmdPhase::SelectObjects ? R::SelectionAccumulate
-                                                                           : R::Ignore;
-  case K::MatchProp:
-  case K::LayMCur:
-    return R::SelectionAccumulate;
-  // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
-  // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
-  // point pick, resolved to a height by SubmitExtrudeViewportPick.
-  case K::Extrude:
-    return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
-                                                                            : R::SnappedPointPick;
-  // PRESSPULL (REQ-319, widened by GitHub issue #396): the same select-then-distance shape as
-  // EXTRUDE. SelectTarget accumulates entities the same way (a Ctrl+click sub-object face is a
-  // separate selection this route never sees — ViewportClickRouteFor only decides ordinary
-  // model-space clicks); WaitDistance is a snapped point resolved to a distance by
-  // SubmitPressPullViewportPick.
-  case K::PressPull:
-    return cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget
-               ? R::SelectionAccumulate
-               : R::SnappedPointPick;
-  // LOFT / SWEEP (REQ-315): one phase, the accumulate-and-Enter "select objects" step — nothing is
-  // picked by point, so this is their only route.
-  case K::Loft:
-  case K::Sweep:
-    return R::SelectionAccumulate;
-  // REVOLVE (REQ-314): select profiles, then two snapped points for the axis; the angle is typed.
-  case K::Revolve: {
-    using RP = AppCommandState::RevolvePhase;
-    switch (cmd.revolvePhase) {
-    case RP::SelectProfiles:
-      return R::SelectionAccumulate;
-    case RP::WaitAxisStart:
-    case RP::WaitAxisEnd:
-      return R::SnappedPointPick;
-    case RP::WaitAngle:
-      return R::Ignore;  // a typed value; SubmitViewportPickImpl has no branch for it
-    }
-    return R::Ignore;
-  }
-  // UNION / SUBTRACT / INTERSECT (REQ-314): every phase is a "select solids" step.
-  case K::Boolean:
-    return R::SelectionAccumulate;
-  // SLICE (REQ-314): select solids, then three snapped points for the plane, then a point on the
-  // side to keep (or a typed B).
-  case K::Slice: {
-    using SP = AppCommandState::SlicePhase;
-    switch (cmd.slicePhase) {
-    case SP::SelectSolids:
-      return R::SelectionAccumulate;
-    case SP::WaitP1:
-    case SP::WaitP2:
-    case SP::WaitP3:
-    case SP::WaitKeepSide:
-      return R::SnappedPointPick;
-    }
-    return R::Ignore;
-  }
-  // SECTION (REQ-335 increment 2): select solids, then three snapped points for the plane. The same
-  // shape as SLICE above minus the keep-side step, because SECTION keeps neither piece — it keeps
-  // the outline.
-  case K::Section: {
-    using SecP = AppCommandState::SectionPhase;
-    switch (cmd.sectionPhase) {
-    case SecP::SelectSolids:
-      return R::SelectionAccumulate;
-    case SecP::WaitP1:
-    case SecP::WaitP2:
-    case SecP::WaitP3:
-      return R::SnappedPointPick;
-    }
-    return R::Ignore;
-  }
-  // SECTIONPLANE (REQ-342): one step, and it wants a FACE. Unlike SECTION above it never asks which
-  // solids to cut — a clip plane is a property of the view and cuts everything, so there is nothing
-  // to select but the face the plane goes on.
-  case K::SectionPlane:
-    return R::SubObjectFacePick;
-  case K::Align:
-    return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
-                                                                       : R::SnappedPointPick;
-  case K::Mirror:
-    // REQ-103 step 1. NeedEraseAnswer is a Yes/No text prompt, but routing its click to the state
-    // machine is harmless (SubmitViewportPickImpl ignores it) and keeps this branch phase-simple.
-    return cmd.mirrorPhase == AppCommandState::MirrorPhase::PickSelection ? R::SelectionAccumulate
-                                                                         : R::SnappedPointPick;
-  case K::Array: {
-    // REQ-305. PickSelection is the click-or-window-select MOVE/COPY/ROTATE share. The three
-    // spatial phases (column/row spacing, polar center, fill angle) commit from a click, same
-    // shape as OFFSET's distance-or-click. The typed-only phases (type choice, the two item
-    // counts, rotate Yes/No) take no viewport click — SubmitViewportPickImpl has no branch for
-    // them either, so routing anything but Ignore there would be a click that goes nowhere.
-    using APh = AppCommandState::ArrayPhase;
-    switch (cmd.arrayPhase) {
-    case APh::PickSelection:
-      return R::SelectionAccumulate;
-    case APh::Rect_WaitColumnSpacing:
-    case APh::Rect_WaitRowSpacing:
-    case APh::Polar_WaitCenter:
-    case APh::Polar_WaitAngle:
-      return R::SnappedPointPick;
-    case APh::WaitType:
-    case APh::Rect_WaitColumns:
-    case APh::Rect_WaitRows:
-    case APh::Rect_WaitLevels:
-    case APh::Rect_WaitLevelSpacing:  // typed-number only (GitHub issue #400 inc 2, REQ-305 acc 12)
-    case APh::Polar_WaitItemCount:
-    case APh::Polar_WaitRotateAnswer:
-      return R::Ignore;
-    }
-    return R::Ignore;
-  }
-
-
-  // --- UCS: most phases take a point; Object takes an entity; the rest are typed only. ---
-  //
-  // REQ-154. Without this branch every UCS phase fell to the default and its clicks were discarded,
-  // so the whole mouse half of the command was dead — origin picks, the three-point form, ZAxis and
-  // Object included — while `PICK`-driven transcripts stayed green, because PICK calls
-  // SubmitViewportPick directly and never consults this table. That is the same way RECT,
-  // FEATURELINE and REQ-103's five modify commands each shipped ignoring real clicks; the CLICK verb
-  // exists to make it fail loudly instead, and it did.
-  //
-  // SnappedPointPick rather than a raw cursor because an object snap is exactly what a UCS pick
-  // wants: putting the origin on a real endpoint, or taking a rotation angle from the two ends of a
-  // line that is already drawn, is the case the command is for.
-  case K::Ucs: {
-    using UPh = AppCommandState::UcsPhase;
-    switch (cmd.ucsPhase) {
-    case UPh::WaitOriginOrOption:
-    case UPh::WaitXAxisPoint:
-    case UPh::WaitXyPoint:
-    case UPh::WaitRotationAngleP1:
-    case UPh::WaitRotationAngleP2:
-    case UPh::WaitZAxisOrigin:
-    case UPh::WaitZAxisPoint:
-      return R::SnappedPointPick;
-    // `Object` aligns the frame to an entity, so it needs the entity under the cursor rather than a
-    // coordinate — the same shape OFFSET and DESIGNATEBREAKLINE use.
-    case UPh::WaitObjectPick:
-      return R::RawEntityPick;
-    // Typed-only prompts. The rotation angle is a number or the `2P` keyword; Named wants a name.
-    // SubmitViewportPickImpl has no branch for either, so routing anything but Ignore would be a
-    // click that goes nowhere.
-    case UPh::Idle:
-    case UPh::WaitRotationAngle:
-    case UPh::WaitNamedName:
-      return R::Ignore;
-    }
-    return R::Ignore;
-  }
-
-  // PLAN is keyword-only at every phase — an option letter, then possibly a UCS name. It moves the
-  // camera and never reads a coordinate, so a click has nothing to land on.
-  case K::Plan:
-    return R::Ignore;
-  // --- DELETE / JOIN: select objects, ENTER to act on them. ---
-  case K::Delete:
-  case K::Join:
-    // REQ-121 (GitHub #91 review): these two were the last object-selection steps still on the
-    // two-click-box-only shape, so the shared "Select objects, ENTER to continue" prompt was
-    // FACTUALLY WRONG for them — `ProcessCommandLineSubmit` told the user Enter does nothing here.
-    // D-2026-08-25-l gave click-or-box-accumulate to the seven transform commands and excluded only
-    // STRETCH, for a stated reason; DELETE and JOIN were simply never included, the same omission
-    // class as ALIGN's snapped box corners. Fixing the behaviour rather than the sentence is what
-    // keeps rule (3) "one prompt, everywhere" a rule (D-2026-08-26-d).
-    return R::SelectionAccumulate;
-
-  // --- Pure fence commands. ---
-  case K::Zoom:
-    // The only remaining SelectionBox user besides STRETCH, and the one that picks a REGION OF THE
-    // VIEW rather than objects — see ViewportIsObjectSelectionStep's named exception below.
-    return R::SelectionBox;
-
-  // --- REQ-103 loop-style commands: one entity per click, no selection set. ---
-  case K::Lengthen:
-    // DYnamic's second click is a coordinate resolved to a length; every other phase searches for
-    // an entity under the cursor (ASSUMPTION-2 in TASK-099).
-    return cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget
-               ? R::SnappedPointPick
-               : R::RawEntityPick;
-  case K::Extend:
-    // Both phases (boundary edges, then targets) are entity searches — TRIM's shape.
-    return R::RawEntityPick;
-  case K::Break:
-    // Phase 1 searches for the entity; phase 2 is a point on the entity already chosen, projected
-    // by ClosestPointOnEntity either way, so it snaps (ASSUMPTION-1 in TASK-099).
-    return cmd.breakPhase == AppCommandState::BreakPhase::SelectFirstPoint ? R::RawEntityPick
-                                                                          : R::SnappedPointPick;
-  case K::Fillet:
-  case K::Chamfer:
-    // Both phases (first curve, then second curve) are entity searches — EXTEND's shape, never a
-    // bare coordinate.
-    return R::RawEntityPick;
-
-  // --- Commands owning their own click handling. ---
-  case K::Trim:
-    return R::TrimPick;
-  case K::Hatch:
-    return R::HatchPick;
-  case K::PdfAttach:
-    return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint
-               ? R::PdfAttachInsertPoint
-               : R::Ignore;  // dialog / async build / scale / rotation phases take no viewport click
-  case K::InsertBlock: {
-    using IPh = AppCommandState::InsertBlockPhase;
-    if (cmd.insertBlockPhase == IPh::WaitAlignFace)
-      return R::InsertBlockAlignFacePick;
-    return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-            cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitConnectorTarget)
-               ? R::InsertBlockPick
-               : R::Ignore;  // dialog / attribute prompt owns the interaction
-  }
-
-  // --- Deliberately click-less in model space. ---
-  case K::Pan:
-  case K::Orbit:
-    return R::Ignore;  // drag-driven; a click alone means nothing
-  case K::TrimState:
-  case K::Elev:
-    return R::Ignore;  // system-variable text prompts, answered on the command line
-  case K::GeoMarkLatLong:
-    return R::Ignore;  // REQ-359: latitude and longitude are typed on the command line
-  case K::SectionClip:
-    // REQ-341. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
-    // FLIP or a distance, all of which arrive on the command line — a viewport click answers none
-    // of them. Stated rather than left to the tail return, because this switch has no `default:`
-    // precisely so that every Kind carries a decision someone made.
-    return R::Ignore;
-  case K::VpFreeze:
-  case K::VpThaw:
-    return R::Ignore;  // REQ-046: layer freezing is per-viewport, so these pick inside a floating
-                       // viewport only — model space has no viewport to freeze a layer in
-  case K::PaperRectViewport:
-    return R::Ignore;  // REQ-033: paper space only, handled by the paper click block
-  }
-  // Unreachable for any handled Kind. Kept (rather than left to fall off the end) so a Kind added
-  // without a case is a compiler warning and a failing ViewportPickPolicyTests case, not UB.
-  return R::Ignore;
+  return ViewportClickRouteFromStepRoute(stepengine::ActiveClickRoute(cmd));
 }
 
 /// Is the active command asking **which objects** rather than **which point**? (REQ-121)
@@ -535,7 +158,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   // enumerator changes click routing to fix a cursor question. One named exception with a reason is
   // the smaller change (CLAUDE.md rule 1). If a second region-picking command ever appears, split it
   // then — that is the point at which the abstraction earns its keep.
-  if (cmd.active == AppCommandState::Kind::Zoom)
+  if (stepengine::ActiveIsZoomRegionBox(cmd))
     return false;
 
   switch (ViewportClickRouteFor(cmd)) {

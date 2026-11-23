@@ -400,176 +400,180 @@ void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::
 }
 
 void CancelBooleanCommand(AppCommandState& st) {
-  st.booleanPhase = AppCommandState::BooleanPhase::SelectOperands;
-  st.booleanMinuend.clear();
+  if (auto* bs = st.sessionAs<stepengine::BooleanSession>()) {
+    bs->phase = stepengine::BooleanPhase::SelectOperands;
+    bs->minuend.clear();
+  }
 }
 
 std::string CadBooleanPromptText(const AppCommandState& st) {
-  switch (st.booleanPhase) {
-  case AppCommandState::BooleanPhase::SelectOperands:
-    return std::string(BooleanVerb(static_cast<CadBooleanOp>(st.booleanOp))) +
+  const auto* bs = st.sessionAs<stepengine::BooleanSession>();
+  if (!bs)
+    return "BOOLEAN";
+  switch (bs->phase) {
+  case stepengine::BooleanPhase::SelectOperands:
+    return std::string(BooleanVerb(static_cast<CadBooleanOp>(bs->op))) +
            " — select solids to combine, Enter when done. ESC cancels.";
-  case AppCommandState::BooleanPhase::SelectMinuend:
+  case stepengine::BooleanPhase::SelectMinuend:
     return "SUBTRACT — select solids to subtract FROM, Enter when done. ESC cancels.";
-  case AppCommandState::BooleanPhase::SelectSubtrahend:
+  case stepengine::BooleanPhase::SelectSubtrahend:
     return "SUBTRACT — select solids/circles to subtract, Enter when done. ESC cancels.";
   }
   return "BOOLEAN";
 }
 
 void StartBooleanCommand(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log) {
-  CancelBooleanCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Boolean;
-  st.lastCommand = AppCommandState::Kind::Boolean;
-  st.booleanOp = static_cast<int>(op);
   st.selBoxWaitingSecond = false;
 
   const std::vector<int> pre = SelectedSolidIndices(st);
+  if (op != CadBooleanOp::Subtract && pre.size() >= 2) {
+    CommitBoolean(st, op, pre, {}, log);
+    return;
+  }
+  auto sess = std::make_unique<stepengine::BooleanSession>();
+  sess->op = static_cast<int>(op);
   if (op == CadBooleanOp::Subtract) {
     if (!pre.empty()) {
-      st.booleanMinuend = pre;
+      sess->minuend = pre;
       st.selection.clear();
-      st.booleanPhase = AppCommandState::BooleanPhase::SelectSubtrahend;
+      sess->phase = stepengine::BooleanPhase::SelectSubtrahend;
     } else {
-      st.booleanPhase = AppCommandState::BooleanPhase::SelectMinuend;
+      sess->phase = stepengine::BooleanPhase::SelectMinuend;
     }
   } else {
-    if (pre.size() >= 2) {
-      CommitBoolean(st, op, pre, {}, log);
-      st.active = AppCommandState::Kind::None;
-      CancelBooleanCommand(st);
-      return;
-    }
-    st.booleanPhase = AppCommandState::BooleanPhase::SelectOperands;
+    sess->phase = stepengine::BooleanPhase::SelectOperands;
   }
+  stepengine::BeginSession(st, std::move(sess));
   log.push_back(CadBooleanPromptText(st));
 }
 
 bool HandleBooleanTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Boolean)
+  auto* bs = st.sessionAs<stepengine::BooleanSession>();
+  if (!bs)
     return false;
   if (!StringUtil::trimCopy(lineIn).empty())
-    return false;  // only Enter means anything at a selection prompt
-  const CadBooleanOp op = static_cast<CadBooleanOp>(st.booleanOp);
+    return false;
+  const CadBooleanOp op = static_cast<CadBooleanOp>(bs->op);
   const std::vector<int> sel = SelectedSolidIndices(st);
 
-  using BP = AppCommandState::BooleanPhase;
-  if (st.booleanPhase == BP::SelectMinuend) {
+  using BP = stepengine::BooleanPhase;
+  if (bs->phase == BP::SelectMinuend) {
     if (sel.empty()) {
       log.push_back("SUBTRACT — nothing selected. Click a solid, or ESC.");
       return true;
     }
-    st.booleanMinuend = sel;
+    bs->minuend = sel;
     st.selection.clear();
-    st.booleanPhase = BP::SelectSubtrahend;
+    bs->phase = BP::SelectSubtrahend;
     log.push_back(CadBooleanPromptText(st));
     return true;
   }
-  if (st.booleanPhase == BP::SelectSubtrahend) {
+  if (bs->phase == BP::SelectSubtrahend) {
     const std::vector<int> selCircles = SelectedCircleIndices(st);
     if (sel.empty() && selCircles.empty()) {
       log.push_back("SUBTRACT — select the solids/circles to subtract, or ESC.");
       return true;
     }
-    CommitBoolean(st, CadBooleanOp::Subtract, st.booleanMinuend, sel, log);
-    CancelBooleanCommand(st);
-    st.active = AppCommandState::Kind::None;
+    const std::vector<int> minuend = bs->minuend;
+    CommitBoolean(st, CadBooleanOp::Subtract, minuend, sel, log);
+    stepengine::EndSession(st);
     return true;
   }
-  // SelectOperands (UNION / INTERSECT).
   if (sel.size() < 2) {
     log.push_back(std::string(BooleanVerb(op)) + " — select at least two solids, or ESC.");
     return true;
   }
   CommitBoolean(st, op, sel, {}, log);
-  CancelBooleanCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   return true;
 }
 
-// -------------------------------------------------------------------------------------------------
-// The prompted SLICE command (REQ-314 / ADR-046 increment 3b). Select solids, three points for the
-// cutting plane, then a point on the side to keep (or B for both). Each sliced solid is replaced by
-// its kept piece(s) in one undo step; a solid the kernel cannot slice is reported and nothing in
-// the document changes (REQ-201).
-// -------------------------------------------------------------------------------------------------
-
 void CancelSliceCommand(AppCommandState& st) {
-  st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
-  st.sliceSolidIndices.clear();
+  if (auto* ss = st.sessionAs<stepengine::SliceSession>()) {
+    ss->phase = stepengine::SlicePhase::SelectSolids;
+    ss->solidIndices.clear();
+  }
 }
 
 std::string CadSlicePromptText(const AppCommandState& st) {
-  switch (st.slicePhase) {
-  case AppCommandState::SlicePhase::SelectSolids:
+  const auto* ss = st.sessionAs<stepengine::SliceSession>();
+  if (!ss)
+    return "SLICE";
+  switch (ss->phase) {
+  case stepengine::SlicePhase::SelectSolids:
     return "SLICE — select solids, Enter when done. ESC cancels.";
-  case AppCommandState::SlicePhase::WaitP1:
+  case stepengine::SlicePhase::WaitP1:
     return "SLICE — first point on the cutting plane. ESC cancels.";
-  case AppCommandState::SlicePhase::WaitP2:
+  case stepengine::SlicePhase::WaitP2:
     return "SLICE — second point on the cutting plane. ESC cancels.";
-  case AppCommandState::SlicePhase::WaitP3:
+  case stepengine::SlicePhase::WaitP3:
     return "SLICE — third point on the cutting plane. ESC cancels.";
-  case AppCommandState::SlicePhase::WaitKeepSide:
+  case stepengine::SlicePhase::WaitKeepSide:
     return "SLICE — pick a point on the side to keep, or type B for both. ESC cancels.";
   }
   return "SLICE";
 }
 
 static void SliceEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
-  st.sliceSolidIndices.clear();
+  auto* ss = st.sessionAs<stepengine::SliceSession>();
+  if (!ss)
+    return;
+  ss->solidIndices.clear();
   const int nSolid = static_cast<int>(st.drawing.cadSolids.size());
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
-      st.sliceSolidIndices.push_back(e.index);
+      ss->solidIndices.push_back(e.index);
   }
-  std::sort(st.sliceSolidIndices.begin(), st.sliceSolidIndices.end());
-  st.sliceSolidIndices.erase(std::unique(st.sliceSolidIndices.begin(), st.sliceSolidIndices.end()),
-                             st.sliceSolidIndices.end());
-  if (st.sliceSolidIndices.empty()) {
+  std::sort(ss->solidIndices.begin(), ss->solidIndices.end());
+  ss->solidIndices.erase(std::unique(ss->solidIndices.begin(), ss->solidIndices.end()),
+                         ss->solidIndices.end());
+  if (ss->solidIndices.empty()) {
     log.push_back("SLICE — no solids selected. Click a solid, or ESC.");
-    st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
+    ss->phase = stepengine::SlicePhase::SelectSolids;
     return;
   }
-  st.slicePhase = AppCommandState::SlicePhase::WaitP1;
+  ss->phase = stepengine::SlicePhase::WaitP1;
   log.push_back(CadSlicePromptText(st));
 }
 
 void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelSliceCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Slice;
-  st.lastCommand = AppCommandState::Kind::Slice;
   st.selBoxWaitingSecond = false;
+  auto sess = std::make_unique<stepengine::SliceSession>();
+  auto* ss = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
   if (!st.selection.empty()) {
     SliceEnterPlanePhase(st, log);
-    if (st.slicePhase != AppCommandState::SlicePhase::SelectSolids)
+    if (ss->phase != stepengine::SlicePhase::SelectSolids)
       return;
     st.selection.clear();
   }
-  st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
+  ss->phase = stepengine::SlicePhase::SelectSolids;
   log.push_back(CadSlicePromptText(st));
 }
 
 static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<std::string>& log) {
-  const ray3d::Vec3 n = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+  auto* ss = st.sessionAs<stepengine::SliceSession>();
+  if (!ss)
+    return;
+  const ray3d::Vec3 n = ray3d::Cross(ray3d::Sub(ss->p2, ss->p1), ray3d::Sub(ss->p3, ss->p1));
   if (!(ray3d::Length(n) > 1e-9)) {
     log.push_back("SLICE — the three points are in a line; they do not define a plane.");
     return;
   }
-  // Slice every selected solid first; only touch the document if they all succeed (REQ-201).
   struct Result {
     int index = 0;
     std::vector<brep::Solid> pieces;
   };
   std::vector<Result> results;
-  for (int idx : st.sliceSolidIndices) {
+  for (int idx : ss->solidIndices) {
     if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.cadSolids.size() || !st.drawing.cadSolids[static_cast<size_t>(idx)])
       continue;
     brep::Solid above;
     brep::Solid below;
     brep::Problem why = brep::Problem::Ok;
-    if (!brep::Slice(*st.drawing.cadSolids[static_cast<size_t>(idx)], st.sliceP1, n, keep, &above, &below, &why)) {
+    if (!brep::Slice(*st.drawing.cadSolids[static_cast<size_t>(idx)], ss->p1, n, keep, &above, &below, &why)) {
       log.push_back(std::string("SLICE — ") + brep::ProblemText(why) + " Nothing changed.");
       return;
     }
@@ -587,7 +591,6 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   }
 
   PushUndoSnapshot(st, "Slice");
-  // Replace high index first so the lower indices stay valid.
   std::sort(results.begin(), results.end(), [](const Result& a, const Result& b) { return a.index > b.index; });
   int made = 0;
   for (Result& r : results) {
@@ -607,8 +610,7 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   st.selection.clear();
   log.push_back("SLICE — " + std::to_string(results.size()) + " solid(s) cut into " +
                 std::to_string(made) + " piece(s).");
-  CancelSliceCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -735,109 +737,117 @@ void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std:
 // -------------------------------------------------------------------------------------------------
 
 void CancelPressPullCommand(AppCommandState& st) {
-  st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
-  st.pressPullOnFace = false;
-  st.pressPullFace = SelectedSubObject{};
-  st.pressPullProfile = brep::Profile{};
-  st.pressPullDistPickValid = false;
-  st.pressPullDistPick = 0.0;
+  if (auto* pp = st.sessionAs<stepengine::PressPullSession>()) {
+    pp->phase = stepengine::PressPullPhase::SelectTarget;
+    pp->onFace = false;
+    pp->face = SelectedSubObject{};
+    pp->profile = brep::Profile{};
+    pp->distPickValid = false;
+    pp->distPick = 0.0;
+  }
 }
 
 std::string CadPressPullPromptText(const AppCommandState& st) {
-  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+  const auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp || pp->phase == stepengine::PressPullPhase::SelectTarget) {
     return "PRESSPULL — Ctrl+click a solid face, or select a closed polyline or circle, Enter when "
            "done. ESC cancels.";
   }
   std::string s = "PRESSPULL — specify distance";
-  if (st.pressPullDistPickValid) {
+  if (pp->distPickValid) {
     char buf[48];
-    std::snprintf(buf, sizeof(buf), " <%.4g>", st.pressPullDistPick);
+    std::snprintf(buf, sizeof(buf), " <%.4g>", pp->distPick);
     s += buf;
   }
   s += ": type a value or click. ESC cancels.";
   return s;
 }
 
-/// Move to the distance phase if the current target resolves; otherwise report and stay.
 static void PressPullEnterDistancePhase(AppCommandState& st, std::vector<std::string>& log) {
+  auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp)
+    return;
   const PressPullTarget t = GatherPressPullTarget(st);
   if (t.kind == PressPullTargetKind::TooMany) {
     log.push_back("PRESSPULL - more than one candidate is selected; this moves one at a time.");
-    st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+    pp->phase = stepengine::PressPullPhase::SelectTarget;
     return;
   }
   if (t.kind == PressPullTargetKind::None) {
     log.push_back("PRESSPULL - nothing selected can be pushed or pulled (need a solid face, a "
                   "closed polyline, or a circle).");
-    st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+    pp->phase = stepengine::PressPullPhase::SelectTarget;
     return;
   }
-  st.pressPullOnFace = (t.kind == PressPullTargetKind::Face);
-  if (st.pressPullOnFace)
-    st.pressPullFace = t.face;
+  pp->onFace = (t.kind == PressPullTargetKind::Face);
+  if (pp->onFace)
+    pp->face = t.face;
   else
-    st.pressPullProfile = t.profile;
-  st.pressPullPhase = AppCommandState::PressPullPhase::WaitDistance;
-  st.pressPullDistPickValid = false;
+    pp->profile = t.profile;
+  pp->phase = stepengine::PressPullPhase::WaitDistance;
+  pp->distPickValid = false;
   log.push_back(CadPressPullPromptText(st));
 }
 
 void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log) {
-  CancelPressPullCommand(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::PressPull;
-  st.lastCommand = AppCommandState::Kind::PressPull;
   st.selBoxWaitingSecond = false;
+  auto sess = std::make_unique<stepengine::PressPullSession>();
+  auto* pp = sess.get();
+  stepengine::BeginSession(st, std::move(sess));
 
   if (!st.subObjectSelection.empty() || !st.selection.empty()) {
     PressPullEnterDistancePhase(st, log);
-    if (st.pressPullPhase == AppCommandState::PressPullPhase::WaitDistance)
+    if (pp->phase == stepengine::PressPullPhase::WaitDistance)
       return;
-    // fell back to SelectTarget — nothing usable was selected; drop it and ask.
     st.selection.clear();
   }
-  st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+  pp->phase = stepengine::PressPullPhase::SelectTarget;
   log.push_back(CadPressPullPromptText(st));
 }
 
 bool CadBuildPressPullSolid(const AppCommandState& st, double distance, brep::Solid* out) {
-  if (!out || !std::isfinite(distance) || distance == 0.0)
+  const auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp || !out || !std::isfinite(distance) || distance == 0.0)
     return false;
-  if (st.pressPullOnFace) {
-    const CadSolidPtr sp = st.pressPullFace.owner.lock();
-    if (!sp || st.pressPullFace.solidIndex < 0 ||
-        static_cast<size_t>(st.pressPullFace.solidIndex) >= st.drawing.cadSolids.size() ||
-        st.drawing.cadSolids[static_cast<size_t>(st.pressPullFace.solidIndex)] != sp)
+  if (pp->onFace) {
+    const CadSolidPtr sp = pp->face.owner.lock();
+    if (!sp || pp->face.solidIndex < 0 ||
+        static_cast<size_t>(pp->face.solidIndex) >= st.drawing.cadSolids.size() ||
+        st.drawing.cadSolids[static_cast<size_t>(pp->face.solidIndex)] != sp)
       return false;
     brep::Problem why = brep::Problem::Ok;
-    return brep::PushPullFace(*sp, st.pressPullFace.index, distance, out, &why);
+    return brep::PushPullFace(*sp, pp->face.index, distance, out, &why);
   }
   brep::Problem why = brep::Problem::Ok;
-  return brep::Extrude(st.pressPullProfile, distance, out, &why);
+  return brep::Extrude(pp->profile, distance, out, &why);
 }
 
 static void CommitPressPull(AppCommandState& st, double distance, std::vector<std::string>& log) {
+  auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp)
+    return;
   PressPullTarget t;
-  t.kind = st.pressPullOnFace ? PressPullTargetKind::Face : PressPullTargetKind::Profile;
-  t.face = st.pressPullFace;
-  t.profile = st.pressPullProfile;
+  t.kind = pp->onFace ? PressPullTargetKind::Face : PressPullTargetKind::Profile;
+  t.face = pp->face;
+  t.profile = pp->profile;
   if (!CadCommitPressPullTarget(st, t, distance, log))
-    return;  // refused; stays in WaitDistance so the user can try another value
-  if (!st.pressPullOnFace)
+    return;
+  if (!pp->onFace)
     st.selection.clear();
-  CancelPressPullCommand(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 bool HandlePressPullTextInput(const std::string& lineIn, AppCommandState& st,
                               std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::PressPull)
+  auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+  if (pp->phase == stepengine::PressPullPhase::SelectTarget) {
     if (!line.empty())
-      return false;  // a name / coordinate here means nothing; leave the command running
+      return false;
     if (st.subObjectSelection.empty() && st.selection.empty()) {
       log.push_back("PRESSPULL — nothing selected. Ctrl+click a face, or select a closed "
                     "polyline/circle, or ESC.");
@@ -847,10 +857,9 @@ bool HandlePressPullTextInput(const std::string& lineIn, AppCommandState& st,
     return true;
   }
 
-  // WaitDistance.
   if (line.empty()) {
-    if (st.pressPullDistPickValid) {
-      CommitPressPull(st, st.pressPullDistPick, log);
+    if (pp->distPickValid) {
+      CommitPressPull(st, pp->distPick, log);
     } else {
       log.push_back("PRESSPULL — type a distance, or move the cursor to a view where one can be read.");
     }
@@ -862,10 +871,7 @@ bool HandlePressPullTextInput(const std::string& lineIn, AppCommandState& st,
     log.push_back("PRESSPULL — \"" + line + "\" is not a distance. Type a non-zero number, or ESC.");
     return true;
   }
-  // The typed number is a magnitude; the sign comes from wherever the live preview is currently
-  // pointing (issue #396's rule for EXTRUDE, applied here too), falling back to the typed sign
-  // as-is when no valid preview direction is available.
-  const double signedD = st.pressPullDistPickValid ? std::copysign(d, st.pressPullDistPick) : d;
+  const double signedD = pp->distPickValid ? std::copysign(d, pp->distPick) : d;
   CommitPressPull(st, signedD, log);
   return true;
 }
@@ -873,51 +879,46 @@ bool HandlePressPullTextInput(const std::string& lineIn, AppCommandState& st,
 void SubmitPressPullViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   (void)wx;
   (void)wy;
-  if (st.active != AppCommandState::Kind::PressPull)
+  auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp)
     return;
-  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
-    // Selection accumulation itself is handled by the shared click path; a click here only advances
-    // once the user presses Enter. Nothing to do.
+  if (pp->phase == stepengine::PressPullPhase::SelectTarget)
     return;
-  }
-  if (!st.pressPullDistPickValid) {
+  if (!pp->distPickValid) {
     log.push_back("PRESSPULL — no distance under the cursor here; type a value, or orbit the view.");
     return;
   }
-  CommitPressPull(st, st.pressPullDistPick, log);
+  CommitPressPull(st, pp->distPick, log);
 }
 
 void CadResolvePressPullPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
-  st.pressPullDistPickValid = false;
-  if (st.active != AppCommandState::Kind::PressPull ||
-      st.pressPullPhase != AppCommandState::PressPullPhase::WaitDistance)
+  auto* pp = st.sessionAs<stepengine::PressPullSession>();
+  if (!pp)
+    return;
+  pp->distPickValid = false;
+  if (pp->phase != stepengine::PressPullPhase::WaitDistance)
     return;
 
-  // The push/pull axis: the target's own outward normal (face mode) or plane normal (profile
-  // mode), through an anchor on it. Distance is the closest approach between that axis and the
-  // cursor ray — exactly the maths CadResolveExtrudePick and the gizmo drag both use, and for the
-  // same reason: the cursor sits ON the work plane, so its offset along the axis is only readable
-  // from the ray. Plan view has no ray, so it has no answer; the prompt says so.
   (void)cursorOnPlane;
   if (!ray || !ray->valid())
     return;
 
   ray3d::Vec3 anchor{};
   ray3d::Vec3 axis{};
-  if (st.pressPullOnFace) {
-    if (!CadSubObjectFaceGrip(st, st.pressPullFace, &anchor, &axis))
+  if (pp->onFace) {
+    if (!CadSubObjectFaceGrip(st, pp->face, &anchor, &axis))
       return;
   } else {
-    anchor = st.pressPullProfile.plane.origin;
-    axis = st.pressPullProfile.plane.zAxis;
+    anchor = pp->profile.plane.origin;
+    axis = pp->profile.plane.zAxis;
   }
   double d = 0.0;
   if (!CadAxisDragParam(anchor, axis, *ray, &d))
     return;
   if (!std::isfinite(d) || std::fabs(d) <= 1e-9)
     return;
-  st.pressPullDistPick = d;
-  st.pressPullDistPickValid = true;
+  pp->distPick = d;
+  pp->distPickValid = true;
 }
 
 bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
@@ -1166,12 +1167,7 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
   // natural thing to press, matched the `RECT` command and started drawing a rectangle. The
   // prompted form is what PRESSPULL already grew for the same reason (issue #396).
   if (text.empty()) {
-    st.active = AppCommandState::Kind::Fillet;
-    st.lastCommand = AppCommandState::Kind::Fillet;
-    st.filletPhase = AppCommandState::FilletPhase::WaitFirstEntity;
-    st.filletSolidAwaitingRadius = true;
-    st.filletTextAwaitingRadius = false;
-    st.filletTextAwaitingTrim = false;
+    stepengine::BeginSession(st, std::make_unique<stepengine::FilletSession>(true), true);
     char buf[160];
     std::snprintf(buf, sizeof(buf),
                   "FILLET - %d edge(s) selected. Specify fillet radius <%.4f>, Enter to accept, "
@@ -1284,14 +1280,7 @@ void CadChamferSolidEdges(AppCommandState& st, const std::string& args,
   // A bare `CHAMFER` prompts rather than printing usage — the trap TASK-219 found for FILLET, where
   // entering no command state sent the next keystroke to the idle command line.
   if (text.empty()) {
-    st.active = AppCommandState::Kind::Chamfer;
-    st.lastCommand = AppCommandState::Kind::Chamfer;
-    st.chamferPhase = AppCommandState::ChamferPhase::WaitFirstEntity;
-    st.chamferSolidAwaitingDistance = true;
-    st.chamferTextAwaitingFirstValue = false;
-    st.chamferTextAwaitingSecondDist = false;
-    st.chamferTextAwaitingAngle = false;
-    st.chamferTextAwaitingTrim = false;
+    stepengine::BeginSession(st, std::make_unique<stepengine::ChamferSession>(true), true);
     char buf[176];
     std::snprintf(buf, sizeof(buf),
                   "CHAMFER - %d edge(s) selected. Specify chamfer distance <%.4f>, Enter to accept, "
@@ -1468,12 +1457,13 @@ bool CadSubObjectEdgeGrip(const AppCommandState& st, const SelectedSubObject& re
 
 
 bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Slice)
+  auto* ss = st.sessionAs<stepengine::SliceSession>();
+  if (!ss)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
-  using SP = AppCommandState::SlicePhase;
+  using SP = stepengine::SlicePhase;
 
-  if (st.slicePhase == SP::SelectSolids) {
+  if (ss->phase == SP::SelectSolids) {
     if (!line.empty())
       return false;
     if (st.selection.empty()) {
@@ -1484,7 +1474,7 @@ bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::v
     return true;
   }
 
-  if (st.slicePhase == SP::WaitKeepSide) {
+  if (ss->phase == SP::WaitKeepSide) {
     if (line.empty()) {
       log.push_back("SLICE — pick a point on the side to keep, or type B for both.");
       return true;
@@ -1498,14 +1488,13 @@ bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::v
       log.push_back("SLICE — type B for both, or X,Y[,Z] for a point on the side to keep.");
       return true;
     }
-    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(ss->p2, ss->p1), ray3d::Sub(ss->p3, ss->p1));
     const brep::SliceKeep keep =
-        ray3d::Dot(ray3d::Sub(q, st.sliceP1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
+        ray3d::Dot(ray3d::Sub(q, ss->p1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
     CommitSlice(st, keep, log);
     return true;
   }
 
-  // WaitP1 / WaitP2 / WaitP3.
   if (line.empty())
     return true;
   ray3d::Vec3 p{};
@@ -1513,43 +1502,44 @@ bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::v
     log.push_back("SLICE — could not read the point. Use X,Y or X,Y,Z.");
     return true;
   }
-  if (st.slicePhase == SP::WaitP1) {
-    st.sliceP1 = p;
-    st.slicePhase = SP::WaitP2;
-  } else if (st.slicePhase == SP::WaitP2) {
-    st.sliceP2 = p;
-    st.slicePhase = SP::WaitP3;
+  if (ss->phase == SP::WaitP1) {
+    ss->p1 = p;
+    ss->phase = SP::WaitP2;
+  } else if (ss->phase == SP::WaitP2) {
+    ss->p2 = p;
+    ss->phase = SP::WaitP3;
   } else {
-    st.sliceP3 = p;
-    st.slicePhase = SP::WaitKeepSide;
+    ss->p3 = p;
+    ss->phase = SP::WaitKeepSide;
   }
   log.push_back(CadSlicePromptText(st));
   return true;
 }
 
 void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Slice)
+  auto* ss = st.sessionAs<stepengine::SliceSession>();
+  if (!ss)
     return;
-  using SP = AppCommandState::SlicePhase;
+  using SP = stepengine::SlicePhase;
   const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
                       static_cast<double>(CadCommitElevation(st))};
-  switch (st.slicePhase) {
+  switch (ss->phase) {
   case SP::WaitP1:
-    st.sliceP1 = p;
-    st.slicePhase = SP::WaitP2;
+    ss->p1 = p;
+    ss->phase = SP::WaitP2;
     break;
   case SP::WaitP2:
-    st.sliceP2 = p;
-    st.slicePhase = SP::WaitP3;
+    ss->p2 = p;
+    ss->phase = SP::WaitP3;
     break;
   case SP::WaitP3:
-    st.sliceP3 = p;
-    st.slicePhase = SP::WaitKeepSide;
+    ss->p3 = p;
+    ss->phase = SP::WaitKeepSide;
     break;
   case SP::WaitKeepSide: {
-    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(ss->p2, ss->p1), ray3d::Sub(ss->p3, ss->p1));
     const brep::SliceKeep keep =
-        ray3d::Dot(ray3d::Sub(p, st.sliceP1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
+        ray3d::Dot(ray3d::Sub(p, ss->p1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
     CommitSlice(st, keep, log);
     return;
   }

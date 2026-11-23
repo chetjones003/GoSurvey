@@ -1,4 +1,5 @@
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 #include "CadCoordinateFrame.hpp"
 #include <cmath>
 #include <cstdio>
@@ -10,11 +11,6 @@ static void CommitIdPointAt(AppCommandState& st, float lx, float ly, std::vector
   double wy = 0.;
   CadCoord::WorldFromLocal(st, lx, ly, &wx, &wy);
   const int p = st.displayLinearPrecision;
-  // Reported in the ACTIVE UCS (REQ-154), which is the frame the same numbers would be typed back
-  // in — a readout in one frame and entry in another is how a coordinate gets quietly transcribed
-  // to the wrong place. The label names the frame, so the value is never ambiguous. Z comes from
-  // CadCommitElevation rather than a hardcoded 0, so the point reports the elevation it is actually
-  // at: on a tilted work plane that varies across the plane, and it was previously always 0.
   const double wz = static_cast<double>(CadCommitElevation(st));
   const ray3d::Vec3 shown = ucs::WorldToUcs(st.activeUcs, {wx, wy, wz});
   char buf[256];
@@ -22,14 +18,15 @@ static void CommitIdPointAt(AppCommandState& st, float lx, float ly, std::vector
                 FormatLinear(shown.x, p).c_str(), FormatLinear(shown.y, p).c_str(),
                 FormatLinear(shown.z, p).c_str());
   log.push_back(buf);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float y2, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  using SIP = AppCommandState::SurveyInversePhase;
-  const float de = x2 - st.surveyInverseFromX;
-  const float dn = y2 - st.surveyInverseFromY;
+  auto* inv = st.sessionAs<stepengine::SurveyInverseSession>();
+  if (!inv)
+    return;
+  const float de = x2 - inv->fromX;
+  const float dn = y2 - inv->fromY;
   const float horiz = std::hypot(de, dn);
   if (horiz < 1e-10f) {
     log.push_back("INVERSE — horizontal distance is zero; pick a different second point.");
@@ -44,8 +41,7 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
                 FormatLinear(static_cast<double>(de), p).c_str(), FormatLinear(static_cast<double>(dn), p).c_str(),
                 FormatLinear(static_cast<double>(horiz), p).c_str(), brgStr.c_str());
   log.push_back(buf);
-  st.active = K::None;
-  st.surveyInversePhase = SIP::WaitFrom;
+  stepengine::EndSession(st);
 }
 
 /// Below this horizontal separation DIST reports a pair as vertical and declines to state a grade
@@ -81,8 +77,6 @@ static constexpr double kDistVerticalRunFt = 0.01;
 /// CadCommitElevation), matching CommitIdPointAt's convention.
 static void CommitDistSecondPoint(AppCommandState& st, float lx1, float ly1, float wz1, float lx2, float ly2, float wz2,
                                    std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  using DP = AppCommandState::DistPhase;
   double wx1 = 0., wy1 = 0., wx2 = 0., wy2 = 0.;
   CadCoord::WorldFromLocal(st, lx1, ly1, &wx1, &wy1);
   CadCoord::WorldFromLocal(st, lx2, ly2, &wx2, &wy2);
@@ -102,31 +96,19 @@ static void CommitDistSecondPoint(AppCommandState& st, float lx1, float ly1, flo
                 FormatLinear(dy, p).c_str(), FormatLinear(dz, p).c_str(), FormatLinear(slope, p).c_str());
   log.push_back(buf);
 
-  // The surveyor's four numbers. `run` is the HORIZONTAL distance and `rise` the VERTICAL
-  // difference, both in the active UCS like every figure on the line above — so on a tilted UCS
-  // "horizontal" means horizontal in the frame the user is working in, which is the same frame the
-  // deltas are already reported in.
   const double run = std::hypot(dx, dy);
   const double rise = dz;
   if (run < kDistVerticalRunFt) {
-    // A true vertical. There IS a distance here (the line above reported it) but no grade: the run
-    // is the denominator, and a pair this close in plan is not separated in plan at all. Said
-    // rather than divided by, which is the REQ-201 shape.
     std::snprintf(buf, sizeof(buf), "DIST — vertical: horiz %s  vert %s. No grade.",
                   FormatLinear(run, p).c_str(), FormatLinear(rise, p).c_str());
   } else if (std::abs(rise) < 1e-9) {
-    // Flat: a run:rise ratio would divide by zero, and "level" is what a surveyor writes on the
-    // sheet anyway. REQ-074's wording verbatim.
     std::snprintf(buf, sizeof(buf), "DIST — level (0.00%%)  horiz %s  vert %s", FormatLinear(run, p).c_str(),
                   FormatLinear(rise, p).c_str());
   } else {
-    // Both conventions, because both are used: percent for the grade, run:rise for the slope.
-    // REQ-074's wording verbatim, so the same two points read the same way in either command.
     std::snprintf(buf, sizeof(buf), "DIST — grade %.2f%%  slope %.2f:1  horiz %s  vert %s", rise / run * 100.0,
                   run / std::abs(rise), FormatLinear(run, p).c_str(), FormatLinear(rise, p).c_str());
   }
   log.push_back(buf);
 
-  st.active = K::None;
-  st.distPhase = DP::WaitFrom;
+  stepengine::EndSession(st);
 }

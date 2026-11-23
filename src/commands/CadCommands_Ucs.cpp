@@ -536,7 +536,7 @@ static const char* kUcsPrompt = "Specify origin of UCS or [Named/Previous/View/W
 void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Ucs;
+  stepengine::BeginSession(st, std::make_unique<stepengine::UcsSession>(), /*recordAsLastCommand=*/false);
   st.ucsPhase = AppCommandState::UcsPhase::WaitOriginOrOption;
   log.push_back(kUcsPrompt);
 }
@@ -544,14 +544,14 @@ void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.active = AppCommandState::Kind::Plan;
+  stepengine::BeginSession(st, std::make_unique<stepengine::PlanSession>(), /*recordAsLastCommand=*/false);
   st.planPhase = AppCommandState::PlanPhase::WaitOption;
   log.push_back("PLAN - enter an option [Current/Ucs/World] <Current>:");
 }
 
 static void EndUcsCommand(AppCommandState& st) {
   st.ucsPhase = AppCommandState::UcsPhase::Idle;
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 // Resolve a point typed at a UCS prompt. Interpreted in the CURRENT UCS, as AutoCAD does - the new
@@ -1065,7 +1065,7 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     if (!found) {
       log.push_back("PLAN - there is no saved UCS named " + in + ".");
       st.planPhase = AppCommandState::PlanPhase::Idle;
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       return true;
     }
     // The named frame orients the CAMERA. The active UCS is deliberately left alone - Autodesk
@@ -1073,7 +1073,7 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     ApplyPlanViewOf(st, found->frame, log);
     log.push_back("PLAN - view set to the XY plane of UCS " + found->name + ". The current UCS is unchanged.");
     st.planPhase = AppCommandState::PlanPhase::Idle;
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return true;
   }
 
@@ -1096,7 +1096,7 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     return true;
   }
   st.planPhase = AppCommandState::PlanPhase::Idle;
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   return true;
 }
 

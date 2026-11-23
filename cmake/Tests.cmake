@@ -179,6 +179,7 @@ add_executable(GoSurveyTests
   tests/CutClipboardTests.cpp
   # Commands, updates and crash reports
   tests/CommandRegistryHandlerTests.cpp
+  tests/StepEngineTests.cpp
   tests/UpdateCheckTests.cpp
   tests/CrashReporterTests.cpp)
 target_include_directories(GoSurveyTests PRIVATE src/qt src/telemetry tests "${PUGIXML_INCLUDE}")

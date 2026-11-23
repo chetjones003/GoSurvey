@@ -165,7 +165,7 @@ bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entr
   st.insertBlockDialogOpen = false;
   st.insertBlockPipeSpliceArmed = true;
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
-  st.active = AppCommandState::Kind::InsertBlock;
+  stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/false);
   log.push_back("Pipe Fittings — \"" + entry.name +
                 "\": click on a pipe run to splice it in, on a connection port or pipe end to snap "
                 "onto it, or anywhere else to place it (ESC cancels).");

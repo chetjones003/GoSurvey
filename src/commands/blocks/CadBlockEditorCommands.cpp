@@ -3,6 +3,7 @@
 #include "blocks/CadBlockCreateInternal.hpp"
 #include "connect/CadBlockConnectInternal.hpp"
 #include "CadCommands.hpp"
+#include "engine/CommandRegistry.hpp"
 #include "ProjectWarnings.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
 #include <GoSurvey/Renderer/CadSolidDisplay.hpp>
@@ -874,42 +875,14 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     return true;
   }
 
-  if (tok == "pipepalette" || tok == "pipepal") {
-    // REQ-350 (a) — reopen (or close) the Pipe Fittings palette. PIPERUN opens it on its own; this is
-    // how it comes back after the close box, and how it is reached without starting a run at all.
-    CadPipePaletteSetOpen(st, !st.pipeFittingPaletteOpen, log);
-    return true;
-  }
-
-  if (tok == "pipecatalog" || tok == "pcat") {
-    // Catalog lookup (issue #486 increment B4 / REQ-345). One-shot report over CadPipeCatalogFind —
-    // no state machine, the same "bare/short verb, immediate answer" shape PIPESYS's own report
-    // verbs use, because this is a query (and a side-effecting import when the match is not yet
-    // imported), not something routed interactively.
-    std::string partTypeTok, sizeTok, classTok;
-    args >> partTypeTok >> sizeTok;
-    if (partTypeTok.empty() || sizeTok.empty()) {
-      log.push_back("PIPECATALOG - usage: PIPECATALOG <part type> <nominal size> [pressure class]. Part "
-                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, "
-                    "nozzle, other.");
+  if (tok == "pipecatalog" || tok == "pcat" || tok == "pipepalette") {
+    if (const stepengine::CommandDef* def = stepengine::CommandRegistry::Instance().FindAny(tok);
+        def && def->execute) {
+      std::string rest;
+      std::getline(args, rest);
+      def->execute(st, StringUtil::trimCopy(rest), log);
       return true;
     }
-    const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
-    if (partType == CadPipePartType::None) {
-      log.push_back("PIPECATALOG - unknown part type \"" + partTypeTok + "\".");
-      return true;
-    }
-    CadPipePressureClass pressureClass = CadPipePressureClass::None;
-    if (args >> classTok) {
-      pressureClass = ParseCadPipePressureClass(classTok);
-      if (pressureClass == CadPipePressureClass::None) {
-        log.push_back("PIPECATALOG - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
-        return true;
-      }
-    }
-    std::string blockName;
-    (void)CadPipeCatalogFind(st, partType, sizeTok, pressureClass, &blockName, log);
-    return true;
   }
 
   if (tok == "libexport") {

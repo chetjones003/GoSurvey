@@ -705,3 +705,75 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   b.frameMs.clear();
   b.pointCloudPath.clear();
 }
+
+void WriteUndoHistoryLogLine(const std::string& msg) {
+  const std::filesystem::path dir = UserDataDirectory();
+  if (dir.empty())
+    return;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const std::filesystem::path logPath = dir / "history.log";
+  std::ofstream f(logPath, std::ios::app);
+  if (!f)
+    return;
+  std::time_t t = std::time(nullptr);
+  char timeBuf[32];
+  struct tm tmInfo{};
+#ifdef _WIN32
+  localtime_s(&tmInfo, &t);
+#else
+  localtime_r(&t, &tmInfo);
+#endif
+  std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+  f << timeBuf << "  " << msg << "\n";
+}
+
+void ExecutePipePerfCommand(AppCommandState& st, std::vector<std::string>& log) {
+  const AppCommandState::PipeRunPerf& p = st.pipeRunPerf;
+  char line[256];
+  std::vector<std::string> out;
+  out.push_back("PIPEPERF - live pipe routing profile (ms)");
+  std::snprintf(line, sizeof(line), "  route            : %d vertices at last rebuild, %d click(s)",
+                p.lastRunVerts, p.clicks);
+  out.push_back(line);
+  const auto row = [&](const char* name, const AppCommandState::PipeRunPerfStat& s, const char* unit) {
+    std::snprintf(line, sizeof(line), "  %-17s: %6d %s  total %9.1f  avg %7.2f  max %7.2f", name,
+                  s.calls, unit, s.totalMs, s.AvgMs(), s.maxMs);
+    out.push_back(line);
+  };
+  row("sweep (tube)", p.sweep, "call(s) ");
+  row("tessellate", p.tessellate, "solid(s)");
+  row("rebuild pass", p.rebuild, "pass(es)");
+  row("  .. faces", p.tessFaces, "solid(s)");
+  row("  .. edges", p.tessEdges, "solid(s)");
+  row("  .. isolines", p.tessIso, "solid(s)");
+  row("ghost preview", p.ghost, "frame(s)");
+  std::snprintf(line, sizeof(line), "  cache            : %d run(s) re-swept, %d reused",
+                p.runsSwept, p.runsReused);
+  out.push_back(line);
+  std::snprintf(line, sizeof(line), "  triangles        : %lld produced by display tessellation",
+                p.tessTriangles);
+  out.push_back(line);
+  const double perClick = p.clicks > 0 ? (p.sweep.totalMs + p.tessellate.totalMs) /
+                                             static_cast<double>(p.clicks)
+                                       : 0.0;
+  std::snprintf(line, sizeof(line), "  per click        : %.1f ms of sweep + tessellation", perClick);
+  out.push_back(line);
+  std::snprintf(line, sizeof(line), "  per ghost frame  : %.2f ms average", p.ghost.AvgMs());
+  out.push_back(line);
+
+  namespace fs = std::filesystem;
+  fs::path outPath = UserDataDirectory();
+  if (outPath.empty())
+    outPath = fs::current_path();
+  outPath /= "gosurvey-pipeperf.txt";
+  std::ofstream f(outPath, std::ios::binary | std::ios::trunc);
+  if (f) {
+    for (const std::string& l : out)
+      f << l << "\n";
+    f.close();
+    out.push_back("  written to       : " + outPath.u8string());
+  }
+  for (const std::string& l : out)
+    log.push_back(l);
+}

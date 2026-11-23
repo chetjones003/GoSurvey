@@ -41,10 +41,89 @@ void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  OffsetCmd::ResetOffsetDraft(st);
-  st.active = K::Offset;
-  st.selBoxWaitingSecond = false;
+  st.offsetHoverHighlightValid = false;
+  st.offsetHoverEntity = {};
+  stepengine::BeginSession(st, std::make_unique<stepengine::OffsetSession>(), true);
   log.push_back("OFFSET — specify offset distance, or T for through-point mode. ESC cancels.");
+}
+
+static void HandlePaperOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs)
+    return;
+  using OP = stepengine::OffsetPhase;
+  if (ofs->paperLayoutIndex >= 0 && st.activeSpaceIndex != ofs->paperLayoutIndex) {
+    log.push_back("OFFSET — return to the paper layout where the object was picked, or cancel OFFSET.");
+    return;
+  }
+  if (ofs->phase == OP::WaitDistanceOrThrough) {
+    log.push_back("OFFSET — type a positive offset distance, or T for through-point mode.");
+    return;
+  }
+  if (ofs->phase == OP::WaitSelectEntity) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.drawing.paperLayouts.size()) {
+      log.push_back("OFFSET — no active paper layout.");
+      return;
+    }
+    PaperRef hit{};
+    const PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+    float tolerance = 0.05f;
+    if (st.viewportLastSurveyLayoutHeightPx > 1.f && st.viewportLastSurveyLayoutOrthoHalfH > 0.f) {
+      const float worldTol = st.objectSnapAperturePx *
+          ((2.f * st.viewportLastSurveyLayoutOrthoHalfH) / std::max(st.viewportLastSurveyLayoutHeightPx, 1.f));
+      tolerance = std::clamp(worldTol, 0.01f, 0.25f);
+    }
+    if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy), tolerance, &hit, nullptr)) {
+      log.push_back("OFFSET — nothing under cursor; try again.");
+      return;
+    }
+    SelectedEntity::Type type{};
+    switch (hit.type) {
+    case PaperRef::Type::Line: type = SelectedEntity::Type::LineSeg; break;
+    case PaperRef::Type::Circle: type = SelectedEntity::Type::Circle; break;
+    case PaperRef::Type::Arc: type = SelectedEntity::Type::Arc; break;
+    case PaperRef::Type::Ellipse: type = SelectedEntity::Type::Ellipse; break;
+    case PaperRef::Type::Polyline: type = SelectedEntity::Type::Polyline; break;
+    case PaperRef::Type::Text:
+      log.push_back("OFFSET — paper text cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    case PaperRef::Type::Block:
+      log.push_back("OFFSET — paper blocks cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    default:
+      log.push_back("OFFSET — unsupported paper object. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    ofs->entity = {type, hit.index};
+    ofs->entityValid = true;
+    ofs->paperLayoutIndex = st.activeSpaceIndex;
+    if (ofs->throughMode) {
+      if (type == SelectedEntity::Type::Ellipse || type == SelectedEntity::Type::Polyline) {
+        log.push_back("OFFSET — through-point mode does not support paper ellipses or polylines. Pick a line, circle, or arc.");
+        ofs->entityValid = false;
+        ofs->paperLayoutIndex = -1;
+        return;
+      }
+      ofs->phase = OP::WaitThroughPick;
+      log.push_back("OFFSET — click the through point (line / circle / arc).");
+    } else {
+      ofs->phase = OP::WaitSidePick;
+      log.push_back("OFFSET — pick which side of the object to offset.");
+    }
+    return;
+  }
+  if (ofs->phase == OP::WaitThroughPick || ofs->phase == OP::WaitSidePick)
+    OffsetCmd::CommitPaperOffset(st, wx, wy, log);
+}
+
+void SubmitOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs)
+    return;
+  if (ofs->paperLayoutIndex >= 0 || (st.activeSpaceIndex >= 0 && !InFloatingModelSpace(st)))
+    HandlePaperOffsetViewportPick(st, wx, wy, log);
+  else
+    OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
 }
 
 
@@ -106,15 +185,16 @@ static bool OfsLineLineIntersectInf(float ax, float ay, float bx, float by, floa
 }
 
 static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, float py, float* signedDOut) {
-  using OP = AppCommandState::OffsetPhase;
+  using OP = stepengine::OffsetPhase;
   using T = SelectedEntity::Type;
-  if (!st.offsetEntityValid)
+  const auto* ofs = st.sessionAs<stepengine::OffsetSession>();
+  if (!ofs || !ofs->entityValid)
     return false;
-  const SelectedEntity& e = st.offsetEntity;
-  if (st.offsetPhase == OP::WaitSidePick) {
-    if (st.offsetTypedDistance <= 0.f)
+  const SelectedEntity& e = ofs->entity;
+  if (ofs->phase == OP::WaitSidePick) {
+    if (ofs->typedDistance <= 0.f)
       return false;
-    const float d = st.offsetTypedDistance;
+    const float d = ofs->typedDistance;
     float sgn = 1.f;
     switch (e.type) {
     case T::LineSeg: {
@@ -215,7 +295,7 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     *signedDOut = d * sgn;
     return true;
   }
-  if (st.offsetPhase == OP::WaitThroughPick) {
+  if (ofs->phase == OP::WaitThroughPick) {
     float signedD = 0.f;
     switch (e.type) {
     case T::LineSeg: {
@@ -367,13 +447,9 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     return;
   previewLines->clear();
   previewCircles->clear();
-  if (!cmd.offsetEntityValid)
+  const auto* ofs = cmd.sessionAs<stepengine::OffsetSession>();
+  if (!ofs || !ofs->entityValid)
     return;
-  // REQ-329 increment 7: this ghost is built with flat world-XY math (the `Ofs*` helpers). Under a
-  // tilted work plane the COMMITTED offset is resolved in that plane (CommitOffsetLine /
-  // HandleOffsetSidePick), so a flat ghost would sit somewhere the click will not. Suppress it
-  // there rather than mislead — the committed result is UCS-correct; a plane-aware preview is
-  // follow-on work.
   if (!CadWorkPlaneIsWorldXy(cmd))
     return;
   float signedD = 0.f;
@@ -381,7 +457,7 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     return;
 
   using T = SelectedEntity::Type;
-  const SelectedEntity& e = cmd.offsetEntity;
+  const SelectedEntity& e = ofs->entity;
   constexpr float zl = 0.022f;
 
   switch (e.type) {

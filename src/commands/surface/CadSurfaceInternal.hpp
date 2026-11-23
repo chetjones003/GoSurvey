@@ -254,15 +254,18 @@ static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const App
 
 /// First pick: report the elevation on each covering surface, and remember them for the grade.
 static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
-  st.surfaceElevFromX = x;
-  st.surfaceElevFromY = y;
-  st.surfaceElevFromZ = SurfaceElevationsAt(st, x, y);
+  auto* sess = st.sessionAs<stepengine::SurfaceElevGradeSession>();
+  if (!sess)
+    return;
+  sess->fromX = x;
+  sess->fromY = y;
+  sess->fromZ = SurfaceElevationsAt(st, x, y);
 
   if (st.drawing.cadSurfaces.empty()) {
     log.push_back("SURFELEV — there are no surfaces in the drawing. Build one from a point group first.");
     return;
   }
-  if (st.surfaceElevFromZ.empty()) {
+  if (sess->fromZ.empty()) {
     // REQ-074: "a pick outside the surface reports that it is outside; it never extrapolates."
     log.push_back("SURFELEV — outside surface. No elevation at that point.");
     return;
@@ -293,12 +296,13 @@ static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, st
 
 /// Second pick: grade from the first, computed **within each surface**, never across two.
 static void ReportSurfaceGradeTo(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  using SEP = AppCommandState::SurfaceElevPhase;
+  auto* sess = st.sessionAs<stepengine::SurfaceElevGradeSession>();
+  if (!sess)
+    return;
   const int p = st.displayLinearPrecision;
 
-  const double dx = x - st.surfaceElevFromX;
-  const double dy = y - st.surfaceElevFromY;
+  const double dx = x - sess->fromX;
+  const double dy = y - sess->fromY;
   const double run = std::hypot(dx, dy);
 
   // REQ-074: "two picks at the same location report zero distance rather than dividing by zero."
@@ -306,15 +310,13 @@ static void ReportSurfaceGradeTo(AppCommandState& st, double x, double y, std::v
   // considers two positions to be the same site (it is what BuildTin de-duplicates on).
   if (run < kTinPlanEpsilon) {
     log.push_back("SURFELEV — both picks are at the same location: horizontal distance 0. No grade.");
-    st.active = K::None;
-    st.surfaceElevPhase = SEP::WaitFirst;
-    st.surfaceElevFromZ.clear();
+    stepengine::EndSession(st);
     return;
   }
 
   const std::vector<std::pair<std::string, double>> to = SurfaceElevationsAt(st, x, y);
   bool reportedAny = false;
-  for (const auto& from : st.surfaceElevFromZ) {
+  for (const auto& from : sess->fromZ) {
     // `from.first` rather than a structured binding: capturing one in the lambda below is a C++20
     // extension, and this file is built as C++17.
     const std::string& name = from.first;
@@ -341,12 +343,10 @@ static void ReportSurfaceGradeTo(AppCommandState& st, double x, double y, std::v
     log.push_back(buf);
     reportedAny = true;
   }
-  if (!reportedAny && st.surfaceElevFromZ.empty())
+  if (!reportedAny && sess->fromZ.empty())
     log.push_back("SURFELEV — outside surface at the first point; no grade to report.");
 
-  st.active = K::None;
-  st.surfaceElevPhase = SEP::WaitFirst;
-  st.surfaceElevFromZ.clear();
+  stepengine::EndSession(st);
 }
 
 
@@ -392,3 +392,6 @@ void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vecto
 void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
 void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log);
+void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

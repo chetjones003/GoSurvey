@@ -152,7 +152,7 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
       pl.viewInit = true;
     }
   }
-  cmd.active = AppCommandState::Kind::None;  // leaving a space cancels any in-progress command
+  stepengine::EndSession(cmd);  // leaving a space cancels any in-progress command
   BumpCadGpuCache(cmd);
 }
 
@@ -224,8 +224,7 @@ void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string
     log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
     return;
   }
-  cmd.active = AppCommandState::Kind::PaperRectViewport;
-  cmd.lastCommand = AppCommandState::Kind::PaperRectViewport;
+  stepengine::BeginSession(cmd, std::make_unique<stepengine::PaperRectViewportSession>(), /*recordAsLastCommand=*/true);
   cmd.paperVpPhase = 0;
   cmd.paperVpMode = 0;
   log.push_back("MVIEW — click first corner or type [Fit/2/3/4/Object] (Esc to cancel).");
@@ -344,7 +343,7 @@ void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<st
                   "and destination. ESC cancels.");
     return;
   }
-  cmd.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
+  stepengine::EndSession(cmd);  // paper-space edit ops are not a model command
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
   log.push_back(std::string(copy ? "COPY" : "MOVE") + " — specify base point (click or type X,Y). ESC to cancel.");
@@ -1286,7 +1285,7 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
   }
   cmd.floatingViewportLayout = layoutIdx;
   cmd.floatingViewportIndex = vpIdx;
-  cmd.active = AppCommandState::Kind::None;
+  stepengine::EndSession(cmd);
   cmd.paperMovePhase = 0;
   cmd.paperGripCorner = -2;
   cmd.paperSelBoxActive = false;
@@ -1322,7 +1321,7 @@ void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log)
   }
   cmd.floatingViewportLayout = -1;
   cmd.floatingViewportIndex = -1;
-  cmd.active = AppCommandState::Kind::None;
+  stepengine::EndSession(cmd);
   log.push_back("Returned to paper space.");
   BumpCadGpuCache(cmd);
 }
@@ -1849,9 +1848,10 @@ static void StartVpFreezeThaw(AppCommandState& st, bool freeze, std::vector<std:
     return;
   }
   ResetAllCadDraftTools(st);
-  ResetModifyRotateDraft(st);
-  st.active      = freeze ? K::VpFreeze : K::VpThaw;
-  st.lastCommand = st.active;
+  if (freeze)
+    stepengine::BeginSession(st, std::make_unique<stepengine::VpFreezeSession>(), /*recordAsLastCommand=*/true);
+  else
+    stepengine::BeginSession(st, std::make_unique<stepengine::VpThawSession>(), /*recordAsLastCommand=*/true);
   st.selBoxWaitingSecond = false;
   log.push_back(std::string(name) + " — select objects to " + (freeze ? "freeze" : "thaw") +
                 " their layer in this viewport. Press Esc or Enter to exit.");

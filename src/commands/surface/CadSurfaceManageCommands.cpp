@@ -2035,7 +2035,6 @@ void RunSurfaceCrossings(AppCommandState& st, const std::string& args, std::vect
 
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  using SEP = AppCommandState::SurfaceElevPhase;
   if (st.active != K::None) {
     log.push_back("SURFELEV — finish or cancel the active command first.");
     return;
@@ -2049,10 +2048,9 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
-  st.surfaceElevPhase = SEP::WaitFirst;
-  st.surfaceElevFromZ.clear();
-  st.active = K::SurfaceElevGrade;
+  auto sess = std::make_unique<stepengine::SurfaceElevGradeSession>();
+  sess->phase = stepengine::SurfaceElevPhase::WaitFirst;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.");
 }
 
@@ -2068,9 +2066,9 @@ void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, 
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.waterDropSurfaceName = surfaceName;
-  st.active = K::WaterDrop;
+  auto sess = std::make_unique<stepengine::WaterDropSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("WATERDROP — pick a plan position on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2086,9 +2084,9 @@ void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, 
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.catchmentSurfaceName = surfaceName;
-  st.active = K::Catchment;
+  auto sess = std::make_unique<stepengine::CatchmentSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("CATCHMENT — pick an outlet on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2110,10 +2108,9 @@ void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceNam
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.swapEdgeSurfaceName = surfaceName;
-  st.active = K::SwapTinEdge;
-  st.lastCommand = K::SwapTinEdge;
+  auto sess = std::make_unique<stepengine::SwapTinEdgeSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("SURFSWAPEDGE — pick an interior edge on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2133,10 +2130,9 @@ void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceNam
     return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.addPointSurfaceName = surfaceName;
-  st.active = K::AddTinPoint;
-  st.lastCommand = K::AddTinPoint;
+  auto sess = std::make_unique<stepengine::AddTinPointSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("SURFACEADDPOINT — pick a plan position on \"" + surfaceName +
                 "\" (elevation = current work plane). ESC cancels.");
 }
@@ -2162,10 +2158,9 @@ void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceNam
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.delPointSurfaceName = surfaceName;
-  st.active = K::DelTinPoint;
-  st.lastCommand = K::DelTinPoint;
+  auto sess = std::make_unique<stepengine::DelTinPointSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("SURFACEDELPOINT — pick the point to remove from \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2184,11 +2179,10 @@ void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceNa
     return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.movePointSurfaceName = surfaceName;
-  st.moveTinPointPhase = AppCommandState::MoveTinPointPhase::WaitFrom;
-  st.active = K::MoveTinPoint;
-  st.lastCommand = K::MoveTinPoint;
+  auto sess = std::make_unique<stepengine::MoveTinPointSession>();
+  sess->surfaceName = surfaceName;
+  sess->phase = stepengine::MoveTinPointPhase::WaitFrom;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("SURFACEMOVEPOINT — pick the point to move on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2212,10 +2206,9 @@ void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.delLineSurfaceName = surfaceName;
-  st.active = K::DelTinLine;
-  st.lastCommand = K::DelTinLine;
+  auto sess = std::make_unique<stepengine::DelTinLineSession>();
+  sess->surfaceName = surfaceName;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("SURFDELLINE — pick an interior edge on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2237,11 +2230,10 @@ void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceNam
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.quickProfileSurfaceName = surfaceName;
-  st.quickProfilePhase = AppCommandState::QuickProfilePhase::WaitFirst;
-  st.active = K::QuickProfile;
-  st.lastCommand = K::QuickProfile;
+  auto sess = std::make_unique<stepengine::QuickProfileSession>();
+  sess->surfaceName = surfaceName;
+  sess->phase = stepengine::QuickProfilePhase::WaitFirst;
+  stepengine::BeginSession(st, std::move(sess), true);
   log.push_back("QUICKPROFILE — first point of the sample line on \"" + surfaceName + "\". ESC cancels.");
 }
 
@@ -2279,10 +2271,10 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.designateSurfaceName = surfaceName;
-  st.designateContourSource = false;
-  st.active = K::DesignateBreakline;
+  auto sess = std::make_unique<stepengine::DesignateBreaklineSession>();
+  sess->surfaceName = surfaceName;
+  sess->contourSource = false;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("DESIGNATEBREAKLINE — pick a line or polyline to use as a breakline on \"" + surfaceName +
                "\". ESC cancels.");
 }
@@ -2304,10 +2296,10 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.designateSurfaceName = surfaceName;
-  st.designateContourSource = true;
-  st.active = K::DesignateBreakline;
+  auto sess = std::make_unique<stepengine::DesignateBreaklineSession>();
+  sess->surfaceName = surfaceName;
+  sess->contourSource = true;
+  stepengine::BeginSession(st, std::move(sess), false);
   log.push_back("DESIGNATECONTOUR — pick a line or polyline to use as a contour on \"" + surfaceName +
                "\". ESC cancels.");
 }
@@ -2329,10 +2321,10 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  st.designateSurfaceName = surfaceName;
-  st.designateBoundaryKind = kind;
-  st.active = K::DesignateBoundary;
+  auto sess = std::make_unique<stepengine::DesignateBoundarySession>();
+  sess->surfaceName = surfaceName;
+  sess->boundaryKind = kind;
+  stepengine::BeginSession(st, std::move(sess), false);
   const char* kindName = kind == CadBoundaryKind::Outer ? "outer"
                        : kind == CadBoundaryKind::Hide  ? "hide"
                        : kind == CadBoundaryKind::Show  ? "show"
@@ -2346,12 +2338,16 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
 /// target surface's definition, and trigger the dynamic rebuild (REQ-069) — a plain BumpCadGpuCache
 /// is enough, since TickSurfaceRebuilds' dirty check is exactly "cadGpuRevision moved."
 void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
   const std::string cmdName = isBoundary ? "DESIGNATEBOUNDARY" : "DESIGNATEBREAKLINE";
-  const int si = FindSurfaceIndex(st, st.designateSurfaceName);
+  const auto* bndSess = isBoundary ? st.sessionAs<stepengine::DesignateBoundarySession>() : nullptr;
+  const auto* blSess = !isBoundary ? st.sessionAs<stepengine::DesignateBreaklineSession>() : nullptr;
+  const std::string targetSurfaceName = bndSess ? bndSess->surfaceName : (blSess ? blSess->surfaceName : std::string());
+  const CadBoundaryKind boundaryKind = bndSess ? bndSess->boundaryKind : CadBoundaryKind::Outer;
+  const bool contourSource = blSess && blSess->contourSource;
+  const int si = FindSurfaceIndex(st, targetSurfaceName);
   if (si < 0) {
-    log.push_back(cmdName + " — surface \"" + st.designateSurfaceName + "\" no longer exists.");
-    st.active = K::None;
+    log.push_back(cmdName + " — surface \"" + targetSurfaceName + "\" no longer exists.");
+    stepengine::EndSession(st);
     return;
   }
   SelectedEntity hit{};
@@ -2398,7 +2394,7 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   if (isBoundary) {
     CadSurfaceBoundary b;
     b.entityId = id;
-    b.kind = st.designateBoundaryKind;
+    b.kind = boundaryKind;
     b.name = st.designateBoundaryName;  // REQ-075; empty when the command was typed, not dialogued
     surface.boundaries.push_back(b);
     const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
@@ -2407,7 +2403,7 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
                                                              : "clip";
     log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary" +
                   (b.name.empty() ? "" : " \"" + b.name + "\"") + " to \"" + surface.name + "\".");
-  } else if (st.designateContourSource) {
+  } else if (contourSource) {
     CadSurfaceBreakline bl;
     bl.entityId = id;
     bl.description = st.designateBreaklineDescription;
@@ -2425,7 +2421,6 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   // Consumed: a later typed DESIGNATE* must not inherit the last dialog's text.
   st.designateBreaklineDescription.clear();
   st.designateBoundaryName.clear();
-  st.designateContourSource = false;
   BumpCadGpuCache(st);  // marks every surface's dirty check; TickSurfaceRebuilds picks this one up next frame
-  st.active = K::None;
+  stepengine::EndSession(st);
 }

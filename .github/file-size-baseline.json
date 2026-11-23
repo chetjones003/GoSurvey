@@ -1,5 +1,4 @@
 {
-  "src/commands/CadCommands.cpp": 8540,
   "src/geometry/src/brep.cpp": 19848,
   "src/io/src/AcisSatParser.cpp": 3189,
   "src/io/src/DxfIo.cpp": 6683,
@@ -9,7 +8,7 @@
   "src/qt/PdfWindow.cpp": 3296,
   "src/renderer/src/ViewportRenderer.cpp": 4256,
   "tests/BrepTests.cpp": 9427,
-  "tests/IO/LibreDwgCadTests.cpp": 9310,
+  "tests/IO/LibreDwgCadTests.cpp": 9308,
   "tests/Survey/TraverseTests.cpp": 3120,
   "tests/headless/HeadlessDriver.cpp": 3235
 }

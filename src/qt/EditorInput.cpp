@@ -208,9 +208,9 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
+  const auto* angSt = stepengine::ActiveSegmentAngleState(m_State);
   const bool bearingPickAwaitingCommand =
-      (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
-      m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
+      angSt && angSt->pickPhase == stepengine::SegmentAnglePickPhase::WaitAdjustOrCommit;
   if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
   // REQ-501.2: near an alignment, a point being entered or a grip being dragged reads its station, offset and bearing.
   const QString readout = QString::fromUtf8(m_State.alignmentCursorReadout.c_str());
@@ -293,8 +293,8 @@ void EditorWindow::CancelDraftingInput() {
   else if (m_State.selBoxWaitingSecond) m_Viewport->CancelSelectionBox();
   else if (m_State.sectionPlaneGripDrag >= 0) AbortSectionPlaneGripDrag(m_State);
   else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) CancelGizmoDrag(m_State);
-  else if ((m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
-           m_State.segmentAnglePickPhase != AppCommandState::SegmentAnglePickPhase::Idle)
+  else if (const auto* angSt = stepengine::ActiveSegmentAngleState(m_State);
+           angSt && angSt->pickPhase != stepengine::SegmentAnglePickPhase::Idle)
     CancelSegmentAnglePick(m_State, &m_Log);
   else if (m_State.active != AppCommandState::Kind::None || m_State.paperLengthenPhase || m_State.paperExtendPhase ||
            m_State.paperBreakPhase || m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase)
@@ -421,10 +421,12 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   if (!editing && key->key() == Qt::Key_Delete) {
     StartDeleteCommand(m_State, m_Log); Refresh(); return true;
   }
-  if (!editing && m_State.active == AppCommandState::Kind::DimLinear &&
-      m_State.dimPhase == AppCommandState::DimPhase::WaitDimLinePt &&
-      (key->key() == Qt::Key_H || key->key() == Qt::Key_V) && !ctrl) {
-    CadDimLinearApplyHVHotkey(m_State, key->key() == Qt::Key_V, m_Log); Refresh(); return true;
+  if (!editing) {
+    if (const auto* ds = m_State.sessionAs<stepengine::DimSession>();
+        ds && ds->linear && ds->phase == stepengine::DimPhase::WaitDimLinePt &&
+        (key->key() == Qt::Key_H || key->key() == Qt::Key_V) && !ctrl) {
+      CadDimLinearApplyHVHotkey(m_State, key->key() == Qt::Key_V, m_Log); Refresh(); return true;
+    }
   }
   for (int i = 0; i < 3; ++i) if (widget == m_DynamicFields[i]) {
     // Consume Return here: propagation after returnPressed would submit a second blank line.
