@@ -133,6 +133,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Multileader:    return &st.drawing.cadMultileaderAttrs;
   case EntityKind::Spline:         return &st.drawing.cadSplineAttrs;
   case EntityKind::Point:          return &st.drawing.cadPointAttrs;
+  case EntityKind::PipeRun:        return &st.drawing.cadPipeRunAttrs;
   }
   return &st.drawing.userLineAttrs;
 }
