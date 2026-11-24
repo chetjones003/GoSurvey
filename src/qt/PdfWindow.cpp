@@ -2216,32 +2216,6 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     }
     painter.drawPath(path);
   };
-  // A dimension as it plots (REQ-391): the same strokes the saved file gets, then its label, turned along a
-  // Length's line and centred on the shared anchor.
-  const auto drawDimension = [&](const pdfview::Annot& a) {
-    painter.save();
-    for (const auto& stroke : pdfview::DimensionStrokes(a)) {
-      QPolygonF polygon;
-      for (const auto& pt : stroke.pts) polygon << map(pt.first, pt.second);
-      if (stroke.filled) { painter.setBrush(painter.pen().color()); painter.drawPolygon(polygon); }
-      else { painter.setBrush(Qt::NoBrush); painter.drawPolyline(polygon); }
-    }
-    const QString label = QString::fromUtf8(pdfview::DimensionLabel(a, CurrentScale()).c_str());
-    QFont font(QString::fromStdString(a.font)); font.setPixelSize(std::max(1, qRound(std::max(4.f, a.fontSize) * factor)));
-    painter.setFont(font);
-    const auto anchor = pdfview::DimensionLabelAnchor(a);
-    painter.translate(map(anchor.first, anchor.second));
-    painter.rotate(-pdfview::DimensionLabelAngleDeg(a)); // page y is up, the screen's is down
-    const QFontMetricsF metrics(font);
-    const QStringList lines = label.split(QLatin1Char('\n'));
-    double y = -metrics.height() * lines.size() * 0.5;
-    for (const QString& line : lines) {
-      painter.drawText(QRectF(-metrics.horizontalAdvance(line) * 0.5 - 2, y, metrics.horizontalAdvance(line) + 4, metrics.height()),
-                       Qt::AlignCenter, line);
-      y += metrics.height();
-    }
-    painter.restore();
-  };
   for (std::size_t itemIndex = 0; itemIndex < m_Annotations.Items().size(); ++itemIndex) {
     const auto& annotation = m_DragPreview && static_cast<int>(itemIndex) == m_SelectedAnnotation ? *m_DragPreview : m_Annotations.Items()[itemIndex];
     if (annotation.page != page) continue;
@@ -2263,7 +2237,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     } else if (annotation.kind == pdfview::Annot::Kind::RevCloud) {
       drawCloud(annotation);
     } else if (annotation.IsDimension()) {
-      drawDimension(annotation);
+      PaintDimension(painter, annotation, map, factor);
     }
     if (showGrips) {
       std::vector<QPointF> grips = GripPoints(annotation);
@@ -2317,20 +2291,11 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
       else ghost.pts = {m_Draft.front(), {corner.first, m_Draft.front().second}, corner, {m_Draft.front().first, corner.second}};
       if (ghost.pts.size() >= 3) drawCloud(ghost); else painter.drawLine(start, end);
     } else if ((kind == pdfview::Annot::Kind::Length || kind == pdfview::Annot::Kind::Angle) && m_Draft.size() == 2) {
-      // The dimension it will make: a Length follows the pointer sideways for its offset, an Angle takes it as the
-      // second leg's end.
-      pdfview::Annot ghost; ghost.kind = kind; ghost.page = page; ApplyAnnotationStyle(ghost);
-      const QPointF at = CanvasToPage(end);
-      const std::pair<float, float> pointer(static_cast<float>(at.x()), static_cast<float>(at.y()));
-      ghost.pts = m_Draft;
-      if (kind == pdfview::Annot::Kind::Length) {
-        const auto line = pdfview::LengthDimLine(ghost);
-        ghost.offset = (pointer.first - ghost.pts[0].first) * line.nx + (pointer.second - ghost.pts[0].second) * line.ny;
-      } else ghost.pts.push_back(pointer);
-      painter.setPen(QPen(QColor(QtAccentFor(false).strong), 1.5));
-      drawDimension(ghost);
-    }
-    else painter.drawLine(map(m_Draft.back().first, m_Draft.back().second), end);
+      pdfview::Annot ghost; ghost.kind = kind; ghost.page = page; ApplyAnnotationStyle(ghost); ghost.pts = m_Draft;
+      const QPointF at = CanvasToPage(end);  // the dimension it will make, completed at the pointer
+      pdfview::PlaceDimensionPreview(ghost, {static_cast<float>(at.x()), static_cast<float>(at.y())});
+      painter.setPen(QPen(QColor(QtAccentFor(false).strong), 1.5)); PaintDimension(painter, ghost, map, factor);
+    } else painter.drawLine(map(m_Draft.back().first, m_Draft.back().second), end);
   }
 }
 

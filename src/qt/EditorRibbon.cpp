@@ -3,6 +3,7 @@
 #include "RibbonCatalog.hpp"
 #include "ModelingRibbon.hpp"
 #include <QAbstractItemView>
+#include <QAbstractSpinBox>
 #include <QLineEdit>
 #include "CadBlocks.hpp"
 #include "DxfIo.hpp"
@@ -1601,17 +1602,26 @@ void EditorWindow::OpenRibbonStyleManager(const QString& galleryObjectName) {
 
 // Ribbon buttons and pick-only drop-downs never take typing, so they never take keyboard focus: once one
 // held it, every typed command went to that control instead of the command line until the user clicked
-// back into the drawing. Spin boxes and editable combos keep focus, since they are typed into.
-static void ReleaseRibbonKeyboardFocus(QWidget* root) {
+// back into the drawing. Spin boxes and editable combos keep focus, since they are typed into, and hand it
+// back to \p drawing when Enter commits the value.
+static void ReleaseRibbonKeyboardFocus(QWidget* root, QWidget* drawing) {
   if (!root) return;
   for (auto* button : root->findChildren<QAbstractButton*>()) button->setFocusPolicy(Qt::NoFocus);
-  for (auto* combo : root->findChildren<QComboBox*>())
+  const auto returnOnEnter = [drawing](QWidget* field, QLineEdit* edit) {
+    if (!edit || field->property("ribbonReturnsFocus").toBool()) return;
+    field->setProperty("ribbonReturnsFocus", true);
+    QObject::connect(edit, &QLineEdit::returnPressed, drawing, [drawing] { drawing->setFocus(Qt::OtherFocusReason); });
+  };
+  for (auto* combo : root->findChildren<QComboBox*>()) {
     if (!combo->isEditable()) combo->setFocusPolicy(Qt::NoFocus);
+    else returnOnEnter(combo, combo->lineEdit());
+  }
+  for (auto* spin : root->findChildren<QAbstractSpinBox*>()) returnOnEnter(spin, spin->findChild<QLineEdit*>());
 }
 
 void EditorWindow::RefreshRibbon() {
   auto* ribbon = findChild<QTabWidget*>("ribbon"); if (!ribbon) return;
-  ReleaseRibbonKeyboardFocus(findChild<QToolBar*>("ribbonBar"));
+  ReleaseRibbonKeyboardFocus(findChild<QToolBar*>("ribbonBar"), m_Viewport);
   const bool drawing = m_State.activeDrawingIdx > 0;
   if (auto* layers = findChild<QWidget*>("ribbonSharedLayers")) layers->setEnabled(drawing);
   const bool paper = m_State.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(m_State);

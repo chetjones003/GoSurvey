@@ -3,7 +3,6 @@
 #include "CadColor.hpp"
 #include "CadCommands.hpp"
 #include "CadLinetype.hpp"
-#include "GoSurvey/Document/Appearance.hpp"
 #include "EditorWindow.hpp"
 #include "QtAccent.hpp"
 
@@ -379,13 +378,10 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   for (int column = 0; column < ColumnCount; ++column) if (column != Name) header->resizeSection(column, kColumnWidth[column]);
   layout->addWidget(table, 1);
   auto fitVisibleRows = [&] {
-    int visibleRows = 0;
-    for (int row = 0; row < table->rowCount(); ++row) visibleRows += table->isRowHidden(row) ? 0 : 1;
-    const int rowCount = std::min(visibleRows, 8);
     // Two rows stay visible however small the window: the table scrolls, the rest of the dialog never overlaps.
     // Set as a style rule, not setMinimumHeight: the application's QTableWidget rule (min-height:21px) wins
     // over a plain minimum on every re-polish, which let the window squeeze the table to its header.
-    const int minimum = header->sizeHint().height() + 6 + std::max(2, std::min(rowCount, 2)) * kRowHeight;
+    const int minimum = header->sizeHint().height() + 6 + 2 * kRowHeight;
     table->setStyleSheet(QString("QTableWidget#layerTable { min-height:%1px; }").arg(minimum));
   };
   auto* noMatches = new QLabel("No layers match this search.", &dialog);

@@ -543,12 +543,12 @@ inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPe
   return a.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
 }
 
-/// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
-// Visible text footprint using the frontend's font measurement when available.
+/// Visible text footprint using the frontend's font measurement when available.
 /// \p measure false skips the renderer measurement and returns the cheap estimated quad, for rejecting
 /// far-away text before paying for a Qt layout (hover picks run this for every annotation).
 void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
                                bool measure = true);
+/// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY);
 

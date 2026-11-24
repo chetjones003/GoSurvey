@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <functional>
 #include <vector>
 
 /// Render-time tuning sourced from Settings → Display / System (AutoCAD Options analog).
@@ -562,6 +563,23 @@ private:
   double hatchAnchorY_ = 0.0;
   std::vector<float> hatchUpload_;
   void ReleaseHatchGpu();
+  /// What the hatch pass (ViewportHatchPass.cpp) reads from the frame being rendered.
+  struct HatchPassInput {
+    const CadExtendedGeometryInput* extended;
+    const std::vector<CadFilledRegion>* filledRegions;
+    const std::vector<EntityAttributes>* filledRegionAttrs;
+    const std::vector<CadLayerRow>* drawingLayers;
+    const float* projRot;
+    double panX, panY;
+    float panZf;
+    double halfHd;
+    double viewAnchorX, viewAnchorY;
+    bool depthOn;
+    float lineWidth;
+    std::function<void()> depthForGeometry;
+    std::function<void(double, double)> setVcLineClipAnchor;
+  };
+  void DrawHatchPatterns(const HatchPassInput& in);
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
 

@@ -2030,9 +2030,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       const bool shift = event->modifiers() & Qt::ShiftModifier;
       const bool fenceWindow = m_Last.x() >= m_State.selBoxAnchorScreenX;
       if (m_State.selBoxWaitingSecond) {
-        const double pickX = m_State.selBoxWaitingSecond || m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
-        const double pickY = m_State.selBoxWaitingSecond || m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
-        SubmitViewportPick(m_State, pickX, pickY, m_Log, shift, fenceWindow,
+        // The box's far corner is where the pointer is, never a snapped point.
+        SubmitViewportPick(m_State, rawCursor.x, rawCursor.y, m_Log, shift, fenceWindow,
             CadViewIsPlan(m_State) ? nullptr : &ray);
         m_LeftDragSelection = false;
       } else {

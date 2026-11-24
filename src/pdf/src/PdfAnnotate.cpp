@@ -99,6 +99,15 @@ DimLine LengthDimLine(const Annot& a) {
   return d;
 }
 
+void PlaceDimensionPreview(Annot& a, std::pair<float, float> pointer) {
+  if (a.kind == Annot::Kind::Length && !a.pts.empty()) {
+    const DimLine line = LengthDimLine(a);
+    a.offset = (pointer.first - a.pts[0].first) * line.nx + (pointer.second - a.pts[0].second) * line.ny;
+  } else if (a.kind == Annot::Kind::Angle) {
+    a.pts.push_back(pointer);
+  }
+}
+
 float DimensionLabelAngleDeg(const Annot& a) {
   if (a.kind != Annot::Kind::Length || a.pts.size() < 2)
     return 0.f;

@@ -110,6 +110,9 @@ struct DimLine {
   float nx = 0.f, ny = 1.f;
 };
 DimLine LengthDimLine(const Annot& a);
+/// Completes a two-pick Length or Angle dimension at \p pointer for its placement preview: a Length takes the
+/// pointer's distance along the dimension normal as its offset, an Angle takes the pointer as its second leg's end.
+void PlaceDimensionPreview(Annot& a, std::pair<float, float> pointer);
 /// One stroke of a dimension's drawing, in page points: an open polyline, or a filled closed polygon (an arrowhead).
 struct DimStroke {
   std::vector<std::pair<float, float>> pts;
