@@ -202,16 +202,8 @@
   bool alignHasSelection = false; ///< true = only transform snapshotted entities; false = all
 
   // -------------------------------------------------------------------------
-  // PDFATTACH command state
+  // PDFATTACH dialog/preview state (active phase lives in stepengine::PdfAttachSession)
   // -------------------------------------------------------------------------
-  enum class PdfAttachPhase : std::uint8_t {
-    WaitDialog,       ///< Dialog is open; user browses / configures
-    Building,         ///< Async rasterize running in background; dialog shows spinner
-    WaitInsertPoint,  ///< User picks insertion point in viewport
-    WaitScaleRef,     ///< User picks second point to define scale interactively
-    WaitRotationPt,   ///< User picks rotation reference point
-  } pdfAttachPhase = PdfAttachPhase::WaitDialog;
-
   bool pdfAttachDialogOpen = false;
 
   /// REQ-387 (#732): requests the PDF Viewer window consumes on its next frame. The typed command
@@ -225,18 +217,8 @@
   int pdfCompareBenchPages = 0; ///< `BENCH PDFCOMPARE [pages]` (REQ-392): build two synthetic PDFs this long and time panning their overlay
 
   // -------------------------------------------------------------------------
-  // INSERT dialog (issue #124)
+  // INSERT dialog (issue #124; active phase lives in stepengine::InsertBlockSession)
   // -------------------------------------------------------------------------
-  enum class InsertBlockPhase : std::uint8_t {
-    WaitDialog,
-    WaitInsertPoint,
-    WaitScale,
-    WaitRotation,
-    WaitAlignFace,       ///< Pick a planar solid face to orient the fitting (issue #475 inc3)
-    WaitConnectorTarget, ///< Pick a target connection port on a placed block (issue #475 inc5)
-    WaitAttributes,
-  } insertBlockPhase = InsertBlockPhase::WaitDialog;
-
   bool insertBlockDialogOpen = false;
   char insertBlockName[256]{};
   char insertBlockPath[4096]{};
@@ -282,7 +264,7 @@
   char insertBlockAttrBuf[8][128]{};
 
   // Block Create dialog (ribbon Create button) — mirrors Insert dialog (issue #475 follow-up)
-  enum class BlockCreatePhase : std::uint8_t { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
+  bool blockCreateAwaitingBasePoint = false;
   bool blockCreateDialogOpen = false;
   char blockCreateName[256]{};
   float blockCreateBaseX = 0.f;

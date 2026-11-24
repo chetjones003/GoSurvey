@@ -24,7 +24,7 @@ void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) 
   if (st.active != AppCommandState::Kind::None)
     CancelActiveCommand(st, log);
   st.blockCreateDialogOpen = true;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  st.blockCreateAwaitingBasePoint = false;
   st.blockCreateName[0] = '\0';
   st.blockCreateBaseX = 0.f;
   st.blockCreateBaseY = 0.f;
@@ -93,7 +93,7 @@ static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::str
   BumpCadGpuCache(st);
   log.push_back("BLOCK \u2014 created \"" + name + "\".");
   st.blockCreateDialogOpen = false;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  st.blockCreateAwaitingBasePoint = false;
   return true;
 }
 
@@ -102,7 +102,7 @@ void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std
 }
 
 void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
-  if (st.blockCreatePhase != AppCommandState::BlockCreatePhase::WaitBasePoint)
+  if (!st.blockCreateAwaitingBasePoint)
     return;
   st.blockCreateBaseX = wx;
   st.blockCreateBaseY = wy;
@@ -113,11 +113,11 @@ void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, flo
   bool canCreate = !name.empty() && CadBlockFindDef(st.drawing.blockDefs, name) < 0 && !st.selection.empty();
   if (canCreate) {
     st.blockCreateDialogOpen = false;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+    st.blockCreateAwaitingBasePoint = false;
     CommitBlockCreateFromState(st, log);
   } else {
     st.blockCreateDialogOpen = true;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+    st.blockCreateAwaitingBasePoint = false;
     log.push_back("BLOCK \u2014 base point picked; complete the dialog and click OK.");
   }
 }
@@ -139,7 +139,7 @@ void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
   }
   if (st.blockCreateSpecifyBase) {
     st.blockCreateDialogOpen = false;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitBasePoint;
+    st.blockCreateAwaitingBasePoint = true;
     log.push_back("BLOCK \u2014 pick base point (ESC cancels).");
     return;
   }
@@ -149,7 +149,7 @@ void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
 void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
   (void)log;
   st.blockCreateDialogOpen = false;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  st.blockCreateAwaitingBasePoint = false;
 }
 
 bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,

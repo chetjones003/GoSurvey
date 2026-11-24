@@ -456,3 +456,78 @@ TEST_CASE("CommandRegistry: UCS polar prompt, ZOOM region box, and GIZMO setting
   SubmitLine(st, "gizmo off", log);
   REQUIRE_FALSE(st.gizmoPersistent);
 }
+
+TEST_CASE("Session ownership: UCS, PLAN, 3DMOVE, CHPROP, MATCHPROP, BCONNECT, PDFATTACH, and MVIEW own their state",
+          "[stepengine][sessions]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddLine(st, 0.0, 0.0, 10.0, 0.0);
+
+  // UCS session owns phase & pending picks and drops cleanly on Esc.
+  SubmitLine(st, "ucs", log);
+  REQUIRE(st.sessionAs<stepengine::UcsSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::UcsSession>()->phase == stepengine::UcsPhase::WaitOriginOrOption);
+  SubmitLine(st, "5,6", log);
+  REQUIRE(st.sessionAs<stepengine::UcsSession>()->phase == stepengine::UcsPhase::WaitXAxisPoint);
+  CHECK(st.sessionAs<stepengine::UcsSession>()->pendingOrigin.x == Catch::Approx(5.0));
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+
+  // PLAN session owns phase and drops cleanly on finish.
+  SubmitLine(st, "plan", log);
+  REQUIRE(st.sessionAs<stepengine::PlanSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::PlanSession>()->phase == stepengine::PlanPhase::WaitOption);
+  SubmitLine(st, "world", log);
+  CHECK(st.activeSession == nullptr);
+
+  // 3DMOVE session owns GizmoCmdPhase and restores gizmoOp on Esc.
+  st.gizmoOp = CadGizmoOp::Rotate;
+  st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  SubmitLine(st, "3dmove", log);
+  REQUIRE(st.sessionAs<stepengine::GizmoCmdSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::GizmoCmdSession>()->phase == stepengine::GizmoCmdPhase::BasePoint);
+  CHECK(st.gizmoOp == CadGizmoOp::Translate);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+  CHECK(st.gizmoOp == CadGizmoOp::Rotate);
+
+  // CHPROP session owns PropCmdPhase and ChPropProperty.
+  st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  SubmitLine(st, "chprop", log);
+  REQUIRE(st.sessionAs<stepengine::PropCmdSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::PropCmdSession>()->phase == stepengine::PropCmdPhase::WaitProperty);
+  SubmitLine(st, "color", log);
+  CHECK(st.sessionAs<stepengine::PropCmdSession>()->phase == stepengine::PropCmdPhase::WaitValue);
+  CHECK(st.sessionAs<stepengine::PropCmdSession>()->chPropProperty == stepengine::ChPropProperty::Color);
+  SubmitLine(st, "red", log);
+  CHECK(st.sessionAs<stepengine::PropCmdSession>()->phase == stepengine::PropCmdPhase::WaitProperty);
+  SubmitLine(st, "", log);
+  CHECK(st.activeSession == nullptr);
+
+  // BCONNECT session owns awaitingFace and routes BconnectFacePick through StepEngine.
+  CadBlockDefinition def;
+  def.name = "PORTFIT";
+  st.drawing.blockDefs.push_back(def);
+  SubmitLine(st, "bedit PORTFIT", log);
+  REQUIRE(st.blockEditActive);
+  SubmitLine(st, "bconnect P1", log);
+  REQUIRE(st.sessionAs<stepengine::BConnectSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::BConnectSession>()->name == "P1");
+  SubmitLine(st, "4in", log);
+  SubmitLine(st, "", log);
+  SubmitLine(st, "", log);
+  SubmitLine(st, "", log);
+  REQUIRE(st.sessionAs<stepengine::BConnectSession>()->awaitingFace);
+  CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::BconnectFacePick);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+  CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::IdleSelection);
+
+  // PDFATTACH session owns PdfAttachPhase and drops on Esc.
+  SubmitLine(st, "pdfattach", log);
+  REQUIRE(st.sessionAs<stepengine::PdfAttachSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::PdfAttachSession>()->phase == stepengine::PdfAttachPhase::WaitDialog);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+  CHECK_FALSE(st.pdfAttachDialogOpen);
+}

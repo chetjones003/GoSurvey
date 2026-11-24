@@ -40,13 +40,11 @@ void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PdfAttachSession>(), /*recordAsLastCommand=*/false);
-  st.pdfAttachPhase      = AppCommandState::PdfAttachPhase::WaitDialog;
   st.pdfAttachDialogOpen = true;
   log.push_back("PDFATTACH — select PDF file and options in the dialog, then place the underlay.");
 }
 
 void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
-  using Ph = AppCommandState::PdfAttachPhase;
   std::string capturedPath = cmd.pdfAttachFilePath;
   const int capturedPage = cmd.pdfAttachSelectedPage;
   const float capturedDpi = cmd.pdfAttachRasterDpi;
@@ -68,13 +66,14 @@ void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
     buildPtr->done.store(true, std::memory_order_release);
   });
   cmd.pdfAttachAsync = std::move(build);
-  cmd.pdfAttachPhase = Ph::Building;
+  if (auto* sess = cmd.sessionAs<stepengine::PdfAttachSession>())
+    sess->phase = stepengine::PdfAttachPhase::Building;
   log.push_back("PDFATTACH — rasterizing, please wait...");
 }
 
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::PdfAttach ||
-      st.pdfAttachPhase != AppCommandState::PdfAttachPhase::WaitInsertPoint)
+  const auto* sess = st.sessionAs<stepengine::PdfAttachSession>();
+  if (!sess || sess->phase != stepengine::PdfAttachPhase::WaitInsertPoint)
     return;
 
   PdfAttachment att;
@@ -117,7 +116,6 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
   }
 
   stepengine::EndSession(st);
-  st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
 }
 
 void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {

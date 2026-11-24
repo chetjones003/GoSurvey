@@ -166,8 +166,6 @@ void FinishSelectionBox(AppCommandState& st, double wx, double wy, bool windowSe
 // ---------------------------------------------------------------------------
 
 StepClickRoute ActiveClickRoute(const AppCommandState& st) {
-  if (st.blockEditActive && st.bconnectAwaitingFace)
-    return StepClickRoute::BconnectFacePick;
   if (!st.activeSession)
     return StepClickRoute::IdleSelection;
   return st.activeSession->currentStep(st).clickRoute;
@@ -702,16 +700,6 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     else if (st.paperChamferPhase)
       log.push_back("CHAMFER canceled.");
     ResetPaperModifyDrafts(st);
-    return;
-  }
-  if (st.bconnectAwaitingFace) {
-    st.bconnectAwaitingFace = false;
-    st.bconnectNameBuf[0] = '\0';
-    st.bconnectSizeBuf[0] = '\0';
-    st.bconnectCompatTagPending.clear();
-    if (st.active == AppCommandState::Kind::BConnect)
-      stepengine::EndSession(st);
-    log.push_back("BCONNECT canceled.");
     return;
   }
   if (st.active == AppCommandState::Kind::None)

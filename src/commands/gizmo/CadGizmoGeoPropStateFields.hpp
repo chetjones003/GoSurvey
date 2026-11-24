@@ -65,20 +65,14 @@
   /// Session state, like \ref gizmoOp.
   bool gizmoPersistent = false;
 
-  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
-  /// sits on (D-2026-09-28-c), or showing the handles on it.
-  enum class GizmoCmdPhase : std::uint8_t { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  // 3DMOVE / 3DROTATE / 3DSCALE, Geolocation, and CHPROP / MATCHPROP / LAYMCUR per-invocation
+  // phase and scratch fields live in stepengine::GizmoCmdSession, GeoCmdSession, and PropCmdSession
+  // (src/commands/gizmo/CadGizmoGeoPropSessions.hpp).
 
-  // --- Geolocation tab commands (REQ-359) ---
-  /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
-  /// the design point, WaitSecond = a point along north from it.
-  /// GEOCAPTUREAREA: the two corners, then Capturing while the map controller gathers the tiles.
-  enum class GeoCmdPhase : std::uint8_t { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
-  double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
-  double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
+  // --- Geolocation tab state (REQ-359) ---
   /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
   /// Settings window (which reads and clears \c done). Points are one pick; ToNorth / LocalAzimuth
-  /// are two (a direction), with the first in geoCmdFirstA/B.
+  /// are two (a direction), with the first in GeoCmdSession::firstA/B.
   struct DrawingSettingsPickState {
     enum class Target : std::uint8_t { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
     bool   done = false;         ///< A result is waiting for the window.
@@ -108,19 +102,6 @@
     int    gathered = 0;
     std::string prompt;         ///< "Capturing map… n of m tiles", kept here so the prompt can point at it.
   } mapCapture;
-
-  // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
-  /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
-  /// property (WaitProperty) and its value (WaitValue); MATCHPROP's destinations are SelectTargets.
-  enum class PropCmdPhase : std::uint8_t { SelectObjects, WaitProperty, WaitValue, SelectTargets };
-  PropCmdPhase propCmdPhase = PropCmdPhase::SelectObjects;
-  /// The property CHPROP is asking a value for.
-  enum class ChPropProperty : std::uint8_t { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
-  /// MATCHPROP's source attributes, copied when the source is picked (an index would not survive an
-  /// undo in between — architecture §11.9).
-  EntityAttributes matchPropSource;
-  /// The source carries a linetype / lineweight (\ref CadLineStyleApplies), so they are copied too.
-  bool matchPropSourceHasLineStyle = false;
   /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
   /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
   /// the selection's box, where the persistent gizmo always sits. Storage coordinates.

@@ -577,7 +577,6 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   LoadBundledBlockLibrary(st, log);
   stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/true);
   st.insertBlockDialogOpen = true;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockSpecifyPoint = true;
   st.insertBlockSpecifyScale = false;
   st.insertBlockSpecifyRot = true;
@@ -663,19 +662,23 @@ void ApplyInsertXformToDialog(const CadBlockXform& xf, AppCommandState& st) {
 }
 
 void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
   if (st.insertBlockSpecifyAlignFace) {
-    st.insertBlockPhase = Ph::WaitAlignFace;
+    if (sess)
+      sess->phase = Ph::WaitAlignFace;
     log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
     return;
   }
   if (st.insertBlockSpecifyScale) {
-    st.insertBlockPhase = Ph::WaitScale;
+    if (sess)
+      sess->phase = Ph::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
   if (st.insertBlockSpecifyRot) {
-    st.insertBlockPhase = Ph::WaitRotation;
+    if (sess)
+      sess->phase = Ph::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -684,9 +687,10 @@ void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log)
 }
 
 void InsertAdvanceAfterScaleOrRot(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
   if (st.insertBlockSpecifyRot) {
-    st.insertBlockPhase = Ph::WaitRotation;
+    if (auto* sess = st.sessionAs<stepengine::InsertBlockSession>())
+      sess->phase = Ph::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -695,9 +699,10 @@ void InsertAdvanceAfterScaleOrRot(AppCommandState& st, std::vector<std::string>&
 }
 
 void InsertAdvanceAfterAlignFace(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
   if (st.insertBlockSpecifyScale) {
-    st.insertBlockPhase = Ph::WaitScale;
+    if (auto* sess = st.sessionAs<stepengine::InsertBlockSession>())
+      sess->phase = Ph::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
@@ -891,8 +896,9 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
 
 bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log,
                                     bool optional) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess || sess->phase != Ph::WaitConnectorTarget)
     return false;
 
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
@@ -1012,7 +1018,6 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
 
 
 void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BlockFittingPhase;
   if (st.blockEditorName.empty()) {
     log.push_back("BLOCKFITTING — open a block with BEDIT first.");
     return;
@@ -1021,12 +1026,12 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
   if (di < 0)
     return;
   const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
-  stepengine::BeginSession(st, std::make_unique<stepengine::BlockFittingSession>(), /*recordAsLastCommand=*/false);
-  st.blockFittingPhase = Ph::WaitPartType;
-  st.blockFittingPartTypePending = def.partType;
-  st.blockFittingNominalSizePending = def.nominalSize;
-  st.blockFittingPressureClassPending = def.pressureClass;
-  st.blockFittingPartNumberPending = def.partNumber;
+  auto sess = std::make_unique<stepengine::BlockFittingSession>();
+  sess->partTypePending = def.partType;
+  sess->nominalSizePending = def.nominalSize;
+  sess->pressureClassPending = def.pressureClass;
+  sess->partNumberPending = def.partNumber;
+  stepengine::BeginSession(st, std::move(sess), /*recordAsLastCommand=*/false);
   log.push_back(
       "BLOCKFITTING — part type [" +
       (def.partType == CadPipePartType::None ? std::string("none") : std::string(CadPipePartTypeTag(def.partType))) +
@@ -1035,7 +1040,10 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BlockFittingPhase;
+  using Ph = stepengine::BlockFittingPhase;
+  auto* sess = st.sessionAs<stepengine::BlockFittingSession>();
+  if (!sess)
+    return;
   const std::string line = StringUtil::trimCopy(lineIn);
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
@@ -1045,39 +1053,39 @@ void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
-  if (st.blockFittingPhase == Ph::WaitPartType) {
+  if (sess->phase == Ph::WaitPartType) {
     if (!line.empty())
-      st.blockFittingPartTypePending = CadBlockEqCi(line, "none") ? CadPipePartType::None : ParseCadPipePartType(line);
-    st.blockFittingPhase = Ph::WaitNominalSize;
-    log.push_back("BLOCKFITTING — nominal size [" + st.blockFittingNominalSizePending + "] (Enter to keep current):");
+      sess->partTypePending = CadBlockEqCi(line, "none") ? CadPipePartType::None : ParseCadPipePartType(line);
+    sess->phase = Ph::WaitNominalSize;
+    log.push_back("BLOCKFITTING — nominal size [" + sess->nominalSizePending + "] (Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitNominalSize) {
+  if (sess->phase == Ph::WaitNominalSize) {
     if (!line.empty())
-      st.blockFittingNominalSizePending = line;
-    st.blockFittingPhase = Ph::WaitPressureClass;
+      sess->nominalSizePending = line;
+    sess->phase = Ph::WaitPressureClass;
     log.push_back("BLOCKFITTING — pressure class [" +
-                  (st.blockFittingPressureClassPending == CadPipePressureClass::None
+                  (sess->pressureClassPending == CadPipePressureClass::None
                        ? std::string("none")
-                       : std::string(CadPipePressureClassTag(st.blockFittingPressureClassPending))) +
+                       : std::string(CadPipePressureClassTag(sess->pressureClassPending))) +
                   "] (CS150|CS300|none, Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitPressureClass) {
+  if (sess->phase == Ph::WaitPressureClass) {
     if (!line.empty())
-      st.blockFittingPressureClassPending =
+      sess->pressureClassPending =
           CadBlockEqCi(line, "none") ? CadPipePressureClass::None : ParseCadPipePressureClass(line);
-    st.blockFittingPhase = Ph::WaitPartNumber;
-    log.push_back("BLOCKFITTING — part number [" + st.blockFittingPartNumberPending + "] (Enter to keep current):");
+    sess->phase = Ph::WaitPartNumber;
+    log.push_back("BLOCKFITTING — part number [" + sess->partNumberPending + "] (Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitPartNumber) {
+  if (sess->phase == Ph::WaitPartNumber) {
     if (!line.empty())
-      st.blockFittingPartNumberPending = line;
-    def.partType = st.blockFittingPartTypePending;
-    def.nominalSize = st.blockFittingNominalSizePending;
-    def.pressureClass = st.blockFittingPressureClassPending;
-    def.partNumber = st.blockFittingPartNumberPending;
+      sess->partNumberPending = line;
+    def.partType = sess->partTypePending;
+    def.nominalSize = sess->nominalSizePending;
+    def.pressureClass = sess->pressureClassPending;
+    def.partNumber = sess->partNumberPending;
     st.blockEditorDirty = true;
     log.push_back("BLOCKFITTING — updated \"" + def.name + "\".");
     stepengine::EndSession(st);
@@ -1090,11 +1098,12 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   // No vertex/edge tolerance needed any more (issue #496 follow-up): RayHitAnySolidFace picks the
   // nearest front face by triangle hit alone, matching "Center of face" rather than
   // solidpick::PickSubObject's vertex/edge-precedence pick.
-  if (!st.blockEditActive || !st.bconnectAwaitingFace)
+  auto* sess = st.sessionAs<stepengine::BConnectSession>();
+  if (!st.blockEditActive || !sess || !sess->awaitingFace)
     return false;
-  if (st.bconnectNameBuf[0] == '\0') {
+  if (sess->name.empty()) {
     log.push_back("BCONNECT — internal error: missing connection name.");
-    st.bconnectAwaitingFace = false;
+    sess->awaitingFace = false;
     return false;
   }
 
@@ -1150,30 +1159,23 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   if (di < 0)
     return false;
   CadBlockConnection conn;
-  conn.name = st.bconnectNameBuf;
-  conn.nominalSize = st.bconnectSizeBuf;
+  conn.name = sess->name;
+  conn.nominalSize = sess->nominalSize;
   conn.x = static_cast<float>(centre.x);
   conn.y = static_cast<float>(centre.y);
   conn.z = static_cast<float>(centre.z);
   conn.nx = static_cast<float>(n.x);
   conn.ny = static_cast<float>(n.y);
   conn.nz = static_cast<float>(n.z);
-  conn.role = st.bconnectRolePending;
-  conn.engagementLength = st.bconnectEngagementPending;
-  conn.compatibilityTag = st.bconnectCompatTagPending;
+  conn.role = sess->rolePending;
+  conn.engagementLength = sess->engagementPending;
+  conn.compatibilityTag = sess->compatTagPending;
   const std::string addedName = conn.name;
   st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
   st.blockEditorDirty = true;
-  st.bconnectAwaitingFace = false;
-  st.bconnectNameBuf[0] = '\0';
-  st.bconnectSizeBuf[0] = '\0';
-  st.bconnectRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEngagementPending = 0.f;
-  st.bconnectCompatTagPending.clear();
   // The BCONNECT wizard (issue #496) keeps st.active == Kind::BConnect through the face-pick step
   // so ESC still cancels it as one command; release it now that the pick has committed.
-  if (st.active == AppCommandState::Kind::BConnect)
-    stepengine::EndSession(st);
+  stepengine::EndSession(st);
   log.push_back("BCONNECT — added connection \"" + addedName + "\".");
   return true;
 }
@@ -1205,8 +1207,9 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
 
 bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                                     std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitAlignFace)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess || sess->phase != Ph::WaitAlignFace)
     return false;
 
   RefreshSolidDisplayGeometry(st);
@@ -1282,6 +1285,7 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     }
     st.insertBlockRotYDeg = ry;
   }
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
   if (st.insertBlockSpecifyConnectorSnap) {
     const int cdi = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
     if (cdi < 0 || st.drawing.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
@@ -1289,31 +1293,36 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
       return;
     }
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
     log.push_back("INSERT — pick the target connection port to snap to.");
     return;
   }
   if (st.insertBlockSpecifyPoint) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
     log.push_back("INSERT — specify insertion point.");
     return;
   }
   if (st.insertBlockSpecifyAlignFace) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAlignFace;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitAlignFace;
     log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
     return;
   }
   if (st.insertBlockSpecifyScale) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitScale;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
   if (st.insertBlockSpecifyRot) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -1399,17 +1408,21 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
 
 bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, float curZ, CadBlockXform* out) {
   assert(out != nullptr);
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
-      st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace &&
-      st.insertBlockPhase != Ph::WaitConnectorTarget)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess)
+    return false;
+  const Ph phase = sess->phase;
+  if (phase != Ph::WaitInsertPoint && phase != Ph::WaitScale &&
+      phase != Ph::WaitRotation && phase != Ph::WaitAlignFace &&
+      phase != Ph::WaitConnectorTarget)
     return false;
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (di < 0)
     return false;
 
   CadBlockXform xf;
-  if (st.insertBlockPhase == Ph::WaitInsertPoint) {
+  if (phase == Ph::WaitInsertPoint) {
     xf.x = curX;
     xf.y = curY;
     xf.z = curZ;
@@ -1422,7 +1435,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   float sx = st.insertBlockSx;
   float sy = st.insertBlockSy;
   float sz = st.insertBlockSz;
-  if (st.insertBlockPhase == Ph::WaitScale && st.insertBlockSpecifyScale) {
+  if (phase == Ph::WaitScale && st.insertBlockSpecifyScale) {
     const float d = InsertLiveScaleDist(st, curX, curY, curZ);
     if (d > 1.e-8f) {
       sx = d;
@@ -1434,7 +1447,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   }
 
   float rotDeg = st.insertBlockRotDeg;
-  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+  if (phase == Ph::WaitRotation && st.insertBlockSpecifyRot)
     rotDeg = InsertLiveRotDeg(st, curX, curY);
 
   // CadBlockPlaceInsert multiplies the transform by the block-unit scale after building it from
@@ -1444,7 +1457,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   xf.sy = sy * us;
   xf.sz = sz * us;
   ApplyInsertDialogRotations(st, &xf);
-  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+  if (phase == Ph::WaitRotation && st.insertBlockSpecifyRot)
     xf.rotZ = InsertRotZFromCwNorthDeg(rotDeg);
   *out = xf;
   return true;
@@ -1455,14 +1468,15 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<
 }
 
 void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock)
+  using Ph = stepengine::InsertBlockPhase;
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess)
     return;
-  if (st.insertBlockPhase == Ph::WaitConnectorTarget) {
+  if (sess->phase == Ph::WaitConnectorTarget) {
     SubmitInsertBlockConnectorPick(st, wx, wy, wz, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitInsertPoint) {
+  if (sess->phase == Ph::WaitInsertPoint) {
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
@@ -1493,19 +1507,20 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
       int runIdx = -1;
       if (CadPipeRunUnderPick(st, pick, &runIdx)) {
         st.insertBlockPipeSpliceArmed = false;
-        st.insertBlockPhase = Ph::WaitInsertPoint;
         stepengine::EndSession(st);
         if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
           return;
         // Refused, and said why. Re-arm just enough to finish the click as a placement.
-        stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/false);
-        st.insertBlockPhase = Ph::WaitInsertPoint;
+        stepengine::BeginSession(
+            st, std::make_unique<stepengine::InsertBlockSession>(Ph::WaitInsertPoint),
+            /*recordAsLastCommand=*/false);
+        sess = st.sessionAs<stepengine::InsertBlockSession>();
       }
       st.insertBlockPipeSpliceArmed = false;
-      st.insertBlockPhase = Ph::WaitConnectorTarget;
+      sess->phase = Ph::WaitConnectorTarget;
       if (SubmitInsertBlockConnectorPick(st, wx, wy, wz, log, /*optional=*/true))
         return;  // snapped and placed
-      st.insertBlockPhase = Ph::WaitInsertPoint;
+      sess->phase = Ph::WaitInsertPoint;
       // The REASON, not the outcome: `InsertAdvanceAfterPoint` below is what actually places
       // it, and "within 2 ft" covers both "nothing there" and "nothing there this part can
       // mate with" — the snap refuses for either, and the user needs to know only that it
@@ -1517,7 +1532,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     InsertAdvanceAfterPoint(st, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitScale) {
+  if (sess->phase == Ph::WaitScale) {
     const float dist = InsertLiveScaleDist(st, wx, wy, wz);
     if (dist < 1.e-8f) {
       log.push_back("INSERT — scale point must be away from the insertion point.");
@@ -1531,7 +1546,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     InsertAdvanceAfterScaleOrRot(st, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitRotation) {
+  if (sess->phase == Ph::WaitRotation) {
     // Store the pick direction in the same clockwise-from-north convention the typed field uses,
     // so InsertRotZFromCwNorthDeg converts it consistently (pick north → rotation 0 → as authored).
     st.insertBlockRotDeg = InsertLiveRotDeg(st, wx, wy);

@@ -69,8 +69,8 @@ bool IsGizmoCommandKind(AppCommandState::Kind k) {
 }
 
 bool CadGizmoSummoned(const AppCommandState& st) {
-  if (IsGizmoCommandKind(st.active))
-    return st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles;
+  if (const auto* sess = st.sessionAs<stepengine::GizmoCmdSession>())
+    return sess->phase == stepengine::GizmoCmdPhase::Handles;
   return st.gizmoPersistent;
 }
 
@@ -853,14 +853,15 @@ void EndGizmoCommand(AppCommandState& st) {
   CancelGizmoDrag(st);  // with the command's op still set: the cancel's neutral value is per-op
   st.gizmoOp = st.gizmoOpBeforeCmd;
   st.gizmoHoverAxis = -1;
-  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
   st.gizmoBaseValid = false;
   stepengine::EndSession(st);
 }
 
 std::string CadGizmoCommandPromptText(const AppCommandState& st) {
+  const auto* sess = st.sessionAs<stepengine::GizmoCmdSession>();
+  const auto phase = sess ? sess->phase : stepengine::GizmoCmdPhase::SelectObjects;
   const std::string verb = AppCommandState::KindName(st.active);
-  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+  if (phase == stepengine::GizmoCmdPhase::SelectObjects) {
     std::string s = verb + " — select objects";
     if (st.active == AppCommandState::Kind::Move3d)
       s += " (Ctrl+click a solid face, edge or vertex)";
@@ -869,7 +870,7 @@ std::string CadGizmoCommandPromptText(const AppCommandState& st) {
       s += " (" + std::to_string(have) + " selected)";
     return s + ", Enter when done. ESC cancels.";
   }
-  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint)
+  if (phase == stepengine::GizmoCmdPhase::BasePoint)
     return verb + " — specify base point (click, snap or type X,Y[,Z]) <Enter = centre of the "
                   "selection>. ESC cancels.";
   const char* what = st.gizmoOp == CadGizmoOp::Rotate  ? "an angle in degrees"
@@ -891,8 +892,8 @@ std::string CadGizmoCommandPromptText(const AppCommandState& st) {
 
 void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
                           std::vector<std::string>& log) {
-  if (!IsGizmoCommandKind(st.active) ||
-      st.gizmoCmdPhase != AppCommandState::GizmoCmdPhase::BasePoint)
+  auto* sess = st.sessionAs<stepengine::GizmoCmdSession>();
+  if (!sess || sess->phase != stepengine::GizmoCmdPhase::BasePoint)
     return;
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
     log.push_back(std::string(AppCommandState::KindName(st.active)) +
@@ -901,7 +902,7 @@ void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
   }
   st.gizmoBase = ray3d::Vec3{x, y, z};
   st.gizmoBaseValid = true;
-  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+  sess->phase = stepengine::GizmoCmdPhase::Handles;
   log.push_back(CadGizmoCommandPromptText(st));
 }
 
@@ -909,12 +910,15 @@ void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
 /// solid face / edge / vertex, whose handle sits where its kernel edit acts) — or say why there is
 /// no gizmo and end the command (REQ-201): a gizmo command with nothing to drag would look hung.
 static void EnterGizmoHandlesPhase(AppCommandState& st, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::GizmoCmdSession>();
+  if (!sess)
+    return;
   const std::string verb = AppCommandState::KindName(st.active);
-  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+  sess->phase = stepengine::GizmoCmdPhase::Handles;
   st.gizmoBaseValid = false;
   if (CadGizmoVisible(st)) {
     if (st.subObjectSelection.empty())
-      st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::BasePoint;  // D-2026-09-28-c
+      sess->phase = stepengine::GizmoCmdPhase::BasePoint;  // D-2026-09-28-c
     log.push_back(CadGizmoCommandPromptText(st));
     return;
   }
@@ -951,7 +955,6 @@ void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
   CancelGizmoDrag(st);  // a persistent-gizmo drag armed under the old op cannot carry over
   st.gizmoOp = GizmoOpForCommandKind(kind);
   st.gizmoHoverAxis = -1;
-  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
   if (!st.selection.empty() || !st.subObjectSelection.empty()) {
     EnterGizmoHandlesPhase(st, log);  // a pre-selection goes straight to the handles
     return;
@@ -961,11 +964,12 @@ void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
 
 bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
                                  std::vector<std::string>& log) {
-  if (!IsGizmoCommandKind(st.active))
+  auto* sess = st.sessionAs<stepengine::GizmoCmdSession>();
+  if (!sess)
     return false;
   const std::string verb = AppCommandState::KindName(st.active);
   const std::string line = StringUtil::trimCopy(lineIn);
-  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+  if (sess->phase == stepengine::GizmoCmdPhase::SelectObjects) {
     if (!line.empty()) {
       log.push_back(CadGizmoCommandPromptText(st));
       return true;
@@ -980,10 +984,10 @@ bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
 
   // BASE POINT (D-2026-09-28-c). Enter keeps the default — the centre of the selection's box — and
   // a typed point is read the way MOVE reads its base point.
-  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint) {
+  if (sess->phase == stepengine::GizmoCmdPhase::BasePoint) {
     if (line.empty()) {
       st.gizmoBaseValid = false;
-      st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+      sess->phase = stepengine::GizmoCmdPhase::Handles;
       log.push_back(CadGizmoCommandPromptText(st));
       return true;
     }

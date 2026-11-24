@@ -34,20 +34,20 @@ namespace stepengine {
 // PdfAttachSession
 // ---------------------------------------------------------------------------
 
-StepDescriptor PdfAttachSession::currentStep(const AppCommandState& st) const {
-  using PAP = AppCommandState::PdfAttachPhase;
-  if (st.pdfAttachPhase == PAP::WaitInsertPoint) {
+StepDescriptor PdfAttachSession::currentStep(const AppCommandState&) const {
+  using PAP = PdfAttachPhase;
+  if (phase == PAP::WaitInsertPoint) {
     StepDynInputSpec dyn;
     dyn.pointEntry = true;
     return StepDescriptor::Custom("PDFATTACH: Insertion point — click or X,Y | ESC cancel",
                                   StepClickRoute::PdfAttachInsertPoint, BlankEnterPolicy::Custom,
                                   false, false, dyn);
   }
-  if (st.pdfAttachPhase == PAP::WaitScaleRef) {
+  if (phase == PAP::WaitScaleRef) {
     return StepDescriptor::Custom("PDFATTACH: Second point for scale | ESC cancel",
                                   StepClickRoute::Ignore, BlankEnterPolicy::Custom);
   }
-  if (st.pdfAttachPhase == PAP::WaitRotationPt) {
+  if (phase == PAP::WaitRotationPt) {
     return StepDescriptor::Custom("PDFATTACH: Rotation reference point | ESC cancel",
                                   StepClickRoute::Ignore, BlankEnterPolicy::Custom);
   }
@@ -57,8 +57,8 @@ StepDescriptor PdfAttachSession::currentStep(const AppCommandState& st) const {
 
 StepSubmitResult PdfAttachSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                           std::vector<std::string>& log) {
-  using PAP = AppCommandState::PdfAttachPhase;
-  if (st.pdfAttachPhase == PAP::WaitInsertPoint) {
+  using PAP = PdfAttachPhase;
+  if (phase == PAP::WaitInsertPoint) {
     float px = 0.f;
     float py = 0.f;
     if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f)) {
@@ -68,7 +68,7 @@ StepSubmitResult PdfAttachSession::onText(AppCommandState& st, const std::string
     SubmitPdfAttachInsertPoint(st, px, py, log);
     return StepSubmitResult::Handled;
   }
-  if (st.pdfAttachPhase == PAP::WaitDialog || st.pdfAttachPhase == PAP::Building)
+  if (phase == PAP::WaitDialog || phase == PAP::Building)
     log.push_back("PDFATTACH — complete the attach dialog, or ESC to cancel.");
   else
     log.push_back("PDFATTACH — pick the insertion point in the viewport, or ESC to cancel.");
@@ -77,7 +77,7 @@ StepSubmitResult PdfAttachSession::onText(AppCommandState& st, const std::string
 
 void PdfAttachSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                       std::vector<std::string>& log) {
-  if (st.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint) {
+  if (phase == PdfAttachPhase::WaitInsertPoint) {
     SubmitPdfAttachInsertPoint(st, static_cast<float>(pick.localX),
                                static_cast<float>(pick.localY), log);
   }
@@ -98,7 +98,6 @@ void PdfAttachSession::onReset(AppCommandState& st) {
     st.pdfAttachPreviewReady = false;
   }
   st.pdfAttachDialogOpen = false;
-  st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +128,7 @@ void PaperRectViewportSession::onViewportPick(AppCommandState& st, const StepPic
     EndSession(st);
     return;
   }
-  if (st.paperVpMode == 1) {
+  if (mode == 1) {
     PaperRef hit{};
     const PaperLayout& layout = st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
     if (!PickPaperEntityAt(layout, static_cast<float>(pick.localX), static_cast<float>(pick.localY),
@@ -145,36 +144,32 @@ void PaperRectViewportSession::onViewportPick(AppCommandState& st, const StepPic
       return;
     }
     if (AddViewportFromPaperPolyline(st, st.activeSpaceIndex, hit.index, log)) {
-      st.paperVpMode = 0;
-      st.paperVpPhase = 0;
       EndSession(st);
     }
     return;
   }
   const float x = static_cast<float>(pick.localX);
   const float y = static_cast<float>(pick.localY);
-  if (st.paperVpPhase == 0) {
-    st.paperVpFirstXIn = x;
-    st.paperVpFirstYIn = y;
-    st.paperVpPhase = 1;
+  if (phase == 0) {
+    firstXIn = x;
+    firstYIn = y;
+    phase = 1;
     log.push_back("MVIEW — click the opposite corner, or type [Fit/2/3/4/Object].");
     return;
   }
-  if (std::fabs(x - st.paperVpFirstXIn) < 0.1f || std::fabs(y - st.paperVpFirstYIn) < 0.1f) {
+  if (std::fabs(x - firstXIn) < 0.1f || std::fabs(y - firstYIn) < 0.1f) {
     log.push_back("MVIEW — viewport corners must be at least 0.1 in apart; pick the opposite corner again.");
     return;
   }
+  const float x0 = firstXIn;
+  const float y0 = firstYIn;
   PushUndoSnapshot(st, "Create MVIEW viewport");
-  AddViewportRect(st, st.activeSpaceIndex, st.paperVpFirstXIn, st.paperVpFirstYIn, x, y);
-  st.paperVpPhase = 0;
-  st.paperVpMode = 0;
+  AddViewportRect(st, st.activeSpaceIndex, x0, y0, x, y);
   EndSession(st);
   log.push_back("MVIEW — rectangular viewport created.");
 }
 
-void PaperRectViewportSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  st.paperVpPhase = 0;
-  st.paperVpMode = 0;
+void PaperRectViewportSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("MVIEW canceled.");
 }
 

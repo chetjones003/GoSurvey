@@ -5,11 +5,7 @@
   int selectedViewportLayout = -1;           ///< layout owning the primary selected viewport (REQ-027), or -1.
   int selectedViewportIndex = -1;            ///< primary selected viewport (popup edit/grips), or -1.
   std::vector<int> selectedViewports;        ///< all selected viewports in the active layout (REQ-035).
-  // Rectangular viewport command draft (REQ-033): 0 = need first corner, 1 = need second.
-  int   paperVpPhase = 0;
-  float paperVpFirstXIn = 0.f;
-  float paperVpFirstYIn = 0.f;
-  int   paperVpMode = 0;  ///< REQ-490: 0 = rectangle, 1 = awaiting closed polyline Object pick.
+  // Rectangular viewport (MVIEW) per-invocation state lives in stepengine::PaperRectViewportSession.
   // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
   int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
   // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.

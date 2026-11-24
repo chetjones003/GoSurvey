@@ -21,20 +21,11 @@
 #include "CadBlockConnectInternal.hpp"
 
 void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectModePhase;
   if (st.blockEditorName.empty()) {
     log.push_back("BCONNECTMODE — open a block with BEDIT first.");
     return;
   }
   stepengine::BeginSession(st, std::make_unique<stepengine::BConnectModeSession>(), /*recordAsLastCommand=*/false);
-  st.bconnectModePhase = Ph::WaitConnName;
-  st.bconnectModeConnName.clear();
-  st.bconnectModeModeName.clear();
-  st.bconnectModeEditingExisting = false;
-  st.bconnectModeTargetPending = CadConnectionModeTarget::GenericPort;
-  st.bconnectModeRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectModeEngagementPending = 0.f;
-  st.bconnectModeCompatTagPending.clear();
   if (!connNameArg.empty()) {
     // Power-user shortcut (also how the ribbon button and BCONNECTMODE <name> jump straight past
     // the first prompt): reuse the phase handler itself so the two entry points can't drift apart.
@@ -45,7 +36,10 @@ void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std:
 }
 
 void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectModePhase;
+  using Ph = stepengine::BConnectModePhase;
+  auto* sess = st.sessionAs<stepengine::BConnectModeSession>();
+  if (!sess)
+    return;
   const std::string line = StringUtil::trimCopy(lineIn);
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
@@ -55,7 +49,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
-  if (st.bconnectModePhase == Ph::WaitConnName) {
+  if (sess->phase == Ph::WaitConnName) {
     if (line.empty()) {
       log.push_back("BCONNECTMODE — connection point name:");
       return;
@@ -66,7 +60,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       stepengine::EndSession(st);
       return;
     }
-    st.bconnectModeConnName = line;
+    sess->connName = line;
     const CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
     if (!conn.modes.empty()) {
       std::string existing = "BCONNECTMODE — \"" + line + "\" already has: ";
@@ -79,25 +73,25 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       }
       log.push_back(existing);
     }
-    st.bconnectModePhase = Ph::WaitModeName;
+    sess->phase = Ph::WaitModeName;
     log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
     return;
   }
 
-  const int ci = CadBlockFindConnection(def, st.bconnectModeConnName);
+  const int ci = CadBlockFindConnection(def, sess->connName);
   if (ci < 0) {
-    log.push_back("BCONNECTMODE — connection \"" + st.bconnectModeConnName + "\" is gone; canceled.");
+    log.push_back("BCONNECTMODE — connection \"" + sess->connName + "\" is gone; canceled.");
     stepengine::EndSession(st);
     return;
   }
   CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
 
-  if (st.bconnectModePhase == Ph::WaitModeName) {
+  if (sess->phase == Ph::WaitModeName) {
     if (line.empty()) {
       log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
       return;
     }
-    st.bconnectModeModeName = line;
+    sess->modeName = line;
     int mi = -1;
     for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
       if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, line)) {
@@ -105,27 +99,27 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
         break;
       }
     }
-    st.bconnectModeEditingExisting = mi >= 0;
+    sess->editingExisting = mi >= 0;
     if (mi >= 0) {
       const CadBlockConnectionMode& m = conn.modes[static_cast<size_t>(mi)];
-      st.bconnectModeTargetPending = m.target;
-      st.bconnectModeRolePending = m.role;
-      st.bconnectModeEngagementPending = m.engagementLength;
-      st.bconnectModeCompatTagPending = m.compatibilityTag;
-      st.bconnectModePhase = Ph::WaitRemoveConfirm;
+      sess->targetPending = m.target;
+      sess->rolePending = m.role;
+      sess->engagementPending = m.engagementLength;
+      sess->compatTagPending = m.compatibilityTag;
+      sess->phase = Ph::WaitRemoveConfirm;
       log.push_back("BCONNECTMODE — remove mode \"" + line + "\"? (y/N):");
       return;
     }
-    st.bconnectModePhase = Ph::WaitTarget;
+    sess->phase = Ph::WaitTarget;
     log.push_back("BCONNECTMODE — snap target for \"" + line + "\" (" + BConnectModeTargetPromptList() + "):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitRemoveConfirm) {
+  if (sess->phase == Ph::WaitRemoveConfirm) {
     if (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes")) {
       int mi = -1;
       for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-        if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
+        if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, sess->modeName)) {
           mi = i;
           break;
         }
@@ -133,68 +127,68 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       if (mi >= 0) {
         conn.modes.erase(conn.modes.begin() + mi);
         st.blockEditorDirty = true;
-        log.push_back("BCONNECTMODE — removed mode \"" + st.bconnectModeModeName + "\".");
+        log.push_back("BCONNECTMODE — removed mode \"" + sess->modeName + "\".");
       }
       stepengine::EndSession(st);
       return;
     }
-    st.bconnectModePhase = Ph::WaitTarget;
-    log.push_back("BCONNECTMODE — snap target for \"" + st.bconnectModeModeName + "\" [" +
-                  std::string(CadConnectionModeTargetTag(st.bconnectModeTargetPending)) + "] (" +
+    sess->phase = Ph::WaitTarget;
+    log.push_back("BCONNECTMODE — snap target for \"" + sess->modeName + "\" [" +
+                  std::string(CadConnectionModeTargetTag(sess->targetPending)) + "] (" +
                   BConnectModeTargetPromptList() + ", Enter to keep current):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitTarget) {
+  if (sess->phase == Ph::WaitTarget) {
     if (!line.empty())
-      st.bconnectModeTargetPending = ParseCadConnectionModeTarget(line);
-    st.bconnectModePhase = Ph::WaitRole;
-    log.push_back("BCONNECTMODE — role [" + std::string(CadBlockConnectionRoleTag(st.bconnectModeRolePending)) +
+      sess->targetPending = ParseCadConnectionModeTarget(line);
+    sess->phase = Ph::WaitRole;
+    log.push_back("BCONNECTMODE — role [" + std::string(CadBlockConnectionRoleTag(sess->rolePending)) +
                   "] (" + BConnectModeRolePromptList() + ", Enter to keep current):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitRole) {
+  if (sess->phase == Ph::WaitRole) {
     if (!line.empty())
-      st.bconnectModeRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectModePhase = Ph::WaitEngagement;
+      sess->rolePending = ParseCadBlockConnectionRole(line);
+    sess->phase = Ph::WaitEngagement;
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%g", st.bconnectModeEngagementPending);
+    std::snprintf(buf, sizeof(buf), "%g", sess->engagementPending);
     log.push_back(std::string("BCONNECTMODE — engagement length [") + buf + "] (Enter to keep current):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitEngagement) {
+  if (sess->phase == Ph::WaitEngagement) {
     if (!line.empty()) {
       float v = 0.f;
       if (!TryParseF(line, v)) {
         log.push_back("BCONNECTMODE — engagement length must be a number.");
         return;
       }
-      st.bconnectModeEngagementPending = v;
+      sess->engagementPending = v;
     }
-    st.bconnectModePhase = Ph::WaitCompatTag;
-    log.push_back("BCONNECTMODE — compatibility tag [" + st.bconnectModeCompatTagPending +
+    sess->phase = Ph::WaitCompatTag;
+    log.push_back("BCONNECTMODE — compatibility tag [" + sess->compatTagPending +
                   "] (Enter to keep current, type \"-\" to clear):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitCompatTag) {
+  if (sess->phase == Ph::WaitCompatTag) {
     if (line == "-")
-      st.bconnectModeCompatTagPending.clear();
+      sess->compatTagPending.clear();
     else if (!line.empty())
-      st.bconnectModeCompatTagPending = line;
-    st.bconnectModePhase = Ph::WaitIsDefault;
-    log.push_back("BCONNECTMODE — make \"" + st.bconnectModeModeName + "\" the default mode? (y/N):");
+      sess->compatTagPending = line;
+    sess->phase = Ph::WaitIsDefault;
+    log.push_back("BCONNECTMODE — make \"" + sess->modeName + "\" the default mode? (y/N):");
     return;
   }
 
-  if (st.bconnectModePhase == Ph::WaitIsDefault) {
+  if (sess->phase == Ph::WaitIsDefault) {
     const bool makeDefault = (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes"));
-    BConnectModeCommit(st, conn);
+    BConnectModeCommit(st, *sess, conn);
     int mi = -1;
     for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
+      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, sess->modeName)) {
         mi = i;
         break;
       }
@@ -208,7 +202,7 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
     if (!conn.modes.empty() &&
         std::none_of(conn.modes.begin(), conn.modes.end(), [](const CadBlockConnectionMode& m) { return m.isDefault; }))
       conn.modes.front().isDefault = true;
-    log.push_back("BCONNECTMODE — set mode \"" + st.bconnectModeModeName + "\" on \"" + st.bconnectModeConnName +
+    log.push_back("BCONNECTMODE — set mode \"" + sess->modeName + "\" on \"" + sess->connName +
                   "\".");
     stepengine::EndSession(st);
     return;
@@ -216,18 +210,11 @@ void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std:
 }
 
 void BConnectStart(AppCommandState& st, const std::string& nameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectPhase;
   if (st.blockEditorName.empty()) {
     log.push_back("BCONNECT — open a block with BEDIT first.");
     return;
   }
   stepengine::BeginSession(st, std::make_unique<stepengine::BConnectSession>(), /*recordAsLastCommand=*/false);
-  st.bconnectPhase = Ph::WaitName;
-  st.bconnectNameBuf[0] = '\0';
-  st.bconnectSizeBuf[0] = '\0';
-  st.bconnectRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEngagementPending = 0.f;
-  st.bconnectCompatTagPending.clear();
   if (!nameArg.empty()) {
     BConnectSubmitLine(st, nameArg, log);
     return;
@@ -236,58 +223,60 @@ void BConnectStart(AppCommandState& st, const std::string& nameArg, std::vector<
 }
 
 void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectPhase;
+  using Ph = stepengine::BConnectPhase;
+  auto* sess = st.sessionAs<stepengine::BConnectSession>();
+  if (!sess)
+    return;
   const std::string line = StringUtil::trimCopy(lineIn);
 
-  if (st.bconnectPhase == Ph::WaitName) {
+  if (sess->phase == Ph::WaitName) {
     if (line.empty()) {
       log.push_back("BCONNECT — connection point name:");
       return;
     }
-    std::snprintf(st.bconnectNameBuf, sizeof(st.bconnectNameBuf), "%s", line.c_str());
-    st.bconnectPhase = Ph::WaitNominalSize;
+    sess->name = line;
+    sess->phase = Ph::WaitNominalSize;
     log.push_back("BCONNECT — nominal size (e.g. 2in, Enter to skip):");
     return;
   }
-  if (st.bconnectPhase == Ph::WaitNominalSize) {
-    std::snprintf(st.bconnectSizeBuf, sizeof(st.bconnectSizeBuf), "%s", line.c_str());
-    st.bconnectPhase = Ph::WaitRole;
+  if (sess->phase == Ph::WaitNominalSize) {
+    sess->nominalSize = line;
+    sess->phase = Ph::WaitRole;
     log.push_back("BCONNECT — role (" + BConnectModeRolePromptList() + ", Enter for inlet):");
     return;
   }
-  if (st.bconnectPhase == Ph::WaitRole) {
+  if (sess->phase == Ph::WaitRole) {
     if (!line.empty())
-      st.bconnectRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectPhase = Ph::WaitEngagement;
+      sess->rolePending = ParseCadBlockConnectionRole(line);
+    sess->phase = Ph::WaitEngagement;
     log.push_back("BCONNECT — engagement length (Enter for 0):");
     return;
   }
-  if (st.bconnectPhase == Ph::WaitEngagement) {
+  if (sess->phase == Ph::WaitEngagement) {
     if (!line.empty()) {
       float v = 0.f;
       if (!TryParseF(line, v)) {
         log.push_back("BCONNECT — engagement length must be a number.");
         return;
       }
-      st.bconnectEngagementPending = v;
+      sess->engagementPending = v;
     }
-    st.bconnectPhase = Ph::WaitCompatTag;
+    sess->phase = Ph::WaitCompatTag;
     log.push_back("BCONNECT — compatibility tag (Enter to skip):");
     return;
   }
-  if (st.bconnectPhase == Ph::WaitCompatTag) {
+  if (sess->phase == Ph::WaitCompatTag) {
     if (!line.empty())
-      st.bconnectCompatTagPending = line;
-    st.bconnectPhase = Ph::WaitPoint;
+      sess->compatTagPending = line;
+    sess->phase = Ph::WaitPoint;
     // Arm the face pick immediately (issue #496 follow-up) rather than waiting for an extra blank
     // Enter — a click in the viewport works right away, and typing coordinates instead still works
-    // because BConnectSubmitLine keeps routing here first (see the K::BConnect check in
-    // ProcessCommandLineSubmit) as long as st.active hasn't been cleared yet.
-    st.bconnectAwaitingFace = true;
+    // because BConnectSubmitLine keeps routing here first while BConnectSession is active.
+    sess->awaitingFace = true;
     log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
     return;
   }
-  if (st.bconnectPhase == Ph::WaitPoint) {
+  if (sess->phase == Ph::WaitPoint) {
     if (line.empty()) {
       log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
       return;
@@ -300,7 +289,7 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
       log.push_back("BCONNECT — type 6 comma-separated numbers x,y,z,nx,ny,nz, or click a flat face.");
       return;
     }
-    st.bconnectAwaitingFace = false;
+    sess->awaitingFace = false;
     const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0) {
       log.push_back("BCONNECT — the block being edited no longer exists.");
@@ -308,17 +297,17 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
       return;
     }
     CadBlockConnection conn;
-    conn.name = st.bconnectNameBuf;
-    conn.nominalSize = st.bconnectSizeBuf;
+    conn.name = sess->name;
+    conn.nominalSize = sess->nominalSize;
     conn.x = x;
     conn.y = y;
     conn.z = z;
     conn.nx = nx;
     conn.ny = ny;
     conn.nz = nz;
-    conn.role = st.bconnectRolePending;
-    conn.engagementLength = st.bconnectEngagementPending;
-    conn.compatibilityTag = st.bconnectCompatTagPending;
+    conn.role = sess->rolePending;
+    conn.engagementLength = sess->engagementPending;
+    conn.compatibilityTag = sess->compatTagPending;
     const std::string addedName = conn.name;
     st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
     st.blockEditorDirty = true;
@@ -329,7 +318,6 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
 }
 
 void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectEditPhase;
   if (st.blockEditorName.empty()) {
     log.push_back("BCONNECTEDIT — open a block with BEDIT first.");
     return;
@@ -343,12 +331,6 @@ void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std:
     return;
   }
   stepengine::BeginSession(st, std::make_unique<stepengine::BConnectEditSession>(), /*recordAsLastCommand=*/false);
-  st.bconnectEditPhase = Ph::WaitConnName;
-  st.bconnectEditConnName.clear();
-  st.bconnectEditNominalSizePending.clear();
-  st.bconnectEditRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEditEngagementPending = 0.f;
-  st.bconnectEditCompatTagPending.clear();
   if (!connNameArg.empty()) {
     BConnectEditSubmitLine(st, connNameArg, log);
     return;
@@ -364,7 +346,10 @@ void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std:
 }
 
 void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectEditPhase;
+  using Ph = stepengine::BConnectEditPhase;
+  auto* sess = st.sessionAs<stepengine::BConnectEditSession>();
+  if (!sess)
+    return;
   const std::string line = StringUtil::trimCopy(lineIn);
   const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
@@ -374,7 +359,7 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   }
   CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
-  if (st.bconnectEditPhase == Ph::WaitConnName) {
+  if (sess->phase == Ph::WaitConnName) {
     if (line.empty()) {
       log.push_back("BCONNECTEDIT — connection point name:");
       return;
@@ -385,84 +370,84 @@ void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std:
       stepengine::EndSession(st);
       return;
     }
-    st.bconnectEditConnName = line;
+    sess->connName = line;
     const CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
-    st.bconnectEditNominalSizePending = c.nominalSize;
-    st.bconnectEditRolePending = c.role;
-    st.bconnectEditEngagementPending = c.engagementLength;
-    st.bconnectEditCompatTagPending = c.compatibilityTag;
-    st.bconnectEditPhase = Ph::WaitRemoveConfirm;
+    sess->nominalSizePending = c.nominalSize;
+    sess->rolePending = c.role;
+    sess->engagementPending = c.engagementLength;
+    sess->compatTagPending = c.compatibilityTag;
+    sess->phase = Ph::WaitRemoveConfirm;
     log.push_back("BCONNECTEDIT — remove \"" + line + "\"? (y/N):");
     return;
   }
 
-  const int ci = CadBlockFindConnection(def, st.bconnectEditConnName);
+  const int ci = CadBlockFindConnection(def, sess->connName);
   if (ci < 0) {
-    log.push_back("BCONNECTEDIT — connection \"" + st.bconnectEditConnName + "\" is gone; canceled.");
+    log.push_back("BCONNECTEDIT — connection \"" + sess->connName + "\" is gone; canceled.");
     stepengine::EndSession(st);
     return;
   }
   CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
 
-  if (st.bconnectEditPhase == Ph::WaitRemoveConfirm) {
+  if (sess->phase == Ph::WaitRemoveConfirm) {
     if (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes")) {
       def.connections.erase(def.connections.begin() + ci);
       st.blockEditorDirty = true;
-      log.push_back("BCONNECTEDIT — removed \"" + st.bconnectEditConnName + "\".");
+      log.push_back("BCONNECTEDIT — removed \"" + sess->connName + "\".");
       stepengine::EndSession(st);
       return;
     }
-    st.bconnectEditPhase = Ph::WaitNominalSize;
-    log.push_back("BCONNECTEDIT — nominal size [" + st.bconnectEditNominalSizePending +
+    sess->phase = Ph::WaitNominalSize;
+    log.push_back("BCONNECTEDIT — nominal size [" + sess->nominalSizePending +
                   "] (Enter to keep current):");
     return;
   }
 
-  if (st.bconnectEditPhase == Ph::WaitNominalSize) {
+  if (sess->phase == Ph::WaitNominalSize) {
     if (!line.empty())
-      st.bconnectEditNominalSizePending = line;
-    st.bconnectEditPhase = Ph::WaitRole;
-    log.push_back("BCONNECTEDIT — role [" + std::string(CadBlockConnectionRoleTag(st.bconnectEditRolePending)) +
+      sess->nominalSizePending = line;
+    sess->phase = Ph::WaitRole;
+    log.push_back("BCONNECTEDIT — role [" + std::string(CadBlockConnectionRoleTag(sess->rolePending)) +
                   "] (" + BConnectModeRolePromptList() + ", Enter to keep current):");
     return;
   }
 
-  if (st.bconnectEditPhase == Ph::WaitRole) {
+  if (sess->phase == Ph::WaitRole) {
     if (!line.empty())
-      st.bconnectEditRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectEditPhase = Ph::WaitEngagement;
+      sess->rolePending = ParseCadBlockConnectionRole(line);
+    sess->phase = Ph::WaitEngagement;
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%g", st.bconnectEditEngagementPending);
+    std::snprintf(buf, sizeof(buf), "%g", sess->engagementPending);
     log.push_back(std::string("BCONNECTEDIT — engagement length [") + buf + "] (Enter to keep current):");
     return;
   }
 
-  if (st.bconnectEditPhase == Ph::WaitEngagement) {
+  if (sess->phase == Ph::WaitEngagement) {
     if (!line.empty()) {
       float v = 0.f;
       if (!TryParseF(line, v)) {
         log.push_back("BCONNECTEDIT — engagement length must be a number.");
         return;
       }
-      st.bconnectEditEngagementPending = v;
+      sess->engagementPending = v;
     }
-    st.bconnectEditPhase = Ph::WaitCompatTag;
-    log.push_back("BCONNECTEDIT — compatibility tag [" + st.bconnectEditCompatTagPending +
+    sess->phase = Ph::WaitCompatTag;
+    log.push_back("BCONNECTEDIT — compatibility tag [" + sess->compatTagPending +
                   "] (Enter to keep current, type \"-\" to clear):");
     return;
   }
 
-  if (st.bconnectEditPhase == Ph::WaitCompatTag) {
+  if (sess->phase == Ph::WaitCompatTag) {
     if (line == "-")
-      st.bconnectEditCompatTagPending.clear();
+      sess->compatTagPending.clear();
     else if (!line.empty())
-      st.bconnectEditCompatTagPending = line;
-    c.nominalSize = st.bconnectEditNominalSizePending;
-    c.role = st.bconnectEditRolePending;
-    c.engagementLength = st.bconnectEditEngagementPending;
-    c.compatibilityTag = st.bconnectEditCompatTagPending;
+      sess->compatTagPending = line;
+    c.nominalSize = sess->nominalSizePending;
+    c.role = sess->rolePending;
+    c.engagementLength = sess->engagementPending;
+    c.compatibilityTag = sess->compatTagPending;
     st.blockEditorDirty = true;
-    log.push_back("BCONNECTEDIT — updated \"" + st.bconnectEditConnName + "\".");
+    log.push_back("BCONNECTEDIT — updated \"" + sess->connName + "\".");
     stepengine::EndSession(st);
     return;
   }

@@ -537,7 +537,6 @@ void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::UcsSession>(), /*recordAsLastCommand=*/false);
-  st.ucsPhase = AppCommandState::UcsPhase::WaitOriginOrOption;
   log.push_back(kUcsPrompt);
 }
 
@@ -545,12 +544,10 @@ void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::PlanSession>(), /*recordAsLastCommand=*/false);
-  st.planPhase = AppCommandState::PlanPhase::WaitOption;
   log.push_back("PLAN - enter an option [Current/Ucs/World] <Current>:");
 }
 
 static void EndUcsCommand(AppCommandState& st) {
-  st.ucsPhase = AppCommandState::UcsPhase::Idle;
   stepengine::EndSession(st);
 }
 
@@ -634,20 +631,22 @@ static bool ParseUcsPromptPoint(const AppCommandState& st, const std::string& ra
   return true;
 }
 
-/// Apply a rotation of \p deg about \ref AppCommandState::ucsRotationAxis and close the command.
+/// Apply a rotation of \p deg about the active session's rotationAxis and close the command.
 ///
 /// One place, because the angle now arrives by two routes — typed, or measured from two picks — and
 /// a second copy of this three-way branch is how the two would eventually disagree about what `Y`
 /// means.
 static void ApplyUcsRotation(AppCommandState& st, double deg, std::vector<std::string>& log) {
-  const ucs::Ucs next = (st.ucsRotationAxis == 'X')   ? ucs::RotatedAboutX(st.activeUcs, deg)
-                        : (st.ucsRotationAxis == 'Y') ? ucs::RotatedAboutY(st.activeUcs, deg)
-                                                      : ucs::RotatedAboutZ(st.activeUcs, deg);
+  const auto* sess = st.sessionAs<stepengine::UcsSession>();
+  const char axis = sess ? sess->rotationAxis : 'Z';
+  const ucs::Ucs next = (axis == 'X')   ? ucs::RotatedAboutX(st.activeUcs, deg)
+                        : (axis == 'Y') ? ucs::RotatedAboutY(st.activeUcs, deg)
+                                        : ucs::RotatedAboutZ(st.activeUcs, deg);
   SetActiveUcs(st, next, log);
   EndUcsCommand(st);
 }
 
-/// Finish `UCS <axis>` + `2P`: measure the angle from \ref AppCommandState::ucsAngleBasePoint to
+/// Finish `UCS <axis>` + `2P`: measure the angle from the active session's angleBasePoint to
 /// \p p2 in the rotation's own plane, and apply it.
 ///
 /// Reports the angle it derived. The user picked two points and never saw a number, so echoing the
@@ -655,15 +654,18 @@ static void ApplyUcsRotation(AppCommandState& st, double deg, std::vector<std::s
 /// repeat the frame later.
 static void CommitUcsRotationFromTwoPoints(AppCommandState& st, const ray3d::Vec3& p2,
                                            std::vector<std::string>& log) {
-  const ray3d::Vec3 dir = ray3d::Sub(p2, st.ucsAngleBasePoint);
+  auto* sess = st.sessionAs<stepengine::UcsSession>();
+  if (!sess)
+    return;
+  const ray3d::Vec3 dir = ray3d::Sub(p2, sess->angleBasePoint);
   double deg = 0.0;
-  if (!ucs::AngleInRotationPlaneDeg(st.activeUcs, st.ucsRotationAxis, dir, &deg)) {
+  if (!ucs::AngleInRotationPlaneDeg(st.activeUcs, sess->rotationAxis, dir, &deg)) {
     // Either the two picks coincide, or the direction lies out of the plane being rotated — two
     // points straight up define no rotation about Z. Stay at the prompt so the second pick can be
     // retaken rather than losing the whole command (REQ-201).
-    log.push_back(std::string("UCS - those two points define no angle in the ") + st.ucsRotationAxis +
+    log.push_back(std::string("UCS - those two points define no angle in the ") + sess->rotationAxis +
                   " rotation plane. Pick the second point again, or ESC.");
-    st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+    sess->phase = stepengine::UcsPhase::WaitRotationAngleP2;
     return;
   }
   char buf[96];
@@ -752,13 +754,15 @@ void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log) {
 }
 
 bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Ucs)
+  auto* sess = st.sessionAs<stepengine::UcsSession>();
+  if (!sess)
     return false;
+  using UPh = stepengine::UcsPhase;
   const std::string in = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(in);
 
-  switch (st.ucsPhase) {
-    case AppCommandState::UcsPhase::WaitOriginOrOption: {
+  switch (sess->phase) {
+    case UPh::WaitOriginOrOption: {
       if (in.empty() || low == "w" || low == "world") {  // bare Enter takes the <World> default
         ApplyUcsWorld(st, log);
         EndUcsCommand(st);
@@ -793,19 +797,19 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         return true;
       }
       if (low == "x" || low == "y" || low == "z") {
-        st.ucsRotationAxis = static_cast<char>(low[0] - 32);  // 'x' -> 'X'
-        st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngle;
-        log.push_back(std::string("Specify rotation angle about ") + st.ucsRotationAxis +
+        sess->rotationAxis = static_cast<char>(low[0] - 32);  // 'x' -> 'X'
+        sess->phase = UPh::WaitRotationAngle;
+        log.push_back(std::string("Specify rotation angle about ") + sess->rotationAxis +
                       " axis <0>: or [2P] to pick two points  (positive follows the right-hand rule)");
         return true;
       }
       if (low == "za" || low == "zaxis") {
-        st.ucsPhase = AppCommandState::UcsPhase::WaitZAxisOrigin;
+        sess->phase = UPh::WaitZAxisOrigin;
         log.push_back("Specify new origin point <0,0,0>:");
         return true;
       }
       if (low == "ob" || low == "object") {
-        st.ucsPhase = AppCommandState::UcsPhase::WaitObjectPick;
+        sess->phase = UPh::WaitObjectPick;
         log.push_back("Select object to align UCS with:  (click a line, polyline, arc, circle, ellipse or text)");
         return true;
       }
@@ -814,7 +818,7 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         // a Save/Restore/Delete question in front of it asked something the user had already
         // answered by getting this far. Restoring and deleting are the View Manager's, where the
         // saved frames are listed - see SaveNamedUcs in the header.
-        st.ucsPhase = AppCommandState::UcsPhase::WaitNamedName;
+        sess->phase = UPh::WaitNamedName;
         log.push_back("Enter name to save current UCS as:");
         return true;
       }
@@ -825,8 +829,8 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       }
       ray3d::Vec3 origin;
       if (ParseUcsPromptPoint(st, in, &origin)) {
-        st.ucsPendingOrigin = origin;
-        st.ucsPhase = AppCommandState::UcsPhase::WaitXAxisPoint;
+        sess->pendingOrigin = origin;
+        sess->phase = UPh::WaitXAxisPoint;
         log.push_back("Specify point on positive portion of X axis <accept origin only>:");
         return true;
       }
@@ -834,10 +838,11 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitXAxisPoint: {
+    case UPh::WaitXAxisPoint: {
       if (in.empty()) {
         // Origin only: keep the current orientation, which is AutoCAD's single-point behaviour.
-        SetActiveUcs(st, ucs::WithOrigin(st.activeUcs, st.ucsPendingOrigin), log);
+        const ray3d::Vec3 origin = sess->pendingOrigin;
+        SetActiveUcs(st, ucs::WithOrigin(st.activeUcs, origin), log);
         EndUcsCommand(st);
         return true;
       }
@@ -845,22 +850,22 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       // `@33.2311<17` - distance and angle from the origin just picked, the form the cursor's
       // distance/angle boxes assemble. Tried first because it is unambiguous: a leading '@' with a
       // '<' cannot be a coordinate pair.
-      if (!ParseUcsPolarPoint(st, in, st.ucsPendingOrigin, &onX) && !ParseUcsPromptPoint(st, in, &onX)) {
+      if (!ParseUcsPolarPoint(st, in, sess->pendingOrigin, &onX) && !ParseUcsPromptPoint(st, in, &onX)) {
         log.push_back("UCS - enter a point or @distance<angle, or press Enter to accept the origin alone.");
         return true;
       }
-      st.ucsPendingXAxisPoint = onX;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitXyPoint;
+      sess->pendingXAxisPoint = onX;
+      sess->phase = UPh::WaitXyPoint;
       log.push_back("Specify point on positive-Y portion of the UCS XY plane <accept X axis only>:");
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitXyPoint: {
+    case UPh::WaitXyPoint: {
       ucs::Ucs next;
       if (in.empty()) {
         // Origin + X only: the Z axis stays as close to the current frame's as it can, which is
         // what "rotate the frame to this direction" should mean.
-        if (!UcsAlignedToDirection(st.ucsPendingOrigin, ray3d::Sub(st.ucsPendingXAxisPoint, st.ucsPendingOrigin),
+        if (!UcsAlignedToDirection(sess->pendingOrigin, ray3d::Sub(sess->pendingXAxisPoint, sess->pendingOrigin),
                                    &next)) {
           log.push_back("UCS - the X-axis point coincides with the origin; no direction is defined.");
           EndUcsCommand(st);
@@ -873,13 +878,13 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       ray3d::Vec3 onXy;
       // Polar accepted here too, measured from the same origin as the X-axis step so both boxes
       // read against one reference rather than the second silently changing it.
-      if (!ParseUcsPolarPoint(st, in, st.ucsPendingOrigin, &onXy) && !ParseUcsPromptPoint(st, in, &onXy)) {
+      if (!ParseUcsPolarPoint(st, in, sess->pendingOrigin, &onXy) && !ParseUcsPromptPoint(st, in, &onXy)) {
         log.push_back("UCS - enter a point or @distance<angle, or press Enter to accept the X axis alone.");
         return true;
       }
-      if (!ucs::FromThreePoints(st.ucsPendingOrigin, st.ucsPendingXAxisPoint, onXy, &next)) {
+      if (!ucs::FromThreePoints(sess->pendingOrigin, sess->pendingXAxisPoint, onXy, &next)) {
         log.push_back("UCS - those three points are collinear, so they define no plane. Pick again.");
-        st.ucsPhase = AppCommandState::UcsPhase::WaitXyPoint;
+        sess->phase = UPh::WaitXyPoint;
         return true;
       }
       SetActiveUcs(st, next, log);
@@ -887,14 +892,14 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitRotationAngle: {
+    case UPh::WaitRotationAngle: {
       // `2P` — take the angle from two picked points instead of a typed number. A surveyor working
       // to a lot line or a building face knows the LINE, not its bearing; making them read a bearing
       // off the drawing and type it back in is arithmetic the app can do exactly and they can only
       // do approximately. Same keyword LINE and POLYLINE already use for "define this direction by
       // picking", so it is one convention rather than a second one.
       if (low == "2p" || low == "2") {
-        st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP1;
+        sess->phase = UPh::WaitRotationAngleP1;
         log.push_back("Specify first point of the angle:  (or ESC to cancel)");
         return true;
       }
@@ -915,19 +920,19 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitRotationAngleP1: {
+    case UPh::WaitRotationAngleP1: {
       ray3d::Vec3 p1;
       if (!ParseUcsPromptPoint(st, in, &p1)) {
         log.push_back("UCS - enter the first point of the angle (click, or type X,Y / X,Y,Z).");
         return true;
       }
-      st.ucsAngleBasePoint = p1;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+      sess->angleBasePoint = p1;
+      sess->phase = UPh::WaitRotationAngleP2;
       log.push_back("Specify second point of the angle:");
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitRotationAngleP2: {
+    case UPh::WaitRotationAngleP2: {
       ray3d::Vec3 p2;
       if (!ParseUcsPromptPoint(st, in, &p2)) {
         log.push_back("UCS - enter the second point of the angle (click, or type X,Y / X,Y,Z).");
@@ -937,7 +942,7 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitZAxisOrigin: {
+    case UPh::WaitZAxisOrigin: {
       ray3d::Vec3 origin{0.0, 0.0, 0.0};
       if (!in.empty() && !ParseUcsPromptPoint(st, in, &origin)) {
         log.push_back("UCS ZAxis - enter an origin point (blank Enter for the current UCS origin).");
@@ -945,20 +950,20 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       }
       if (in.empty())
         origin = st.activeUcs.origin;
-      st.ucsPendingOrigin = origin;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitZAxisPoint;
+      sess->pendingOrigin = origin;
+      sess->phase = UPh::WaitZAxisPoint;
       log.push_back("Specify point on positive portion of Z axis:");
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitZAxisPoint: {
+    case UPh::WaitZAxisPoint: {
       ray3d::Vec3 onZ;
       if (!ParseUcsPromptPoint(st, in, &onZ)) {
         log.push_back("UCS ZAxis - enter a point on the positive Z axis.");
         return true;
       }
       ucs::Ucs next;
-      if (!ucs::FromZAxis(st.ucsPendingOrigin, onZ, &next)) {
+      if (!ucs::FromZAxis(sess->pendingOrigin, onZ, &next)) {
         log.push_back("UCS ZAxis - that point coincides with the origin, so no Z direction is defined.");
         return true;
       }
@@ -967,12 +972,12 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitObjectPick: {
+    case UPh::WaitObjectPick: {
       log.push_back("UCS Object - click an object in the drawing, or press Esc to cancel.");
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitNamedName: {
+    case UPh::WaitNamedName: {
       // `?` still lists, so the one keyboard shortcut for "what is already saved?" works at this
       // prompt too - and it cannot be a name, since a blank-or-World check would reject it anyway.
       if (low == "?") {
@@ -992,22 +997,24 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
 
 bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log,
                             const ray3d::Ray* pickRay) {
-  if (st.active != AppCommandState::Kind::Ucs)
+  auto* sess = st.sessionAs<stepengine::UcsSession>();
+  if (!sess)
     return false;
-  switch (st.ucsPhase) {
-    case AppCommandState::UcsPhase::WaitOriginOrOption:
-      st.ucsPendingOrigin = worldPoint;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitXAxisPoint;
+  using UPh = stepengine::UcsPhase;
+  switch (sess->phase) {
+    case UPh::WaitOriginOrOption:
+      sess->pendingOrigin = worldPoint;
+      sess->phase = UPh::WaitXAxisPoint;
       log.push_back("Specify point on positive portion of X axis <accept origin only>:");
       return true;
-    case AppCommandState::UcsPhase::WaitXAxisPoint:
-      st.ucsPendingXAxisPoint = worldPoint;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitXyPoint;
+    case UPh::WaitXAxisPoint:
+      sess->pendingXAxisPoint = worldPoint;
+      sess->phase = UPh::WaitXyPoint;
       log.push_back("Specify point on positive-Y portion of the UCS XY plane <accept X axis only>:");
       return true;
-    case AppCommandState::UcsPhase::WaitXyPoint: {
+    case UPh::WaitXyPoint: {
       ucs::Ucs next;
-      if (!ucs::FromThreePoints(st.ucsPendingOrigin, st.ucsPendingXAxisPoint, worldPoint, &next)) {
+      if (!ucs::FromThreePoints(sess->pendingOrigin, sess->pendingXAxisPoint, worldPoint, &next)) {
         log.push_back("UCS - those three points are collinear, so they define no plane. Pick again.");
         return true;
       }
@@ -1018,22 +1025,22 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
     // The two picks that define a rotation angle. Clicking is the point of the option - a surveyor
     // picks the ends of a lot line rather than typing its bearing - so these route exactly as the
     // typed forms do, through the same commit helper.
-    case AppCommandState::UcsPhase::WaitRotationAngleP1:
-      st.ucsAngleBasePoint = worldPoint;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+    case UPh::WaitRotationAngleP1:
+      sess->angleBasePoint = worldPoint;
+      sess->phase = UPh::WaitRotationAngleP2;
       log.push_back("Specify second point of the angle:");
       return true;
-    case AppCommandState::UcsPhase::WaitRotationAngleP2:
+    case UPh::WaitRotationAngleP2:
       CommitUcsRotationFromTwoPoints(st, worldPoint, log);
       return true;
-    case AppCommandState::UcsPhase::WaitZAxisOrigin:
-      st.ucsPendingOrigin = worldPoint;
-      st.ucsPhase = AppCommandState::UcsPhase::WaitZAxisPoint;
+    case UPh::WaitZAxisOrigin:
+      sess->pendingOrigin = worldPoint;
+      sess->phase = UPh::WaitZAxisPoint;
       log.push_back("Specify point on positive portion of Z axis:");
       return true;
-    case AppCommandState::UcsPhase::WaitZAxisPoint: {
+    case UPh::WaitZAxisPoint: {
       ucs::Ucs next;
-      if (!ucs::FromZAxis(st.ucsPendingOrigin, worldPoint, &next)) {
+      if (!ucs::FromZAxis(sess->pendingOrigin, worldPoint, &next)) {
         log.push_back("UCS ZAxis - that point coincides with the origin, so no Z direction is defined.");
         return true;
       }
@@ -1041,7 +1048,7 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
       EndUcsCommand(st);
       return true;
     }
-    case AppCommandState::UcsPhase::WaitObjectPick: {
+    case UPh::WaitObjectPick: {
       ucs::Ucs next;
       if (!UcsFromObjectPick(st, worldPoint, log, &next, pickRay))
         return true;  // stay in the pick phase so the user can try another object
@@ -1055,16 +1062,16 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
 }
 
 bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::Plan)
+  auto* sess = st.sessionAs<stepengine::PlanSession>();
+  if (!sess)
     return false;
   const std::string in = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(in);
 
-  if (st.planPhase == AppCommandState::PlanPhase::WaitNamedName) {
+  if (sess->phase == stepengine::PlanPhase::WaitNamedName) {
     const NamedUcs* found = FindNamedUcs(st, in);
     if (!found) {
       log.push_back("PLAN - there is no saved UCS named " + in + ".");
-      st.planPhase = AppCommandState::PlanPhase::Idle;
       stepengine::EndSession(st);
       return true;
     }
@@ -1072,7 +1079,6 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     // documents that distinction, and it is the entire reason PLAN is not just another UCS option.
     ApplyPlanViewOf(st, found->frame, log);
     log.push_back("PLAN - view set to the XY plane of UCS " + found->name + ". The current UCS is unchanged.");
-    st.planPhase = AppCommandState::PlanPhase::Idle;
     stepengine::EndSession(st);
     return true;
   }
@@ -1087,7 +1093,7 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     if (st.drawing.ucsNamed.empty()) {
       log.push_back("PLAN - there are no saved UCS definitions. Save one with UCS Named Save first.");
     } else {
-      st.planPhase = AppCommandState::PlanPhase::WaitNamedName;
+      sess->phase = stepengine::PlanPhase::WaitNamedName;
       log.push_back("Enter name of UCS:");
       return true;
     }
@@ -1095,7 +1101,6 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     log.push_back("PLAN - enter Current, Ucs or World.");
     return true;
   }
-  st.planPhase = AppCommandState::PlanPhase::Idle;
   stepengine::EndSession(st);
   return true;
 }

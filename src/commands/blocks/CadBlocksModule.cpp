@@ -16,10 +16,10 @@ namespace stepengine {
 // InsertBlockSession
 // ---------------------------------------------------------------------------
 
-StepDescriptor InsertBlockSession::currentStep(const AppCommandState& st) const {
-  using IPh = AppCommandState::InsertBlockPhase;
+StepDescriptor InsertBlockSession::currentStep(const AppCommandState&) const {
+  using IPh = InsertBlockPhase;
   StepDynInputSpec dyn;
-  switch (st.insertBlockPhase) {
+  switch (phase) {
   case IPh::WaitInsertPoint:
     dyn.pointEntry = true;
     return StepDescriptor::Custom(
@@ -55,12 +55,12 @@ StepDescriptor InsertBlockSession::currentStep(const AppCommandState& st) const 
 
 StepSubmitResult InsertBlockSession::onBlankEnter(AppCommandState& st,
                                                   std::vector<std::string>& log) {
-  using IPh = AppCommandState::InsertBlockPhase;
-  if (st.insertBlockPhase == IPh::WaitAttributes) {
+  using IPh = InsertBlockPhase;
+  if (phase == IPh::WaitAttributes) {
     CadBlocksCommitInsertAttrDialog(st, log);
     return StepSubmitResult::Handled;
   }
-  if (st.insertBlockPhase == IPh::WaitRotation) {
+  if (phase == IPh::WaitRotation) {
     CadBlocksPlacePendingInsert(st, log);
     return StepSubmitResult::Handled;
   }
@@ -69,16 +69,16 @@ StepSubmitResult InsertBlockSession::onBlankEnter(AppCommandState& st,
 
 StepSubmitResult InsertBlockSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                             std::vector<std::string>& log) {
-  using IPh = AppCommandState::InsertBlockPhase;
-  if (st.insertBlockPhase == IPh::WaitDialog) {
+  using IPh = InsertBlockPhase;
+  if (phase == IPh::WaitDialog) {
     log.push_back("INSERT — complete the Insert dialog, or ESC to cancel.");
     return StepSubmitResult::Handled;
   }
-  if (st.insertBlockPhase == IPh::WaitAttributes) {
+  if (phase == IPh::WaitAttributes) {
     log.push_back("INSERT — use the Edit Attributes dialog, or press Enter to accept.");
     return StepSubmitResult::Handled;
   }
-  if (st.insertBlockPhase == IPh::WaitRotation) {
+  if (phase == IPh::WaitRotation) {
     if (trimmedLine.find(',') == std::string::npos) {
       float ang = 0.f;
       if (ParseAngleDegrees(trimmedLine, &ang)) {
@@ -88,7 +88,7 @@ StepSubmitResult InsertBlockSession::onText(AppCommandState& st, const std::stri
       }
     }
   }
-  if (st.insertBlockPhase == IPh::WaitInsertPoint) {
+  if (phase == IPh::WaitInsertPoint) {
     float px = 0.f;
     float py = 0.f;
     float wz = 0.f;
@@ -124,9 +124,9 @@ StepSubmitResult InsertBlockSession::onText(AppCommandState& st, const std::stri
 
 void InsertBlockSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                         std::vector<std::string>& log) {
-  using IPh = AppCommandState::InsertBlockPhase;
-  if (st.insertBlockPhase == IPh::WaitInsertPoint || st.insertBlockPhase == IPh::WaitScale ||
-      st.insertBlockPhase == IPh::WaitRotation || st.insertBlockPhase == IPh::WaitAlignFace) {
+  using IPh = InsertBlockPhase;
+  if (phase == IPh::WaitInsertPoint || phase == IPh::WaitScale ||
+      phase == IPh::WaitRotation || phase == IPh::WaitAlignFace) {
     float wz = CadCommitElevation(st);
     if (st.viewportSnapPickValid)
       wz = st.viewportSnapPickLocalZ;
@@ -138,7 +138,6 @@ void InsertBlockSession::onViewportPick(AppCommandState& st, const StepPickInput
 void InsertBlockSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
   st.insertBlockPipeSpliceArmed = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
   st.insertBlockSnappedPipeRun = -1;
@@ -147,7 +146,6 @@ void InsertBlockSession::onCancel(AppCommandState& st, std::vector<std::string>&
 
 void InsertBlockSession::onReset(AppCommandState& st) {
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
   st.insertBlockSnappedPipeRun = -1;
@@ -158,7 +156,7 @@ void InsertBlockSession::onReset(AppCommandState& st) {
 // ---------------------------------------------------------------------------
 
 StepDescriptor BConnectSession::currentStep(const AppCommandState& st) const {
-  if (st.blockEditActive && st.bconnectAwaitingFace) {
+  if (st.blockEditActive && awaitingFace) {
     return StepDescriptor::Custom("", StepClickRoute::BconnectFacePick, BlankEnterPolicy::Custom);
   }
   return StepDescriptor::Text("", BlankEnterPolicy::Custom);
@@ -176,11 +174,7 @@ StepSubmitResult BConnectSession::onBlankEnter(AppCommandState& st,
   return StepSubmitResult::Handled;
 }
 
-void BConnectSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  st.bconnectAwaitingFace = false;
-  st.bconnectNameBuf[0] = '\0';
-  st.bconnectSizeBuf[0] = '\0';
-  st.bconnectCompatTagPending.clear();
+void BConnectSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("BCONNECT canceled.");
 }
 

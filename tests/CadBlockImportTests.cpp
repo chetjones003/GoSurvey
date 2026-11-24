@@ -316,7 +316,8 @@ TEST_CASE("bare INSERT opens dialog state without placing", "[issue124][block][i
   StartInsertBlockCommand(st, log);
   CHECK(st.active == AppCommandState::Kind::InsertBlock);
   CHECK(st.insertBlockDialogOpen);
-  CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitDialog);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitDialog);
   CHECK(st.drawing.cadBlockRefs.empty());
 }
 
@@ -361,7 +362,8 @@ TEST_CASE("INSERT with attributes opens Edit Attributes after place", "[issue124
   CadBlocksCommitInsertDialog(st, log);
   REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   CHECK(st.active == AppCommandState::Kind::InsertBlock);
-  CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitAttributes);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>() != nullptr);
+  CHECK(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitAttributes);
   CHECK(st.insertBlockAttrDialogOpen);
   std::snprintf(st.insertBlockAttrBuf[0], sizeof(st.insertBlockAttrBuf[0]), "B9");
   CadBlocksCommitInsertAttrDialog(st, log);
@@ -497,9 +499,10 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
   st.insertBlockSpecifyScale = false;
   st.insertBlockSpecifyRot = true;
   CadBlocksCommitInsertDialog(st, log);
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitInsertPoint);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>() != nullptr);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitInsertPoint);
   SubmitInsertBlockPick(st, 10.f, 20.f, log);
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitRotation);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitRotation);
 
   char ang[32] = "90";
   ProcessCommandLineSubmit(ang, static_cast<int>(sizeof(ang)), st, log);
@@ -507,7 +510,7 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
   // 90 = 90° clockwise from north (the app convention); the block frame is CCW-from-east, so rotZ
   // is −π/2. A north-authored matchline rotated 90° CW lands east — horizontal, asserted below.
   CHECK(st.drawing.cadBlockRefs[0].xf.rotZ == Catch::Approx(-1.5707963f).margin(0.01f));
-  CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitAttributes);
+  CHECK(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitAttributes);
   CHECK(st.insertBlockAttrDialogOpen);
 
   std::vector<CadBlockWorldSeg> segs;
@@ -655,7 +658,7 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
 
   REQUIRE(SubmitInsertBlockConnectorPick(st, 0.f, 0.f, 0.f, log));
   REQUIRE(st.drawing.cadBlockRefs.size() == 2);
@@ -701,7 +704,7 @@ TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
 
   // Click near the run's END (10,0,0), not exactly on it — the snap is a nearest-within-2ft search.
   REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
@@ -768,7 +771,7 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
 
   // Click at (9.3,0,0): 0.3 ft from the host port, 0.7 ft from the pipe end — the host port is
   // geometrically nearer, but incompatible with this connection point's configured mode.
@@ -832,7 +835,7 @@ TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined g
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
 
   REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
   REQUIRE(st.drawing.cadBlockRefs.size() == 1);
@@ -885,7 +888,7 @@ TEST_CASE("A connection point configured only for a flange face ignores a nearby
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
 
   // Only a pipe end is nearby (no flange face anywhere) — this port must refuse rather than snap
   // to a target kind it was never configured to mate with.
@@ -1240,10 +1243,10 @@ TEST_CASE("INSERT rotation preview transform matches the committed insert", "[is
   st.insertBlockSpecifyScale = false;
   st.insertBlockSpecifyRot = true;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
 
   SubmitInsertBlockPick(st, 5.f, 6.f, log);  // insertion point
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitRotation);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitRotation);
 
   CadBlockXform pv;
   REQUIRE(CadBlockInsertPreviewXform(st, 15.f, 6.f, &pv));  // cursor due east -> 90 deg cw-from-north
@@ -1270,10 +1273,10 @@ TEST_CASE("INSERT scale preview transform matches the committed insert", "[issue
   st.insertBlockSpecifyRot = false;
   st.insertBlockUniformScale = true;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
 
   SubmitInsertBlockPick(st, 0.f, 0.f, log);  // insertion point
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitScale);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitScale);
 
   CadBlockXform pv;
   REQUIRE(CadBlockInsertPreviewXform(st, 3.f, 4.f, &pv));  // distance 5
@@ -1299,9 +1302,9 @@ TEST_CASE("INSERT preview emits a rotated block ghost into the rubber lines", "[
   st.insertBlockSpecifyRot = true;
   st.insertBlockSpecifyScale = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
   SubmitInsertBlockPick(st, 10.f, 10.f, log);
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitRotation);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitRotation);
 
   std::vector<float> rubber;
   // Cursor due east of the insertion point -> 90 deg cw-from-north -> ghost segment points east.
@@ -1319,7 +1322,8 @@ TEST_CASE("INSERT preview emits a rotated block ghost into the rubber lines", "[
 
 TEST_CASE("INSERT preview is inert with no definition selected", "[issue124][block][insert][preview]") {
   AppCommandState st;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+  stepengine::BeginSession(
+      st, std::make_unique<stepengine::InsertBlockSession>(stepengine::InsertBlockPhase::WaitRotation), false);
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "MISSING");
   CadBlockXform pv;
   CHECK_FALSE(CadBlockInsertPreviewXform(st, 1.f, 1.f, &pv));
@@ -1479,7 +1483,7 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     s2.insertBlockSpecifyScale = false;
     s2.insertBlockSpecifyRot = false;
     s2.insertBlockDialogOpen = false;
-    s2.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    s2.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
     SubmitInsertBlockPick(s2, 10.f, 20.f, log);
     REQUIRE(s2.drawing.cadBlockRefs.size() == 1);
     CHECK(s2.drawing.cadBlockRefs[0].xf.z == Catch::Approx(0.f));
@@ -1492,7 +1496,7 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
   st.insertBlockSpecifyScale = false;
   st.insertBlockSpecifyRot = false;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
 
   // Preview during WaitInsertPoint must be at the cursor Z, not at stored 0.
   CadBlockXform pv{};
@@ -1520,7 +1524,7 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     s3.insertBlockSpecifyScale = false;
     s3.insertBlockSpecifyRot = false;
     s3.insertBlockDialogOpen = false;
-    s3.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    s3.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
     s3.active = AppCommandState::Kind::InsertBlock;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "30,40,7.5");
@@ -1541,7 +1545,7 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     s4.insertBlockSpecifyScale = false;
     s4.insertBlockSpecifyRot = false;
     s4.insertBlockDialogOpen = false;
-    s4.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    s4.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
     s4.active = AppCommandState::Kind::InsertBlock;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "@5,0,3");
@@ -1569,10 +1573,10 @@ TEST_CASE("INSERT 3D scale preview uses true 3D distance", "[issue475][block][in
   st.insertBlockSpecifyRot = false;
   st.insertBlockUniformScale = true;
   st.insertBlockDialogOpen = false;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.sessionAs<stepengine::InsertBlockSession>()->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
 
   SubmitInsertBlockPick(st, 0.f, 0.f, 0.f, log);
-  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitScale);
+  REQUIRE(st.sessionAs<stepengine::InsertBlockSession>()->phase == stepengine::InsertBlockPhase::WaitScale);
 
   CadBlockXform pv;
   REQUIRE(CadBlockInsertPreviewXform(st, 0.f, 0.f, 3.f, &pv));

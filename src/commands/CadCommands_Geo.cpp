@@ -604,7 +604,8 @@ bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string
   if (pick) {
     log.push_back("Capture Area — specify the first corner of the area (click or type X,Y). ESC cancels.");
   } else {
-    st.geoCmdPhase = AppCommandState::GeoCmdPhase::Capturing;
+    if (auto* sess = st.sessionAs<stepengine::GeoCmdSession>())
+      sess->phase = stepengine::GeoCmdPhase::Capturing;
     log.push_back("Capture Area — capturing the visible map. ESC cancels.");
   }
   return true;
@@ -618,7 +619,6 @@ void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, s
     BumpCadGpuCache(st);  // document content: marks the drawing modified
   }
   stepengine::EndSession(st);
-  st.geoCmdPhase = AppCommandState::GeoCmdPhase::WaitFirst;
   st.mapCapture = AppCommandState::MapCaptureState{};
   log.push_back(n > 0 ? "Capture Area — " + std::to_string(n) + " map tile(s) kept in the drawing."
                       : std::string("Capture Area — the map has no tiles in that area; nothing was kept."));
@@ -626,7 +626,6 @@ void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, s
 
 void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std::string>& log) {
   stepengine::EndSession(st);
-  st.geoCmdPhase = AppCommandState::GeoCmdPhase::WaitFirst;
   st.mapCapture = AppCommandState::MapCaptureState{};
   log.push_back("Capture Area — nothing was kept: " + why);
 }
@@ -955,7 +954,6 @@ static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const 
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::GeoCmdSession>(k), /*recordAsLastCommand=*/true);
-  st.geoCmdPhase = AppCommandState::GeoCmdPhase::WaitFirst;
   return true;
 }
 
@@ -1009,8 +1007,11 @@ int SurveyPointNumberAt(const AppCommandState& st, double localX, double localY)
 }
 
 bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::GeoCmdSession>();
+  if (!sess)
+    return false;
   using T = AppCommandState::DrawingSettingsPickState::Target;
-  using GP = AppCommandState::GeoCmdPhase;
+  using GP = stepengine::GeoCmdPhase;
   AppCommandState::DrawingSettingsPickState& pick = st.drawingSettingsPick;
   if (pick.target == T::ReferencePoint || pick.target == T::RotationPoint) {
     pick.worldX = localX + st.drawing.worldDocumentOriginX;
@@ -1020,22 +1021,21 @@ bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY
     stepengine::EndSession(st);
     return true;
   }
-  if (st.geoCmdPhase == GP::WaitFirst) {
-    st.geoCmdFirstA = localX;
-    st.geoCmdFirstB = localY;
-    st.geoCmdPhase = GP::WaitSecond;
+  if (sess->phase == GP::WaitFirst) {
+    sess->firstA = localX;
+    sess->firstB = localY;
+    sess->phase = GP::WaitSecond;
     log.push_back("DRAWINGSETTINGS — pick the second point of the direction.");
     return true;
   }
-  const double dx = localX - st.geoCmdFirstA;
-  const double dy = localY - st.geoCmdFirstB;
+  const double dx = localX - sess->firstA;
+  const double dy = localY - sess->firstB;
   if (std::hypot(dx, dy) < 1.e-9) {
     log.push_back("DRAWINGSETTINGS — the two points must differ; pick again.");
     return false;
   }
   pick.azimuthDeg = geo::AzimuthDeg(dx, dy);
   pick.done = true;
-  st.geoCmdPhase = GP::WaitFirst;
   stepengine::EndSession(st);
   return true;
 }
@@ -1043,8 +1043,11 @@ bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY
 }  // namespace
 
 bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
+  auto* sess = st.sessionAs<stepengine::GeoCmdSession>();
+  if (!sess)
+    return false;
   using K = AppCommandState::Kind;
-  using GP = AppCommandState::GeoCmdPhase;
+  using GP = stepengine::GeoCmdPhase;
   if (st.active == K::DrawingSettingsPick)
     return SubmitDrawingSettingsPick(st, localX, localY, log);
   if (st.active == K::GeoMarkPoint) {
@@ -1052,54 +1055,56 @@ bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, st
     return PlacePositionMarkerAtLocal(st, localX, localY, log) >= 0;
   }
   if (st.active == K::GeoCaptureArea) {  // REQ-364 Pick Area: two corners, then the capture runs
-    if (st.geoCmdPhase == GP::Capturing)
+    if (sess->phase == GP::Capturing)
       return false;
-    if (st.geoCmdPhase == GP::WaitFirst) {
-      st.geoCmdFirstA = localX;
-      st.geoCmdFirstB = localY;
-      st.geoCmdPhase = GP::WaitSecond;
+    if (sess->phase == GP::WaitFirst) {
+      sess->firstA = localX;
+      sess->firstB = localY;
+      sess->phase = GP::WaitSecond;
       log.push_back("Capture Area — specify the opposite corner.");
       return true;
     }
-    if (std::fabs(localX - st.geoCmdFirstA) < 1.e-9 || std::fabs(localY - st.geoCmdFirstB) < 1.e-9) {
+    if (std::fabs(localX - sess->firstA) < 1.e-9 || std::fabs(localY - sess->firstB) < 1.e-9) {
       log.push_back("Capture Area — the corners must make a rectangle; pick the opposite corner again.");
       return false;
     }
-    st.mapCapture.minX = std::min(st.geoCmdFirstA, localX);
-    st.mapCapture.maxX = std::max(st.geoCmdFirstA, localX);
-    st.mapCapture.minY = std::min(st.geoCmdFirstB, localY);
-    st.mapCapture.maxY = std::max(st.geoCmdFirstB, localY);
-    st.geoCmdPhase = GP::Capturing;
+    st.mapCapture.minX = std::min(sess->firstA, localX);
+    st.mapCapture.maxX = std::max(sess->firstA, localX);
+    st.mapCapture.minY = std::min(sess->firstB, localY);
+    st.mapCapture.maxY = std::max(sess->firstB, localY);
+    sess->phase = GP::Capturing;
     log.push_back("Capture Area — capturing the picked area. ESC cancels.");
     return true;
   }
   if (st.active != K::GeoReorientMarker)
     return false;
-  if (st.geoCmdPhase == GP::WaitFirst) {
-    st.geoCmdFirstA = localX;
-    st.geoCmdFirstB = localY;
-    st.geoCmdPhase = GP::WaitSecond;
+  if (sess->phase == GP::WaitFirst) {
+    sess->firstA = localX;
+    sess->firstB = localY;
+    sess->phase = GP::WaitSecond;
     log.push_back("GEOREORIENTMARKER — specify a point in the north direction.");
     return true;
   }
-  const double dx = localX - st.geoCmdFirstA;
-  const double dy = localY - st.geoCmdFirstB;
+  const double firstA = sess->firstA;
+  const double firstB = sess->firstB;
+  const double dx = localX - firstA;
+  const double dy = localY - firstB;
   if (std::hypot(dx, dy) < 1.e-9) {
     log.push_back("GEOREORIENTMARKER — the north point must differ from the design point; pick again.");
     return false;
   }
   stepengine::EndSession(st);
-  st.geoCmdPhase = GP::WaitFirst;
-  return SetGeographicMarker(st, st.geoCmdFirstA, st.geoCmdFirstB, std::atan2(dy, dx) * 180.0 / kPi, log);
+  return SetGeographicMarker(st, firstA, firstB, std::atan2(dy, dx) * 180.0 / kPi, log);
 }
 
 bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  using GP = AppCommandState::GeoCmdPhase;
-  if (!IsGeoCommand(st.active))
+  auto* sess = st.sessionAs<stepengine::GeoCmdSession>();
+  if (!sess || !IsGeoCommand(st.active))
     return false;
+  using K = AppCommandState::Kind;
+  using GP = stepengine::GeoCmdPhase;
   if (st.active == K::GeoMarkLatLong) {
-    if (st.geoCmdPhase == GP::WaitFirst) {
+    if (sess->phase == GP::WaitFirst) {
       // "lat,long" in one go is accepted too.
       const size_t comma = line.find(',');
       double lat = 0.0, lon = 0.0;
@@ -1113,8 +1118,8 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
         log.push_back("GEOMARKLATLONG — not a latitude: decimal degrees (-90..90) or D M S with N/S.");
         return true;
       }
-      st.geoCmdFirstA = lat;
-      st.geoCmdPhase = GP::WaitSecond;
+      sess->firstA = lat;
+      sess->phase = GP::WaitSecond;
       log.push_back("GEOMARKLATLONG — enter the longitude (west negative, e.g. -97.7394 or 97 44 21.7W).");
       return true;
     }
@@ -1123,12 +1128,12 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
       log.push_back("GEOMARKLATLONG — not a longitude: decimal degrees (-180..180) or D M S with E/W.");
       return true;
     }
+    const double lat = sess->firstA;
     stepengine::EndSession(st);
-    st.geoCmdPhase = GP::WaitFirst;
-    PlacePositionMarkerAtLatLong(st, st.geoCmdFirstA, lon, log);
+    PlacePositionMarkerAtLatLong(st, lat, lon, log);
     return true;
   }
-  if (st.active == K::GeoCaptureArea && st.geoCmdPhase == GP::Capturing) {
+  if (st.active == K::GeoCaptureArea && sess->phase == GP::Capturing) {
     log.push_back("Capture Area — still gathering the map tiles; ESC cancels.");
     return true;
   }
@@ -1143,13 +1148,16 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
 
 const char* GeoCommandPrompt(const AppCommandState& st) {
   using K = AppCommandState::Kind;
-  const bool first = st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst;
+  using GP = stepengine::GeoCmdPhase;
+  const auto* sess = st.sessionAs<stepengine::GeoCmdSession>();
+  const GP phase = sess ? sess->phase : GP::WaitFirst;
+  const bool first = phase == GP::WaitFirst;
   switch (st.active) {
     case K::GeoMarkPoint:      return "Specify position:";
     case K::GeoMarkLatLong:    return first ? "Enter latitude:" : "Enter longitude:";
     case K::GeoReorientMarker: return first ? "Specify design point:" : "Specify north direction:";
     case K::GeoCaptureArea:
-      if (st.geoCmdPhase == AppCommandState::GeoCmdPhase::Capturing)
+      if (phase == GP::Capturing)
         return st.mapCapture.prompt.empty() ? "Capturing map\xE2\x80\xA6" : st.mapCapture.prompt.c_str();
       return first ? "Specify first corner:" : "Specify opposite corner:";
     case K::DrawingSettingsPick:

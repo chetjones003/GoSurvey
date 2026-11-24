@@ -843,8 +843,9 @@ void EditorViewport::paintGL() {
     m_Renderer->SetSize(w, h);
     std::vector<PdfAttachment> pdfForRender;
     const std::vector<PdfAttachment>* pdfAttachments = &m_State.drawing.pdfAttachments;
-    const bool placingPdf = m_State.active == AppCommandState::Kind::PdfAttach &&
-        m_State.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+    const auto* pdfSess = m_State.sessionAs<stepengine::PdfAttachSession>();
+    const bool placingPdf = pdfSess &&
+        pdfSess->phase == stepengine::PdfAttachPhase::WaitInsertPoint &&
         m_State.pdfAttachPreviewReady;
     const bool modifyingPdf = (m_State.active == AppCommandState::Kind::Move ||
         m_State.active == AppCommandState::Kind::Copy || m_State.active == AppCommandState::Kind::Scale ||

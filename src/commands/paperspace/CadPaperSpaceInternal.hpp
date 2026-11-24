@@ -77,8 +77,10 @@ static bool CreateMviewPreset(AppCommandState& st, const std::string& option, st
     return false;
   }
   if (option == "object") {
-    st.paperVpMode = 1;
-    st.paperVpPhase = 0;
+    if (auto* sess = st.sessionAs<stepengine::PaperRectViewportSession>()) {
+      sess->mode = 1;
+      sess->phase = 0;
+    }
     log.push_back("MVIEW Object — select a closed paper-space polyline (Esc to cancel).");
     return true;
   }
@@ -115,8 +117,6 @@ static bool CreateMviewPreset(AppCommandState& st, const std::string& option, st
   st.selectedViewports = created;
   st.selectedViewportIndex = created.empty() ? -1 : created.front();
   st.selectedViewportLayout = created.empty() ? -1 : st.activeSpaceIndex;
-  st.paperVpMode = 0;
-  st.paperVpPhase = 0;
   stepengine::EndSession(st);
   log.push_back("MVIEW " + (option == "fit" ? std::string("Fit") : option) + " — " +
                 std::to_string(created.size()) + " viewport(s) created.");

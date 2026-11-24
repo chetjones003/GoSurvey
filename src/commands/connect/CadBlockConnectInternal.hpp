@@ -21,13 +21,14 @@ std::string BConnectModeRolePromptList() {
 
 /// Writes \p pending (with any fields left as-typed) into the named mode on \p conn, adding it if
 /// new, and enforces the single-default invariant (issue #496 AC: exactly one default per point).
-void BConnectModeCommit(AppCommandState& st, CadBlockConnection& conn) {
+void BConnectModeCommit(AppCommandState& st, const stepengine::BConnectModeSession& sess,
+                        CadBlockConnection& conn) {
   CadBlockConnectionMode mode;
-  mode.name = st.bconnectModeModeName;
-  mode.target = st.bconnectModeTargetPending;
-  mode.role = st.bconnectModeRolePending;
-  mode.engagementLength = st.bconnectModeEngagementPending;
-  mode.compatibilityTag = st.bconnectModeCompatTagPending;
+  mode.name = sess.modeName;
+  mode.target = sess.targetPending;
+  mode.role = sess.rolePending;
+  mode.engagementLength = sess.engagementPending;
+  mode.compatibilityTag = sess.compatTagPending;
   int mi = -1;
   for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
     if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, mode.name)) {

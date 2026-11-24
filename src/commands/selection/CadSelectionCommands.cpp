@@ -2353,8 +2353,9 @@ bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocal
                                             std::vector<std::string>& log, bool beginBoxOnMiss) {
   using K = AppCommandState::Kind;
   const bool modelSpace = st.activeSpaceIndex == kModelSpaceIndex;
+  const auto* gizmoSess = st.sessionAs<stepengine::GizmoCmdSession>();
   const bool gizmoMoveSubObject =
-      st.active == K::Move3d && st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
+      gizmoSess && st.active == K::Move3d && gizmoSess->phase == stepengine::GizmoCmdPhase::SelectObjects;
   const bool pressPullSelectTarget =
       st.sessionAs<stepengine::PressPullSession>() &&
       st.sessionAs<stepengine::PressPullSession>()->phase == stepengine::PressPullPhase::SelectTarget;
