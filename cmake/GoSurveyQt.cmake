@@ -51,8 +51,10 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/PdfWindow.cpp
   src/qt/PdfWindowCompare.cpp
   src/qt/PdfScaleUi.cpp
+  src/qt/PdfWindowDimensions.cpp
   src/qt/FailureReport.cpp
   src/renderer/src/ViewportRenderer.cpp
+  src/renderer/src/ViewportHatchPass.cpp
   src/pdf/src/PdfAttach.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp

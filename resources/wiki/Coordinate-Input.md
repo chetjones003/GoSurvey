@@ -139,6 +139,10 @@ current **world** X and Y at the configured display precision.
 | **Enter** | Commits the point |
 | **A click in the viewport** | Also commits the point |
 
+The fields take your typing as soon as a point is asked for — from the drawing, from an empty
+command line (where the cursor stays after you type the command), or from any panel you are not
+typing into. **Space** still acts as Enter there.
+
 Prompts that expect a bearing, angle, distance, option, or command name show a **single** field
 instead of two.
 

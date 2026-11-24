@@ -534,8 +534,11 @@ void RegisterPipeSiteCommands(CommandRegistry& reg) {
   reg.Add({"piperun", "pipe",
            "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = schedule 40), then points (U undo, END/Enter finishes)",
            CadCommandKind::PipeRun, false, true,
-           [](AppCommandState& st, const std::string&, std::vector<std::string>& log) {
+           [](AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
              StartPipeRunCommand(st, log);
+             // "PIPERUN 4in" answers the size prompt inline, as the command line usage promises.
+             if (!StringUtil::trimCopy(args).empty())
+               HandlePipeRunTextInput(StringUtil::trimCopy(args), st, log);
            }});
   reg.Add({"pipesys", "pipenet, pipingsystem",
            "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the current pipe-run selection)",

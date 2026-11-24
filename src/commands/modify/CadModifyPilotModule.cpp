@@ -758,8 +758,13 @@ StepDescriptor MirrorSession::currentStep(const AppCommandState&) const {
     return StepDescriptor::SelectObjects(kSelectObjectsPrompt, BlankEnterPolicy::Custom, true);
   case MirrorPhase::NeedP1:
     return StepDescriptor::Point("MIRROR: First point of mirror line — click or X,Y | ESC cancel");
-  case MirrorPhase::NeedP2:
-    return StepDescriptor::Point("MIRROR: Second point of mirror line — click or X,Y | ESC cancel");
+  case MirrorPhase::NeedP2: {
+    StepDynInputSpec dyn;
+    dyn.pointEntry = true;
+    dyn.haveBase = true;
+    dyn.basePoint = ray3d::Vec3{p1X, p1Y, p1Z};
+    return StepDescriptor::Point("MIRROR: Second point of mirror line — click or X,Y or @dx,dy | ESC cancel", dyn);
+  }
   case MirrorPhase::NeedEraseAnswer:
     return StepDescriptor::KeywordOptions("MIRROR: Erase source objects? [Yes/No] <N> | ESC cancel",
                                           BlankEnterPolicy::TakeDefault, StepClickRoute::Ignore);
@@ -799,7 +804,7 @@ StepSubmitResult MirrorSession::onText(AppCommandState& st, const std::string& t
   }
   if (phase == MirrorPhase::NeedP2) {
     float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, true, p1X, p1Y))
       return StepSubmitResult::Unparsed;
     if (std::hypot(px - p1X, py - p1Y) < 1e-8f) {
       log.push_back("MIRROR — mirror line needs two distinct points; try again.");
@@ -846,13 +851,16 @@ void MirrorSession::onViewportPick(AppCommandState& st, const StepPickInput& pic
     return;
   }
   if (phase == MirrorPhase::NeedP2) {
-    if (std::hypot(pick.localX - p1X, pick.localY - p1Y) < 1e-8) {
+    // ORTHO locks the mirror line, as it does in the preview.
+    float px = static_cast<float>(pick.localX), py = static_cast<float>(pick.localY), pz = CadCommitElevation(st);
+    ApplyOrthoConstrainFromAnchor(st, p1X, p1Y, &px, &py, st.orthoMode, p1Z, pz, &pz);
+    if (std::hypot(px - p1X, py - p1Y) < 1e-8f) {
       log.push_back("MIRROR — mirror line needs two distinct points; try again.");
       return;
     }
-    p2X = static_cast<float>(pick.localX);
-    p2Y = static_cast<float>(pick.localY);
-    p2Z = CadCommitElevation(st);
+    p2X = px;
+    p2Y = py;
+    p2Z = pz;
     phase = MirrorPhase::NeedEraseAnswer;
     log.push_back("Erase source objects? [Yes/No] <N>:");
   }

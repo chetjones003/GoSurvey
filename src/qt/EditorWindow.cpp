@@ -20,6 +20,9 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QTextEdit>
+#include <QFontComboBox>
+#include <QTextCursor>
+#include <QColorDialog>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
 #include <utility>
@@ -1711,80 +1714,6 @@ void EditorWindow::ShowLayoutManager() {
   dialog.exec();
 }
 
-void EditorWindow::ShowPageSetupManager(int layoutIndex) {
-  m_State.showPageSetupManager = false;
-  if (layoutIndex < 0) layoutIndex = m_State.activeSpaceIndex;
-  if (layoutIndex < 0 || layoutIndex >= static_cast<int>(m_State.drawing.paperLayouts.size())) {
-    QMessageBox::information(this, "Page Setup Manager", "Switch to a paper layout first."); return;
-  }
-  m_State.pageSetupLayoutIdx = layoutIndex;
-  const bool writable = !ActiveDrawingReadOnly();
-  if (writable) EnsureStandardPageSetup(m_State);
-  QDialog dialog(this); dialog.setObjectName("pageSetupManager"); dialog.setWindowTitle("Page Setup Manager"); dialog.resize(650, 430);
-  auto* outer = new QVBoxLayout(&dialog);
-  auto* current = new QLabel("Current layout: “" + QString::fromUtf8(m_State.drawing.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str()) + "”", &dialog);
-  outer->addWidget(current);
-  auto* row = new QHBoxLayout(); outer->addLayout(row);
-  auto* list = new QListWidget(&dialog); list->setObjectName("pageSetupList"); list->setMinimumWidth(250); row->addWidget(list, 1);
-  auto* details = new QLabel(&dialog); details->setObjectName("pageSetupDetails"); details->setWordWrap(true); row->addWidget(details, 1);
-  auto* actions = new QVBoxLayout(); row->addLayout(actions);
-  auto* apply = new QPushButton("Set Current", &dialog); apply->setObjectName("pageSetupApply");
-  auto* create = new QPushButton("New…", &dialog); create->setObjectName("pageSetupNew");
-  auto* modify = new QPushButton("Modify…", &dialog); modify->setObjectName("pageSetupModify");
-  auto* close = new QPushButton("Close", &dialog); close->setObjectName("pageSetupClose");
-  actions->addWidget(apply); actions->addWidget(create); actions->addWidget(modify); actions->addStretch(); actions->addWidget(close);
-  auto* onNew = new QCheckBox("Display when creating a new layout", &dialog); onNew->setChecked(m_State.pageSetupDisplayOnNew); onNew->setEnabled(writable); outer->addWidget(onNew);
-  const auto& layout = m_State.drawing.paperLayouts[static_cast<size_t>(layoutIndex)];
-  const QString layoutRow = "*" + QString::fromUtf8(layout.name.c_str()) + "*";
-  auto refill = [&] {
-    list->clear(); list->addItem(layoutRow);
-    for (const auto& setup : m_State.drawing.savedPageSetups) list->addItem(QString::fromUtf8(setup.name.c_str()));
-    int selected = m_State.pageSetupManagerSel < 0 ? 0 : m_State.pageSetupManagerSel + 1;
-    list->setCurrentRow(std::clamp(selected, 0, list->count() - 1));
-  };
-  auto updateDetails = [&] {
-    const int selected = list->currentRow();
-    const PageSetup value = selected > 0 && selected - 1 < static_cast<int>(m_State.drawing.savedPageSetups.size())
-        ? m_State.drawing.savedPageSetups[static_cast<size_t>(selected - 1)] : PageSetupFromLayout(layout, "");
-    const QString paper = value.presetIdx >= 0 && value.presetIdx < kPaperSizePresetCount
-        ? QString::fromUtf8(kPaperSizePresets[value.presetIdx].name) : "Custom";
-    const float width = value.landscape ? std::max(value.portraitWidthIn, value.portraitHeightIn) : std::min(value.portraitWidthIn, value.portraitHeightIn);
-    const float height = value.landscape ? std::min(value.portraitWidthIn, value.portraitHeightIn) : std::max(value.portraitWidthIn, value.portraitHeightIn);
-    details->setText(QString("Device\nGoSurvey PDF (vector)\n\nPaper\n%1\n%2 × %3 in · %4\n\nPlot area\nLayout\n\nScale\n%5")
-        .arg(paper).arg(width, 0, 'f', 2).arg(height, 0, 'f', 2).arg(value.landscape ? "Landscape" : "Portrait")
-        .arg(value.fitToPaper ? "Fit to paper" : "1 : " + QString::number(value.scaleModelPerPaperIn, 'g', 5)));
-    const bool saved = selected > 0 && selected - 1 < static_cast<int>(m_State.drawing.savedPageSetups.size());
-    apply->setEnabled(writable && saved); modify->setEnabled(writable); create->setEnabled(writable);
-    m_State.pageSetupManagerSel = selected - 1;
-  };
-  refill(); updateDetails();
-  connect(list, &QListWidget::currentRowChanged, &dialog, [&] { updateDetails(); });
-  connect(apply, &QPushButton::clicked, &dialog, [&] {
-    const int selected = list->currentRow() - 1;
-    if (selected < 0 || selected >= static_cast<int>(m_State.drawing.savedPageSetups.size())) return;
-    PushUndoSnapshot(m_State, "Apply page setup");
-    ApplyPageSetupToLayout(m_State.drawing.paperLayouts[static_cast<size_t>(layoutIndex)], m_State.drawing.savedPageSetups[static_cast<size_t>(selected)]);
-    BumpCadGpuCache(m_State); Refresh(); updateDetails();
-  });
-  connect(create, &QPushButton::clicked, &dialog, [&] {
-    bool ok = false; const QString name = QInputDialog::getText(&dialog, "New Page Setup", "Name:", QLineEdit::Normal,
-        QString("Setup%1").arg(m_State.drawing.savedPageSetups.size() + 1), &ok).trimmed();
-    if (!ok) return;
-    if (name.isEmpty()) { QMessageBox::warning(&dialog, "New Page Setup", "Enter a page setup name."); return; }
-    for (const auto& item : m_State.drawing.savedPageSetups) if (QString::fromUtf8(item.name.c_str()).compare(name, Qt::CaseInsensitive) == 0) {
-      QMessageBox::warning(&dialog, "New Page Setup", "A page setup with that name already exists."); return;
-    }
-    PageSetup value = PageSetupFromLayout(m_State.drawing.paperLayouts[static_cast<size_t>(layoutIndex)], name.toUtf8().toStdString());
-    m_State.drawing.savedPageSetups.push_back(value); m_State.pageSetupManagerSel = static_cast<int>(m_State.drawing.savedPageSetups.size()) - 1;
-    refill(); updateDetails();
-  });
-  connect(modify, &QPushButton::clicked, &dialog, [&] { const int target = list->currentRow() - 1; dialog.accept(); ShowPageSetupEditor(target); });
-  connect(onNew, &QCheckBox::toggled, &dialog, [&](bool value) { m_State.pageSetupDisplayOnNew = value; });
-  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
-  dialog.exec();
-  Refresh();
-}
-
 void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   const int layoutIndex = m_State.pageSetupLayoutIdx;
   const bool saved = targetIndex >= 0 && targetIndex < static_cast<int>(m_State.drawing.savedPageSetups.size());
@@ -1847,20 +1776,6 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
     ApplyPageSetupToLayout(m_State.drawing.paperLayouts[static_cast<size_t>(layoutIndex)], draft);
   }
   BumpCadGpuCache(m_State); Refresh(); ShowPageSetupManager(layoutIndex);
-}
-
-void EditorWindow::ShowViewportScale() {
-  Viewport* viewport = CurrentViewport(m_State);
-  if (!viewport) { QMessageBox::information(this, "Viewport Scale", "Select one viewport in a paper layout or enter floating model space first."); return; }
-  bool ok = false;
-  const QString current = QString::fromUtf8(PlotScaleLabel(m_State.drawing.drawingInsUnits, viewport->safeScale()).c_str());
-  const QString scale = QInputDialog::getText(this, "Viewport Scale", "Enter a scale such as 1:50 or model units per inch:", QLineEdit::Normal, current, &ok);
-  if (!ok) return;
-  if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Viewport scale cannot be changed in a read-only drawing."); return; }
-  const auto previous = m_Log.size(); HandleVpscaleCommand(scale.toUtf8().toStdString(), m_State, m_Log);
-  if (m_Log.size() > previous && m_Log.back().find("could not read") != std::string::npos)
-    QMessageBox::warning(this, "Viewport Scale", QString::fromUtf8(m_Log.back().c_str()));
-  Refresh();
 }
 
 void EditorWindow::ShowViewportsManager() {
@@ -2059,6 +1974,7 @@ void EditorWindow::ShowViewportsManager() {
 }
 
 bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
+  PropertiesInputEvent(watched, event);
   if (event->type() == QEvent::MouseButtonPress && m_CommandSuggestions && m_CommandSuggestions->isVisible()) {
     auto* clicked = qobject_cast<QWidget*>(watched);
     const bool inSuggestions = clicked &&
@@ -3024,18 +2940,7 @@ void EditorWindow::Refresh() {
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();
-  if (m_State.mtextRichEditorOpen && !m_TextDialogOpen) {
-    m_TextDialogOpen = true;
-    bool accepted = false;
-    const QString text = QInputDialog::getMultiLineText(this, "Edit text", "Text contents", QString::fromUtf8(
-        m_State.mtextRichEditorBuf.c_str()), &accepted);
-    if (accepted) {
-      m_State.mtextRichEditorBuf = text.toUtf8().toStdString();
-      CommitMtextRichEditor(m_State, m_Log);
-    } else CancelMtextRichEditor(m_State, &m_Log);
-    m_TextDialogOpen = false;
-    Refresh();
-  }
+  if (m_State.mtextRichEditorOpen && !m_TextDialogOpen) ShowTextEditor();
 }
 
 void EditorWindow::ShowWhatsNew() {
@@ -3698,4 +3603,69 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
   delete adjustment;
   Refresh();
   return true;
+}
+
+void EditorWindow::ShowTextEditor() {
+  m_TextDialogOpen = true;
+  QDialog dialog(this);
+  dialog.setObjectName("mtextEditor");
+  dialog.setWindowTitle(m_State.mtextRichEditorPlain ? "Edit text" : "Text formatting");
+  dialog.resize(700, 360);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* editor = new QTextEdit(&dialog);
+  editor->setObjectName("mtextContents");
+  const bool plain = m_State.mtextRichEditorPlain;
+  editor->setAcceptRichText(!plain);
+  if (plain) editor->setPlainText(QString::fromUtf8(m_State.mtextRichEditorBuf.c_str()));
+  else {
+    const auto* target = MtextRichEditorTargetAnnotation(m_State);
+    PopulateQtText(*editor->document(), 18, m_State.mtextRichEditorBuf,
+        target ? target->fontFamily : "Arial", dialog.palette().color(QPalette::Text), true);
+  }
+  editor->document()->setModified(false);
+  if (!plain) {
+    auto* tools = new QHBoxLayout;
+    auto* family = new QFontComboBox(&dialog);
+    family->setObjectName("mtextFont"); family->setToolTip("Font for the selected text");
+    tools->addWidget(family, 1);
+    connect(family, &QFontComboBox::currentFontChanged, editor, [editor](const QFont& font) {
+      QTextCharFormat format; format.setFontFamilies({font.family()}); editor->mergeCurrentCharFormat(format);
+    });
+    const auto toggle = [&](const QString& label, const QString& name, auto apply) {
+      auto* button = new QToolButton(&dialog); button->setText(label); button->setObjectName(name);
+      button->setCheckable(true); button->setFocusPolicy(Qt::NoFocus); tools->addWidget(button);
+      connect(button, &QToolButton::clicked, editor, [editor, apply](bool on) {
+        QTextCharFormat format; apply(format, on); editor->mergeCurrentCharFormat(format);
+      });
+      return button;
+    };
+    auto* bold = toggle("Bold", "mtextBold", [](auto& f, bool on) { f.setFontWeight(on ? QFont::Bold : QFont::Normal); });
+    auto* italic = toggle("Italic", "mtextItalic", [](auto& f, bool on) { f.setFontItalic(on); });
+    auto* underline = toggle("Underline", "mtextUnderline", [](auto& f, bool on) { f.setFontUnderline(on); });
+    const auto syncFormat = [=](const QTextCharFormat& format) {  // the controls show the text's format
+      const QSignalBlocker b(bold), i(italic), u(underline), f(family);
+      bold->setChecked(format.fontWeight() >= QFont::Bold); italic->setChecked(format.fontItalic());
+      underline->setChecked(format.fontUnderline()); family->setCurrentFont(format.font());
+    };
+    connect(editor, &QTextEdit::currentCharFormatChanged, &dialog, syncFormat); syncFormat(editor->currentCharFormat());
+    auto* color = new QPushButton("Color...", &dialog); tools->addWidget(color);
+    connect(color, &QPushButton::clicked, &dialog, [editor, &dialog] {
+      const auto chosen = QColorDialog::getColor(editor->textColor(), &dialog, "Text color");
+      if (chosen.isValid()) editor->setTextColor(chosen);
+    });
+    layout->addLayout(tools);
+  }
+  layout->addWidget(editor, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+  layout->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  editor->setFocus();
+  if (dialog.exec() == QDialog::Accepted) {
+    // A Save without edits preserves original wire tags and inherited appearance exactly.
+    if (editor->document()->isModified()) m_State.mtextRichEditorBuf = plain
+        ? editor->toPlainText().toUtf8().toStdString() : QtTextToMtextWire(*editor->document());
+    CommitMtextRichEditor(m_State, m_Log);
+  } else CancelMtextRichEditor(m_State, &m_Log);
+  m_TextDialogOpen = false;
+  Refresh();
 }

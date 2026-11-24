@@ -2,6 +2,7 @@
 #include "draw/CadDrawInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "HatchGeom.hpp"
+#include "HatchPattern.hpp"
 #include <GoSurvey/Geometry/HatchBoundary.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Geometry/spline.hpp>
@@ -552,22 +553,46 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
     out->push_back({ln.x0, ln.y0, ln.x1, ln.y1});
   }
 
+  // A polyline edge with a bulge is an arc: follow it, not its chord, or a rounded corner leaves a sliver
+  // outside the hatch (and a chord can cross a neighbour the arc never touches).
+  const auto polylineEdge = [&](size_t a, size_t b) {
+    const double x0 = st.drawing.vertex(a).x, y0 = st.drawing.vertex(a).y;
+    const double x1 = st.drawing.vertex(b).x, y1 = st.drawing.vertex(b).y;
+    const float bulge = a < st.drawing.userPolylineVertsBulge.size() ? st.drawing.userPolylineVertsBulge[a] : 0.f;
+    const BulgeArcSpan span = std::fabs(bulge) > 1e-6f ? BulgeArc(x0, y0, x1, y1, bulge) : BulgeArcSpan{};
+    if (!span.valid) {
+      out->push_back({x0, y0, x1, y1});
+      return;
+    }
+    const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(span.sweep) / (3.14159265358979323846 / 24.0))), 2, 96);
+    double px = x0, py = y0;
+    for (int i = 1; i <= n; ++i) {
+      const double t = span.startAngle + span.sweep * i / n;
+      const double x = i == n ? x1 : span.cx + span.radius * std::cos(t);
+      const double y = i == n ? y1 : span.cy + span.radius * std::sin(t);
+      out->push_back({px, py, x, y});
+      px = x;
+      py = y;
+    }
+  };
   const int nPoly = static_cast<int>(st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
     const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
     for (int vi = v0; vi + 1 < v1; ++vi)
-      out->push_back({st.drawing.vertex(vi).x,
-                      st.drawing.vertex(vi).y,
-                      st.drawing.vertex(static_cast<size_t>(vi + 1)).x,
-                      st.drawing.vertex(static_cast<size_t>(vi + 1)).y});
+      polylineEdge(static_cast<size_t>(vi), static_cast<size_t>(vi + 1));
     const bool closed =
         static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     if (closed && v1 - v0 >= 2)
-      out->push_back({st.drawing.vertex(static_cast<size_t>(v1 - 1)).x,
-                      st.drawing.vertex(static_cast<size_t>(v1 - 1)).y,
-                      st.drawing.vertex(v0).x,
-                      st.drawing.vertex(v0).y});
+      polylineEdge(static_cast<size_t>(v1 - 1), static_cast<size_t>(v0));
+  }
+
+  // Linework inside block references bounds areas too (imported drawings put pads and outlines in blocks).
+  std::vector<CadBlockWorldSeg> blockSegs;
+  for (const CadBlockRef& ref : st.drawing.cadBlockRefs) {
+    blockSegs.clear();
+    CadBlockCollectWorldLines(st.drawing.blockDefs, ref, EntityAttributes{}, &blockSegs);
+    for (const CadBlockWorldSeg& s : blockSegs) out->push_back({s.x0, s.y0, s.x1, s.y1});
   }
 
   auto tessellate = [&](auto pointAt, int n) {
@@ -881,3 +906,51 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 }
 
 // localX/localY are LOCAL storage coordinates, not world — see the declaration in CadCommands.hpp.
+
+namespace {
+// FNV-1a over raw bytes: a staleness fingerprint, not a security hash.
+std::uint64_t HashBytes(std::uint64_t h, const void* data, std::size_t size) {
+  const auto* bytes = static_cast<const unsigned char*>(data);
+  for (std::size_t i = 0; i < size; ++i) { h ^= bytes[i]; h *= 1099511628211ull; }
+  return h;
+}
+} // namespace
+
+void SetHatchPatternLibrary(AppCommandState& st, const std::string& patSource) {
+  const std::uint64_t sig = HashBytes(1469598103934665603ull, patSource.data(), patSource.size());
+  if (sig == st.hatchPatternLibrarySig && !st.hatchPatternLibrary.empty()) return;
+  st.hatchPatternLibrary.clear();
+  hatchpat::Parse(patSource, &st.hatchPatternLibrary);
+  st.hatchPatternLibrarySig = sig;
+  st.hatchDisplayRevisionSeen = ~0ull;  // every key includes the library, so the next refresh re-checks all
+}
+
+void RefreshHatchDisplayGeometry(AppCommandState& st, std::uint64_t renderRevision) {
+  const auto& regions = st.drawing.cadFilledRegions;
+  CadHatchDisplayGeometry& cache = st.hatchDisplayGeometry;
+  if (renderRevision == st.hatchDisplayRevisionSeen && cache.segments.size() == regions.size()) return;
+  st.hatchDisplayRevisionSeen = renderRevision;
+  bool changed = cache.segments.size() != regions.size();
+  cache.segments.resize(regions.size());
+  cache.keys.resize(regions.size(), 0);
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    const CadFilledRegion& region = regions[i];
+    std::uint64_t key = 0;
+    if (!region.isSolid()) {
+      key = HashBytes(st.hatchPatternLibrarySig, region.vertsXyz.data(), region.vertsXyz.size() * sizeof(double));
+      key = HashBytes(key, region.loopStart.data(), region.loopStart.size() * sizeof(int));
+      key = HashBytes(key, region.patternName.data(), region.patternName.size());
+      key = HashBytes(key, &region.patternScale, sizeof(region.patternScale));
+      key = HashBytes(key, &region.patternAngleDeg, sizeof(region.patternAngleDeg));
+      key |= 1;  // never 0, which marks "no pattern"
+    }
+    if (key == cache.keys[i]) continue;
+    cache.keys[i] = key;
+    cache.segments[i].clear();
+    if (key != 0)
+      if (const hatchpat::Def* pattern = hatchpat::Find(st.hatchPatternLibrary, region.patternName))
+        hatchpattern::BuildSegments(region, *pattern, &cache.segments[i]);
+    changed = true;
+  }
+  if (changed) ++cache.revision;
+}

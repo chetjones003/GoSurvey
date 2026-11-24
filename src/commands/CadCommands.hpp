@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "HatchPat.hpp"
 #include "engine/CommandSession.hpp"
 #include "engine/StepEngine.hpp"
 #include "modify/CadModifySessions.hpp"
@@ -453,6 +454,8 @@ struct CadExtendedGeometryInput {
   float drawingModelUnitsPerPlottedInch = 0.f;
   const std::vector<CadAnnotationScale>* annotationScales = nullptr;
   int currentAnnotationScaleIndex = -1;
+  /// Patterned hatch linework, parallel to the filled regions handed to the renderer (REQ-043).
+  const CadHatchDisplayGeometry* hatchDisplay = nullptr;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -540,6 +543,11 @@ inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPe
   return a.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
 }
 
+/// Visible text footprint using the frontend's font measurement when available.
+/// \p measure false skips the renderer measurement and returns the cheap estimated quad, for rejecting
+/// far-away text before paying for a Qt layout (hover picks run this for every annotation).
+void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
+                               bool measure = true);
 /// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY);

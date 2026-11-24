@@ -75,7 +75,7 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
         const CadCircleRecord c = cmd.drawing.circle(ci);
         const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
         tryGrip(sel, cx, cy, 0);
-        tryGrip(sel, cx + r, cy, 1);
+        if (CircleHasRadiusGrip(cmd, ci)) tryGrip(sel, cx + r, cy, 1);
       }
       break;
     }
@@ -340,6 +340,8 @@ bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<VT>& V,
 
 }  // namespace
 
+namespace { EntityAttributes SelectSimilarAttrsOf(const AppCommandState&, const SelectedEntity&); }
+
 void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za, float xb, float yb,
                               float zb, bool subtract, bool windowMode, bool includeSurveyPoints,
                               const Camera* cam, float vpW, float vpH) {
@@ -515,17 +517,44 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   }
   const size_t nAnn = st.drawing.cadAnnotations.size();
   for (size_t ai = 0; ai < nAnn; ++ai) {
-    float amnX = 0.f;
-    float amnY = 0.f;
-    float amxX = 0.f;
-    float amxY = 0.f;
-    CadAnnotationRoughBounds(st.drawing.cadAnnotations[ai], st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
-    SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
+    const auto& annotation = st.drawing.cadAnnotations[ai];
     bool hit = false;
-    if (windowMode)
-      hit = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
-    else
-      hit = !(amxX < mnX || amnX > mxX || amxY < mnY || amnY > mxY);
+    if (annotation.kind == CadAnnotation::Kind::Text || annotation.kind == CadAnnotation::Kind::Mtext) {
+      float xs[4], ys[4];
+      // Cheap reject: either selection mode needs the text to overlap the rectangle, and the padded
+      // estimate contains the measured quad, so skip the Qt layout for text nowhere near it.
+      CadAnnotationTextPickQuad(st, annotation, xs, ys, /*measure=*/false);
+      float emnX = *std::min_element(xs, xs + 4), emxX = *std::max_element(xs, xs + 4);
+      float emnY = *std::min_element(ys, ys + 4), emxY = *std::max_element(ys, ys + 4);
+      const float pad = std::max(emxX - emnX, emxY - emnY);
+      SPBox(emnX - pad, emnY - pad, emxX + pad, emxY + pad, &emnX, &emnY, &emxX, &emxY);
+      if (emxX < mnX || emnX > mxX || emxY < mnY || emnY > mxY) continue;
+      CadAnnotationTextPickQuad(st, annotation, xs, ys);
+      curvePts.clear();
+      for (int i = 0; i <= 4; ++i) curvePts.push_back({xs[i % 4], ys[i % 4], annotation.insZ});
+      hit = CurveHitsRect(curvePts);
+      if (!windowMode && !hit) {
+        // A crossing rectangle wholly within the text box touches its interior, not its edges.
+        const float cx = .5f * (mnX + mxX), cy = .5f * (mnY + mxY);
+        float sign = 0.f;
+        bool inside = true;
+        for (int i = 0; i < 4; ++i) SP(xs[i], ys[i], annotation.insZ, &xs[i], &ys[i]);
+        for (int i = 0; i < 4; ++i) {
+          const int j = (i + 1) % 4;
+          const float cross = (xs[j] - xs[i]) * (cy - ys[i]) - (ys[j] - ys[i]) * (cx - xs[i]);
+          if (std::fabs(cross) < 1.e-8f) continue;
+          if (sign && sign * cross < 0.f) { inside = false; break; }
+          sign = cross;
+        }
+        hit = inside && sign != 0.f;
+      }
+    } else {
+      float amnX, amnY, amxX, amxY;
+      CadAnnotationRoughBounds(annotation, st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+      SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);
+      hit = windowMode ? amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY
+                       : !(amxX < mnX || amnX > mxX || amxY < mnY || amnY > mxY);
+    }
     if (hit) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Annotation;
@@ -875,6 +904,14 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
                hits.end());
   }
 
+  // Invisible layers must not contribute hits, even when their geometry lies inside the fence.
+  hits.erase(std::remove_if(hits.begin(), hits.end(), [&](const SelectedEntity& entity) {
+    const auto attrs = SelectSimilarAttrsOf(st, entity);
+    // Empty means "no attributes known for this type" (survey points, alignments...), so keep it.
+    if (attrs.layer.empty()) return false;
+    const CadLayerRow* layer = FindDrawingLayerRowCi(st, attrs.layer);
+    return layer && (!layer->on || layer->frozen);
+  }), hits.end());
   if (subtract) {
     std::vector<SelectedEntity> kept;
     kept.reserve(st.selection.size());
@@ -1167,6 +1204,10 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::Annotation: return pick(st.drawing.cadAnnotationAttrs, e.index);
   case SelectedEntity::Type::Table:      return pick(st.drawing.cadTableAttrs, e.index);
   case SelectedEntity::Type::BlockRef:   return pick(st.drawing.cadBlockRefAttrs, e.index);
+  case SelectedEntity::Type::FilledRegion: return pick(st.drawing.cadFilledRegionAttrs, e.index);
+  case SelectedEntity::Type::Solid: return pick(st.drawing.cadSolidAttrs, e.index);
+  case SelectedEntity::Type::PipeRun: return pick(st.drawing.cadPipeRunAttrs, e.index);
+  case SelectedEntity::Type::FeatureLine: return pick(st.drawing.featureLineAttrs, e.index);
   default:                               return EntityAttributes{};
   }
 }
@@ -2135,7 +2176,7 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
     haveSolid = PickClosestSolidEntity(st, rq.eyeRay, solidTol, &solidE, &tSolid);
   }
   // Only a DRAWN surface hides what is behind it: in 2D Wireframe a solid is see-through (Q1).
-  const bool opaque = haveSolid && st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  const bool opaque = haveSolid && EffectiveVisualStyle(st) != VisualStyle::Wireframe2D;
   // "On the surface" counts as in front: a line drawn on a face, or the face's own edge, must still
   // win over the face. The pick tolerance is that allowance, converted to ray-parameter units.
   const double depthTolT = haveSolid ? static_cast<double>(std::max(rq.lineTol, solidTol)) / edLen : 0.0;

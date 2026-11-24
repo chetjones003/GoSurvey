@@ -7,6 +7,8 @@
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextBlock>
+#include <QTextFragment>
 #include <algorithm>
 #include <cmath>
 
@@ -45,7 +47,7 @@ QString QtFontFamilyForCadFont(const std::string& fontName) {
 }
 
 void PopulateQtText(QTextDocument& document, float pixels, const std::string& wire,
-                    const std::string& family, const QColor& color) {
+                    const std::string& family, const QColor& color, bool inheritColor) {
   document.clear();
   document.setDocumentMargin(0);
   QFont font(family.empty() ? QStringLiteral("Segoe UI") : QtFontFamilyForCadFont(family));
@@ -62,10 +64,11 @@ void PopulateQtText(QTextDocument& document, float pixels, const std::string& wi
     QTextCharFormat format;
     format.setFontWeight(span.bold ? QFont::Bold : QFont::Normal);
     format.setFontItalic(span.italic); format.setFontUnderline(span.underline);
-    format.setForeground(span.hasColor ? QColor::fromRgb(span.color) : color);
+    if (span.hasColor || !inheritColor) format.setForeground(span.hasColor ? QColor::fromRgb(span.color) : color);
     if (!span.font.empty()) format.setFontFamilies({QString::fromUtf8(span.font.c_str())});
-    std::string text = wire.substr(span.rawBegin, span.rawEnd - span.rawBegin);
-    if (span.caps) MtextRichApplyCapsAscii(&text);
+    // Caps is a display attribute: keep the typed casing so an edited document round-trips it.
+    if (span.caps) format.setFontCapitalization(QFont::AllUppercase);
+    const std::string text = wire.substr(span.rawBegin, span.rawEnd - span.rawBegin);
     cursor.insertText(QString::fromUtf8(text.c_str()), format);
   }
 }
@@ -76,4 +79,32 @@ void MeasureQtText(float pixels, const std::string& wire, const std::string& fam
   document.adjustSize();
   if (width) *width = static_cast<float>(document.idealWidth());
   if (height) *height = static_cast<float>(document.size().height());
+}
+
+std::string QtTextToMtextWire(const QTextDocument& document) {
+  std::string wire;
+  for (auto block = document.begin(); block.isValid(); block = block.next()) {
+    if (block != document.begin()) wire += '\n';
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+      const auto fragment = it.fragment();
+      if (!fragment.isValid()) continue;
+      const auto format = fragment.charFormat();
+      std::string open, close;
+      const auto wrap = [&](const std::string& a, const std::string& b) { open += a; close = b + close; };
+      if (format.fontWeight() >= QFont::Bold) wrap("[[b]]", "[[/b]]");
+      if (format.fontItalic()) wrap("[[i]]", "[[/i]]");
+      if (format.fontUnderline()) wrap("[[u]]", "[[/u]]");
+      if (format.fontCapitalization() == QFont::AllUppercase) wrap("[[caps]]", "[[/caps]]");
+      if (format.hasProperty(QTextFormat::FontFamilies)) {
+        const auto families = format.fontFamilies().toStringList();
+        if (!families.isEmpty()) wrap("[[font:" + families.front().toUtf8().toStdString() + "]]", "[[/font]]");
+      }
+      if (format.foreground().style() != Qt::NoBrush) {
+        const auto rgb = format.foreground().color().name(QColor::HexRgb).mid(1).toUpper();
+        wrap("[[color:" + rgb.toStdString() + "]]", "[[/color]]");
+      }
+      wire += open + fragment.text().toUtf8().toStdString() + close;
+    }
+  }
+  return wire;
 }

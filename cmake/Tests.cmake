@@ -181,6 +181,7 @@ add_executable(GoSurveyTests
   tests/EntityKindOpsTests.cpp
   tests/CutClipboardTests.cpp
   # Commands, updates and crash reports
+  tests/EditorInteractionTests.cpp
   tests/CommandRegistryHandlerTests.cpp
   tests/StepEngineTests.cpp
   tests/UpdateCheckTests.cpp

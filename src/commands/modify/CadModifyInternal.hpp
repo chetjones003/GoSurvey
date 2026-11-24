@@ -22,6 +22,17 @@ void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
   *y = static_cast<T>(by + s * dx + c * dy);
 }
 
+/// MTEXT turns like TEXT: its box's top-left (the anchor the renderer draws from) rotates about the
+/// base, the box keeps its local width/height (so wrapping is unchanged) and rotationRad grows.
+inline void RotateMtextAroundBase(double bx, double by, double rad, CadAnnotation* a) {
+  const float w = a->boxMaxX - a->boxMinX, h = a->boxMaxY - a->boxMinY;
+  float x = a->boxMinX, y = a->boxMaxY;
+  RotateAroundBase(bx, by, rad, &x, &y);
+  a->boxMinX = x; a->boxMaxX = x + w;
+  a->boxMaxY = y; a->boxMinY = y - h;
+  a->rotationRad += static_cast<float>(rad);
+}
+
 /// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate
 /// (near-zero-length) mirror line leaves the point unchanged rather than dividing by ~0 — callers
 /// require two distinct points before a mirror commits (see \c HandleMirrorText), so this is a
@@ -882,6 +893,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += rad;
+        } else if (c.kind == CadAnnotation::Kind::Mtext) {
+          RotateMtextAroundBase(bx, by, rad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimLinear) {
           RotateCadDimLinearAroundBase(bx, by, rad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimAligned) {
@@ -1245,6 +1258,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         c.insZ = static_cast<float>(ins.z);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += angleRad;
+        } else if (c.kind == CadAnnotation::Kind::Mtext) {
+          RotateMtextAroundBase(axisPoint.x, axisPoint.y, angleRad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimLinear) {
           RotateCadDimLinearAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimAligned) {

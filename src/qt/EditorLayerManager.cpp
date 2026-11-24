@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QCursor>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -31,6 +32,7 @@
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -71,7 +73,7 @@ class PaletteRefreshFilter final : public QObject {
 
 QString LayerManagerStyle(bool dark) {
   QString style = QtApplyAccent(
-      "QLabel#layerManagerTitle { font-size:17px; font-weight:600; }"
+      "QLabel#layerManagerTitle { font-size:15px; font-weight:600; }"
       "QLabel#layerManagerSubtitle, QLabel#layerManagerHint { color:@quiet@; }",
       dark) + (dark ? QString("QPushButton:disabled { color:#89979a; background:#242a2f; border:1px solid #343c41; }")
                     : QString("QPushButton:disabled { color:#68727b; background:#edf0f2; border:1px solid #cbd2d8; }")) +
@@ -153,6 +155,57 @@ public:
   }
 };
 
+/// Linetype cells edit through a drop-down of every linetype the drawing can draw, each shown by name beside a
+/// sample of its pattern. Choosing one commits it, like typing the name used to.
+class LinetypeDelegate : public QStyledItemDelegate {
+public:
+  explicit LinetypeDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
+
+  QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex&) const override {
+    auto* combo = new QComboBox(parent);
+    combo->setObjectName("layerLinetypeCombo");
+    const bool dark = option.palette.color(QPalette::Base).lightness() < 128;
+    const QColor ink = dark ? QColor("#e2e6ea") : QColor("#414b54");
+    const qreal ratio = parent->devicePixelRatioF();
+    combo->setIconSize(QSize(56, kSwatch.height()));
+    // ByLayer and ByBlock mean nothing on a layer itself, so the list starts at Continuous.
+    for (const char* name : kEntityLinetypeStorage) {
+      if (CadLinetypeNameEqCi(name, "ByLayer") || CadLinetypeNameEqCi(name, "ByBlock")) continue;
+      combo->addItem(QIcon(LinetypeSample(name, ratio, ink)), QString::fromUtf8(name));
+    }
+    connect(combo, qOverload<int>(&QComboBox::activated), this, [this, combo](int) {
+      auto* self = const_cast<LinetypeDelegate*>(this);
+      Q_EMIT self->commitData(combo);
+      Q_EMIT self->closeEditor(combo);
+    });
+    return combo;
+  }
+
+  void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+    auto* combo = static_cast<QComboBox*>(editor);
+    const QString current = index.data(Qt::EditRole).toString();
+    int found = -1;
+    for (int i = 0; i < combo->count(); ++i)
+      if (CadLinetypeNameEqCi(combo->itemText(i).toUtf8().toStdString(), current.toUtf8().toStdString())) found = i;
+    if (found < 0 && !current.isEmpty()) { // a linetype from an imported drawing: keep it choosable
+      combo->addItem(current);
+      found = combo->count() - 1;
+    }
+    combo->setCurrentIndex(std::max(0, found));
+    // Open the list once the editor sits over its cell, so the popup lines up with it.
+    QTimer::singleShot(0, combo, [combo] { combo->showPopup(); });
+  }
+
+  void setModelData(QWidget* editor, QAbstractItemModel* model, const QModelIndex& index) const override {
+    const QString chosen = static_cast<QComboBox*>(editor)->currentText();
+    if (chosen != index.data(Qt::EditRole).toString()) model->setData(index, chosen, Qt::EditRole);
+  }
+
+  void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex&) const override {
+    editor->setGeometry(option.rect);
+  }
+};
+
 /// Draws the On/Frozen/Locked/VP Freeze boxes ourselves so an unchecked box is visible and a checked one is
 /// unmistakable in every theme (REQ-082), and toggles on a click or Space anywhere in the cell.
 class CheckBoxDelegate : public QStyledItemDelegate {
@@ -231,19 +284,27 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   dialog.setWindowTitle("Layer Properties Manager");
   dialog.setSizeGripEnabled(true);
   dialog.resize(1040, std::clamp(240 + static_cast<int>(state.drawing.drawingLayerTable.size()) * kRowHeight, 360, 580));
-  dialog.setMinimumSize(560, 320);
   bool dark = dialog.palette().color(QPalette::Window).lightness() < 128;
   dialog.setStyleSheet(LayerManagerStyle(dark));
 
   auto* layout = new QVBoxLayout(&dialog);
-  layout->setContentsMargins(20, 16, 20, 14);
-  layout->setSpacing(10);
+  // The dialog may never be smaller than its contents need: a squeezed layout overlaps the hint and the buttons
+  // onto the table. The table is the part that gives (it scrolls), so it asks for only a couple of rows.
+  layout->setSizeConstraint(QLayout::SetMinimumSize);
+  layout->setContentsMargins(16, 10, 16, 10);
+  layout->setSpacing(8);
+  // Two compact rows above the table, so it gets the height: the title with the layer count and the current
+  // layer beside it, then the layer buttons with the filter filling the rest of that row.
   auto* title = new QLabel("Layer Properties Manager", &dialog);
   title->setObjectName("layerManagerTitle");
   auto* subtitle = new QLabel(&dialog);
   subtitle->setObjectName("layerManagerSubtitle");
-  layout->addWidget(title);
-  layout->addWidget(subtitle);
+  auto* heading = new QHBoxLayout;
+  heading->setSpacing(10);
+  heading->addWidget(title);
+  heading->addWidget(subtitle, 0, Qt::AlignBaseline);
+  heading->addStretch();
+  layout->addLayout(heading);
 
   auto* toolbar = new QHBoxLayout;
   toolbar->setSpacing(8);
@@ -256,8 +317,8 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   current->setObjectName("layerSetCurrent");
   auto* currentLabel = new QLabel(&dialog);
   currentLabel->setObjectName("layerManagerCurrent");
-  toolbar->addWidget(add); toolbar->addWidget(erase); toolbar->addWidget(current); toolbar->addStretch(); toolbar->addWidget(currentLabel);
-  layout->addLayout(toolbar);
+  toolbar->addWidget(add); toolbar->addWidget(erase); toolbar->addWidget(current);
+  heading->addWidget(currentLabel);
 
   auto* filter = new QLineEdit(&dialog);
   filter->setObjectName("layerManagerFilter");
@@ -273,7 +334,10 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   QObject::connect(filter, &QLineEdit::textChanged, clearFilter, [clearFilter](const QString& text) {
     clearFilter->setVisible(!text.isEmpty());
   });
-  layout->addWidget(filter);
+  filter->setMinimumWidth(180);
+  toolbar->addSpacing(8);
+  toolbar->addWidget(filter, 1);
+  layout->addLayout(toolbar);
 
   auto* table = new QTableWidget(&dialog);
   table->setObjectName("layerTable");
@@ -288,8 +352,9 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   }
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setSelectionMode(QAbstractItemView::SingleSelection);
-  table->setAlternatingRowColors(false);
+  table->setAlternatingRowColors(true);
   table->setItemDelegateForColumn(Name, new NameDelegate(table));
+  table->setItemDelegateForColumn(Linetype, new LinetypeDelegate(table));
   table->setShowGrid(false);
   table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   table->setIconSize(QSize(56, kSwatch.height()));
@@ -313,10 +378,11 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   for (int column = 0; column < ColumnCount; ++column) if (column != Name) header->resizeSection(column, kColumnWidth[column]);
   layout->addWidget(table, 1);
   auto fitVisibleRows = [&] {
-    int visibleRows = 0;
-    for (int row = 0; row < table->rowCount(); ++row) visibleRows += table->isRowHidden(row) ? 0 : 1;
-    const int rowCount = std::min(visibleRows, 8);
-    table->setFixedHeight(header->sizeHint().height() + 4 + rowCount * kRowHeight);
+    // Two rows stay visible however small the window: the table scrolls, the rest of the dialog never overlaps.
+    // Set as a style rule, not setMinimumHeight: the application's QTableWidget rule (min-height:21px) wins
+    // over a plain minimum on every re-polish, which let the window squeeze the table to its header.
+    const int minimum = header->sizeHint().height() + 6 + 2 * kRowHeight;
+    table->setStyleSheet(QString("QTableWidget#layerTable { min-height:%1px; }").arg(minimum));
   };
   auto* noMatches = new QLabel("No layers match this search.", &dialog);
   noMatches->setObjectName("layerManagerNoMatches");
@@ -324,11 +390,19 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   noMatches->hide();
   layout->addWidget(noMatches);
 
-  auto* hint = new QLabel("Click a column heading to sort. Right-click a heading to show or hide columns, or drag it to reorder.", &dialog);
+  // The hint shares the Close button's row and stays one line: a word-wrapped label reserves the height of
+  // its narrowest wrap, which left a band of empty space under the table. The table takes all the rest.
+  const QString hintText = "Click a column heading to sort. Right-click a heading to show or hide columns, or drag it to reorder.";
+  auto* hint = new QLabel(hintText, &dialog);
   hint->setObjectName("layerManagerHint");
-  layout->addWidget(hint);
+  hint->setToolTip(hintText);
+  hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-  layout->addWidget(buttons);
+  auto* footer = new QHBoxLayout;
+  footer->setSpacing(12);
+  footer->addWidget(hint, 1);
+  footer->addWidget(buttons);
+  layout->addLayout(footer);
 
   // Display order is a permutation of the stored table: sorting never touches state.drawing.drawingLayerTable (REQ-082).
   int sortColumn = -1;
@@ -526,6 +600,10 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
 
   // A click on a swatch opens a colour chooser; typing in the cell still works (double-click or F2).
   QObject::connect(table, &QTableWidget::cellClicked, &dialog, [&](int row, int column) {
+    if (column == Linetype && table->item(row, column) && (table->item(row, column)->flags() & Qt::ItemIsEditable)) {
+      table->editItem(table->item(row, column));
+      return;
+    }
     if (!IsColorColumn(column) || !table->item(row, column)) return;
     const QRect cell = table->visualRect(table->model()->index(row, column));
     const QPoint at = table->viewport()->mapFromGlobal(QCursor::pos());

@@ -340,6 +340,13 @@
   float hatchAngleDeg = 0.f;
   float hatchScale = 1.f;
   std::string hatchPatternName;      ///< "" or "SOLID" = solid fill; e.g. "ANSI31" for a line pattern
+  /// The parsed hatch-pattern library (acadiso.pat), loaded once by the frontend with
+  /// ef SetHatchPatternLibrary. Shared by the pattern renderer and the ribbon's pattern gallery.
+  std::vector<hatchpat::Def> hatchPatternLibrary;
+  std::uint64_t hatchPatternLibrarySig = 0;
+  /// Pattern linework per filled region; see ef RefreshHatchDisplayGeometry.
+  CadHatchDisplayGeometry hatchDisplayGeometry;
+  std::uint64_t hatchDisplayRevisionSeen = ~0ull;
 
   // --- EXTRACTCENTERLINE command (REQ-347) ---
   // Active hover fit and neighborhood-query cache live in stepengine::ExtractCenterlineSession.

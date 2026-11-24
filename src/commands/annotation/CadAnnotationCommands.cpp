@@ -3,6 +3,7 @@
 #include "annotation/CadAnnotationInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
+#include "CadField.hpp"
 #include "GoSurvey/Document/MtextRichFormat.hpp"
 #include <algorithm>
 #include <array>
@@ -335,6 +336,26 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   *out = std::move(d);
   return true;
+}
+
+
+void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
+                               bool measure) {
+  CadAnnotation effective = a;
+  const auto* style = TextStyles::IsStyleableText(a) ? TextStyles::Find(st.drawing.textStyles, a.styleName) : nullptr;
+  if (style) TextStyles::RebakeAnnotation(effective, *style);
+  const float mup = AnnotativeModelUnitsPerPlottedInch(effective, nullptr, st.drawing.modelUnitsPerPlottedInch,
+      &st.drawing.annotationScales, st.currentAnnotationScaleIndex);
+  const float h = CadAnnotationHeightWorld(effective, mup);
+  float w = -1.f, measuredHeight = -1.f;
+  if (measure && effective.kind == CadAnnotation::Kind::Text && st.measureAnnotationText) {
+    // Use the renderer's fixed layout size, then scale back into drawing coordinates.
+    st.measureAnnotationText(100.f, CadAnnotationResolvedText(st, effective), effective.fontFamily, &w, &measuredHeight);
+    w *= h / 100.f; measuredHeight *= h / 100.f;
+    if (style) w *= style->widthFactor;
+    if (!std::isfinite(w) || !std::isfinite(measuredHeight)) w = measuredHeight = -1.f;
+  }
+  CadTextAnnotationQuad(effective, h, xs, ys, w, measuredHeight);
 }
 
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,

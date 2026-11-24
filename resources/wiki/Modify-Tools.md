@@ -323,3 +323,10 @@ is set in **Settings → User Preferences**; a history log is written to
 **MIRROR** appears on the Modify ribbon but is **disabled** — hovering it says *"Mirror — flip
 selection across a mirror line (not implemented yet)."* There is no STRETCH, EXTEND, BREAK, FILLET,
 CHAMFER, ARRAY, or EXPLODE command. See [[Known Limitations]].
+
+### TRIM hover feedback
+
+With smart TRIM active, hovering over a line or polyline segment previews the portion that would
+be removed before the first trim-line point is picked. Moving away clears that hint. After the
+first point, the existing trim-line preview follows the second point. TRIM is recorded for
+**Repeat last command**.

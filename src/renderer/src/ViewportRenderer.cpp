@@ -1,4 +1,5 @@
 #include <GoSurvey/Renderer/ViewportRenderer.hpp>
+#include "ViewportRendererInternal.hpp"
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
@@ -202,23 +203,6 @@ GLuint LinkProgram(GLuint vs, GLuint fs) {
   return p;
 }
 
-void MulMat4(const float* a, const float* b, float* out) {
-  for (int c = 0; c < 4; ++c) {
-    for (int r = 0; r < 4; ++r) {
-      out[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1] +
-                       a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
-    }
-  }
-}
-
-void TranslateMat(float tx, float ty, float tz, float* m) {
-  std::memset(m, 0, sizeof(float) * 16);
-  m[0] = m[5] = m[10] = m[15] = 1.f;
-  m[12] = tx;
-  m[13] = ty;
-  m[14] = tz;
-}
-
 void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                             double viewAnchorX, double viewAnchorY) {
   if (r <= 1e-6f || segments < 1)
@@ -241,26 +225,6 @@ void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r
     out.push_back(ry);
     out.push_back(z);
   }
-}
-
-const CadLayerRow* LookupLayerRowCi(const std::vector<CadLayerRow>* layers, const std::string& layerName) {
-  if (!layers)
-    return nullptr;
-  for (const auto& r : *layers) {
-    if (r.name.size() != layerName.size())
-      continue;
-    bool eq = true;
-    for (size_t i = 0; i < r.name.size(); ++i) {
-      if (std::tolower(static_cast<unsigned char>(r.name[i])) !=
-          std::tolower(static_cast<unsigned char>(layerName[i]))) {
-        eq = false;
-        break;
-      }
-    }
-    if (eq)
-      return &r;
-  }
-  return nullptr;
 }
 
 // issue #383: AutoCAD's default (0.18mm/ByLayer) linework reads as a near-hairline in the
@@ -1032,6 +996,7 @@ void ViewportRenderer::DestroyShader() {
   ReleaseMeshGpu();
   ReleasePointCloudGpu();
   ReleaseSolidGpu();
+  ReleaseHatchGpu();
   if (shadedProgram_) {
     glDeleteProgram(shadedProgram_);
     shadedProgram_ = 0;
@@ -2679,6 +2644,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindVertexArray(0);
   }
+
+  // --- Patterned hatches (REQ-043): ViewportHatchPass.cpp.
+  DrawHatchPatterns(HatchPassInput{extended, filledRegions, filledRegionAttrs, drawingLayers, projRot, panX, panY,
+                                   panZf, halfHd, viewAnchorX, viewAnchorY, depthOn, kLwMain, depthForGeometry,
+                                   [&](double ax, double ay) { setClipAnchor(clipLocVcLine_, ax, ay); }});
 
   glUseProgram(lineProgram_);
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);

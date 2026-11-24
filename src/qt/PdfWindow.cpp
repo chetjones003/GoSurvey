@@ -73,7 +73,6 @@
 #include <set>
 #include <cmath>
 #include <utility>
-
 namespace {
 // Input tolerances are in the canvas's device-independent pixel coordinates.
 constexpr double kGripPickDip = 7.0;
@@ -81,7 +80,6 @@ constexpr double kMarkPickDip = 5.0;
 constexpr double kMinDragDip = 4.0;
 constexpr int kPdfToolCallout = static_cast<int>(pdfview::Annot::Kind::Leader);
 constexpr int kPdfToolRevisionCloud = static_cast<int>(pdfview::Annot::Kind::RevCloud);
-
 void ResizeCoordinateReviewRows(QTableWidget* table, int availableTextWidth = -1) {
   if (!table) return;
   for (int row = 0; row < table->rowCount(); ++row) {
@@ -92,7 +90,6 @@ void ResizeCoordinateReviewRows(QTableWidget* table, int availableTextWidth = -1
     auto* createAs = detailPanel ? detailPanel->findChild<QComboBox*>(createAsName) : nullptr;
     auto* detailLayout = detailPanel ? qobject_cast<QVBoxLayout*>(detailPanel->layout()) : nullptr;
     if (!details || !createAs || !detailLayout) continue;
-
     QTextDocument document;
     document.setDefaultFont(details->font());
     document.setDocumentMargin(0);
@@ -105,7 +102,6 @@ void ResizeCoordinateReviewRows(QTableWidget* table, int availableTextWidth = -1
     table->setRowHeight(row, std::max(100, detailHeight + decisionHeight));
   }
 }
-
 class PdfAuditProgressBar final : public QProgressBar {
 public:
   using QProgressBar::QProgressBar;
@@ -585,10 +581,10 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
       {"Ellipse", static_cast<int>(pdfview::Annot::Kind::Ellipse), "ellipse.png", "E"},
       {"Callout", kPdfToolCallout, "Multileader.png", "C"},
       {"Revision cloud", kPdfToolRevisionCloud, "c3d_revcloud.png", "K"},
-      {"Length", static_cast<int>(pdfview::Annot::Kind::Length), "Measure_Distance.png", "D"},
+      {"Linear dimension", static_cast<int>(pdfview::Annot::Kind::Length), "Measure_Distance.png", "D"},
       {"Polyline length", static_cast<int>(pdfview::Annot::Kind::PolyLength), "polyline.png", "P"},
       {"Area", static_cast<int>(pdfview::Annot::Kind::Area), "Measure_Area.png", "A"},
-      {"Angle", static_cast<int>(pdfview::Annot::Kind::Angle), "Measure_Angle.png", "G"},
+      {"Angular dimension", static_cast<int>(pdfview::Annot::Kind::Angle), "Measure_Angle.png", "G"},
       {"Check", kToolCheck, "Check.png", "H"}};
   std::map<int, QAction*> toolActions;
   for (const auto& kind : kinds) {
@@ -890,6 +886,10 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     look.Widget(fill); look.Small(applyStyle); look.Finish(page, 8);
     pdfribbon::PanelBuilder edit(page, tab, "Edit");
     edit.Small(undoAction); edit.Small(redoAction); edit.Finish(page, 5);
+    pdfribbon::PanelBuilder dimensions(page, tab, "Dimensions");
+    dimensions.Large(toolActions[static_cast<int>(pdfview::Annot::Kind::Length)]);
+    dimensions.Small(toolActions[static_cast<int>(pdfview::Annot::Kind::Angle)]);
+    dimensions.Finish(page, 10);
   });
   addPage("Measure", [&](pdfribbon::Page* page) {
     const QString tab = tabKey("Measure");
@@ -2237,12 +2237,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     } else if (annotation.kind == pdfview::Annot::Kind::RevCloud) {
       drawCloud(annotation);
     } else if (annotation.IsDimension()) {
-      QPolygonF polygon;
-      for (const auto& pt : annotation.pts) polygon << map(pt.first, pt.second);
-      painter.drawPolyline(polygon);
-      if (annotation.kind == pdfview::Annot::Kind::Area) painter.drawLine(polygon.first(), polygon.last());
-      const auto anchor = pdfview::DimensionLabelAnchor(annotation);
-      painter.drawText(map(anchor.first, anchor.second), QString::fromUtf8(pdfview::DimensionLabel(annotation, CurrentScale()).c_str()));
+      PaintDimension(painter, annotation, map, factor);
     }
     if (showGrips) {
       std::vector<QPointF> grips = GripPoints(annotation);
@@ -2295,8 +2290,12 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
       if (m_CloudPolygon) ghost.pts.push_back(corner);
       else ghost.pts = {m_Draft.front(), {corner.first, m_Draft.front().second}, corner, {m_Draft.front().first, corner.second}};
       if (ghost.pts.size() >= 3) drawCloud(ghost); else painter.drawLine(start, end);
-    }
-    else painter.drawLine(map(m_Draft.back().first, m_Draft.back().second), end);
+    } else if ((kind == pdfview::Annot::Kind::Length || kind == pdfview::Annot::Kind::Angle) && m_Draft.size() == 2) {
+      pdfview::Annot ghost; ghost.kind = kind; ghost.page = page; ApplyAnnotationStyle(ghost); ghost.pts = m_Draft;
+      const QPointF at = CanvasToPage(end);  // the dimension it will make, completed at the pointer
+      pdfview::PlaceDimensionPreview(ghost, {static_cast<float>(at.x()), static_cast<float>(at.y())});
+      painter.setPen(QPen(QColor(QtAccentFor(false).strong), 1.5)); PaintDimension(painter, ghost, map, factor);
+    } else painter.drawLine(map(m_Draft.back().first, m_Draft.back().second), end);
   }
 }
 

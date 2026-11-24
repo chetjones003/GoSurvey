@@ -99,6 +99,15 @@ DimLine LengthDimLine(const Annot& a) {
   return d;
 }
 
+void PlaceDimensionPreview(Annot& a, std::pair<float, float> pointer) {
+  if (a.kind == Annot::Kind::Length && !a.pts.empty()) {
+    const DimLine line = LengthDimLine(a);
+    a.offset = (pointer.first - a.pts[0].first) * line.nx + (pointer.second - a.pts[0].second) * line.ny;
+  } else if (a.kind == Annot::Kind::Angle) {
+    a.pts.push_back(pointer);
+  }
+}
+
 float DimensionLabelAngleDeg(const Annot& a) {
   if (a.kind != Annot::Kind::Length || a.pts.size() < 2)
     return 0.f;
@@ -158,6 +167,70 @@ std::pair<float, float> DimensionLabelAnchor(const Annot& a) {
     }
   }
   return {ax, ay};
+}
+
+namespace {
+// A filled arrowhead with its tip at (tx,ty), its body running back along the unit direction (ux,uy).
+DimStroke Arrowhead(float tx, float ty, float ux, float uy, float length) {
+  const float w = length * 0.3f;
+  return {{{tx, ty}, {tx + ux * length - uy * w, ty + uy * length + ux * w}, {tx + ux * length + uy * w, ty + uy * length - ux * w}}, true};
+}
+} // namespace
+
+std::vector<DimStroke> DimensionStrokes(const Annot& a) {
+  std::vector<DimStroke> out;
+  if (!DimensionComplete(a))
+    return out;
+  const float fs = std::max(4.f, a.fontSize);
+  if (a.kind == Annot::Kind::Length) {
+    const DimLine d = LengthDimLine(a);
+    out.push_back({{{d.x0, d.y0}, {d.x1, d.y1}}, false});
+    if (std::fabs(a.offset) > 0.5f) { // extension lines, with a small gap at the measured point and an overshoot
+      const float s = a.offset > 0.f ? 1.f : -1.f, gap = std::min(2.f, std::fabs(a.offset) * 0.3f), over = 2.f;
+      for (int i = 0; i < 2; ++i) {
+        const auto& p = a.pts[static_cast<size_t>(i)];
+        out.push_back({{{p.first + d.nx * s * gap, p.second + d.ny * s * gap},
+                        {(i == 0 ? d.x0 : d.x1) + d.nx * s * over, (i == 0 ? d.y0 : d.y1) + d.ny * s * over}}, false});
+      }
+    }
+    const float len = std::hypot(d.x1 - d.x0, d.y1 - d.y0);
+    if (len > 1e-3f) {
+      const float ux = (d.x1 - d.x0) / len, uy = (d.y1 - d.y0) / len;
+      const float al = std::clamp(fs * 0.6f, 2.f, len / 3.f);
+      out.push_back(Arrowhead(d.x0, d.y0, ux, uy, al));
+      out.push_back(Arrowhead(d.x1, d.y1, -ux, -uy, al));
+    }
+    return out;
+  }
+  out.push_back({a.pts, false});
+  if (a.kind == Annot::Kind::Area)
+    out.back().pts.push_back(a.pts.front());
+  if (a.kind == Annot::Kind::Angle) { // an arc between the legs, inside the label, with an arrow at each end
+    const auto& c = a.pts[1];
+    const float l1 = std::hypot(a.pts[0].first - c.first, a.pts[0].second - c.second);
+    const float l2 = std::hypot(a.pts[2].first - c.first, a.pts[2].second - c.second);
+    const float r = std::min(fs * 1.6f, 0.8f * std::min(l1, l2));
+    if (r > 1e-3f) {
+      const float t0 = std::atan2(a.pts[0].second - c.second, a.pts[0].first - c.first);
+      float sweep = std::atan2(a.pts[2].second - c.second, a.pts[2].first - c.first) - t0;
+      while (sweep > 3.14159265f) sweep -= 6.2831853f;
+      while (sweep <= -3.14159265f) sweep += 6.2831853f;
+      DimStroke arc;
+      constexpr int kSteps = 32;
+      for (int i = 0; i <= kSteps; ++i) {
+        const float t = t0 + sweep * static_cast<float>(i) / kSteps;
+        arc.pts.emplace_back(c.first + r * std::cos(t), c.second + r * std::sin(t));
+      }
+      out.push_back(arc);
+      const float arcLen = std::fabs(sweep) * r;
+      if (arcLen > 1e-3f) {
+        const float al = std::clamp(fs * 0.6f, 1.f, arcLen / 3.f), sg = sweep >= 0.f ? 1.f : -1.f, t1 = t0 + sweep;
+        out.push_back(Arrowhead(arc.pts.front().first, arc.pts.front().second, -std::sin(t0) * sg, std::cos(t0) * sg, al));
+        out.push_back(Arrowhead(arc.pts.back().first, arc.pts.back().second, std::sin(t1) * sg, -std::cos(t1) * sg, al));
+      }
+    }
+  }
+  return out;
 }
 
 std::string DimensionLabel(const Annot& a, const PageScale& s) {
@@ -636,30 +709,13 @@ bool AddLengthDimension(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, const
   const float w = std::max(0.1f, a.thickness);
   const float fs = std::max(4.f, a.fontSize);
   const DimLine d = LengthDimLine(a);
-  const float len = std::hypot(d.x1 - d.x0, d.y1 - d.y0);
   std::vector<FPDF_PAGEOBJECT> objs;
   const auto add = [&](FPDF_PAGEOBJECT o) {
     if (o != nullptr)
       objs.push_back(o);
   };
-  add(StrokePath({{d.x0, d.y0}, {d.x1, d.y1}}, c, w, false));
-  if (std::fabs(a.offset) > 0.5f) { // extension lines, with a small gap at the measured point and an overshoot
-    const float s = a.offset > 0.f ? 1.f : -1.f, gap = std::min(2.f, std::fabs(a.offset) * 0.3f), over = 2.f;
-    for (int i = 0; i < 2; ++i) {
-      const auto& p = a.pts[static_cast<size_t>(i)];
-      add(StrokePath({{p.first + d.nx * s * gap, p.second + d.ny * s * gap},
-                      {(i == 0 ? d.x0 : d.x1) + d.nx * s * over, (i == 0 ? d.y0 : d.y1) + d.ny * s * over}},
-                     c, w, false));
-    }
-  }
-  if (len > 1e-3f) { // arrows
-    const float ux = (d.x1 - d.x0) / len, uy = (d.y1 - d.y0) / len;
-    const float al = std::clamp(fs * 0.6f, 2.f, len / 3.f), aw = al * 0.3f;
-    add(StrokePath({{d.x0, d.y0}, {d.x0 + ux * al - uy * aw, d.y0 + uy * al + ux * aw}, {d.x0 + ux * al + uy * aw, d.y0 + uy * al - ux * aw}},
-                   c, 0.1f, true));
-    add(StrokePath({{d.x1, d.y1}, {d.x1 - ux * al - uy * aw, d.y1 - uy * al + ux * aw}, {d.x1 - ux * al + uy * aw, d.y1 - uy * al - ux * aw}},
-                   c, 0.1f, true));
-  }
+  for (const DimStroke& stroke : DimensionStrokes(a))
+    add(StrokePath(stroke.pts, c, stroke.filled ? 0.1f : w, stroke.filled));
   const std::string label = DimensionLabel(a, scale);
   Shx::Font* sf = StrokeFontFor(a.font, label);
   FPDF_FONT font = sf != nullptr ? nullptr : FPDFText_LoadStandardFont(doc, "Helvetica");
@@ -739,6 +795,12 @@ bool AddDimension(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, const PageS
   FPDFPath_SetDrawMode(path, 0, 1);
   FPDFPageObj_Transform(path, 1, 0, 0, 1, 0, 0);
   std::vector<FPDF_PAGEOBJECT> objs = {path};
+  if (a.kind == Annot::Kind::Angle) { // the arc and its arrows; the legs are `path`
+    const auto strokes = DimensionStrokes(a);
+    for (size_t i = 1; i < strokes.size(); ++i)
+      if (FPDF_PAGEOBJECT o = StrokePath(strokes[i].pts, c, strokes[i].filled ? 0.1f : std::max(0.1f, a.thickness), strokes[i].filled))
+        objs.push_back(o);
+  }
 
   const float fs = std::max(4.f, a.fontSize);
   const auto [ax, ay] = DimensionLabelAnchor(a);
@@ -746,7 +808,8 @@ bool AddDimension(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, const PageS
   Shx::Font* sf = StrokeFontFor(a.font, label);
   FPDF_FONT font = sf != nullptr ? nullptr : FPDFText_LoadStandardFont(doc, "Helvetica");
   if (sf == nullptr && font == nullptr) {
-    FPDFPageObj_Destroy(path);
+    for (FPDF_PAGEOBJECT o : objs)
+      FPDFPageObj_Destroy(o);
     error = "the font for the dimension label could not be loaded";
     return false;
   }

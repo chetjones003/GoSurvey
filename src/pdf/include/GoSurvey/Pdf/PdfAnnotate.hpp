@@ -110,6 +110,18 @@ struct DimLine {
   float nx = 0.f, ny = 1.f;
 };
 DimLine LengthDimLine(const Annot& a);
+/// Completes a two-pick Length or Angle dimension at \p pointer for its placement preview: a Length takes the
+/// pointer's distance along the dimension normal as its offset, an Angle takes the pointer as its second leg's end.
+void PlaceDimensionPreview(Annot& a, std::pair<float, float> pointer);
+/// One stroke of a dimension's drawing, in page points: an open polyline, or a filled closed polygon (an arrowhead).
+struct DimStroke {
+  std::vector<std::pair<float, float>> pts;
+  bool filled = false;
+};
+/// Everything a dimension draws except its label (REQ-391), shared by the on-screen view and the saved file:
+/// a Length's dimension line, extension lines and arrows; an Angle's legs, arc and arrows; a PolyLength's path;
+/// an Area's closed outline.
+std::vector<DimStroke> DimensionStrokes(const Annot& a);
 /// The angle of a dimension's label text in degrees, turned so it never reads upside down (0 for all but Length).
 float DimensionLabelAngleDeg(const Annot& a);
 /// Where a dimension's label is centred, in page points (the longest segment's middle, the area's centre, beside

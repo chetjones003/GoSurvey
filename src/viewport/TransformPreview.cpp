@@ -1168,8 +1168,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
       return;
     const float x0 = ms->p1X, y0 = ms->p1Y;
-    const float x1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
-    const float y1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    float x1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    float y1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    if (ms->phase == MirP::NeedP2)
+      ApplyOrthoConstrainFromAnchor(cmd, x0, y0, &x1, &y1, cmd.orthoMode, ms->p1Z, cmd.uiCursorWorldZ);
     // The mirror line itself, so the user sees what they are reflecting across — same rubber-line
     // convention SCALE uses for its reference/new-length segments above.
     prevLines->push_back(x0);

@@ -438,6 +438,13 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
   RotatePtForAnnotationPreview(bx, by, rad, &a.insX, &a.insY);
   if (a.kind == CadAnnotation::Kind::Text) {
     a.rotationRad += rad;
+  } else if (a.kind == CadAnnotation::Kind::Mtext) {
+    const float w = a.boxMaxX - a.boxMinX, h = a.boxMaxY - a.boxMinY;
+    float x = a.boxMinX, y = a.boxMaxY;
+    RotatePtForAnnotationPreview(bx, by, rad, &x, &y);
+    a.boxMinX = x; a.boxMaxX = x + w;
+    a.boxMaxY = y; a.boxMinY = y - h;
+    a.rotationRad += rad;
   } else if (a.kind == CadAnnotation::Kind::DimLinear) {
     RotateCadDimLinearAroundBase(bx, by, rad, &a);
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
@@ -617,8 +624,10 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
       return;
     const float mx0 = ms->p1X, my0 = ms->p1Y;
-    const float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
-    const float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    if (ms->phase == MirP::NeedP2)
+      ApplyOrthoConstrainFromAnchor(cmd, mx0, my0, &mx1, &my1, cmd.orthoMode, ms->p1Z, cmd.uiCursorWorldZ);
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Annotation)
         continue;
@@ -703,8 +712,10 @@ void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, fl
     if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
       return;
     const float mx0 = ms->p1X, my0 = ms->p1Y;
-    const float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
-    const float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    float mx1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
+    float my1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
+    if (ms->phase == MirP::NeedP2)
+      ApplyOrthoConstrainFromAnchor(cmd, mx0, my0, &mx1, &my1, cmd.orthoMode, ms->p1Z, cmd.uiCursorWorldZ);
     for (const auto& e : cmd.selection) {
       if (e.type != SelectedEntity::Type::Table)
         continue;

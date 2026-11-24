@@ -296,6 +296,10 @@ private:
   void SplitPages();
   bool ConfirmDiscard();
   pdfview::PageScale CurrentScale() const;
+  /// Paints a dimension as it plots (REQ-391): the saved file's strokes, then its label turned along a Length's
+  /// line and centred on the shared anchor. \p toCanvas maps page points; \p pixelsPerPoint sizes the text.
+  void PaintDimension(QPainter& painter, const pdfview::Annot& a, const std::function<QPointF(float, float)>& toCanvas,
+                      double pixelsPerPoint) const;
 
   // REQ-430: scale display, calibration, scale checks and snapping (src/qt/PdfScaleUi.cpp).
   friend class PdfScaleDialogs;
