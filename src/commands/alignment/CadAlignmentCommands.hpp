@@ -32,14 +32,14 @@ void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args,
 // REQ-485 interactive creation: ALIGNMENTLAYOUT picks PIs, CREATEALIGNMENTFROMOBJECTS without a name picks objects.
 void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentCurveSettings(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
-/// A click or snapped point for Kind::AlignmentLayout, or an object pick for Kind::AlignmentFromObjects (drawing-local).
-bool SubmitAlignmentCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
-/// Typed input (including a bare Enter) for the two alignment Kinds; false when neither is active.
-bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
-/// ESC: the layout keeps what was built (as Civil 3D does); picking objects is abandoned.
-void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log);
-/// Command-line prompt for the two alignment Kinds, or nullptr.
-const char* AlignmentCommandPrompt(const AppCommandState& st);
+/// Interactive ALIGNMENTLAYOUT session handlers (drawing-local coordinates).
+bool SubmitAlignmentLayoutPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+bool HandleAlignmentLayoutText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+void CancelAlignmentLayout(AppCommandState& st, const std::string& layoutName, std::vector<std::string>& log);
+/// Interactive CREATEALIGNMENTFROMOBJECTS session handlers (drawing-local coordinates).
+bool SubmitAlignmentFromObjectsPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+bool HandleAlignmentFromObjectsText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+void CancelAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& log);
 /// "Alignment - (n)" with the first n not already used, like Civil 3D's default name.
 std::string NextAlignmentName(const AppCommandState& st);
 /// `base`, or "base (2)", "base (3)"... - the first not used; names are unique ignoring case (REQ-480, REQ-487 AC4).

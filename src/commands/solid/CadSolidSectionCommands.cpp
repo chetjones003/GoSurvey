@@ -288,8 +288,6 @@ void CancelSectionCommand(AppCommandState& st) {
 }
 
 void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::SectionSession>();
   auto* ss = sess.get();
   stepengine::BeginSession(st, std::move(sess));
@@ -767,7 +765,6 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
 /// a user who already knows what they want should not be made to answer a prompt.
 void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::SectionClipSession>(), /*recordAsLastCommand=*/false);
   log.push_back(SectionClipReport(st));
 }
@@ -970,8 +967,6 @@ void CancelSectionPlaneCommand(AppCommandState& st) {
 
 void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::SectionPlaneSession>());
   if (st.drawing.cadSolids.empty()) {
     log.push_back("SECTIONPLANE — there are no solids in the drawing yet.");

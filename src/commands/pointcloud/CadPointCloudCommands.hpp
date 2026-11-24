@@ -50,8 +50,8 @@ bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
                              const std::string& pathUtf8, std::vector<std::string>& log);
 
 /// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
-/// point cloud's bounded preview sample under \p ray, writing the result into
-/// \c st.extractCenterlineHoverValid / P0/P1 (or clearing it when no acceptable fit is found —
+/// point cloud's bounded preview sample under \p ray, writing the result into the active
+/// \c stepengine::ExtractCenterlineSession (or clearing it when no acceptable fit is found —
 /// too few nearby points, or the residual gate rejects the neighborhood). \p ray must be the same
 /// ray the viewport's own hover/click seam already computed (REQ-058), exactly like every other
 /// hover-driven command in this file.

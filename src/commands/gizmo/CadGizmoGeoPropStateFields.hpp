@@ -92,30 +92,15 @@
   bool mtextRichEditorMultileaderJustPlaced = false;
   /// Edit Location asks the Drawing Settings window to show Units and Zone (REQ-359 item 2).
   bool drawingSettingsShowUnitsAndZone = false;
-  /// REQ-364: a running Capture Area. The command layer sets the area; the online map controller
-  /// (which knows the displayed level and has the tiles) gathers them, updates the progress, and
-  /// ends the command through CommitMapCapture / FailMapCapture.
-  struct MapCaptureState {
-    bool   visibleArea = true;  ///< Capture what the view shows; else the picked LOCAL rectangle below.
-    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
-    int    total = 0;           ///< Tiles to gather (0 until the controller has planned them).
-    int    gathered = 0;
-    std::string prompt;         ///< "Capturing map… n of m tiles", kept here so the prompt can point at it.
-  } mapCapture;
-  /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
-  /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
-  /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
-  bool gizmoBaseValid = false;
-  ray3d::Vec3 gizmoBase{0.0, 0.0, 0.0};
+  // GEOCAPTUREAREA progress (mapCapture) lives in stepengine::GeoCmdSession.
+  // 3DMOVE / 3DROTATE / 3DSCALE base point (baseValid, base) and saved gizmoOp (opBeforeCmd)
+  // live in stepengine::GizmoCmdSession.
   /// The live TRANSLATE drag as a displacement: `gizmoDragDistance` along the axis for an axis
   /// handle, or the in-plane offset for a plane handle (D-2026-09-28-c), where no single distance
   /// says it. The ghost and the commit read this one field so the two cannot disagree.
   ray3d::Vec3 gizmoDragVec{0.0, 0.0, 0.0};
   /// Where a plane-handle grab met the plane — the drag is the hit's offset from here.
   ray3d::Vec3 gizmoGrabPoint{0.0, 0.0, 0.0};
-  /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
-  /// however it ends, so the command's op never leaks into the persistent setting.
-  CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///

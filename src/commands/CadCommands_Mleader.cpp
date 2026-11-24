@@ -131,9 +131,7 @@ void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::MleaderSession>(), /*recordAsLastCommand=*/true);
   log.push_back("MLEADER — specify arrowhead location (click or type X,Y). ESC cancels.");
 }
@@ -154,8 +152,6 @@ void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>&
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::MleaderAddLeaderSession>(*ix),
                            /*recordAsLastCommand=*/false);
   log.push_back("Add Leader — specify arrowhead location for the new branch. ESC cancels.");

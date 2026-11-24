@@ -195,6 +195,10 @@ class SplineSession final : public CommandSession {
 
 class HatchSession final : public CommandSession {
  public:
+  /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
+  std::vector<float> previewLoop;
+  bool previewValid = false;
+
   [[nodiscard]] CadCommandKind kind() const override { return CadCommandKind::Hatch; }
   [[nodiscard]] StepDescriptor currentStep(const AppCommandState& st) const override;
   StepSubmitResult onText(AppCommandState& st, const std::string& trimmedLine,
@@ -203,7 +207,6 @@ class HatchSession final : public CommandSession {
   void onViewportPick(AppCommandState& st, const StepPickInput& pick,
                       std::vector<std::string>& log) override;
   void onCancel(AppCommandState& st, std::vector<std::string>& log) override;
-  void onReset(AppCommandState& st) override;
 };
 
 class TextSession final : public CommandSession {

@@ -188,8 +188,9 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
     return false;
   // A 3D gizmo command's own base point (D-2026-09-28-c), when one was given: the user said where
   // the gizmo goes, and for ROTATE / SCALE that is the pivot and the centre.
-  if (IsGizmoCommandKind(st.active) && st.gizmoBaseValid) {
-    *out = st.gizmoBase;
+  if (const auto* gizmoSess = st.sessionAs<stepengine::GizmoCmdSession>();
+      gizmoSess && gizmoSess->baseValid) {
+    *out = gizmoSess->base;
     return true;
   }
   ray3d::Vec3 mn{};
@@ -851,9 +852,9 @@ static CadGizmoOp GizmoOpForCommandKind(AppCommandState::Kind k) {
 
 void EndGizmoCommand(AppCommandState& st) {
   CancelGizmoDrag(st);  // with the command's op still set: the cancel's neutral value is per-op
-  st.gizmoOp = st.gizmoOpBeforeCmd;
+  if (const auto* sess = st.sessionAs<stepengine::GizmoCmdSession>())
+    st.gizmoOp = sess->opBeforeCmd;
   st.gizmoHoverAxis = -1;
-  st.gizmoBaseValid = false;
   stepengine::EndSession(st);
 }
 
@@ -900,8 +901,8 @@ void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
                   " — that base point is not a finite coordinate.");  // REQ-201
     return;
   }
-  st.gizmoBase = ray3d::Vec3{x, y, z};
-  st.gizmoBaseValid = true;
+  sess->base = ray3d::Vec3{x, y, z};
+  sess->baseValid = true;
   sess->phase = stepengine::GizmoCmdPhase::Handles;
   log.push_back(CadGizmoCommandPromptText(st));
 }
@@ -915,7 +916,7 @@ static void EnterGizmoHandlesPhase(AppCommandState& st, std::vector<std::string>
     return;
   const std::string verb = AppCommandState::KindName(st.active);
   sess->phase = stepengine::GizmoCmdPhase::Handles;
-  st.gizmoBaseValid = false;
+  sess->baseValid = false;
   if (CadGizmoVisible(st)) {
     if (st.subObjectSelection.empty())
       sess->phase = stepengine::GizmoCmdPhase::BasePoint;  // D-2026-09-28-c
@@ -948,10 +949,9 @@ void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
-  stepengine::BeginSession(st, std::make_unique<stepengine::GizmoCmdSession>(kind), /*recordAsLastCommand=*/true);
-  st.gizmoOpBeforeCmd = st.gizmoOp;
+  const CadGizmoOp savedOp = st.gizmoOp;
+  stepengine::BeginSession(st, std::make_unique<stepengine::GizmoCmdSession>(kind, savedOp),
+                           /*recordAsLastCommand=*/true);
   CancelGizmoDrag(st);  // a persistent-gizmo drag armed under the old op cannot carry over
   st.gizmoOp = GizmoOpForCommandKind(kind);
   st.gizmoHoverAxis = -1;
@@ -986,7 +986,7 @@ bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
   // a typed point is read the way MOVE reads its base point.
   if (sess->phase == stepengine::GizmoCmdPhase::BasePoint) {
     if (line.empty()) {
-      st.gizmoBaseValid = false;
+      sess->baseValid = false;
       sess->phase = stepengine::GizmoCmdPhase::Handles;
       log.push_back(CadGizmoCommandPromptText(st));
       return true;

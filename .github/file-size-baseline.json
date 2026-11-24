@@ -10,5 +10,5 @@
   "tests/BrepTests.cpp": 9427,
   "tests/IO/LibreDwgCadTests.cpp": 9308,
   "tests/Survey/TraverseTests.cpp": 3120,
-  "tests/headless/HeadlessDriver.cpp": 3235
+  "tests/headless/HeadlessDriver.cpp": 3220
 }

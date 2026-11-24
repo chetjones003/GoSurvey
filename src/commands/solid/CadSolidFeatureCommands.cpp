@@ -117,8 +117,6 @@ static void ExtrudeEnterHeightPhase(AppCommandState& st, std::vector<std::string
 }
 
 void StartExtrudeCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::ExtrudeSession>();
   auto* es = sess.get();
   stepengine::BeginSession(st, std::move(sess));
@@ -298,8 +296,6 @@ static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartLoftCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::LoftSession>());
 
   if (st.selection.size() >= 2) {
@@ -610,8 +606,6 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::SweepSession>());
 
   brep::Profile prof;
@@ -744,8 +738,6 @@ static void RevolveEnterAxisPhase(AppCommandState& st, std::vector<std::string>&
 }
 
 void StartRevolveCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::RevolveSession>();
   auto* rvs = sess.get();
   stepengine::BeginSession(st, std::move(sess));

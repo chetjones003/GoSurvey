@@ -1258,8 +1258,7 @@ void EditorWindow::ServiceUiRequests() {
         ts->stage = 3;
       m_Log.push_back("TABLE — specify the insertion point (upper-left corner):");
     } else {
-      m_State.activeSession.reset();
-      m_State.active = AppCommandState::Kind::None;
+      stepengine::EndSession(m_State);
     }
     m_ModalOpen = false;
     Refresh();

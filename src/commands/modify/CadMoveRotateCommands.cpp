@@ -718,7 +718,6 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
   const auto initialPhase =
       haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;
@@ -735,7 +734,6 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
   const auto initialPhase =
       haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;
@@ -758,7 +756,6 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.pendingSurveyDupIsRotate = false;
   const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
   const auto initialPhase =

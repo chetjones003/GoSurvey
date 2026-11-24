@@ -1169,9 +1169,7 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) 
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::ZoomSession>(), /*recordAsLastCommand=*/false);
-  st.selBoxWaitingSecond = false;
   log.push_back(
       "ZOOM WINDOW — click two corners (crossing window corners use cursor position, not object snap). ESC "
       "cancels.");
@@ -1184,9 +1182,7 @@ void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PAN — finish or cancel the active command first.");
     return;
   }
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::PanSession>(), /*recordAsLastCommand=*/true);
-  st.selBoxWaitingSecond = false;
   log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
 }
 
@@ -1202,9 +1198,7 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ORBIT — model space only; a paper sheet is 2D.");
     return;
   }
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::OrbitSession>(), /*recordAsLastCommand=*/true);
-  st.selBoxWaitingSecond = false;
   log.push_back("ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-click to exit.");
 }
 

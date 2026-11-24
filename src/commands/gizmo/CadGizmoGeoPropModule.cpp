@@ -1,10 +1,10 @@
 // ADR-0012 / Issue #1578: 3D Gizmo, Property, Selection, and Geolocation command module.
 
+#include "CadCommands.hpp"
+#include "CadCommandsInternal.hpp"
 #include "gizmo/CadGizmoGeoPropSessions.hpp"
 #include "engine/CommandRegistry.hpp"
 #include "engine/StepEngine.hpp"
-#include "CadCommands.hpp"
-#include "CadCommandsInternal.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
 
 #include <sstream>
@@ -52,12 +52,15 @@ void GizmoCmdSession::onViewportPick(AppCommandState& st, const StepPickInput& p
 
 void GizmoCmdSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(std::string(AppCommandState::KindName(kind_)) + " canceled.");
-  EndGizmoCommand(st);
+  CancelGizmoDrag(st);
+  st.gizmoOp = opBeforeCmd;
+  st.gizmoHoverAxis = -1;
 }
 
 void GizmoCmdSession::onReset(AppCommandState& st) {
-  if (IsGizmoCommandKind(st.active))
-    EndGizmoCommand(st);
+  CancelGizmoDrag(st);
+  st.gizmoOp = opBeforeCmd;
+  st.gizmoHoverAxis = -1;
 }
 
 // ---------------------------------------------------------------------------

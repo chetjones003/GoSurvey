@@ -599,13 +599,15 @@ bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string
   }
   if (!StartGeoCommand(st, AppCommandState::Kind::GeoCaptureArea, "Capture Area", log))
     return false;
-  st.mapCapture = AppCommandState::MapCaptureState{};
-  st.mapCapture.visibleArea = !pick;
+  if (auto* sess = st.sessionAs<stepengine::GeoCmdSession>()) {
+    sess->mapCapture = stepengine::MapCaptureState{};
+    sess->mapCapture.visibleArea = !pick;
+    if (!pick)
+      sess->phase = stepengine::GeoCmdPhase::Capturing;
+  }
   if (pick) {
     log.push_back("Capture Area — specify the first corner of the area (click or type X,Y). ESC cancels.");
   } else {
-    if (auto* sess = st.sessionAs<stepengine::GeoCmdSession>())
-      sess->phase = stepengine::GeoCmdPhase::Capturing;
     log.push_back("Capture Area — capturing the visible map. ESC cancels.");
   }
   return true;
@@ -619,14 +621,12 @@ void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, s
     BumpCadGpuCache(st);  // document content: marks the drawing modified
   }
   stepengine::EndSession(st);
-  st.mapCapture = AppCommandState::MapCaptureState{};
   log.push_back(n > 0 ? "Capture Area — " + std::to_string(n) + " map tile(s) kept in the drawing."
                       : std::string("Capture Area — the map has no tiles in that area; nothing was kept."));
 }
 
 void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std::string>& log) {
   stepengine::EndSession(st);
-  st.mapCapture = AppCommandState::MapCaptureState{};
   log.push_back("Capture Area — nothing was kept: " + why);
 }
 
@@ -950,9 +950,7 @@ static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const 
     return false;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::GeoCmdSession>(k), /*recordAsLastCommand=*/true);
   return true;
 }
@@ -1068,10 +1066,10 @@ bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, st
       log.push_back("Capture Area — the corners must make a rectangle; pick the opposite corner again.");
       return false;
     }
-    st.mapCapture.minX = std::min(sess->firstA, localX);
-    st.mapCapture.maxX = std::max(sess->firstA, localX);
-    st.mapCapture.minY = std::min(sess->firstB, localY);
-    st.mapCapture.maxY = std::max(sess->firstB, localY);
+    sess->mapCapture.minX = std::min(sess->firstA, localX);
+    sess->mapCapture.maxX = std::max(sess->firstA, localX);
+    sess->mapCapture.minY = std::min(sess->firstB, localY);
+    sess->mapCapture.maxY = std::max(sess->firstB, localY);
     sess->phase = GP::Capturing;
     log.push_back("Capture Area — capturing the picked area. ESC cancels.");
     return true;
@@ -1158,7 +1156,7 @@ const char* GeoCommandPrompt(const AppCommandState& st) {
     case K::GeoReorientMarker: return first ? "Specify design point:" : "Specify north direction:";
     case K::GeoCaptureArea:
       if (phase == GP::Capturing)
-        return st.mapCapture.prompt.empty() ? "Capturing map\xE2\x80\xA6" : st.mapCapture.prompt.c_str();
+        return (sess && !sess->mapCapture.prompt.empty()) ? sess->mapCapture.prompt.c_str() : "Capturing map\xE2\x80\xA6";
       return first ? "Specify first corner:" : "Specify opposite corner:";
     case K::DrawingSettingsPick:
       if (st.drawingSettingsPick.target == AppCommandState::DrawingSettingsPickState::Target::ReferencePoint)

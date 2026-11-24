@@ -744,7 +744,6 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
   const auto initialPhase =
       haveSel ? stepengine::ModifyPhase::NeedBase : stepengine::ModifyPhase::PickSelection;

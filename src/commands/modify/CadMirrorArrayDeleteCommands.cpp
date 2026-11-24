@@ -1703,7 +1703,6 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.pendingSurveyDupIsMirror = false;
   const bool haveSel = !st.selection.empty() || !st.selectedSurveyPointIndices.empty();
   const auto initialPhase =

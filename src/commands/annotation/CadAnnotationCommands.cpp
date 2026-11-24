@@ -466,9 +466,7 @@ void MigrateLegacyAnnotationTables(AppCommandState& st) {
 
 void StartTextCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::TextSession>(DefaultAnnotationTextHeightWorld(st)),
                            /*recordAsLastCommand=*/false);
   log.push_back(
@@ -478,9 +476,7 @@ void StartTextCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::MtextSession>(), /*recordAsLastCommand=*/false);
   log.push_back("MTEXT — two corners for box, then type in the on-screen editor (Ctrl+Enter reformats; Save to place). ESC cancels.");
 }
@@ -644,18 +640,14 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log) {
 
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::DimSession>(false), /*recordAsLastCommand=*/true);
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
 }
 
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::DimSession>(true), /*recordAsLastCommand=*/true);
   log.push_back("DIMLINEAR — ortho distance in X or Y between extension points; third pick sets dimension line; "
                 "cursor or H/V chooses horizontal vs vertical. ESC cancels.");
@@ -663,9 +655,7 @@ void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::DimAngularSession>(), /*recordAsLastCommand=*/true);
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
                 "cancels.");
