@@ -60,15 +60,24 @@ function Remove-Stale([string]$Kind, [string]$Path, $Items) {
 function Remove-OldWorkflowRuns([int]$RetentionDays = 7) {
   $cutoff = [DateTimeOffset]::UtcNow.AddDays(-$RetentionDays)
   $rows = gh api --paginate "repos/$Repo/actions/runs?per_page=100" `
-    --jq '.workflow_runs[] | [.id, .created_at] | @tsv'
+    --jq '.workflow_runs[] | [.id, .created_at, .status] | @tsv'
   if ($LASTEXITCODE -ne 0) { throw 'Listing workflow runs failed.' }
   $runs = @($rows | Where-Object { $_ } | ForEach-Object {
     $parts = $_ -split "`t"
-    [pscustomobject]@{ Id = $parts[0]; CreatedAt = [DateTimeOffset]::Parse($parts[1]) }
+    [pscustomobject]@{
+      Id = $parts[0]
+      CreatedAt = [DateTimeOffset]::Parse($parts[1])
+      Status = $parts[2]
+    }
   })
   $stale = @($runs | Where-Object { $_.CreatedAt -lt $cutoff })
-  Write-Output "workflow runs: $($runs.Count) total, $($stale.Count) older than $RetentionDays days."
-  foreach ($run in $stale) {
+  $incomplete = @($stale | Where-Object { $_.Status -cne 'completed' })
+  $completed = @($stale | Where-Object { $_.Status -ceq 'completed' })
+  Write-Output "workflow runs: $($runs.Count) total, $($completed.Count) old and complete, $($incomplete.Count) old and incomplete (kept)."
+  foreach ($run in $incomplete) {
+    Write-Output "  keeping old incomplete run $($run.Id) (status: $($run.Status))"
+  }
+  foreach ($run in $completed) {
     Remove-ApiItem 'run' "$($run.Id) ($($run.CreatedAt.ToString('u')))" `
       "repos/$Repo/actions/runs/$($run.Id)"
   }
@@ -102,7 +111,7 @@ function Remove-SupersededReleases {
     throw "Resolving GitHub's latest stable release failed: $latestStableResponse"
   }
 
-  $keepIds = @($latestStableId) + @($releases | Where-Object { $_.Tag -eq 'channel-beta' } | ForEach-Object Id)
+  $keepIds = @($latestStableId) + @($releases | Where-Object { $_.Tag -ceq 'channel-beta' } | ForEach-Object Id)
   $stale = @($releases | Where-Object { -not $_.Draft -and $_.Id -notin $keepIds })
   Write-Output "releases: $($releases.Count) total, $($stale.Count) superseded."
   foreach ($release in $stale) {
