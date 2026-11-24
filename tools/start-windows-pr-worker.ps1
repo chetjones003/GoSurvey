@@ -1,6 +1,6 @@
 #Requires -Version 7.2
 param(
-  [Parameter(Mandatory)][ValidateSet('build', 'clang-tidy', 'msvc-analyze')][string]$Role,
+  [Parameter(Mandatory)][ValidateSet('build', 'clang-tidy', 'msvc-analyze', 'pr-3')][string]$Role,
   [Parameter(Mandatory)][string]$RunnerDirectory,
   [string]$EnvironmentFile = 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1',
   [string]$LogDirectory

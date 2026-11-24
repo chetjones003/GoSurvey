@@ -71,7 +71,7 @@ jobs:
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
@@ -128,8 +128,8 @@ jobs:
       always() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    # Self-hosted Victus build runner; fork PRs wait for maintainer approval before running here.
-    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    # Fork PRs wait for maintainer approval before using the self-hosted PR pool.
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     env:
       SCCACHE_GHA_ENABLED: "false"
     steps:
@@ -159,4 +159,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           if (Test-Path build/artifacts/ci) { Copy-Item -Recurse -Force build/artifacts/ci (Join-Path $evidence 'ci') }
           if (Test-Path build/.cmake/release/.ninja_log) { Copy-Item -Force build/.cmake/release/.ninja_log $evidence }
-          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence
+          $storage = Join-Path (Split-Path -Parent $env:RUNNER_TEMP) 'ci-artifacts'
+          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence -StorageRoot $storage
+
+      - name: Stop the build's compiler cache
+        if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        run: ./tools/ci-compiler-cache.ps1 -Action stop
