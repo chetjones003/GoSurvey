@@ -14,12 +14,15 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "HatchGeom.hpp"
+#include <GoSurvey/Document/cadpiperun.hpp>
 #include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Survey/AlignmentModel.hpp>
 
@@ -113,23 +116,28 @@ EntityProbe MapPts(const EntityProbe& src, const std::function<ray3d::Vec3(const
   return out;
 }
 
-// Normalizes an axis-aligned 2D rectangle stored as 2 corners {min, max} after a point map.
-EntityProbe MapAabb2d(const EntityProbe& src, const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
+// Normalizes an axis-aligned 2D rectangle stored at pts[boxIdx] (min) and pts[boxIdx+1] (max)
+// after a point map, mirroring Mtext ROTATE/MIRROR's existing bug where mn/mx are seeded from the
+// UN-TRANSFORMED boxMin corner before transforming the 4 corners, and ins is set to the new boxMin.
+EntityProbe MapMtextAabbWithExistingBug(const EntityProbe& src,
+                                        const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
   EntityProbe out = src;
-  const double x0 = src.pts[0].x, y0 = src.pts[0].y, z0 = src.pts[0].z;
-  const double x1 = src.pts[1].x, y1 = src.pts[1].y;
+  // pts[0] = ins, pts[1] = boxMin, pts[2] = boxMax
+  const double x0 = src.pts[1].x, y0 = src.pts[1].y, z0 = src.pts[1].z;
+  const double x1 = src.pts[2].x, y1 = src.pts[2].y;
   const ray3d::Vec3 c[4] = {
       fn({x0, y0, z0}), fn({x1, y0, z0}), fn({x1, y1, z0}), fn({x0, y1, z0}),
   };
-  double mnX = c[0].x, mxX = c[0].x, mnY = c[0].y, mxY = c[0].y;
-  for (int i = 1; i < 4; ++i) {
+  double mnX = x0, mxX = x0, mnY = y0, mxY = y0;
+  for (int i = 0; i < 4; ++i) {
     mnX = std::min(mnX, c[i].x);
     mxX = std::max(mxX, c[i].x);
     mnY = std::min(mnY, c[i].y);
     mxY = std::max(mxY, c[i].y);
   }
   out.pts[0] = {mnX, mnY, c[0].z};
-  out.pts[1] = {mxX, mxY, c[0].z};
+  out.pts[1] = {mnX, mnY, c[0].z};
+  out.pts[2] = {mxX, mxY, c[0].z};
   return out;
 }
 
@@ -194,16 +202,31 @@ struct OpExpect {
   std::function<EntityProbe(const EntityProbe&)> expectedGeom;
 };
 
+struct Box2d {
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+};
+
+struct Box3d {
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0, mnZ = 0.0, mxZ = 0.0;
+};
+
 struct ExtentsExpect {
   bool in2d = false;
   bool in3d = false;
   bool zoomExtentsFrames = false;
-  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
-  double mnZ = 0.0, mxZ = 0.0;
+  Box2d box2d;
+  Box3d box3d;
 };
+
+ExtentsExpect ExactExtents(double mnX, double mxX, double mnY, double mxY, double mnZ, double mxZ) {
+  return {true, true, true, {mnX, mxX, mnY, mxY}, {mnX, mxX, mnY, mxY, mnZ, mxZ}};
+}
+
+ExtentsExpect NoExtents() { return {false, false, false, {}, {}}; }
 
 struct KindRow {
   const char* name = "";
+  std::optional<SelectedEntity::Type> entityType;
   std::function<void(AppCommandState&)> seed;
   std::function<size_t(const AppCommandState&)> count;
   std::function<EntityProbe(const AppCommandState&, size_t)> probe;
@@ -230,6 +253,60 @@ OpExpect BoxMissed() { return {Outcome::BoxMissed, {}}; }
 OpExpect NotInSel() { return {Outcome::NotInSelection, {}}; }
 
 // ---------------------------------------------------------------------------
+// Exhaustive compile-time + runtime guard for SelectedEntity::Type
+// ---------------------------------------------------------------------------
+// Enforces a hard compiler error (MSVC C4062 / GCC+Clang -Wswitch) whenever a new enumerator is
+// added to SelectedEntity::Type without adding a case here. The test then enumerates every
+// uint8_t value accepted by this switch (well-defined because SelectedEntity::Type has fixed
+// underlying type std::uint8_t) and requires BuildTable() to contain every single one, with no
+// hardcoded count that can drift out of sync.
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(default : 4062)
+#pragma warning(error : 4062)
+#elif defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch"
+#endif
+
+constexpr bool IsKnownSelectedEntityType(SelectedEntity::Type t) {
+  using T = SelectedEntity::Type;
+  switch (t) {
+  case T::LineSeg:
+  case T::Circle:
+  case T::Annotation:
+  case T::Polyline:
+  case T::Arc:
+  case T::Ellipse:
+  case T::PdfUnderlay:
+  case T::FilledRegion:
+  case T::Mesh:
+  case T::FeatureLine:
+  case T::Surface:
+  case T::Table:
+  case T::BlockRef:
+  case T::Solid:
+  case T::PipeRun:
+  case T::PointCloud:
+  case T::SectionPlane:
+  case T::PositionMarker:
+  case T::Multileader:
+  case T::Spline:
+  case T::Point:
+  case T::Alignment:
+    return true;
+  }
+  return false;
+}
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+// ---------------------------------------------------------------------------
 // Seed + probe helpers for each entity kind
 // ---------------------------------------------------------------------------
 
@@ -238,23 +315,21 @@ void SelectOne(AppCommandState& st, SelectedEntity::Type type) {
   st.selection.push_back({type, 0});
 }
 
-// Helper for Arc probe: centre, start point in world, end point in world, radius + normal.
+// Arc probe: centre, start point in world, end point in world; scalars: r, sweepRad, nx, ny, nz.
 EntityProbe ProbeArc(const CadArc& a) {
   const ray3d::Vec3 sp = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
   const ray3d::Vec3 ep = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
-  return {{ray3d::Vec3{a.cx, a.cy, a.z}, sp, ep}, {a.r, a.nx, a.ny, a.nz}};
+  return {{ray3d::Vec3{a.cx, a.cy, a.z}, sp, ep}, {a.r, a.sweepRad, a.nx, a.ny, a.nz}};
 }
 
-// Expected arc probe for rigid/similarity transforms on our seeded flat arc (cx=10, cy=12, z=3, r=6,
-// start=0 -> (16,12,3) inside stretch box, end=pi/2 -> (10,18,3) outside stretch box, normal=(0,0,1)).
 EntityProbe ExpectArcMove(const EntityProbe& p) { return MapPts(p, MapMove3d); }
 EntityProbe ExpectArcRotPlan(const EntityProbe& p) { return MapPts(p, MapRotPlan); }
 EntityProbe ExpectArcRot3d(const EntityProbe& p) {
   EntityProbe out = MapPts(p, MapRot3d);
   // Normal (0,0,1) rotated +90 deg about +Y -> (1,0,0).
-  out.scalars[1] = 1.0;
-  out.scalars[2] = 0.0;
+  out.scalars[2] = 1.0;
   out.scalars[3] = 0.0;
+  out.scalars[4] = 0.0;
   return out;
 }
 EntityProbe ExpectArcScale(const EntityProbe& p) {
@@ -263,7 +338,7 @@ EntityProbe ExpectArcScale(const EntityProbe& p) {
   return out;
 }
 EntityProbe ExpectArcMirror(const EntityProbe& p) {
-  // Reflection reverses handedness: old end becomes new start, old start becomes new end.
+  // Reflection reverses handedness: old end becomes new start, old start becomes new end; sweepRad preserved.
   EntityProbe out = p;
   out.pts[0] = MapMirrorX(p.pts[0]);
   out.pts[1] = MapMirrorX(p.pts[2]);
@@ -277,6 +352,7 @@ std::vector<KindRow> BuildTable() {
   // 1. LineSeg: (10,12,3) -> (20,12,4). Start outside stretch box, end inside.
   rows.push_back(KindRow{
       "LineSeg",
+      SelectedEntity::Type::LineSeg,
       [](AppCommandState& st) {
         st.drawing.pushLine(CadLineRecord{10.0, 12.0, 3.0, 20.0, 12.0, 4.0});
         st.drawing.userLineAttrs.push_back(EntityAttributes{});
@@ -296,12 +372,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
-      {true, true, true, 10.0, 20.0, 12.0, 12.0, 3.0, 4.0},
+      ExactExtents(10.0, 20.0, 12.0, 12.0, 3.0, 4.0),
   });
 
   // 2. Circle: centre (16,12,3), r=2, normal=(0,0,1). Centre inside stretch box.
   rows.push_back(KindRow{
       "Circle",
+      SelectedEntity::Type::Circle,
       [](AppCommandState& st) {
         st.drawing.pushCircle(CadCircleRecord{16.0, 12.0, 3.0, 2.0});
         st.drawing.userCircleAttrs.push_back(EntityAttributes{});
@@ -336,12 +413,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 14.0, 18.0, 10.0, 14.0, 3.0, 3.0},
+      ExactExtents(14.0, 18.0, 10.0, 14.0, 3.0, 3.0),
   });
 
   // 3. Arc: centre (10,12,3), r=6, start=0 (16,12,3 inside box), sweep=pi/2 (end=(10,18,3) outside).
   rows.push_back(KindRow{
       "Arc",
+      SelectedEntity::Type::Arc,
       [](AppCommandState& st) {
         CadArc a;
         a.cx = 10.0;
@@ -374,15 +452,16 @@ std::vector<KindRow> BuildTable() {
         return out;
       }),
       Outcome::Erased,
-      // Note: ComputeWorldExtents (<16) samples the arc [10..16, 12..18]; ComputeWorldExtents3d uses
-      // CollectEntityBoxes which uses the full-circle box [cx-r..cx+r, cy-r..cy+r]. Wait: we verify
-      // exact 2D and 3D bounds separately in the runner! Here mn/mx are the 2D extents.
-      {true, true, true, 10.0, 16.0, 12.0, 18.0, 3.0, 3.0},
+      // 2D ComputeWorldExtents samples the swept arc [10..16, 12..18];
+      // 3D ComputeWorldExtents3d (CollectEntityBoxes) uses the full-circle box [cx-r..cx+r, cy-r..cy+r].
+      {true, true, true, {10.0, 16.0, 12.0, 18.0}, {4.0, 16.0, 6.0, 18.0, 3.0, 3.0}},
   });
 
-  // 4. Ellipse: centre (16,12,3), major=(3,0), ratio=0.5 (minor=1.5), full turn.
+  // 4. Ellipse: centre (16,12,3), major=(3,0), ratio=0.5 (minor=1.5), normal=(0,0,1), full turn.
+  const double kEllRrx = std::hypot(3.0, 1.5);
   rows.push_back(KindRow{
       "Ellipse",
+      SelectedEntity::Type::Ellipse,
       [](AppCommandState& st) {
         CadEllipse el;
         el.cx = 16.0;
@@ -398,7 +477,8 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.userEllipses.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadEllipse& el = st.drawing.userEllipses[i];
-        return {{{el.cx, el.cy, el.z}, {el.cx + el.majVx, el.cy + el.majVy, el.z}}, {el.ratio}};
+        return {{{el.cx, el.cy, el.z}, {el.cx + el.majVx, el.cy + el.majVy, el.z}},
+                {el.ratio, el.nx, el.ny, el.nz, el.startRad, el.sweepRad}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -409,12 +489,18 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 13.0, 19.0, 10.5, 13.5, 3.0, 3.0},
+      // 2D ComputeWorldExtents samples the ellipse [13..19, 10.5..13.5];
+      // 3D ComputeWorldExtents3d (CollectEntityBoxes) uses cx±hypot(ma,mb), cy±hypot(ma,mb).
+      {true, true, true, {13.0, 19.0, 10.5, 13.5},
+       {16.0 - kEllRrx, 16.0 + kEllRrx, 12.0 - kEllRrx, 12.0 + kEllRrx, 3.0, 3.0}},
   });
 
   // 5. Polyline: (10,12,3) -> (15,12,3) -> (20,14,4). First vertex outside stretch box, last two inside.
+  // Probes vertices, per-vertex bulges, per-vertex normals, and closed flag so 3D rotation / copy /
+  // mirror behaviour on polyline normals and bulges is frozen too (today normals stay (0,0,1)).
   rows.push_back(KindRow{
       "Polyline",
+      SelectedEntity::Type::Polyline,
       [](AppCommandState& st) {
         st.drawing.userPolylineOffsets = {0, 3};
         st.drawing.pushVertex(CadPolyVertex{10.0, 12.0, 3.0});
@@ -434,26 +520,43 @@ std::vector<KindRow> BuildTable() {
         const int v0 = st.drawing.userPolylineOffsets[i];
         const int v1 = st.drawing.userPolylineOffsets[i + 1];
         for (int vi = v0; vi < v1; ++vi) {
-          const CadPolyVertex v = st.drawing.vertex(static_cast<size_t>(vi));
+          const size_t k = static_cast<size_t>(vi);
+          const CadPolyVertex v = st.drawing.vertex(k);
           p.pts.push_back({v.x, v.y, v.z});
+          p.scalars.push_back(k < st.drawing.userPolylineVertsBulge.size()
+                                  ? st.drawing.userPolylineVertsBulge[k]
+                                  : 0.0);
+          const size_t nk = k * 3;
+          if (nk + 2 < st.drawing.userPolylineVertsNormal.size()) {
+            p.scalars.push_back(st.drawing.userPolylineVertsNormal[nk]);
+            p.scalars.push_back(st.drawing.userPolylineVertsNormal[nk + 1]);
+            p.scalars.push_back(st.drawing.userPolylineVertsNormal[nk + 2]);
+          } else {
+            p.scalars.insert(p.scalars.end(), {0.0, 0.0, 1.0});
+          }
         }
+        p.scalars.push_back(i < st.drawing.userPolylineClosed.size()
+                                ? static_cast<double>(st.drawing.userPolylineClosed[i])
+                                : 0.0);
         return p;
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
+      // Today RotateSelectionInPlaceAboutAxis rotates polyline vertices but leaves vertex normals unchanged.
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
-      {true, true, true, 10.0, 20.0, 12.0, 14.0, 3.0, 4.0},
+      ExactExtents(10.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
 
   // 6a. Annotation (Text): ins=(16,12,3), plottedHeight=0.1, rot=0.
   rows.push_back(KindRow{
       "AnnotationText",
+      SelectedEntity::Type::Annotation,
       [](AppCommandState& st) {
         CadAnnotation a;
         a.kind = CadAnnotation::Kind::Text;
@@ -495,12 +598,13 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Default modelUnitsPerPlottedInch = 50 -> h = 5.0, w = 0.55 * 5.0 * 2 = 5.5.
-      {true, true, true, 16.0, 21.5, 7.0, 12.0, 3.0, 3.0},
+      ExactExtents(16.0, 21.5, 7.0, 12.0, 3.0, 3.0),
   });
 
-  // 6b. Annotation (Mtext): box [16,20] x [12,15], ins=(16,12,3).
+  // 6b. Annotation (Mtext): ins=(16,12,3), box=[16,20] x [12,15], rot=0, plottedHeight=0.1.
   rows.push_back(KindRow{
       "AnnotationMtext",
+      SelectedEntity::Type::Annotation,
       [](AppCommandState& st) {
         CadAnnotation a;
         a.kind = CadAnnotation::Kind::Mtext;
@@ -511,6 +615,7 @@ std::vector<KindRow> BuildTable() {
         a.boxMinY = 12.f;
         a.boxMaxX = 20.f;
         a.boxMaxY = 15.f;
+        a.rotationRad = 0.f;
         a.plottedHeightInches = 0.1f;
         a.text = "NOTE";
         st.drawing.cadAnnotations.push_back(a);
@@ -520,52 +625,32 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadAnnotations.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadAnnotation& a = st.drawing.cadAnnotations[i];
-        return {{{a.boxMinX, a.boxMinY, a.insZ}, {a.boxMaxX, a.boxMaxY, a.insZ}},
-                {a.plottedHeightInches}};
+        return {{{a.insX, a.insY, a.insZ}, {a.boxMinX, a.boxMinY, a.insZ}, {a.boxMaxX, a.boxMaxY, a.insZ}},
+                {a.rotationRad, a.plottedHeightInches}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       // Existing bug recorded for phase 0: Mtext ROTATE / ROTATE-copy / MIRROR initialize mnX/mxX/mnY/mxY
-      // from the UN-TRANSFORMED boxMin corner before looping over the 4 transformed corners, so the
-      // resulting AABB includes the old boxMin corner (16,12).
-      Applied([](const EntityProbe& p) {
-        EntityProbe out = MapAabb2d(p, MapRotPlan);
-        out.pts[0].x = std::min(out.pts[0].x, p.pts[0].x);
-        out.pts[1].x = std::max(out.pts[1].x, p.pts[0].x);
-        out.pts[0].y = std::min(out.pts[0].y, p.pts[0].y);
-        out.pts[1].y = std::max(out.pts[1].y, p.pts[0].y);
-        return out;
-      }),
-      Duplicated([](const EntityProbe& p) {
-        EntityProbe out = MapAabb2d(p, MapRotPlan);
-        out.pts[0].x = std::min(out.pts[0].x, p.pts[0].x);
-        out.pts[1].x = std::max(out.pts[1].x, p.pts[0].x);
-        out.pts[0].y = std::min(out.pts[0].y, p.pts[0].y);
-        out.pts[1].y = std::max(out.pts[1].y, p.pts[0].y);
-        return out;
-      }),
+      // from the UN-TRANSFORMED boxMin corner before looping over the 4 transformed corners, set ins = boxMin,
+      // and leave rotationRad untouched.
+      Applied([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapRotPlan); }),
+      Duplicated([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapRotPlan); }),
       Refused(),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
-        out.scalars[0] = p.scalars[0] * kScaleFactor;
+        out.scalars[1] = p.scalars[1] * kScaleFactor;
         return out;
       }),
-      Duplicated([](const EntityProbe& p) {
-        EntityProbe out = MapAabb2d(p, MapMirrorX);
-        out.pts[0].x = std::min(out.pts[0].x, p.pts[0].x);
-        out.pts[1].x = std::max(out.pts[1].x, p.pts[0].x);
-        out.pts[0].y = std::min(out.pts[0].y, p.pts[0].y);
-        out.pts[1].y = std::max(out.pts[1].y, p.pts[0].y);
-        return out;
-      }),
+      Duplicated([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 15.0, 3.0, 3.0},
+      ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 3.0),
   });
 
-  // 6c. Annotation (DimAligned): ext1=(16,12), ext2=(20,12), offset=2, ins=(18,14,3).
+  // 6c. Annotation (DimAligned): ext1=(16,12), ext2=(20,12), offset=2, ins=(18,14,3), rot=0.
   rows.push_back(KindRow{
       "AnnotationDimAligned",
+      SelectedEntity::Type::Annotation,
       [](AppCommandState& st) {
         CadAnnotation a;
         a.kind = CadAnnotation::Kind::DimAligned;
@@ -577,6 +662,7 @@ std::vector<KindRow> BuildTable() {
         a.dimExt2X = 20.f;
         a.dimExt2Y = 12.f;
         a.dimSignedOffset = 2.f;
+        a.rotationRad = 0.f;
         a.plottedHeightInches = 0.1f;
         st.drawing.cadAnnotations.push_back(a);
         st.drawing.cadAnnotationAttrs.push_back(EntityAttributes{});
@@ -586,29 +672,39 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadAnnotation& a = st.drawing.cadAnnotations[i];
         return {{{a.insX, a.insY, a.insZ}, {a.dimExt1X, a.dimExt1Y, a.insZ}, {a.dimExt2X, a.dimExt2Y, a.insZ}},
-                {a.dimSignedOffset, a.plottedHeightInches}};
+                {a.dimSignedOffset, a.rotationRad, a.plottedHeightInches}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapRotPlan);
+        // Rotated chord points along (0,-1) -> atan2(-1,0) = -pi/2 -> CadDimReadableTextRotation = +pi/2.
+        out.scalars[1] = kHalfPi;
+        return out;
+      }),
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapRotPlan);
+        out.scalars[1] = kHalfPi;
+        return out;
+      }),
       Refused(),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
-        out.scalars[1] = p.scalars[1] * kScaleFactor;
+        out.scalars[2] = p.scalars[2] * kScaleFactor;
         return out;
       }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      // DimAligned rough bounds pad for text; verify the core box [16..20] x [12..14] is contained.
-      {true, true, true, 16.0, 20.0, 12.0, 14.0, 3.0, 3.0},
+      // Exact CadAnnotationRoughBounds: ext lines [16..20] x [12.048..14.08] union text quad [18..20.75] x [9..14].
+      ExactExtents(16.0, 20.75, 9.0, 14.08, 3.0, 3.0),
   });
 
-  // 6d. Annotation (DimLinear): horizontal dim ext1=(16,12), ext2=(20,12), offset=2, ins=(18,14,3).
+  // 6d. Annotation (DimLinear): horizontal dim ext1=(16,12), ext2=(20,12), offset=2, ins=(18,14,3), rot=0.
   rows.push_back(KindRow{
       "AnnotationDimLinear",
+      SelectedEntity::Type::Annotation,
       [](AppCommandState& st) {
         CadAnnotation a;
         a.kind = CadAnnotation::Kind::DimLinear;
@@ -621,6 +717,7 @@ std::vector<KindRow> BuildTable() {
         a.dimExt2Y = 12.f;
         a.dimSignedOffset = 2.f;
         a.dimLinearVertical = false;
+        a.rotationRad = 0.f;
         a.plottedHeightInches = 0.1f;
         st.drawing.cadAnnotations.push_back(a);
         st.drawing.cadAnnotationAttrs.push_back(EntityAttributes{});
@@ -629,13 +726,13 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadAnnotations.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadAnnotation& a = st.drawing.cadAnnotations[i];
-        return {{{a.dimExt1X, a.dimExt1Y, a.insZ}, {a.dimExt2X, a.dimExt2Y, a.insZ}},
-                {a.dimSignedOffset, a.plottedHeightInches}};
+        return {{{a.insX, a.insY, a.insZ}, {a.dimExt1X, a.dimExt1Y, a.insZ}, {a.dimExt2X, a.dimExt2Y, a.insZ}},
+                {a.dimSignedOffset, a.dimLinearVertical ? 1.0 : 0.0, a.rotationRad, a.plottedHeightInches}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      // Rotating horizontal DimLinear by -90 deg keeps dimLinearVertical=false and recomputes
-      // dimSignedOffset = dmy - ncmy = (-18) - (-18) = 0 (characterises today's RotateCadDimLinearAroundBase).
+      // Rotating horizontal DimLinear by -90 deg rotates ins and ext1/ext2, keeps dimLinearVertical=false,
+      // recomputes dimSignedOffset = 0, and leaves rotationRad = 0 (degenerate horizontal span).
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
         out.scalars[0] = 0.0;
@@ -650,18 +747,26 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
-        out.scalars[1] = p.scalars[1] * kScaleFactor;
+        out.scalars[3] = p.scalars[3] * kScaleFactor;
         return out;
       }),
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
+      // Existing quirk recorded for phase 0: DuplicateCadSelectionReflected calls ReflectCadDimLinearAcrossLine
+      // without reflecting insX/insY, so ext1/ext2 reflect while ins stays at (18,14,3).
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = p;
+        out.pts[1] = MapMirrorX(p.pts[1]);
+        out.pts[2] = MapMirrorX(p.pts[2]);
+        return out;
+      }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 14.0, 3.0, 3.0},
+      ExactExtents(16.0, 20.75, 9.0, 14.08, 3.0, 3.0),
   });
 
   // 7. PdfUnderlay: insert=(16,12), scale=1, rot=0, page=4x3.
   rows.push_back(KindRow{
       "PdfUnderlay",
+      SelectedEntity::Type::PdfUnderlay,
       [](AppCommandState& st) {
         PdfAttachment pdf;
         pdf.filePath = "test.pdf";
@@ -677,7 +782,7 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.pdfAttachments.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const PdfAttachment& p = st.drawing.pdfAttachments[i];
-        return {{{p.insertX, p.insertY, 0.0}}, {p.scale, p.rotationDeg}};
+        return {{{p.insertX, p.insertY, 0.0}}, {p.scale, p.rotationDeg, p.pageWidthPts, p.pageHeightPts}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
       Skipped(), // Gap: COPY silently skips PDF underlays.
@@ -697,16 +802,19 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Gap: PDF underlays are absent from ComputeWorldExtents / CollectEntityBoxes / ComputeWorldExtents3d.
-      {false, false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+      NoExtents(),
   });
 
   // 8. FilledRegion: triangle (16,12,3), (20,12,3), (16,15,3). First vertex inside stretch box.
   rows.push_back(KindRow{
       "FilledRegion",
+      SelectedEntity::Type::FilledRegion,
       [](AppCommandState& st) {
         CadFilledRegion fr;
         fr.vertsXyz = {16.0, 12.0, 3.0, 20.0, 12.0, 3.0, 16.0, 15.0, 3.0};
         fr.loopStart = {0};
+        fr.patternAngleDeg = 15.f;
+        fr.patternScale = 2.f;
         st.drawing.cadFilledRegions.push_back(fr);
         st.drawing.cadFilledRegionAttrs.push_back(EntityAttributes{});
         SelectOne(st, SelectedEntity::Type::FilledRegion);
@@ -714,9 +822,10 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadFilledRegions.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         EntityProbe p;
-        const auto& v = st.drawing.cadFilledRegions[i].vertsXyz;
-        for (size_t k = 0; k + 2 < v.size(); k += 3)
-          p.pts.push_back({v[k], v[k + 1], v[k + 2]});
+        const CadFilledRegion& fr = st.drawing.cadFilledRegions[i];
+        for (size_t k = 0; k + 2 < fr.vertsXyz.size(); k += 3)
+          p.pts.push_back({fr.vertsXyz[k], fr.vertsXyz[k + 1], fr.vertsXyz[k + 2]});
+        p.scalars = {fr.patternAngleDeg, fr.patternScale};
         return p;
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -728,12 +837,13 @@ std::vector<KindRow> BuildTable() {
       Refused(), // DropMirrorUnsupportedFromSelection refuses filled regions.
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 15.0, 3.0, 3.0},
+      ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 3.0),
   });
 
   // 9. Mesh: triangle (16,12,3), (20,12,3), (16,15,4). Reference-only geometry.
   rows.push_back(KindRow{
       "Mesh",
+      SelectedEntity::Type::Mesh,
       [](AppCommandState& st) {
         auto m = std::make_shared<CadMesh>();
         m->vertsXyz = {16.f, 12.f, 3.f, 20.f, 12.f, 3.f, 16.f, 15.f, 4.f};
@@ -759,12 +869,13 @@ std::vector<KindRow> BuildTable() {
       Refused(),   // DropMirrorUnsupportedFromSelection refuses meshes.
       BoxMissed(), // Gap: ComputeSelectionFromRect does not select meshes.
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 15.0, 3.0, 4.0},
+      ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 4.0),
   });
 
   // 10. FeatureLine: (10,12,3) -> (20,12,4). Start outside stretch box, end inside.
   rows.push_back(KindRow{
       "FeatureLine",
+      SelectedEntity::Type::FeatureLine,
       [](AppCommandState& st) {
         st.drawing.featureLineOffsets = {0, 2};
         st.drawing.featureLineVerts = {10.0, 12.0, 3.0, 20.0, 12.0, 4.0};
@@ -786,6 +897,9 @@ std::vector<KindRow> BuildTable() {
           p.pts.push_back({st.drawing.featureLineVerts[b], st.drawing.featureLineVerts[b + 1],
                            st.drawing.featureLineVerts[b + 2]});
         }
+        p.scalars.push_back(i < st.drawing.featureLineClosed.size()
+                                ? static_cast<double>(st.drawing.featureLineClosed[i])
+                                : 0.0);
         return p;
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -798,12 +912,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
-      {true, true, true, 10.0, 20.0, 12.0, 12.0, 3.0, 4.0},
+      ExactExtents(10.0, 20.0, 12.0, 12.0, 3.0, 4.0),
   });
 
   // 11. Surface (TIN): triangle (16,12,3), (20,12,3), (16,15,4). Derived geometry — refused by transforms.
   rows.push_back(KindRow{
       "Surface",
+      SelectedEntity::Type::Surface,
       [](AppCommandState& st) {
         CadSurface surf;
         surf.name = "EG";
@@ -832,12 +947,13 @@ std::vector<KindRow> BuildTable() {
       Refused(),
       Refused(),
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 15.0, 3.0, 4.0},
+      ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 4.0),
   });
 
-  // 12. Table: ins=(16,12,3), width=4, height=2, rot=0.
+  // 12. Table: ins=(16,12,3), width=4, height=2, rot=0, plottedHeight=0.125.
   rows.push_back(KindRow{
       "Table",
+      SelectedEntity::Type::Table,
       [](AppCommandState& st) {
         CadTable t;
         t.insX = 16.f;
@@ -846,6 +962,7 @@ std::vector<KindRow> BuildTable() {
         t.width = 4.f;
         t.height = 2.f;
         t.rotationRad = 0.f;
+        t.plottedHeightInches = 0.125f;
         t.cols = 2;
         t.cells = {"A", "B"};
         st.drawing.cadTables.push_back(t);
@@ -856,7 +973,7 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadTable& t = st.drawing.cadTables[i];
         return {{{t.insX, t.insY, t.insZ}},
-                {t.width, t.height, t.rotationRad, t.localYFlipped ? 1.0 : 0.0}};
+                {t.width, t.height, t.rotationRad, t.localYFlipped ? 1.0 : 0.0, t.plottedHeightInches}};
       },
       // Note: CadTableTranslate translates XY only (insZ unchanged in MOVE & COPY).
       Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
@@ -876,6 +993,7 @@ std::vector<KindRow> BuildTable() {
         EntityProbe out = MapPts(p, MapScaleXy);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         out.scalars[1] = p.scalars[1] * kScaleFactor;
+        out.scalars[4] = p.scalars[4] * kScaleFactor;
         return out;
       }),
       Duplicated([](const EntityProbe& p) {
@@ -888,12 +1006,13 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Table body extends down from insY: [16..20] x [10..12]; CollectEntityBoxes does not track table insZ (0..0).
-      {true, true, true, 16.0, 20.0, 10.0, 12.0, 0.0, 0.0},
+      ExactExtents(16.0, 20.0, 10.0, 12.0, 0.0, 0.0),
   });
 
-  // 13. BlockRef: insertion (16,12,3), scale=(1,1,1), rot=0, def has line (0,0)->(4,2).
+  // 13. BlockRef: insertion (16,12,3), scale=(1,1,1), rot=(0,0,0), def has line (0,0)->(4,2).
   rows.push_back(KindRow{
       "BlockRef",
+      SelectedEntity::Type::BlockRef,
       [](AppCommandState& st) {
         CadBlockDefinition def;
         def.name = "UNITBLK";
@@ -908,6 +1027,8 @@ std::vector<KindRow> BuildTable() {
         ref.xf.sx = 1.f;
         ref.xf.sy = 1.f;
         ref.xf.sz = 1.f;
+        ref.xf.rotX = 0.f;
+        ref.xf.rotY = 0.f;
         ref.xf.rotZ = 0.f;
         st.drawing.cadBlockRefs.push_back(ref);
         st.drawing.cadBlockRefAttrs.push_back(EntityAttributes{});
@@ -916,18 +1037,18 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadBlockRefs.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadBlockRef& r = st.drawing.cadBlockRefs[i];
-        return {{{r.xf.x, r.xf.y, r.xf.z}}, {r.xf.sx, r.xf.sy, r.xf.sz, r.xf.rotZ}};
+        return {{{r.xf.x, r.xf.y, r.xf.z}}, {r.xf.sx, r.xf.sy, r.xf.sz, r.xf.rotX, r.xf.rotY, r.xf.rotZ}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
-        out.scalars[3] = p.scalars[3] - kHalfPi;
+        out.scalars[5] = p.scalars[5] - kHalfPi;
         return out;
       }),
       Duplicated([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
-        out.scalars[3] = p.scalars[3] - kHalfPi;
+        out.scalars[5] = p.scalars[5] - kHalfPi;
         return out;
       }),
       Refused(),
@@ -939,22 +1060,23 @@ std::vector<KindRow> BuildTable() {
         return out;
       }),
       Duplicated([](const EntityProbe& p) {
-        // CadBlockMirror across the Y-axis negates sx and keeps sy=1, sz=1, rotZ=0.
+        // CadBlockMirror across the Y-axis negates sx and keeps sy=1, sz=1, rot=(0,0,0).
         EntityProbe out = MapPts(p, MapMirrorX);
         out.scalars[0] = -1.0;
         out.scalars[1] = 1.0;
         out.scalars[2] = 1.0;
-        out.scalars[3] = 0.0;
+        out.scalars[5] = 0.0;
         return out;
       }),
       Skipped(), // Gap: STRETCH selects BlockRef via crossing box but ApplyStretchToSelection skips it.
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 14.0, 3.0, 3.0},
+      ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 3.0),
   });
 
   // 14. Solid: 4x2x2 box centred in XY at (18,13), rising from z=3 to z=5 -> [16,20] x [12,14] x [3,5].
   rows.push_back(KindRow{
       "Solid",
+      SelectedEntity::Type::Solid,
       [](AppCommandState& st) {
         brep::Solid solid;
         brep::Problem why = brep::Problem::Ok;
@@ -967,8 +1089,9 @@ std::vector<KindRow> BuildTable() {
       },
       [](const AppCommandState& st) { return st.drawing.cadSolids.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
-        const brep::Bounds bb = brep::ComputeBounds(*st.drawing.cadSolids[i]);
-        return {{bb.mn, bb.mx}, {}};
+        const brep::Solid& s = *st.drawing.cadSolids[i];
+        const brep::Bounds bb = brep::ComputeBounds(s);
+        return {{bb.mn, bb.mx}, {static_cast<double>(s.vertices.size()), static_cast<double>(s.faces.size())}};
       },
       Applied([](const EntityProbe& p) { return MapAabb3d(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapAabb3d(p, MapMove3d); }),
@@ -980,12 +1103,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapAabb3d(p, MapMirrorX); }),
       Refused(), // DropSolidsFromSelectionForTransform refuses solids under STRETCH.
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 14.0, 3.0, 5.0},
+      ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 5.0),
   });
 
   // 15. PipeRun: path (10,12,3) -> (20,12,4), nominalSize="4in" (OD = 4.5 in = 0.375 ft, rad = 0.1875 ft).
   rows.push_back(KindRow{
       "PipeRun",
+      SelectedEntity::Type::PipeRun,
       [](AppCommandState& st) {
         CadPipeRun run;
         run.name = "P1";
@@ -998,9 +1122,12 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadPipeRuns.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         EntityProbe p;
-        const auto& v = st.drawing.cadPipeRuns[i].vertsXyz;
-        for (size_t k = 0; k + 2 < v.size(); k += 3)
-          p.pts.push_back({v[k], v[k + 1], v[k + 2]});
+        const CadPipeRun& r = st.drawing.cadPipeRuns[i];
+        for (size_t k = 0; k + 2 < r.vertsXyz.size(); k += 3)
+          p.pts.push_back({r.vertsXyz[k], r.vertsXyz[k + 1], r.vertsXyz[k + 2]});
+        double odFeet = 0.0;
+        (void)CadPipeNominalOdFeet(r.nominalSize, &odFeet);
+        p.scalars = {odFeet};
         return p;
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -1008,18 +1135,20 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      // PipeRun scales its 3D route uniformly even in plan SCALE (REQ-351).
+      // PipeRun scales its 3D route uniformly even in plan SCALE, leaving nominal pipe OD unchanged (REQ-351).
       Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       BoxMissed(), // Gap: ComputeSelectionFromRect skips cadPipeRuns.
       Outcome::Erased,
       // Gap: ComputeRobustWorldExtents (2D) misses PipeRun; ComputeWorldExtents3d (and zoomextents fallback) sees it.
-      {false, true, true, 10.0 - 0.1875, 20.0 + 0.1875, 12.0 - 0.1875, 12.0 + 0.1875, 3.0 - 0.1875, 4.0 + 0.1875},
+      {false, true, true, {},
+       {10.0 - 0.1875, 20.0 + 0.1875, 12.0 - 0.1875, 12.0 + 0.1875, 3.0 - 0.1875, 4.0 + 0.1875}},
   });
 
   // 16. PointCloud: two resident points (16,12,3) and (20,14,4). Display-and-erase only.
   rows.push_back(KindRow{
       "PointCloud",
+      SelectedEntity::Type::PointCloud,
       [](AppCommandState& st) {
         auto pc = std::make_shared<CadPointCloud>();
         pc->sourcePath = "scan.e57";
@@ -1045,21 +1174,23 @@ std::vector<KindRow> BuildTable() {
       Skipped(),
       Skipped(),
       Outcome::Erased,
-      {true, true, true, 16.0, 20.0, 12.0, 14.0, 3.0, 4.0},
+      ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
 
   // 17. SectionPlane: singular view-state clip plane (sectionPlaneSelected, never in st.selection).
   rows.push_back(KindRow{
       "SectionPlane",
+      SelectedEntity::Type::SectionPlane,
       [](AppCommandState& st) {
         st.viewportSectionClip = true;
         st.sectionPlaneSelected = true;
         st.viewportSectionClipOffset = 12.0;
+        st.viewportSectionClipFlip = false;
         st.selection.clear();
       },
       [](const AppCommandState& st) { return st.viewportSectionClip ? size_t{1} : size_t{0}; },
       [](const AppCommandState& st, size_t) -> EntityProbe {
-        return {{}, {st.viewportSectionClipOffset}};
+        return {{}, {st.viewportSectionClipOffset, st.viewportSectionClipFlip ? 1.0 : 0.0}};
       },
       NotInSel(),
       NotInSel(),
@@ -1070,12 +1201,13 @@ std::vector<KindRow> BuildTable() {
       NotInSel(),
       BoxMissed(),
       Outcome::Erased,
-      {false, false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+      NoExtents(),
   });
 
   // 18. PositionMarker: (16,12,3) with Mtext label box [17,20] x [12,14].
   rows.push_back(KindRow{
       "PositionMarker",
+      SelectedEntity::Type::PositionMarker,
       [](AppCommandState& st) {
         CadPositionMarker m;
         m.x = 16.0;
@@ -1089,6 +1221,8 @@ std::vector<KindRow> BuildTable() {
         m.label.boxMinY = 12.f;
         m.label.boxMaxX = 20.f;
         m.label.boxMaxY = 14.f;
+        m.label.rotationRad = 0.f;
+        m.label.plottedHeightInches = 0.1f;
         m.label.text = "PM";
         st.drawing.cadPositionMarkers.push_back(m);
         st.drawing.cadPositionMarkerAttrs.push_back(EntityAttributes{});
@@ -1097,7 +1231,11 @@ std::vector<KindRow> BuildTable() {
       [](const AppCommandState& st) { return st.drawing.cadPositionMarkers.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
         const CadPositionMarker& m = st.drawing.cadPositionMarkers[i];
-        return {{{m.x, m.y, m.z}, {m.label.insX, m.label.insY, m.label.insZ}}, {}};
+        return {{{m.x, m.y, m.z},
+                 {m.label.insX, m.label.insY, m.label.insZ},
+                 {m.label.boxMinX, m.label.boxMinY, m.label.insZ},
+                 {m.label.boxMaxX, m.label.boxMaxY, m.label.insZ}},
+                {m.label.rotationRad, m.label.plottedHeightInches}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -1109,15 +1247,17 @@ std::vector<KindRow> BuildTable() {
       Refused(),
       Outcome::Erased,
       // Circle radius = 0.1 * 50 = 5.0 -> [11..21, 7..17] union label [17..20, 12..14] = [11..21, 7..17].
-      {true, true, true, 11.0, 21.0, 7.0, 17.0, 3.0, 3.0},
+      ExactExtents(11.0, 21.0, 7.0, 17.0, 3.0, 3.0),
   });
 
   // 19. Multileader: path (16,12,3)->(19,14,3) + label box [19,22] x [13,15].
   rows.push_back(KindRow{
       "Multileader",
+      SelectedEntity::Type::Multileader,
       [](AppCommandState& st) {
         CadMultileader ml;
         ml.pathXyz = {16.f, 12.f, 3.f, 19.f, 14.f, 3.f};
+        ml.arrowSizeWorld = 0.5f;
         ml.label.kind = CadAnnotation::Kind::Mtext;
         ml.label.insX = 19.f;
         ml.label.insY = 13.f;
@@ -1126,6 +1266,8 @@ std::vector<KindRow> BuildTable() {
         ml.label.boxMinY = 13.f;
         ml.label.boxMaxX = 22.f;
         ml.label.boxMaxY = 15.f;
+        ml.label.rotationRad = 0.f;
+        ml.label.plottedHeightInches = 0.1f;
         ml.label.text = "ML";
         st.drawing.cadMultileaders.push_back(ml);
         st.drawing.cadMultileaderAttrs.push_back(EntityAttributes{});
@@ -1136,8 +1278,10 @@ std::vector<KindRow> BuildTable() {
         const CadMultileader& ml = st.drawing.cadMultileaders[i];
         return {{{ml.pathXyz[0], ml.pathXyz[1], ml.pathXyz[2]},
                  {ml.pathXyz[3], ml.pathXyz[4], ml.pathXyz[5]},
-                 {ml.label.insX, ml.label.insY, ml.label.insZ}},
-                {}};
+                 {ml.label.insX, ml.label.insY, ml.label.insZ},
+                 {ml.label.boxMinX, ml.label.boxMinY, ml.label.insZ},
+                 {ml.label.boxMaxX, ml.label.boxMaxY, ml.label.insZ}},
+                {ml.arrowSizeWorld, ml.label.rotationRad, ml.label.plottedHeightInches}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -1148,12 +1292,13 @@ std::vector<KindRow> BuildTable() {
       Refused(),
       Refused(),
       Outcome::Erased,
-      {true, true, true, 16.0, 22.0, 12.0, 15.0, 3.0, 3.0},
+      ExactExtents(16.0, 22.0, 12.0, 15.0, 3.0, 3.0),
   });
 
   // 20. Spline: degree-1 spline (10,12,3) -> (20,14,4). Start outside stretch box, end inside.
   rows.push_back(KindRow{
       "Spline",
+      SelectedEntity::Type::Spline,
       [](AppCommandState& st) {
         CadSpline sp;
         sp.degree = 1;
@@ -1165,7 +1310,8 @@ std::vector<KindRow> BuildTable() {
       },
       [](const AppCommandState& st) { return st.drawing.cadSplines.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
-        return {st.drawing.cadSplines[i].ctrl, {}};
+        const CadSpline& sp = st.drawing.cadSplines[i];
+        return {sp.ctrl, {static_cast<double>(sp.degree)}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
@@ -1176,12 +1322,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Skipped(), // Gap: STRETCH selects Spline via crossing box but ApplyStretchToSelection skips it.
       Outcome::Erased,
-      {true, true, true, 10.0, 20.0, 12.0, 14.0, 3.0, 4.0},
+      ExactExtents(10.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
 
   // 21. Point (CAD POINT): (16,12,3). Inside stretch box.
   rows.push_back(KindRow{
       "Point",
+      SelectedEntity::Type::Point,
       [](AppCommandState& st) {
         st.drawing.cadPoints.push_back(CadPoint{16.0, 12.0, 3.0});
         st.drawing.cadPointAttrs.push_back(EntityAttributes{});
@@ -1201,12 +1348,13 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Skipped(), // Gap: STRETCH selects Point via crossing box but ApplyStretchToSelection skips it.
       Outcome::Erased,
-      {true, true, true, 16.0, 16.0, 12.0, 12.0, 3.0, 3.0},
+      ExactExtents(16.0, 16.0, 12.0, 12.0, 3.0, 3.0),
   });
 
   // 22. Alignment: horizontal tangent (10,12) -> (20,12) (azimuth 90 deg = due east, length 10).
   rows.push_back(KindRow{
       "Alignment",
+      SelectedEntity::Type::Alignment,
       [](AppCommandState& st) {
         alignment::Alignment al;
         al.id = 1;
@@ -1217,25 +1365,32 @@ std::vector<KindRow> BuildTable() {
       },
       [](const AppCommandState& st) { return st.drawing.alignments.size(); },
       [](const AppCommandState& st, size_t i) -> EntityProbe {
-        const auto pts = st.drawing.alignments[i].SampleForDisplay(0.5);
+        const alignment::Alignment& al = st.drawing.alignments[i];
+        const auto pts = al.SampleForDisplay(0.5);
         REQUIRE(pts.size() >= 2);
-        return {{{pts.front().x, pts.front().y, 0.0}, {pts.back().x, pts.back().y, 0.0}}, {}};
+        return {{{pts.front().x, pts.front().y, 0.0}, {pts.back().x, pts.back().y, 0.0}}, {al.Length()}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Skipped(), // Gap: tilted-axis RotateSelectedAlignments returns early silently.
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapScaleXy);
+        out.scalars[0] = p.scalars[0] * kScaleFactor;
+        return out;
+      }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Skipped(), // Gap: STRETCH selects Alignment via crossing box but ApplyStretchToSelection skips it.
       Outcome::Erased,
-      {true, true, true, 10.0, 20.0, 12.0, 12.0, 0.0, 0.0},
+      // Exact AlignmentLabelSets::LabelledBounds for (10,12)->(20,12) with default "Standard" label set at scale 50.
+      ExactExtents(-35.0, 65.0, -33.0, 74.5, 0.0, 0.0),
   });
 
   // 23. SurveyPoint: (16,12,3), selected via selectedSurveyPointIndices.
   rows.push_back(KindRow{
       "SurveyPoint",
+      std::nullopt,
       [](AppCommandState& st) {
         SurveyPoint sp;
         sp.id = 101;
@@ -1263,7 +1418,7 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      {true, true, true, 16.0, 16.0, 12.0, 12.0, 3.0, 3.0},
+      ExactExtents(16.0, 16.0, 12.0, 12.0, 3.0, 3.0),
   });
 
   return rows;
@@ -1275,6 +1430,10 @@ void CheckTransformOp(const KindRow& row, const char* opName, const OpExpect& ex
   std::vector<std::string> log;
   row.seed(st);
   REQUIRE(row.count(st) == 1);
+  if (exp.outcome != Outcome::NotInSelection && std::string(opName) != "STRETCH" &&
+      std::string(row.name) != "SectionPlane") {
+    REQUIRE((st.selection.size() + st.selectedSurveyPointIndices.size()) == 1);
+  }
   const EntityProbe before = row.probe(st, 0);
 
   run(st, log);
@@ -1326,72 +1485,39 @@ void CheckExtentsOp(const KindRow& row) {
   row.seed(st);
   const ExtentsExpect& ex = row.extents;
 
-  // 1. 2D extents (ComputeRobustWorldExtents)
+  // 1. 2D extents (ComputeRobustWorldExtents) — exact baseline bounds within kGeomTol.
   double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
   int skipped2d = 0;
   const bool got2d = ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped2d);
   {
-    INFO("kind=" << row.name << " op=extents2d");
+    INFO("kind=" << row.name << " op=extents2d actual=(" << mnX << ".." << mxX << ", " << mnY << ".." << mxY
+                 << ") expected=(" << ex.box2d.mnX << ".." << ex.box2d.mxX << ", " << ex.box2d.mnY << ".."
+                 << ex.box2d.mxY << ")");
     CHECK(got2d == ex.in2d);
     if (got2d && ex.in2d) {
-      // DimAligned/DimLinear rough bounds pad for text; check that the entity's core box is contained
-      // and finite, while exact geometric kinds match within kGeomTol.
-      const bool isDim = std::string(row.name) == "AnnotationDimAligned" ||
-                         std::string(row.name) == "AnnotationDimLinear" ||
-                         std::string(row.name) == "Alignment";
-      if (isDim) {
-        CHECK(std::isfinite(mnX));
-        CHECK(std::isfinite(mxX));
-        CHECK(std::isfinite(mnY));
-        CHECK(std::isfinite(mxY));
-        CHECK(mnX <= ex.mnX + kGeomTol);
-        CHECK(mxX >= ex.mxX - kGeomTol);
-        CHECK(mnY <= ex.mnY + kGeomTol);
-        CHECK(mxY >= ex.mxY - kGeomTol);
-        CHECK(mxX - mnX < 200.0);
-        CHECK(mxY - mnY < 200.0);
-      } else {
-        CHECK(std::fabs(mnX - ex.mnX) <= kGeomTol);
-        CHECK(std::fabs(mxX - ex.mxX) <= kGeomTol);
-        CHECK(std::fabs(mnY - ex.mnY) <= kGeomTol);
-        CHECK(std::fabs(mxY - ex.mxY) <= kGeomTol);
-      }
+      CHECK(std::fabs(mnX - ex.box2d.mnX) <= kGeomTol);
+      CHECK(std::fabs(mxX - ex.box2d.mxX) <= kGeomTol);
+      CHECK(std::fabs(mnY - ex.box2d.mnY) <= kGeomTol);
+      CHECK(std::fabs(mxY - ex.box2d.mxY) <= kGeomTol);
     }
   }
 
-  // 2. 3D extents (ComputeWorldExtents3d)
+  // 2. 3D extents (ComputeWorldExtents3d) — exact baseline bounds within kGeomTol.
   ray3d::Vec3 bmn{}, bmx{};
   int skipped3d = 0;
   const bool got3d = ComputeWorldExtents3d(st, &bmn, &bmx, &skipped3d);
   {
-    INFO("kind=" << row.name << " op=extents3d");
+    INFO("kind=" << row.name << " op=extents3d actual=(" << bmn.x << ".." << bmx.x << ", " << bmn.y << ".." << bmx.y
+                 << ", " << bmn.z << ".." << bmx.z << ") expected=(" << ex.box3d.mnX << ".." << ex.box3d.mxX << ", "
+                 << ex.box3d.mnY << ".." << ex.box3d.mxY << ", " << ex.box3d.mnZ << ".." << ex.box3d.mxZ << ")");
     CHECK(got3d == ex.in3d);
     if (got3d && ex.in3d) {
-      CHECK(std::fabs(bmn.z - ex.mnZ) <= kGeomTol);
-      CHECK(std::fabs(bmx.z - ex.mxZ) <= kGeomTol);
-      // Note: CollectEntityBoxes uses conservative full-circle/bounding-radius XY boxes for Arc/Ellipse.
-      const bool conservative3dXy = std::string(row.name) == "Arc" ||
-                                    std::string(row.name) == "Ellipse" ||
-                                    std::string(row.name) == "AnnotationDimAligned" ||
-                                    std::string(row.name) == "AnnotationDimLinear" ||
-                                    std::string(row.name) == "Alignment";
-      if (conservative3dXy) {
-        CHECK(std::isfinite(bmn.x));
-        CHECK(std::isfinite(bmx.x));
-        CHECK(std::isfinite(bmn.y));
-        CHECK(std::isfinite(bmx.y));
-        CHECK(bmn.x <= ex.mnX + kGeomTol);
-        CHECK(bmx.x >= ex.mxX - kGeomTol);
-        CHECK(bmn.y <= ex.mnY + kGeomTol);
-        CHECK(bmx.y >= ex.mxY - kGeomTol);
-        CHECK(bmx.x - bmn.x < 200.0);
-        CHECK(bmx.y - bmn.y < 200.0);
-      } else {
-        CHECK(std::fabs(bmn.x - ex.mnX) <= kGeomTol);
-        CHECK(std::fabs(bmx.x - ex.mxX) <= kGeomTol);
-        CHECK(std::fabs(bmn.y - ex.mnY) <= kGeomTol);
-        CHECK(std::fabs(bmx.y - ex.mxY) <= kGeomTol);
-      }
+      CHECK(std::fabs(bmn.x - ex.box3d.mnX) <= kGeomTol);
+      CHECK(std::fabs(bmx.x - ex.box3d.mxX) <= kGeomTol);
+      CHECK(std::fabs(bmn.y - ex.box3d.mnY) <= kGeomTol);
+      CHECK(std::fabs(bmx.y - ex.box3d.mxY) <= kGeomTol);
+      CHECK(std::fabs(bmn.z - ex.box3d.mnZ) <= kGeomTol);
+      CHECK(std::fabs(bmx.z - ex.box3d.mxZ) <= kGeomTol);
     }
   }
 
@@ -1407,58 +1533,32 @@ void CheckExtentsOp(const KindRow& row) {
   CHECK(framed == ex.zoomExtentsFrames);
 }
 
-// Exhaustiveness guard: every SelectedEntity::Type enumerator is accounted for in BuildTable().
-constexpr size_t KnownSelectedEntityTypeCount() {
-  using T = SelectedEntity::Type;
-  constexpr T kAll[] = {
-      T::LineSeg,    T::Circle,        T::Annotation, T::Polyline,     T::Arc,
-      T::Ellipse,    T::PdfUnderlay,   T::FilledRegion, T::Mesh,       T::FeatureLine,
-      T::Surface,    T::Table,         T::BlockRef,   T::Solid,        T::PipeRun,
-      T::PointCloud, T::SectionPlane,  T::PositionMarker, T::Multileader, T::Spline,
-      T::Point,      T::Alignment,
-  };
-  size_t count = 0;
-  for (T t : kAll) {
-    switch (t) {
-    case T::LineSeg:
-    case T::Circle:
-    case T::Annotation:
-    case T::Polyline:
-    case T::Arc:
-    case T::Ellipse:
-    case T::PdfUnderlay:
-    case T::FilledRegion:
-    case T::Mesh:
-    case T::FeatureLine:
-    case T::Surface:
-    case T::Table:
-    case T::BlockRef:
-    case T::Solid:
-    case T::PipeRun:
-    case T::PointCloud:
-    case T::SectionPlane:
-    case T::PositionMarker:
-    case T::Multileader:
-    case T::Spline:
-    case T::Point:
-    case T::Alignment:
-      ++count;
-      break;
-    }
-  }
-  return count;
-}
-
-static_assert(KnownSelectedEntityTypeCount() == 22,
-              "Update tests/EntityKindOpsTests.cpp when adding a SelectedEntity::Type.");
-
 } // namespace
 
 TEST_CASE("EntityKindOps phase 0: every entity kind across MOVE, COPY, ROTATE, 3D ROTATE, SCALE, MIRROR, STRETCH, ERASE and extents",
           "[entity-kind-ops][phase0]") {
   const std::vector<KindRow> table = BuildTable();
-  // 22 SelectedEntity::Type kinds (with Annotation split into 4 sub-kinds) + SurveyPoint = 26 rows.
-  REQUIRE(table.size() == KnownSelectedEntityTypeCount() + 3 + 1);
+
+  // Verify every SelectedEntity::Type enumerator accepted by the compiler-enforced exhaustive
+  // switch appears in BuildTable() (plus SurveyPoint, which is not a SelectedEntity::Type).
+  std::set<SelectedEntity::Type> expectedTypes;
+  for (int raw = 0; raw <= 255; ++raw) {
+    const auto t = static_cast<SelectedEntity::Type>(raw);
+    if (IsKnownSelectedEntityType(t))
+      expectedTypes.insert(t);
+  }
+  std::set<SelectedEntity::Type> tableTypes;
+  size_t nonEntityRows = 0;
+  for (const KindRow& row : table) {
+    if (row.entityType.has_value()) {
+      REQUIRE(IsKnownSelectedEntityType(*row.entityType));
+      tableTypes.insert(*row.entityType);
+    } else {
+      ++nonEntityRows;
+    }
+  }
+  REQUIRE(tableTypes == expectedTypes);
+  REQUIRE(nonEntityRows == 1); // SurveyPoint
 
   for (const KindRow& row : table) {
     CheckTransformOp(row, "MOVE", row.move, [](AppCommandState& st, std::vector<std::string>& log) {
@@ -1518,7 +1618,7 @@ TEST_CASE("EntityKindOps phase 0: every entity kind across MOVE, COPY, ROTATE, 3
       CancelActiveCommand(st, log);
     });
 
-    CheckTransformOp(row, "STRETCH", row.stretch, [](AppCommandState& st, std::vector<std::string>& log) {
+    CheckTransformOp(row, "STRETCH", row.stretch, [&](AppCommandState& st, std::vector<std::string>& log) {
       REQUIRE(DispatchByPrimaryForTest("stretch", st, log));
       st.selBoxWaitingSecond = true;
       st.selBoxAnchorX = static_cast<float>(kStretchBoxMaxX);
@@ -1526,7 +1626,15 @@ TEST_CASE("EntityKindOps phase 0: every entity kind across MOVE, COPY, ROTATE, 3
       st.selBoxAnchorZ = 0.f;
       // Right-to-left crossing box [14, 25] x [5, 25].
       SubmitViewportPick(st, kStretchBoxMinX, kStretchBoxMinY, log, /*subtract=*/false, /*windowMode=*/false);
-      if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
+      // Assert crossing-selection outcome immediately before submitting the stretch vector, so
+      // selected-but-skipped kinds (BlockRef, Spline, Point, Alignment, PointCloud) cannot silently
+      // pass if crossing-box selection regresses.
+      const size_t pickedCount = st.selection.size() + st.selectedSurveyPointIndices.size();
+      if (row.stretch.outcome == Outcome::BoxMissed) {
+        CHECK(pickedCount == 0);
+      } else {
+        INFO("kind=" << row.name << " op=STRETCH crossing-pick");
+        REQUIRE(pickedCount == 1);
         SubmitLine(st, "0,0", log);
         SubmitLine(st, "5,3", log);
       }
