@@ -18,9 +18,11 @@
 #include <GoSurvey/Math/ucs.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <utility>
 #include <vector>
@@ -146,7 +148,7 @@ inline void PadAttrs(std::vector<EntityAttributes>& attrs, std::size_t count) {
 
 [[nodiscard]] inline bool ValidPolylineRange(const CadEntityStore& store, std::size_t index,
                                              int* outV0, int* outV1) {
-  if (index + 1 >= store.userPolylineOffsets.size())
+  if (store.userPolylineOffsets.size() < 2 || index >= store.userPolylineOffsets.size() - 1)
     return false;
   const int v0 = store.userPolylineOffsets[index];
   const int v1 = store.userPolylineOffsets[index + 1];
@@ -291,10 +293,10 @@ inline bool TransformCircle(CadEntityStore& store, std::size_t index, const Simi
     if (ray3d::Length(nn) > 0.5) {
       float outNx = kFlatNormalX, outNy = kFlatNormalY, outNz = kFlatNormalZ;
       entityops_detail::StoreUnitNormal(nn, wasFlat, &outNx, &outNy, &outNz);
-      const std::size_t nk = index * 3;
-      if (nk + 2 >= store.userCircleNormals.size() && !IsFlatNormal(outNx, outNy, outNz))
+      if (index >= store.userCircleNormals.size() / 3 && !IsFlatNormal(outNx, outNy, outNz))
         EnsureCircleNormals(store.userCircleNormals, store.circleCount());
-      if (nk + 2 < store.userCircleNormals.size()) {
+      if (index < store.userCircleNormals.size() / 3) {
+        const std::size_t nk = index * 3;
         store.userCircleNormals[nk + 0] = outNx;
         store.userCircleNormals[nk + 1] = outNy;
         store.userCircleNormals[nk + 2] = outNz;
@@ -341,6 +343,12 @@ inline bool TransformArc(CadEntityStore& store, std::size_t index, const Similar
 }
 
 /// Transform a polyline stored in the block-capable core `CadEntityStore` (no vertex normal sidecar).
+///
+/// Straight polylines accept any 3D similarity transform. A polyline carrying any nonzero bulge
+/// requires a planar-Z transform (`xf.isPlanarZ()`), because `CadEntityStore` has no per-vertex
+/// normal sidecar to store a tilted or inverted bulge plane; out-of-plane transforms on bulged
+/// block-store polylines return false without mutating the store (use `CadDrawingEntityStore` for
+/// full 3D bulged polyline transforms).
 inline bool TransformPolyline(CadEntityStore& store, std::size_t index,
                               const SimilarityTransform& xf) {
   if (!xf.valid())
@@ -348,6 +356,13 @@ inline bool TransformPolyline(CadEntityStore& store, std::size_t index,
   int v0 = 0, v1 = 0;
   if (!entityops_detail::ValidPolylineRange(store, index, &v0, &v1))
     return false;
+  if (!xf.isPlanarZ()) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const std::size_t k = static_cast<std::size_t>(vi);
+      if (k < store.userPolylineVertsBulge.size() && store.userPolylineVertsBulge[k] != 0.f)
+        return false;
+    }
+  }
   for (int vi = v0; vi < v1; ++vi) {
     const std::size_t k = static_cast<std::size_t>(vi);
     const CadPolyVertex v = store.vertex(k);
@@ -383,8 +398,8 @@ inline bool TransformPolyline(CadDrawingEntityStore& store, std::size_t index,
       store.userPolylineVertsBulge[k] = -bulge;
 
     if (updateNormals) {
+      const bool haveNormal = k < store.userPolylineVertsNormal.size() / 3;
       const std::size_t nk = k * 3;
-      const bool haveNormal = nk + 2 < store.userPolylineVertsNormal.size();
       const float nx = haveNormal ? store.userPolylineVertsNormal[nk + 0] : kFlatNormalX;
       const float ny = haveNormal ? store.userPolylineVertsNormal[nk + 1] : kFlatNormalY;
       const float nz = haveNormal ? store.userPolylineVertsNormal[nk + 2] : kFlatNormalZ;
@@ -400,7 +415,7 @@ inline bool TransformPolyline(CadDrawingEntityStore& store, std::size_t index,
           if (!haveNormal && !IsFlatNormal(outNx, outNy, outNz))
             entityops_detail::SyncPolylineNormalVec(store.userPolylineVertsNormal,
                                                     store.vertexCount());
-          if (nk + 2 < store.userPolylineVertsNormal.size()) {
+          if (k < store.userPolylineVertsNormal.size() / 3) {
             store.userPolylineVertsNormal[nk + 0] = outNx;
             store.userPolylineVertsNormal[nk + 1] = outNy;
             store.userPolylineVertsNormal[nk + 2] = outNz;
@@ -467,9 +482,11 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
     b.expand({c.cx + r, c.cy + r, c.cz});
     return b;
   }
-  const double dx = r * std::sqrt(std::max(0.0, 1.0 - n.x * n.x));
-  const double dy = r * std::sqrt(std::max(0.0, 1.0 - n.y * n.y));
-  const double dz = r * std::sqrt(std::max(0.0, 1.0 - n.z * n.z));
+  // Use hypot of the other two unit-normal components rather than sqrt(1 - n_k^2) to avoid
+  // catastrophic cancellation when the normal is nearly axis-aligned (e.g. (1e-8, 0, 1)).
+  const double dx = r * std::hypot(n.y, n.z);
+  const double dy = r * std::hypot(n.x, n.z);
+  const double dz = r * std::hypot(n.x, n.y);
   b.expand({c.cx - dx, c.cy - dy, c.cz - dz});
   b.expand({c.cx + dx, c.cy + dy, c.cz + dz});
   return b;
@@ -536,7 +553,7 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
     const float bulge =
         ia < store.userPolylineVertsBulge.size() ? store.userPolylineVertsBulge[ia] : 0.f;
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
-    if (ia * 3 + 2 < store.userPolylineVertsNormal.size()) {
+    if (ia < store.userPolylineVertsNormal.size() / 3) {
       nx = store.userPolylineVertsNormal[ia * 3 + 0];
       ny = store.userPolylineVertsNormal[ia * 3 + 1];
       nz = store.userPolylineVertsNormal[ia * 3 + 2];
@@ -547,15 +564,55 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
   return b;
 }
 
+/// Conservative 3D bounding box of a NURBS spline.
+///
+/// Tessellates the curve within `kSplineSampleTolerance`. For degree > 1 (curved splines), pads
+/// the sampled vertex box by `kSplineSampleTolerance` so an off-sample extremum can never protrude
+/// outside the returned box, then clamps to the control polygon's convex-hull box (when all weights
+/// are positive) so flat or linear spans are never inflated out of their plane.
 [[nodiscard]] inline EntityBounds3d SplineBounds(const CadDrawingEntityStore& store,
                                                  std::size_t index) {
   EntityBounds3d b;
   if (index >= store.cadSplines.size())
     return b;
+  const CadSpline& sp = store.cadSplines[index];
   std::vector<ray3d::Vec3> pts;
-  spline::Tessellate(store.cadSplines[index], kSplineSampleTolerance, &pts);
+  spline::Tessellate(sp, kSplineSampleTolerance, &pts);
   for (const ray3d::Vec3& p : pts)
     b.expand(p);
+  if (!b.valid || sp.degree <= 1)
+    return b;
+
+  // Pad by chord tolerance to guarantee the returned box encloses every point on the curve.
+  b.min.x -= kSplineSampleTolerance;
+  b.min.y -= kSplineSampleTolerance;
+  b.min.z -= kSplineSampleTolerance;
+  b.max.x += kSplineSampleTolerance;
+  b.max.y += kSplineSampleTolerance;
+  b.max.z += kSplineSampleTolerance;
+
+  // A B-spline with positive weights lies strictly within the convex hull of its control points;
+  // clamping keeps planar splines exact in their off-plane coordinate.
+  bool positiveWeights = true;
+  for (double w : sp.weights) {
+    if (!(w > 0.0) || !std::isfinite(w)) {
+      positiveWeights = false;
+      break;
+    }
+  }
+  if (positiveWeights && !sp.ctrl.empty()) {
+    EntityBounds3d hull;
+    for (const ray3d::Vec3& c : sp.ctrl)
+      hull.expand(c);
+    if (hull.valid) {
+      b.min.x = std::max(b.min.x, hull.min.x);
+      b.min.y = std::max(b.min.y, hull.min.y);
+      b.min.z = std::max(b.min.z, hull.min.z);
+      b.max.x = std::min(b.max.x, hull.max.x);
+      b.max.y = std::min(b.max.y, hull.max.y);
+      b.max.z = std::min(b.max.z, hull.max.z);
+    }
+  }
   return b;
 }
 
@@ -619,9 +676,10 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
     return {};
   const std::size_t n0 = store.userPolylineOffsets.size() - 1;
   const std::size_t vertsBefore = store.vertexCount();
-  if (store.userPolylineOffsets.back() != static_cast<int>(vertsBefore))
-    return {};
   const int nv = v1 - v0;
+  if (vertsBefore > static_cast<std::size_t>(std::numeric_limits<int>::max()) - static_cast<std::size_t>(nv) ||
+      store.userPolylineOffsets.back() != static_cast<int>(vertsBefore))
+    return {};
 
   std::vector<CadPolyVertex> verts;
   std::vector<float> bulges;
@@ -780,14 +838,24 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
 }
 
 /// Append copies of all unique valid entities in \p refs and return their new handles (in input
-/// order). Callers implement COPY / ARRAY as `DuplicateEntities` followed by `TransformEntities`.
+/// order). Source handles are validated against the original store counts before appending so an
+/// initially out-of-range handle can never match a copy appended earlier in the same call.
+/// Callers implement COPY / ARRAY as `DuplicateEntities` followed by `TransformEntities`.
 [[nodiscard]] inline std::vector<EntityRef> DuplicateEntities(CadDrawingEntityStore& store,
                                                               const std::vector<EntityRef>& refs) {
+  std::array<std::size_t, kAllEntityKinds.size()> originalCounts{};
+  for (std::size_t i = 0; i < kAllEntityKinds.size(); ++i)
+    originalCounts[i] = EntityCountForKind(store, kAllEntityKinds[i]);
+
   std::set<std::pair<std::uint8_t, int>> seen;
   std::vector<EntityRef> uniqueRefs;
   uniqueRefs.reserve(refs.size());
   for (const EntityRef& ref : refs) {
-    if (!ref.valid())
+    if (!ref.valid() || !HasEntityKindOps(ref.kind))
+      continue;
+    const std::size_t kindOrd = static_cast<std::size_t>(ref.kind);
+    if (kindOrd >= originalCounts.size() ||
+        static_cast<std::size_t>(ref.index) >= originalCounts[kindOrd])
       continue;
     if (seen.insert({static_cast<std::uint8_t>(ref.kind), ref.index}).second)
       uniqueRefs.push_back(ref);
@@ -802,7 +870,9 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
   return copies;
 }
 
-/// Exact 3D bounding box of the entity referenced by \p ref (invalid if out of range or unsupported).
+/// 3D bounding box of the entity referenced by \p ref (invalid if out of range or unsupported).
+/// Analytic and exact for lines, circles, arcs, polylines and points; conservative within
+/// `kSplineSampleTolerance` (clamped to the control polygon) for curved splines.
 [[nodiscard]] inline EntityBounds3d EntityBounds(const CadDrawingEntityStore& store,
                                                  const EntityRef& ref) {
   if (!ref.valid())

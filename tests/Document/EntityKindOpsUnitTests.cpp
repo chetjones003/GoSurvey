@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <limits>
 #include <set>
 #include <vector>
 
@@ -433,4 +434,136 @@ TEST_CASE("ForEachDocumentKind and ForEachEntityAttrs cover every Document-owned
                             REQUIRE(attrs.size() == 1);
                             CHECK(attrs[0].layer == "NEW");
                           });
+}
+
+TEST_CASE("PR-Agent boundary regressions: SIZE_MAX index, near-axis circle bounds, DuplicateEntities snapshot, block-store bulged polyline, curved spline bounds",
+          "[document][entitykindops]") {
+  const auto idXf = doc::SimilarityTransform::Identity();
+
+  SECTION("SIZE_MAX index never wraps or reads out of bounds") {
+    const std::size_t maxIdx = std::numeric_limits<std::size_t>::max();
+    CadDrawingEntityStore store;
+    store.pushLine({0.0, 0.0, 0.0, 1.0, 0.0, 0.0});
+    store.pushCircle({0.0, 0.0, 0.0, 1.0});
+    store.userArcs.push_back(CadArc{0.0, 0.0, 1.0, 0.f, 1.f, 0.0, 0.f, 0.f, 1.f});
+    store.userPolylineOffsets = {0, 2};
+    store.pushVertex({0.0, 0.0, 0.0});
+    store.pushVertex({1.0, 0.0, 0.0});
+    store.cadSplines.push_back(CadSpline{1, false, {0.0, 0.0, 1.0, 1.0}, {{0, 0, 0}, {1, 0, 0}}, {}, {}});
+    store.cadPoints.push_back(CadPoint{0.0, 0.0, 0.0});
+
+    CHECK_FALSE(doc::TransformLine(store, maxIdx, idXf));
+    CHECK_FALSE(doc::TransformCircle(store, maxIdx, idXf));
+    CHECK_FALSE(doc::TransformArc(store, maxIdx, idXf));
+    CHECK_FALSE(doc::TransformPolyline(static_cast<CadEntityStore&>(store), maxIdx, idXf));
+    CHECK_FALSE(doc::TransformPolyline(store, maxIdx, idXf));
+    CHECK_FALSE(doc::TransformSpline(store, maxIdx, idXf));
+    CHECK_FALSE(doc::TransformPoint(store, maxIdx, idXf));
+
+    CHECK_FALSE(doc::LineBounds(store, maxIdx).valid);
+    CHECK_FALSE(doc::CircleBounds(store, maxIdx).valid);
+    CHECK_FALSE(doc::ArcBounds(store, maxIdx).valid);
+    CHECK_FALSE(doc::PolylineBounds(static_cast<const CadEntityStore&>(store), maxIdx).valid);
+    CHECK_FALSE(doc::PolylineBounds(store, maxIdx).valid);
+    CHECK_FALSE(doc::SplineBounds(store, maxIdx).valid);
+    CHECK_FALSE(doc::PointBounds(store, maxIdx).valid);
+
+    CHECK_FALSE(doc::DuplicateLine(store, maxIdx).valid());
+    CHECK_FALSE(doc::DuplicateCircle(store, maxIdx).valid());
+    CHECK_FALSE(doc::DuplicateArc(store, maxIdx).valid());
+    CHECK_FALSE(doc::DuplicatePolyline(static_cast<CadEntityStore&>(store), maxIdx).valid());
+    CHECK_FALSE(doc::DuplicatePolyline(store, maxIdx).valid());
+    CHECK_FALSE(doc::DuplicateSpline(store, maxIdx).valid());
+    CHECK_FALSE(doc::DuplicatePoint(store, maxIdx).valid());
+  }
+
+  SECTION("CircleBounds avoids cancellation for nearly axis-aligned normal") {
+    CadEntityStore store;
+    store.pushCircle(CadCircleRecord{0.0, 0.0, 100.0, 1.0e6});
+    PushCircleNormal(store.userCircleNormals, 1.0e-8f, 0.f, 1.f);
+    const doc::EntityBounds3d b = doc::CircleBounds(store, 0);
+    REQUIRE(b.valid);
+    const double expectedDz = 1.0e6 * static_cast<double>(1.0e-8f);
+    CHECK(b.max.z - 100.0 == Catch::Approx(expectedDz).epsilon(1e-4));
+    CHECK(100.0 - b.min.z == Catch::Approx(expectedDz).epsilon(1e-4));
+  }
+
+  SECTION("DuplicateEntities validates handles against original counts, not newly appended copies") {
+    CadDrawingEntityStore store;
+    store.pushLine({0.0, 0.0, 0.0, 5.0, 0.0, 0.0});
+    store.userLineAttrs.push_back(EntityAttributes{1, "0"});
+
+    // Index 1 is out of range before duplication; duplicating index 0 must NOT make index 1 valid.
+    const std::vector<EntityRef> copies =
+        doc::DuplicateEntities(store, {{EntityKind::Line, 0}, {EntityKind::Line, 1}});
+    REQUIRE(copies.size() == 1);
+    CHECK(copies[0] == EntityRef{EntityKind::Line, 1});
+    CHECK(store.lineCount() == 2);
+  }
+
+  SECTION("CadEntityStore rejects out-of-plane transforms on bulged polylines; CadDrawingEntityStore handles them") {
+    CadEntityStore blockStore;
+    blockStore.userPolylineOffsets = {0, 2};
+    blockStore.pushVertex({0.0, 0.0, 0.0});
+    blockStore.pushVertex({2.0, 0.0, 0.0});
+    blockStore.userPolylineVertsBulge = {1.f, 0.f};
+
+    const auto rotX90 =
+        doc::SimilarityTransform::RotationAboutAxis({0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, kHalfPi);
+    const auto reflHoriz =
+        doc::SimilarityTransform::ReflectionAcrossPlane({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+
+    CHECK_FALSE(doc::TransformPolyline(blockStore, 0, rotX90));
+    CHECK_FALSE(doc::TransformPolyline(blockStore, 0, reflHoriz));
+    CHECK(blockStore.userPolylineVertsBulge[0] == Catch::Approx(1.f));
+
+    // Straight polyline in CadEntityStore still accepts out-of-plane 3D rotation.
+    blockStore.userPolylineVertsBulge[0] = 0.f;
+    CHECK(doc::TransformPolyline(blockStore, 0, rotX90));
+
+    // Drawing store preserves exact geometry under horizontal reflection by flipping normal to -Z and bulge to -1.
+    CadDrawingEntityStore drawStore;
+    drawStore.userPolylineOffsets = {0, 2};
+    drawStore.pushVertex({0.0, 0.0, 0.0});
+    drawStore.pushVertex({2.0, 0.0, 0.0});
+    drawStore.userPolylineVertsBulge = {1.f, 0.f};
+    drawStore.userPolylineVertsNormal = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+    drawStore.userPolylineClosed = {0};
+    REQUIRE(doc::TransformPolyline(drawStore, 0, reflHoriz));
+    CHECK(drawStore.userPolylineVertsBulge[0] == Catch::Approx(-1.f));
+    CheckVecNear({drawStore.userPolylineVertsNormal[0], drawStore.userPolylineVertsNormal[1],
+                  drawStore.userPolylineVertsNormal[2]},
+                 {0.0, 0.0, -1.0});
+    CheckBoundsNear(doc::PolylineBounds(drawStore, 0), {0.0, -1.0, 0.0}, {2.0, 0.0, 0.0});
+  }
+
+  SECTION("SplineBounds conservatively encloses curved degree-3 splines while staying exact in flat planes") {
+    CadDrawingEntityStore store;
+    CadSpline sp;
+    std::string why;
+    REQUIRE(spline::MakeControl({{0.0, 0.0, 5.0}, {5.0, 10.0, 5.0}, {15.0, 10.0, 5.0}, {20.0, 0.0, 5.0}},
+                                false, &sp, &why));
+    store.cadSplines.push_back(sp);
+
+    const doc::EntityBounds3d b = doc::SplineBounds(store, 0);
+    REQUIRE(b.valid);
+    // Planar Z is clamped to the control hull: never inflated off z = 5.
+    CHECK(b.min.z == Catch::Approx(5.0).margin(1e-12));
+    CHECK(b.max.z == Catch::Approx(5.0).margin(1e-12));
+
+    // Every densely evaluated point on the curve lies inside [b.min, b.max] (allowing 1e-12 for
+    // De Boor floating-point rounding on the exact planar Z hull).
+    const double t0 = spline::DomainMin(sp);
+    const double t1 = spline::DomainMax(sp);
+    for (int i = 0; i <= 1000; ++i) {
+      const double t = t0 + (t1 - t0) * static_cast<double>(i) / 1000.0;
+      const ray3d::Vec3 p = spline::Evaluate(sp, t);
+      CHECK(p.x >= b.min.x - 1e-12);
+      CHECK(p.x <= b.max.x + 1e-12);
+      CHECK(p.y >= b.min.y - 1e-12);
+      CHECK(p.y <= b.max.y + 1e-12);
+      CHECK(p.z >= b.min.z - 1e-12);
+      CHECK(p.z <= b.max.z + 1e-12);
+    }
+  }
 }
