@@ -141,6 +141,21 @@ EntityProbe MapMtextAabbWithExistingBug(const EntityProbe& src,
   return out;
 }
 
+// Mtext ROTATE / ROTATE-copy (issue #1624 item 12): MTEXT turns like TEXT. The insertion and the box's
+// top-left corner (the anchor it is drawn from) rotate about the base, the box keeps its own width and
+// height so the wrapping is unchanged, and rotationRad grows by the angle (-90 deg for ROTATE "90").
+EntityProbe MapMtextRotated(const EntityProbe& src, const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
+  EntityProbe out = src;
+  // pts[0] = ins, pts[1] = boxMin, pts[2] = boxMax
+  const double w = src.pts[2].x - src.pts[1].x, h = src.pts[2].y - src.pts[1].y;
+  const ray3d::Vec3 topLeft = fn({src.pts[1].x, src.pts[2].y, src.pts[1].z});
+  out.pts[0] = fn(src.pts[0]);
+  out.pts[1] = {topLeft.x, topLeft.y - h, topLeft.z};
+  out.pts[2] = {topLeft.x + w, topLeft.y, topLeft.z};
+  out.scalars[0] = src.scalars[0] - kHalfPi;
+  return out;
+}
+
 // Computes exact AABB of an axis-aligned 3D box stored as {min, max} after a linear/affine point map.
 EntityProbe MapAabb3d(const EntityProbe& src, const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
   EntityProbe out = src;
@@ -597,8 +612,9 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      // Default modelUnitsPerPlottedInch = 50 -> h = 5.0, w = 0.55 * 5.0 * 2 = 5.5.
-      ExactExtents(16.0, 21.5, 7.0, 12.0, 3.0, 3.0),
+      // Default modelUnitsPerPlottedInch = 50 -> h = 5.0, w = 0.55 * 5.0 * 2 = 5.5. The text stands on its
+      // insertion (baseline) point, so it spans y = 12..17 (#1624: it was reported below the baseline).
+      ExactExtents(16.0, 21.5, 12.0, 17.0, 3.0, 3.0),
   });
 
   // 6b. Annotation (Mtext): ins=(16,12,3), box=[16,20] x [12,15], rot=0, plottedHeight=0.1.
@@ -630,11 +646,10 @@ std::vector<KindRow> BuildTable() {
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      // Existing bug recorded for phase 0: Mtext ROTATE / ROTATE-copy / MIRROR initialize mnX/mxX/mnY/mxY
-      // from the UN-TRANSFORMED boxMin corner before looping over the 4 transformed corners, set ins = boxMin,
-      // and leave rotationRad untouched.
-      Applied([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapRotPlan); }),
-      Duplicated([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapRotPlan); }),
+      // ROTATE / ROTATE-copy turn the box like TEXT (#1624 item 12). MIRROR below still records the phase 0
+      // bug: mn/mx seeded from the UN-TRANSFORMED boxMin corner, ins set to the new boxMin.
+      Applied([](const EntityProbe& p) { return MapMtextRotated(p, MapRotPlan); }),
+      Duplicated([](const EntityProbe& p) { return MapMtextRotated(p, MapRotPlan); }),
       Refused(),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
