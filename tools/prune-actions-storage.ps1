@@ -76,7 +76,7 @@ function Remove-OldWorkflowRuns([int]$RetentionDays = 7) {
 
 function Remove-SupersededReleases {
   $rows = gh api --paginate "repos/$Repo/releases?per_page=100" `
-    --jq '.[] | [.id, .tag_name, .draft, .prerelease, (.published_at // "")] | @tsv'
+    --jq '.[] | [.id, .tag_name, .draft, .prerelease] | @tsv'
   if ($LASTEXITCODE -ne 0) { throw 'Listing releases failed.' }
   $releases = @($rows | Where-Object { $_ } | ForEach-Object {
     $parts = $_ -split "`t"
@@ -85,15 +85,24 @@ function Remove-SupersededReleases {
       Tag = $parts[1]
       Draft = [bool]::Parse($parts[2])
       Prerelease = [bool]::Parse($parts[3])
-      PublishedAt = $parts[4]
     }
   })
 
-  $latestStable = $releases |
-    Where-Object { -not $_.Draft -and -not $_.Prerelease -and $_.Tag -ne 'channel-beta' } |
-    Sort-Object { [DateTimeOffset]::Parse($_.PublishedAt) } -Descending |
-    Select-Object -First 1
-  $keepIds = @($latestStable.Id) + @($releases | Where-Object { $_.Tag -eq 'channel-beta' } | ForEach-Object Id)
+  # Use GitHub's latest-release endpoint instead of assuming publication order identifies it.
+  $stableReleases = @($releases | Where-Object { -not $_.Draft -and -not $_.Prerelease })
+  $latestStableId = $null
+  $latestStableResponse = gh api "repos/$Repo/releases/latest" --jq '.id' 2>&1
+  $latestStableExitCode = $LASTEXITCODE
+  if ($latestStableExitCode -eq 0) {
+    $latestStableId = "$latestStableResponse".Trim()
+    if (-not $latestStableId -or @($stableReleases | Where-Object { $_.Id -eq $latestStableId }).Count -ne 1) {
+      throw 'GitHub latest-release endpoint returned an unexpected release.'
+    }
+  } elseif ($stableReleases.Count -ne 0 -or "$latestStableResponse" -notmatch 'Not Found') {
+    throw "Resolving GitHub's latest stable release failed: $latestStableResponse"
+  }
+
+  $keepIds = @($latestStableId) + @($releases | Where-Object { $_.Tag -eq 'channel-beta' } | ForEach-Object Id)
   $stale = @($releases | Where-Object { -not $_.Draft -and $_.Id -notin $keepIds })
   Write-Output "releases: $($releases.Count) total, $($stale.Count) superseded."
   foreach ($release in $stale) {
