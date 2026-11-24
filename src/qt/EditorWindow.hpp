@@ -105,6 +105,8 @@ private:
   void ShowSnapOverride(const QPoint& position);
   /// The user manual, open at `topicCommand`'s page (empty: the running or last command's).
   void ShowContextualHelp(const QString& topicCommand = {});
+  void ShowTextEditor();
+  void PropertiesInputEvent(QObject* watched, QEvent* event);
   void BuildPropertiesPanel();
   void RefreshProperties();
   void Refresh();

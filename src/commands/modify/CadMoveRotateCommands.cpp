@@ -215,6 +215,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &a.insX, &a.insY);
     if (a.kind == CadAnnotation::Kind::Text) {
       a.rotationRad += rad;
+    } else if (a.kind == CadAnnotation::Kind::Mtext) {
+      RotateMtextAroundBase(bx, by, rad, &a);
     } else if (a.kind == CadAnnotation::Kind::DimLinear) {
       RotateCadDimLinearAroundBase(bx, by, rad, &a);
     } else if (a.kind == CadAnnotation::Kind::DimAligned) {

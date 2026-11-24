@@ -188,3 +188,13 @@ The second tab of the same panel. Generated reports arrive here as tabs:
 ## Related
 
 [[Layers]] · [[Object Selection]] · [[Annotation]] · [[Survey Points]] · [[PDF Underlays]]
+
+### Editing text in the Qt editor
+
+Double-click TEXT or MTEXT to open its editor. MTEXT offers font, bold, italic, underline and color
+controls for selected characters. Save applies the edit in one undo step; Cancel leaves the text
+unchanged. Both TEXT and MTEXT expose rotation in Properties. MTEXT rotation retains the box's local
+width and height so its wrapping stays stable.
+
+Properties input fields select their contents when focused. Layer and annotative-scale dropdowns
+use scrolling lists; the open list stays alive while it handles a selection.

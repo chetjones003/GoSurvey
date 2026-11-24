@@ -897,11 +897,15 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
       const float lastX = static_cast<float>(ps->draftVerts[n - 3]);
       const float lastY = static_cast<float>(ps->draftVerts[n - 2]);
       const float lastZ = static_cast<float>(ps->draftVerts[n - 1]);
-      float wx = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalX) : st.uiCursorWorldX;
-      float wy = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalY) : st.uiCursorWorldY;
+      // Prefer a live object-snap point over the raw cursor (document-local, like the draft verts).
+      float wx = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalX) : static_cast<float>(st.uiCursorWorldX - st.drawing.worldDocumentOriginX);
+      float wy = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalY) : static_cast<float>(st.uiCursorWorldY - st.drawing.worldDocumentOriginY);
       float wz = lastZ;
       const float targetZ = static_cast<float>(CadCommitElevation(st));
-      ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      // A live object snap sets the direction exactly, as it does for a click; only a free cursor
+      // is locked to the compass.
+      if (!st.viewportSnapPickValid)
+        ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
       const double dx = static_cast<double>(wx) - lastX;
       const double dy = static_cast<double>(wy) - lastY;
       const double dz = static_cast<double>(wz) - lastZ;
@@ -947,7 +951,7 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
   }
   const size_t n = ps->draftVerts.size();
   float wz = static_cast<float>(CadCommitElevation(st));
-  if (ps->phase == PRP::WaitNextPoint && n >= 3) {
+  if (ps->phase == PRP::WaitNextPoint && n >= 3 && !st.viewportSnapPickValid) {
     const float lastX = static_cast<float>(ps->draftVerts[n - 3]);
     const float lastY = static_cast<float>(ps->draftVerts[n - 2]);
     const float lastZ = static_cast<float>(ps->draftVerts[n - 1]);

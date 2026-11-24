@@ -328,6 +328,9 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
   double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
+  // A zero-length fence is a hover over one segment: use the ordinary pick tolerance.
+  if (fenceP1x == fenceP2x && fenceP1y == fenceP2y)
+    matchTol = CadHoverEntityPickTolWorld(st);
 
   TrimTargetEdge tgt{};
   double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
@@ -337,7 +340,11 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
     return;
 
   std::vector<std::array<double, 4>> cuts;
-  CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
+  const auto* trim = st.sessionAs<stepengine::TrimSession>();
+  if (trim && trim->phase == stepengine::TrimPhase::SelectTrimTargets)
+    BuildTrimCutSegments(st, trim->cutters, &tgt, &cuts);
+  else
+    CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
   if (cuts.empty())
     return;
 
@@ -384,7 +391,7 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   const auto initialPhase = (st.trimState == 1)
                                 ? stepengine::TrimPhase::SelectCuttingEdges
                                 : stepengine::TrimPhase::CuttingLine_WaitP1;
-  stepengine::BeginSession(st, std::make_unique<stepengine::TrimSession>(initialPhase), false);
+  stepengine::BeginSession(st, std::make_unique<stepengine::TrimSession>(initialPhase), true);
   if (st.trimState == 1) {
     log.push_back(
         "TRIM — pick cutting edges, Enter, then click the pieces to trim (L switches to line trim). ESC cancels.");

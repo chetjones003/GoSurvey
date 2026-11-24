@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QListView>
 #include <QDockWidget>
 #include <QFocusEvent>
 #include <QFrame>
@@ -109,6 +110,21 @@ QString Merge(const QStringList& values) {
   return values.front();
 }
 
+// QWidget::isAncestorOf stops at window boundaries, and a combo's popup list is its own window, so
+// walk the parent chain by hand to ask "does this widget belong to the Properties panel?".
+bool BelongsToPanel(const QWidget* panel, const QWidget* widget) {
+  for (; widget; widget = widget->parentWidget())
+    if (widget == panel) return true;
+  return false;
+}
+
+// A non-editable combo ignores setCurrentText for text that is not an item, and would silently show
+// its first entry instead. Add the value (a placeholder, or a layer absent from the table) first.
+void ShowComboText(QComboBox* combo, const QString& text) {
+  if (combo->findText(text) < 0) combo->insertItem(0, text);
+  combo->setCurrentText(text);
+}
+
 }  // namespace
 
 void EditorWindow::BuildPropertiesPanel() {
@@ -162,6 +178,8 @@ void EditorWindow::RefreshProperties() {
     mix(st.drawing.alignmentCheckSets.size());
   }
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
+  if (auto* popup = QApplication::activePopupWidget(); popup && BelongsToPanel(m_PropertiesScroll, popup))
+    return; // Keep an open layer/scale list alive until Qt finishes handling its input.
   m_PropertiesFingerprint = fp;
 
   auto* body = new TerrainPropertiesBody;
@@ -346,7 +364,7 @@ void EditorWindow::RefreshProperties() {
     m_PropertiesNote = QString::fromStdString(outcome.message);
     if (!outcome.message.empty()) m_Log.push_back("PROPERTIES — " + outcome.message);
     m_PropertiesFingerprint = ~0ull;
-    Refresh();
+    QTimer::singleShot(0, this, [this] { Refresh(); });
   };
   // A numeric field: commits on Enter/focus-out when its text really changed; an unparsable entry
   // is refused with a message and the field goes back to the drawing's value.
@@ -388,17 +406,19 @@ void EditorWindow::RefreshProperties() {
     for (const auto& layer : st.drawing.drawingLayerTable) layers.append(Text(layer.name));
     auto* layer = new QComboBox(body);
     layer->setObjectName("propLayer");
-    layer->setEditable(true);
+    layer->setView(new QListView(layer));
+    layer->setMaxVisibleItems(14);
+    layer->view()->setMinimumWidth(260);
     if (general.layerMixed) layer->addItem("(varies)");
     layer->addItems(layers);
-    layer->setCurrentText(none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
+    ShowComboText(layer, none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
     layer->setEnabled(!none && general.count > 0);
     // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
     const bool oneAlignment = st.selection.size() == 1 && total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
                               static_cast<size_t>(st.selection[0].index) < st.drawing.alignments.size();
     const std::string alignmentName = oneAlignment ? st.drawing.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
     if (oneAlignment) {
-      layer->setCurrentText(Text(st.drawing.alignments[static_cast<size_t>(st.selection[0].index)].layer));
+      ShowComboText(layer, Text(st.drawing.alignments[static_cast<size_t>(st.selection[0].index)].layer));
       layer->setEnabled(true);
     }
     connect(layer, &QComboBox::textActivated, layer, [this, finish, alignmentName](const QString& value) {
@@ -518,12 +538,15 @@ void EditorWindow::RefreshProperties() {
       for (const auto& scale : st.drawing.annotationScales) {
         auto* item = new QStandardItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
         item->setData(QString::fromUtf8(scale.name.c_str()), Qt::UserRole);
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
         const bool visible = visibleScaleNames->empty() ||
             std::find(visibleScaleNames->begin(), visibleScaleNames->end(), scale.name) != visibleScaleNames->end();
         item->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
         scaleModel->appendRow(item);
       }
+      scales->setView(new QListView(scales));
+      scales->view()->setMinimumWidth(260);
+      scales->setMaxVisibleItems(14);
       scales->setModel(scaleModel);
       scales->setEnabled(*annotativeFlag && !st.drawing.annotationScales.empty());
       addRow(annotationRows, "Visible scales", scales);
@@ -549,7 +572,7 @@ void EditorWindow::RefreshProperties() {
         PushUndoSnapshot(m_State, "Annotative scale visibility");
         *visibleScaleNames = std::move(visibleNames);
         BumpCadGpuCache(m_State);
-        Refresh();
+        QTimer::singleShot(0, this, [this] { Refresh(); });
       });
     }
   }
@@ -654,7 +677,7 @@ void EditorWindow::RefreshProperties() {
     number("Insertion Y", "propTextInsertionY", F::InsertionY, fmt(ann.insY + oy), 'Y');
     number("Insertion Z", "propTextInsertionZ", F::InsertionZ, fmt(ann.insZ), 'Z');
     number("Plotted height (in)", "propTextHeight", F::PlottedHeightInches, QString::asprintf("%.4f", static_cast<double>(ann.plottedHeightInches)));
-    if (ann.kind == CadAnnotation::Kind::Text)
+    if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext)
       number("Rotation (CW from N)", "propTextRotation", F::RotationBearingDeg,
              QString::asprintf("%.2f", static_cast<double>(BearingCwNorthDegFromMathAngleRad(ann.rotationRad))));
     if (ann.kind == CadAnnotation::Kind::Mtext) {
@@ -1131,4 +1154,19 @@ void EditorWindow::RefreshProperties() {
   if (auto* old = m_PropertiesScroll->takeWidget()) old->deleteLater();
   m_PropertiesScroll->setWidget(body);
   static_cast<AdaptivePropertiesScrollArea*>(m_PropertiesScroll)->UpdateRowWidths();
+}
+
+void EditorWindow::PropertiesInputEvent(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::Hide && m_PropertiesScroll) {
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (widget && widget->isWindow() && BelongsToPanel(m_PropertiesScroll, widget))
+      QTimer::singleShot(0, this, [this] { RefreshProperties(); });
+  }
+  if (event->type() == QEvent::FocusIn && m_PropertiesScroll) {
+    auto* edit = qobject_cast<QLineEdit*>(watched);
+    if (edit && !edit->isReadOnly() && m_PropertiesScroll->isAncestorOf(edit)) {
+      // Run after the click has positioned the caret. The edit owns the callback's lifetime.
+      QTimer::singleShot(0, edit, [edit] { if (edit->hasFocus()) edit->selectAll(); });
+    }
+  }
 }

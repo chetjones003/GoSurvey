@@ -100,11 +100,27 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
     }
     if (a.kind == CadAnnotation::Kind::Table)
       continue;
-    float mnX = 0.f;
-    float mnY = 0.f;
-    float mxX = 0.f;
-    float mxY = 0.f;
-    CadAnnotationRoughBounds(a, cmd.drawing.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
+    // Test in the text's own frame; its world AABB includes empty corners after rotation.
+    CadAnnotation unrotated = a;
+    const bool box = CadAnnotationHasTextBox(a.kind);
+    const float ax = box ? a.boxMinX : a.insX, ay = box ? a.boxMaxY : a.insY;
+    const float dx = wx - ax, dy = wy - ay;
+    const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+    wx = ax + dx * c + dy * s;
+    wy = ay - dx * s + dy * c;
+    unrotated.rotationRad = 0.f;
+    float xs[4], ys[4];
+    // Cheap reject first: the estimated box, padded by its own size to cover any measured-width
+    // difference, so hovering a drawing full of text doesn't lay out every string on each move.
+    CadAnnotationTextPickQuad(cmd, unrotated, xs, ys, /*measure=*/false);
+    float mnX = *std::min_element(xs, xs + 4), mxX = *std::max_element(xs, xs + 4);
+    float mnY = *std::min_element(ys, ys + 4), mxY = *std::max_element(ys, ys + 4);
+    const float pad = std::max(mxX - mnX, mxY - mnY) + tol;
+    if (wx < mnX - pad || wx > mxX + pad || wy < mnY - pad || wy > mxY + pad)
+      continue;
+    CadAnnotationTextPickQuad(cmd, unrotated, xs, ys);
+    mnX = *std::min_element(xs, xs + 4); mxX = *std::max_element(xs, xs + 4);
+    mnY = *std::min_element(ys, ys + 4); mxY = *std::max_element(ys, ys + 4);
     if (wx >= mnX - tol && wx <= mxX + tol && wy >= mnY - tol && wy <= mxY + tol)
       return i;
   }
