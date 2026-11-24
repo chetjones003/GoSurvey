@@ -23,8 +23,7 @@ permissions:
   pull-requests: read
   security-events: write
 
-# Every job runs on the self-hosted Victus Windows runners. Fork PRs wait for maintainer
-# approval (repository fork-PR approval policy) before any job runs on that machine.
+# Windows checks use the Victus PR pool. Fork PRs wait for maintainer approval.
 defaults:
   run:
     shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; . '{0}'"
@@ -63,7 +62,7 @@ jobs:
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -91,7 +90,7 @@ jobs:
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
@@ -113,10 +112,10 @@ jobs:
     name: PR gate${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     steps:
       - name: Check out PR changes
         uses: actions/checkout@v4
@@ -168,7 +167,7 @@ jobs:
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     steps:
       - name: Check out PR changes
         uses: actions/checkout@v4
@@ -194,10 +193,10 @@ jobs:
     name: security / gitleaks${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -216,10 +215,10 @@ jobs:
     name: security / dependency-scan${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -230,6 +229,6 @@ jobs:
         run: |
           $trivy = ./tools/ci-get-tool.ps1 -Name trivy
           # The vulnerability database is cached on the runner, not in GitHub storage.
-          $cache = Join-Path $env:LOCALAPPDATA 'GoSurveyCI/trivy-cache'
+          $cache = Join-Path (Split-Path -Parent $env:RUNNER_TEMP) 'trivy-cache'
           & $trivy fs --cache-dir $cache --db-repository ghcr.io/aquasecurity/trivy-db:2 `
             --scanners vuln,secret --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .

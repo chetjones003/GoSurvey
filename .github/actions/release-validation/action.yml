@@ -173,6 +173,10 @@ runs:
       shell: pwsh
       run: |
         $workers = [Math]::Min(16, [Environment]::ProcessorCount)
+        $configuredWorkers = 0
+        if ([int]::TryParse($env:CMAKE_BUILD_PARALLEL_LEVEL, [ref]$configuredWorkers) -and $configuredWorkers -gt 0) {
+          $workers = [Math]::Min($workers, $configuredWorkers)
+        }
         $requestedTargets = '${{ inputs.build-targets }}'
         if ($requestedTargets -eq 'all') {
           cmake --build --preset ninja-release --parallel $workers

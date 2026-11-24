@@ -46,6 +46,8 @@ jobs:
   measure:
     name: beta build-time sample
     runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "3"
     timeout-minutes: 120
     continue-on-error: true
     defaults:

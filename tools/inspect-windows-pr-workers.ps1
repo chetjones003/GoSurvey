@@ -1,6 +1,7 @@
 #Requires -Version 7.2
 param(
   [string]$WorkersRoot = (Join-Path $env:USERPROFILE 'GoSurveyCI\pr-workers'),
+  [string]$ThirdPrRunnerDirectory = 'C:\actions-pr-3',
   [switch]$RequireWorkers
 )
 $ErrorActionPreference = 'Stop'
@@ -10,8 +11,13 @@ $processes = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'
   Select-Object Name, ProcessId, ParentProcessId, SessionId, ExecutablePath)
 $processes | Format-Table | Out-String | Write-Host
 $missing = @()
-foreach ($role in 'clang-tidy', 'msvc-analyze') {
-  $exe = Join-Path $WorkersRoot "$role\bin\Runner.Listener.exe"
+$directories = [ordered]@{
+  'clang-tidy' = Join-Path $WorkersRoot 'clang-tidy'
+  'msvc-analyze' = Join-Path $WorkersRoot 'msvc-analyze'
+  'pr-3' = $ThirdPrRunnerDirectory
+}
+foreach ($role in $directories.Keys) {
+  $exe = Join-Path $directories[$role] 'bin\Runner.Listener.exe'
   $listening = @($processes | Where-Object { $_.ExecutablePath -eq $exe })
   # The observed CIM snapshot did not show the briefly connected child listeners.
   # The role launcher holds this mutex until run.cmd exits, independent of CIM.
@@ -35,4 +41,4 @@ foreach ($role in 'clang-tidy', 'msvc-analyze') {
     }
   }
 }
-if ($RequireWorkers -and $missing.Count) { throw "Analyzer workers did not start: $($missing -join ', ')." }
+if ($RequireWorkers -and $missing.Count) { throw "PR workers did not start: $($missing -join ', ')." }

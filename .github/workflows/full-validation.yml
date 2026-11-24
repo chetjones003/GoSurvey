@@ -71,7 +71,7 @@ jobs:
     needs: [ci-event]
     if: >-
       !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
@@ -117,7 +117,7 @@ jobs:
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'C/C++ change detection failed.' }
 
-  # Keep the complete target build blocking while other checks are paused.
+  # Run the full build after a failed classifier, and let a newer commit cancel it.
   build-all-targets:
     defaults:
       run:
@@ -125,11 +125,11 @@ jobs:
     name: full / build all targets${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    # Self-hosted Victus build runner; fork PRs wait for maintainer approval before running here.
-    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    # Fork PRs wait for maintainer approval before using the self-hosted PR pool.
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     env:
       SCCACHE_GHA_ENABLED: "false"
     steps:
@@ -149,14 +149,19 @@ jobs:
           run-tests: 'false'
 
       - name: Summarize CI performance
-        if: always()
+        if: ${{ !cancelled() }}
         run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
 
       - name: Store build performance evidence on the runner
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP 'ci-evidence-build-all'
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           if (Test-Path build/artifacts/ci) { Copy-Item -Recurse -Force build/artifacts/ci (Join-Path $evidence 'ci') }
           if (Test-Path build/.cmake/release/.ninja_log) { Copy-Item -Force build/.cmake/release/.ninja_log $evidence }
-          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence
+          $storage = Join-Path (Split-Path -Parent $env:RUNNER_TEMP) 'ci-artifacts'
+          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence -StorageRoot $storage
+
+      - name: Stop the build's compiler cache
+        if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        run: ./tools/ci-compiler-cache.ps1 -Action stop
