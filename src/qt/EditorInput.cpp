@@ -441,10 +441,19 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (key->key() == Qt::Key_Backspace && !m_DynamicGroup.f[i].locked &&
         dyninput::BackspaceAtEmpty(m_DynamicGroup, i)) { RefreshDraftingInput(); return true; }
   }
-  if (widget == m_Viewport && DynamicInputAcceptsInput() &&
+  // While a point is being entered the dynamic fields own the keyboard, as AutoCAD's do: not only with the
+  // drawing focused, but also from an empty command line (where focus stays after typing the command) and
+  // from any other panel that is not itself being typed into. Without this, coordinates and Tab went to
+  // the command line and the fields beside the cursor were display-only.
+  const bool fieldsOwnKeys = widget == m_Viewport ||
+      (m_DynamicGeometry.pointEntry && widget == m_Command && m_Command->text().isEmpty()) ||
+      (m_DynamicGeometry.pointEntry && !editing);
+  if (fieldsOwnKeys && DynamicInputAcceptsInput() &&
       !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
-    if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) return SubmitDraftingInput();
-    if (key->key() == Qt::Key_Tab || (!key->text().isEmpty() && key->text()[0].isPrint())) {
+    if (widget == m_Viewport && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter))
+      return SubmitDraftingInput();
+    const bool spaceAsEnter = widget != m_Viewport && key->key() == Qt::Key_Space;
+    if (key->key() == Qt::Key_Tab || (!spaceAsEnter && !key->text().isEmpty() && key->text()[0].isPrint())) {
       auto* edit = m_DynamicFields[0]; edit->setFocus(); edit->selectAll();
       if (key->key() != Qt::Key_Tab) QApplication::sendEvent(edit, key);
       return true;

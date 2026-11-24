@@ -1577,3 +1577,17 @@ struct CadFilledRegion {
 /// ~0.008 ft quantization REQ-101 tightened away; catch it at compile time (TASK-228 Phase D).
 static_assert(std::is_same_v<decltype(CadFilledRegion::vertsXyz)::value_type, double>,
               "CadFilledRegion::vertsXyz must stay double (ADR-054 (a), REQ-101)");
+
+/// The pattern linework of every patterned hatch (REQ-043), derived from the filled regions and kept
+/// outside every undo snapshot, like the solid display cache. ef RefreshHatchDisplayGeometry keeps it
+/// current; the renderer draws it as depth-tested lines.
+struct CadHatchDisplayGeometry {
+  /// Parallel to the drawing's filled regions: x0,y0,x1,y1 per segment in local coordinates, in double
+  /// until the GPU narrowing point (ADR-054). Empty for SOLID fills and unknown patterns.
+  std::vector<std::vector<double>> segments;
+  /// Per region, a fingerprint of everything its segments came from (boundary, pattern, scale, angle,
+  /// library). Unchanged means the segments are reused as they are.
+  std::vector<std::uint64_t> keys;
+  /// Bumps whenever any region's segments change, so the renderer re-uploads only then.
+  std::uint64_t revision = 1;
+};

@@ -10,6 +10,15 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
 
 void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
 
+/// Whether circle \p ci shows its radius grip. The grip sits at centre + (r, 0) and its drag sets the
+/// radius in plan, which is only on the circle when the circle lies flat. A tilted circle keeps just its
+/// centre grip, the rule tilted ellipses already follow (`EllipseHasGrips`).
+[[nodiscard]] inline bool CircleHasRadiusGrip(const AppCommandState& st, size_t ci) {
+  const auto& normals = st.drawing.userCircleNormals;
+  if (ci * 3 + 2 >= normals.size()) return true;
+  return IsFlatNormal(normals[ci * 3], normals[ci * 3 + 1], normals[ci * 3 + 2]);
+}
+
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
   if (!st.entityGripMoveActive)
     return;

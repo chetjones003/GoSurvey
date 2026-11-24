@@ -161,7 +161,7 @@ static bool PickClosestPipeRunEntity(const AppCommandState& st, const ray3d::Ray
   solidpick::Tolerance tol;
   tol.vertex = static_cast<double>(tolWorld);
   tol.edge = tol.vertex;
-  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  const bool facesPickable = EffectiveVisualStyle(st) != VisualStyle::Wireframe2D;
   bool any = false;
   double bestT = 0.0;
   int bestOwner = -1;
@@ -206,7 +206,7 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   SelectedSubObject sub{};
   solidpick::Pick pick{};
   // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
-  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  const bool facesPickable = EffectiveVisualStyle(st) != VisualStyle::Wireframe2D;
   const bool haveSolid = PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable) &&
                         sub.solidIndex >= 0 && static_cast<std::size_t>(sub.solidIndex) < st.drawing.cadSolids.size();
 

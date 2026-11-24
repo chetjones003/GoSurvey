@@ -169,6 +169,22 @@ TEST_CASE("Boundary trace: nested squares pick the smallest enclosing loop", "[h
   REQUIRE(hatchboundary::detail::LoopAreaAbs(loop2) == Catch::Approx(100.0));
 }
 
+TEST_CASE("Boundary trace: drawn linework that crosses, overshoots and ends mid-line", "[hatch][boundary]") {
+  // A 10 x 10 area whose sides overshoot the corners by 1, a divider that ends on the left and right sides
+  // (T-junctions at y = 6), and a tick sticking into the lower part. None of it meets end to end.
+  const std::vector<Seg> segs = {
+      {-1, 0, 11, 0}, {10, -1, 10, 11}, {11, 10, -1, 10}, {0, 11, 0, -1},  // overshooting sides
+      {0, 6, 10, 6},                                                       // divider, ends on both sides
+      {5, 0, 5, 2},                                                        // tick off the bottom edge
+  };
+  std::vector<float> lower;
+  REQUIRE(hatchboundary::TraceEnclosingLoop(segs, 2.0, 3.0, &lower));
+  CHECK(hatchboundary::detail::LoopAreaAbs(lower) == Catch::Approx(60.0));
+  std::vector<float> upper;
+  REQUIRE(hatchboundary::TraceEnclosingLoop(segs, 2.0, 8.0, &upper));
+  CHECK(hatchboundary::detail::LoopAreaAbs(upper) == Catch::Approx(40.0));
+}
+
 namespace {
 // A minimal ANSI31-like definition: one solid family at 45°, 3-unit perpendicular spacing.
 hatchpat::Def Ansi31Def() {
@@ -187,7 +203,7 @@ TEST_CASE("Pattern generation: solid region yields no segments", "[hatch][patter
   fr.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   fr.loopStart = {0};
   // default patternName empty → solid
-  std::vector<float> segs;
+  std::vector<double> segs;
   REQUIRE(hatchpattern::BuildSegments(fr, Ansi31Def(), &segs) == 0);
   REQUIRE(segs.empty());
 }
@@ -198,7 +214,7 @@ TEST_CASE("Pattern generation: line family is clipped inside the region", "[hatc
   fr.loopStart = {0};
   fr.patternName = "ANSI31";  // single 45° family
   fr.patternScale = 1.f;
-  std::vector<float> segs;
+  std::vector<double> segs;
   const int n = hatchpattern::BuildSegments(fr, Ansi31Def(), &segs);
   REQUIRE(n > 0);
   REQUIRE(segs.size() == static_cast<size_t>(n) * 4);
@@ -223,7 +239,7 @@ TEST_CASE("Pattern generation: a hole carves gaps (midpoints avoid the hole)", "
                  7, 7, 0, 13, 7, 0, 13, 13, 0, 7,  13, 0};   // hole
   fr.loopStart = {0, 4};
   fr.patternName = "ANSI31";
-  std::vector<float> segs;
+  std::vector<double> segs;
   REQUIRE(hatchpattern::BuildSegments(fr, Ansi31Def(), &segs) > 0);
   // No emitted segment midpoint falls inside the hole (even-odd clipping respects islands).
   for (size_t s = 0; s + 3 < segs.size(); s += 4) {
@@ -240,10 +256,10 @@ TEST_CASE("Pattern generation: larger scale produces fewer lines", "[hatch][patt
   fr.loopStart = {0};
   fr.patternName = "ANSI31";
   fr.patternScale = 1.f;
-  std::vector<float> dense;
+  std::vector<double> dense;
   const int nDense = hatchpattern::BuildSegments(fr, Ansi31Def(), &dense);
   fr.patternScale = 3.f;
-  std::vector<float> sparse;
+  std::vector<double> sparse;
   const int nSparse = hatchpattern::BuildSegments(fr, Ansi31Def(), &sparse);
   REQUIRE(nSparse < nDense);
 }

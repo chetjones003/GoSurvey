@@ -2663,7 +2663,7 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         const float cy = static_cast<float>(c.cy);
         const float cz = static_cast<float>(c.cz);
         gripCandidate(cx, cy, cz);
-        gripCandidate(cx + static_cast<float>(c.r), cy, cz);
+        if (CircleHasRadiusGrip(cmd, ci)) gripCandidate(cx + static_cast<float>(c.r), cy, cz);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
       const int np = static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);

@@ -832,7 +832,15 @@ StepSubmitResult HatchSession::onBlankEnter(AppCommandState&, std::vector<std::s
   return StepSubmitResult::Handled;
 }
 
-void HatchSession::onViewportPick(AppCommandState&, const StepPickInput&, std::vector<std::string>&) {}
+void HatchSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
+                                  std::vector<std::string>& log) {
+  std::vector<float> loop;
+  if (CadHatchTraceAt(st, pick.localX, pick.localY, &loop) && CadHatchCommitLoop(st, loop, log)) {
+    EndSession(st);
+  } else {
+    log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
+  }
+}
 
 void HatchSession::onCancel(AppCommandState& st, std::vector<std::string>&) {
   st.hatchPreviewValid = false;

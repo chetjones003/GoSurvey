@@ -132,29 +132,27 @@ static void ScalePdfInsertAroundBase(float bx, float by, float sc, float* x, flo
   *y = by + sc * (*y - by);
 }
 
-/// REQ-356: dismiss the line-end grip menu after the pointer leaves it for one second.
+/// REQ-356: dismiss the grip menu once the pointer has been off it for one second. Polled rather than
+/// driven by Enter/Leave: an open popup grabs the mouse, and those events do not reliably reach it.
 class GripMenuDismissFilter final : public QObject {
 public:
   explicit GripMenuDismissFilter(QMenu* menu) : QObject(menu), m_Menu(menu) {
-    m_Timer.setSingleShot(true);
-    m_Timer.setInterval(1000);
-    m_Timer.setParent(menu);
-    connect(&m_Timer, &QTimer::timeout, menu, &QMenu::close);
-    menu->installEventFilter(this);
-  }
-  bool eventFilter(QObject* watched, QEvent* event) override {
-    if (watched != m_Menu)
-      return QObject::eventFilter(watched, event);
-    if (event->type() == QEvent::Leave)
-      m_Timer.start();
-    else if (event->type() == QEvent::Enter)
-      m_Timer.stop();
-    return false;
+    m_Timer.setInterval(kTickMs);
+    connect(&m_Timer, &QTimer::timeout, this, [this] {
+      if (!m_Menu->isVisible()) return;
+      // A few pixels of slack so brushing the menu's edge does not start the countdown.
+      const bool over = m_Menu->geometry().adjusted(-6, -6, 6, 6).contains(QCursor::pos());
+      m_OffMs = over ? 0 : m_OffMs + kTickMs;
+      if (m_OffMs >= 1000) m_Menu->close();
+    });
+    m_Timer.start();
   }
 
 private:
+  static constexpr int kTickMs = 100;
   QMenu* m_Menu;
   QTimer m_Timer;
+  int m_OffMs = 0;
 };
 
 static void AppendHighlightFloatVerts(const std::vector<float>& batch, std::vector<double>* out) {
@@ -287,6 +285,16 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
     connect(menu, &QMenu::aboutToHide, this, [this] {
       m_State.gripMenuPendingEntityIndex = -1;
       m_State.gripMenuPendingWhich = -1;
+      // The popup swallowed every move while it was open, so the crosshair still sits on the grip.
+      // Once it is gone, put the crosshair where the pointer actually is.
+      QTimer::singleShot(0, this, [this] {
+        const QPoint global = QCursor::pos();
+        const QPointF local = mapFromGlobal(global);
+        if (!rect().contains(local.toPoint())) return;
+        QMouseEvent move(QEvent::MouseMove, local, QPointF(global), Qt::NoButton,
+                         QGuiApplication::mouseButtons(), QGuiApplication::keyboardModifiers());
+        mouseMoveEvent(&move);
+      });
     });
     new GripMenuDismissFilter(menu);
     menu->popup(QCursor::pos());
@@ -508,7 +516,6 @@ bool EditorViewport::DrawPaperViewportClipMask(const QPainterPath& path, int fra
 void EditorViewport::InvalidateGeometry() {
   ClearTransientInput();
   ++m_RenderRevision; // A different document can have the same domain revision.
-  m_HatchRevision = ~0ull;
   update();
 }
 
@@ -632,6 +639,10 @@ void EditorViewport::paintGL() {
     m_Renderer->BlitRenderedFrame(defaultFramebufferObject(), w, h);
   } else if (m_Ready && !paperSpace) {
     const Camera camera = CadViewCamera(m_State);
+    // Every command-side pick tolerance (CadOffsetEntityPickTolWorld and friends) converts pixels to
+    // world units from these two. Left at their defaults they made a pick reach ~2.5 units at any zoom.
+    m_State.viewportLastSurveyLayoutOrthoHalfH = camera.orthoHalfH;
+    m_State.viewportLastSurveyLayoutHeightPx = static_cast<float>(std::max(1, height()));
     std::vector<float> rubber, preview, previewCircles, highlightCircles;
     std::vector<double> highlight;
     AppendCadDraftRubberLines(m_State, m_Cursor.x, m_Cursor.y, m_State.orthoMode,
@@ -694,9 +705,16 @@ void EditorViewport::paintGL() {
     std::vector<float> subHoverLines;
     BuildSubObjectHoverHighlight(m_State, &subObjectOverlay.hoverFaceTris,
         &subObjectOverlay.hoverFaceEdges, &subHoverLines);
+    // The object under the cursor, in the renderer's hover channel (the sub-object hover shares it).
+    std::vector<float> hoverLines, hoverCircles;
+    if (m_PointerInside) BuildHoverHighlight(m_State, &hoverLines, &hoverCircles);
+    subHoverLines.insert(subHoverLines.end(), hoverLines.begin(), hoverLines.end());
     RefreshSolidDisplayGeometry(m_State);
     RefreshSurfaceDisplayGeometry(m_State);
+    EnsureQtHatchPatternLibrary(m_State);
+    RefreshHatchDisplayGeometry(m_State, m_State.cadGpuCacheRevision + m_RenderRevision);
     CadExtendedGeometryInput ext;
+    ext.hatchDisplay = &m_State.hatchDisplayGeometry;
     ext.arcs = &m_State.drawing.userArcs; ext.arcAttrs = &m_State.drawing.userArcAttrs;
     ext.circleNormals = &m_State.drawing.userCircleNormals;
     ext.ellipses = &m_State.drawing.userEllipses; ext.ellAttrs = &m_State.drawing.userEllAttrs;
@@ -726,8 +744,7 @@ void EditorViewport::paintGL() {
     ext.annotationScales = &m_State.drawing.annotationScales;
     ext.currentAnnotationScaleIndex = m_State.currentAnnotationScaleIndex;
     RenderTuning tuning;
-    const auto* activeViewport = CurrentViewport(m_State);
-    tuning.visualStyle = activeViewport ? activeViewport->visualStyle : m_State.viewportVisualStyle;
+    tuning.visualStyle = EffectiveVisualStyle(m_State);
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
     if (!qApp->property("cadLightTheme").toBool()) {
       tuning.bgR = 32.f / 255.f;
@@ -882,7 +899,8 @@ void EditorViewport::paintGL() {
     }
     m_Renderer->RenderScene(camera, w, h, m_State.drawing.userLinesFlat, m_State.drawing.userCirclesCxCyZR,
         m_State.cadGpuCacheRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
-        &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
+        &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines,
+        hoverCircles.empty() ? nullptr : &hoverCircles, nullptr,
         &m_State.drawing.userLineAttrs, &m_State.drawing.userCircleAttrs, &ext, m_Grid, &m_State.drawing.drawingLayerTable, tuning,
         pdfAttachments, -1, &m_State.drawing.cadFilledRegions, &m_State.drawing.cadFilledRegionAttrs,
         &m_State.drawing.cadMeshes, &m_State.drawing.cadMeshAttrs, &m_State.solidDisplayGeometry,
@@ -931,7 +949,10 @@ void EditorViewport::paintGL() {
       paperCamera.WorldToScreen(x, y, 0.f, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
       return QPointF(sx, sy);
     };
+    EnsureQtHatchPatternLibrary(m_State);
+    RefreshHatchDisplayGeometry(m_State, m_State.cadGpuCacheRevision + m_RenderRevision);
     CadExtendedGeometryInput ext;
+    ext.hatchDisplay = &m_State.hatchDisplayGeometry;
     ext.arcs = &m_State.drawing.userArcs; ext.arcAttrs = &m_State.drawing.userArcAttrs;
     ext.circleNormals = &m_State.drawing.userCircleNormals;
     ext.ellipses = &m_State.drawing.userEllipses; ext.ellAttrs = &m_State.drawing.userEllAttrs;
@@ -1341,35 +1362,6 @@ void EditorViewport::paintGL() {
     }
     painter.restore();
   } else {
-    // The GL fill pass deliberately skips patterned regions; draw their clipped linework here.
-    if (m_HatchRevision != m_State.cadGpuRevision) {
-      QFile file(QtAsset("hatches/acadiso.pat"));
-      const std::string source = file.open(QIODevice::ReadOnly) ? file.readAll().toStdString() : std::string();
-      CadBuildHatchPatternSegments(m_State.drawing.cadFilledRegions, source, &m_HatchSegments);
-      m_HatchRevision = m_State.cadGpuRevision;
-    }
-    const auto hatchCamera = CadViewCamera(m_State);
-    for (std::size_t i = 0; i < m_HatchSegments.size(); ++i) {
-      if (i >= m_State.drawing.cadFilledRegionAttrs.size()) continue;
-      const auto& attrs = m_State.drawing.cadFilledRegionAttrs[i];
-      if (CadEntityIdHidden(&m_State.hiddenEntityIds, attrs.id)) continue;
-      const CadLayerRow* layer = FindDrawingLayerRowCi(m_State, attrs.layer.empty() ? std::string("0") : attrs.layer);
-      if (layer && (!layer->on || layer->frozen)) continue;
-      float rgb[3] = {1, 1, 1};
-      CadColorResolveRgb(CadColorEffectiveStorage(attrs.color, layer ? layer->color : "White"), 1, 1, 1, rgb);
-      QColor color = QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
-      color.setAlphaF(1.f - std::clamp(attrs.transparency < 0.f && layer ? layer->transparency : attrs.transparency, 0.f, 1.f));
-      painter.setPen(QPen(color, 1));
-      const auto& region = m_State.drawing.cadFilledRegions[i];
-      const float z = region.vertsXyz.size() > 2 ? static_cast<float>(region.vertsXyz[2]) : 0.f;
-      const auto& segments = m_HatchSegments[i];
-      for (std::size_t j = 0; j + 3 < segments.size(); j += 4) {
-        float ax, ay, bx, by;
-        hatchCamera.WorldToScreen(segments[j], segments[j + 1], z, width(), height(), &ax, &ay);
-        hatchCamera.WorldToScreen(segments[j + 2], segments[j + 3], z, width(), height(), &bx, &by);
-        painter.drawLine(QPointF(ax, ay), QPointF(bx, by));
-      }
-    }
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
     DrawQtTransformAnnotationPreviews(painter, m_State, static_cast<float>(m_Cursor.x),
         static_cast<float>(m_Cursor.y), static_cast<float>(width()), static_cast<float>(height()));
@@ -1396,7 +1388,7 @@ void EditorViewport::paintGL() {
           if (selected.index >= 0 && ci < m_State.drawing.circleCount()) {
             const CadCircleRecord c = m_State.drawing.circle(ci);
             grips.push_back({c.cx, c.cy, c.cz});
-            grips.push_back({c.cx + c.r, c.cy, c.cz});
+            if (CircleHasRadiusGrip(m_State, ci)) grips.push_back({c.cx + c.r, c.cy, c.cz});
           }
           break;
         }
@@ -1616,7 +1608,12 @@ void EditorViewport::paintGL() {
   if (!paperSpace) painter.drawText(18, height() - 20, "WCS");
   const viewcube::Scene cube = CubeScene();
   PaintViewCube(painter, cube, m_PointerInside ? viewcube::HitTest(cube, m_Last.x(), m_Last.y()) : viewcube::Hit{});
-  if (m_Ready && m_PointerInside && !viewcube::Contains(cube, m_Last.x(), m_Last.y())) DrawCursor(painter);
+  // PAN and ORBIT show their own native cursor (RefreshCommandCursor); painting the crosshair too would
+  // draw two cursors.
+  if (m_Ready && m_PointerInside && m_State.active != AppCommandState::Kind::Pan &&
+      m_State.active != AppCommandState::Kind::Orbit &&
+      !viewcube::Contains(cube, m_Last.x(), m_Last.y()))
+    DrawCursor(painter);
 }
 
 // REQ-450: crosshair arms plus a central pickbox; an object-selection step keeps the pickbox only.
@@ -1662,6 +1659,7 @@ void EditorViewport::enterEvent(QEnterEvent* event) {
 void EditorViewport::leaveEvent(QEvent* event) {
   setCursor(m_Ready ? Qt::BlankCursor : Qt::CrossCursor);  // the painted crosshair stands in for the native one
   m_PointerInside = false;
+  m_State.viewportHoverEntityValid = false;  // no hover highlight left behind on a drawing the pointer left
   update();
   QOpenGLWidget::leaveEvent(event);
 }
@@ -2395,7 +2393,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         } else if (selected.type == SelectedEntity::Type::Circle && index < m_State.drawing.circleCount()) {
           const auto circle = m_State.drawing.circle(index);
           consider(selected, {circle.cx, circle.cy, circle.cz}, 0);
-          consider(selected, {circle.cx + circle.r, circle.cy, circle.cz}, 1);
+          if (CircleHasRadiusGrip(m_State, index)) consider(selected, {circle.cx + circle.r, circle.cy, circle.cz}, 1);
         } else if (selected.type == SelectedEntity::Type::Arc && index < m_State.drawing.userArcs.size()) {
           const auto& arc = m_State.drawing.userArcs[index];
           // The same flat endpoints TryBeginEntityGripAtLocal grabs, so the menu arms the grip it shows.
@@ -2493,7 +2491,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       SelectedSubObject hovered;
       m_State.subObjectHoverValid = PickSubObjectAcrossSolids(m_State, ray, tolerance, &hovered);
       if (m_State.subObjectHoverValid) m_State.subObjectHover = hovered;
-    } else if (m_State.active == AppCommandState::Kind::None && !m_State.entityGripMoveActive) {
+    } else if ((m_State.active == AppCommandState::Kind::None || ViewportIsObjectSelectionStep(m_State)) &&
+               !m_State.entityGripMoveActive && !m_State.selBoxWaitingSecond) {
+      // Idle, or a command asking "which objects?": pre-highlight what a click would take.
       m_State.subObjectHoverValid = false;
       const auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
           static_cast<float>(width()), static_cast<float>(height()));
@@ -2509,6 +2509,8 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       if (m_State.viewportHoverEntityValid) m_State.viewportHoverEntity = hover.entity;
       m_State.viewportPickCandidates = hover.family == ViewportPickFamily::Linework ? hover.candidates : std::vector<CadPickCandidate>{};
       m_State.viewportPickAmbiguous = m_State.viewportPickCandidates.size() > 1;
+    } else {
+      m_State.viewportHoverEntityValid = false;  // drawing, dragging or boxing: no object hover
     }
     if (m_State.entityGripMoveActive) {
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
@@ -2787,6 +2789,31 @@ void EditorViewport::RefreshCommandCursor() {
     }
   }
   const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  if (!overCube && m_PointerInside && m_State.active == AppCommandState::Kind::Orbit) {
+    // Qt has no orbit shape, so draw the 3D Orbit symbol (an axis ringed by an arrowed orbit) at cursor
+    // size: white over a dark outline, readable on light and dark drawings alike. Hotspot at the centre.
+    static const QCursor orbit = [] {
+      QPixmap pixmap(32, 32);
+      pixmap.fill(Qt::transparent);
+      QPainter painter(&pixmap);
+      painter.setRenderHint(QPainter::Antialiasing, true);
+      const QRectF ring(3.5, 11.5, 25.0, 9.0);
+      QPainterPath arrow;  // head on the ring's front-right, pointing along the orbit
+      arrow.moveTo(22.0, 17.0); arrow.lineTo(27.5, 20.5); arrow.lineTo(21.0, 22.5); arrow.closeSubpath();
+      for (const auto& [color, width] : {std::pair{QColor(20, 20, 20), 3.4}, std::pair{QColor(255, 255, 255), 1.5}}) {
+        painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(QPointF(16.0, 2.5), QPointF(16.0, 29.5));
+        painter.drawEllipse(ring);
+        painter.setBrush(color);
+        painter.drawPath(arrow);
+      }
+      painter.end();
+      return QCursor(pixmap, 16, 16);
+    }();
+    setCursor(orbit);
+    return;
+  }
   setCursor(overCube ? Qt::ArrowCursor : (m_PointerInside && m_State.active == AppCommandState::Kind::Pan
       ? Qt::OpenHandCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor)));
 }
@@ -2824,4 +2851,10 @@ void EditorViewport::ClickViewCube(QPointF point) {
   if (viewcube::TargetFor(viewcube::HitTest(scene, point.x(), point.y()), CadViewCamera(m_State),
                           scene.ucsAzimuthOffsetDeg, &target))
     AnimateToOrientation(target.azimuthDeg, target.elevationDeg);
+}
+
+void EnsureQtHatchPatternLibrary(AppCommandState& state) {
+  if (!state.hatchPatternLibrary.empty()) return;
+  QFile file(QtAsset("hatches/acadiso.pat"));
+  if (file.open(QIODevice::ReadOnly)) SetHatchPatternLibrary(state, file.readAll().toStdString());
 }

@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "HatchPat.hpp"
 #include "engine/CommandSession.hpp"
 #include "engine/StepEngine.hpp"
 #include "modify/CadModifySessions.hpp"
@@ -452,6 +453,8 @@ struct CadExtendedGeometryInput {
   float drawingModelUnitsPerPlottedInch = 0.f;
   const std::vector<CadAnnotationScale>* annotationScales = nullptr;
   int currentAnnotationScaleIndex = -1;
+  /// Patterned hatch linework, parallel to the filled regions handed to the renderer (REQ-043).
+  const CadHatchDisplayGeometry* hatchDisplay = nullptr;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.

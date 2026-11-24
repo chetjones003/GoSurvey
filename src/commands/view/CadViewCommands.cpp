@@ -1056,6 +1056,17 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
     log.push_back("VISUALSTYLE — enter 2D, HIDDEN or SHADED.");
     return false;
   }
+  // Like AutoCAD's VSCURRENT, the style belongs to the viewport being worked in: a layout viewport (floating
+  // model space, or the one selected on the sheet) carries its own, and it is what that viewport draws with.
+  if (Viewport* viewport = CurrentViewport(st)) {
+    if (viewport->visualStyle != s) {
+      PushUndoSnapshot(st, "Viewport visual style");
+      viewport->visualStyle = s;
+      BumpCadGpuCache(st);
+    }
+    log.push_back(std::string("Viewport visual style = ") + VisualStyleName(s) + ".");
+    return true;
+  }
   st.viewportVisualStyle = s;
   log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
   return true;

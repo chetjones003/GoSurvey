@@ -75,7 +75,7 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
         const CadCircleRecord c = cmd.drawing.circle(ci);
         const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
         tryGrip(sel, cx, cy, 0);
-        tryGrip(sel, cx + r, cy, 1);
+        if (CircleHasRadiusGrip(cmd, ci)) tryGrip(sel, cx + r, cy, 1);
       }
       break;
     }
@@ -2176,7 +2176,7 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
     haveSolid = PickClosestSolidEntity(st, rq.eyeRay, solidTol, &solidE, &tSolid);
   }
   // Only a DRAWN surface hides what is behind it: in 2D Wireframe a solid is see-through (Q1).
-  const bool opaque = haveSolid && st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  const bool opaque = haveSolid && EffectiveVisualStyle(st) != VisualStyle::Wireframe2D;
   // "On the surface" counts as in front: a line drawn on a face, or the face's own edge, must still
   // win over the face. The pick tolerance is that allowance, converted to ray-parameter units.
   const double depthTolT = haveSolid ? static_cast<double>(std::max(rq.lineTol, solidTol)) / edLen : 0.0;

@@ -44,6 +44,8 @@ bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName);
 /// viewport if inside one (REQ-036), else the single selected viewport in the active paper layout,
 /// else nullptr (no current viewport → VP controls disabled).
 Viewport* CurrentViewport(AppCommandState& st);
+/// The visual style the user is working in: the current viewport's own (ef CurrentViewport), else model space's.
+VisualStyle EffectiveVisualStyle(const AppCommandState& st);
 /// Begin VPFREEZE / VPTHAW: pick entities in the current (floating) viewport to freeze/thaw their layers.
 void StartVpFreezeCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartVpThawCommand(AppCommandState& st, std::vector<std::string>& log);

@@ -340,7 +340,7 @@ void RegisterUcsViewCommands(CommandRegistry& reg) {
                ApplyVisualStyleValue(st, vsArg, log);
              } else {
                log.push_back(std::string("Visual style = ") +
-                             VisualStyleName(st.viewportVisualStyle) +
+                             VisualStyleName(EffectiveVisualStyle(st)) +
                              ". Usage: VS 2D | HIDDEN | SHADED.");
              }
            }});

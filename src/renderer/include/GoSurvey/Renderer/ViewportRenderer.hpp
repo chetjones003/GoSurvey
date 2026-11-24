@@ -551,6 +551,17 @@ private:
   std::vector<SolidGpuBatch> solidGpu_;
   std::uint64_t solidGpuSig_ = 0;  ///< assembly signature solidGpu_ was built from; 0 = not built
   void ReleaseSolidGpu();
+  /// Patterned hatch linework (REQ-043): one per-vertex-colour line buffer for every visible hatch,
+  /// re-uploaded only when the pattern geometry, a hatch's colour or visibility, or the far-drifted view
+  /// anchor changes — never per frame.
+  unsigned int hatchVao_ = 0;
+  unsigned int hatchVbo_ = 0;
+  int hatchVertCount_ = 0;
+  std::uint64_t hatchSig_ = 0;
+  double hatchAnchorX_ = 0.0;
+  double hatchAnchorY_ = 0.0;
+  std::vector<float> hatchUpload_;
+  void ReleaseHatchGpu();
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
 

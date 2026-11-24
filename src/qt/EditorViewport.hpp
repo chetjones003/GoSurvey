@@ -10,6 +10,9 @@
 #include <memory>
 #include <unordered_map>
 #include "CadCommands.hpp"
+
+/// Load acadiso.pat into \p state once, for the hatch pattern renderer and the ribbon pattern gallery.
+void EnsureQtHatchPatternLibrary(AppCommandState& state);
 #include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
 #include "ViewCube.hpp"
@@ -106,8 +109,6 @@ private:
   QTimer m_GripMenuTimer;
   SelectedEntity::Type m_GripMenuType = SelectedEntity::Type::LineSeg;
   ray3d::Vec3 m_GripMenuPoint{};
-  std::uint64_t m_HatchRevision = ~0ull;
-  std::vector<std::vector<float>> m_HatchSegments;
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;

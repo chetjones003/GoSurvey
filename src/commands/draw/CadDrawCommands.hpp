@@ -33,6 +33,12 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 ///        its own plane (the elevation of its first vertex) — issue #564 §2.
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
-// Build clipped hatch pattern linework for presentation without exposing pattern parser internals.
-void CadBuildHatchPatternSegments(const std::vector<CadFilledRegion>& regions, const std::string& source,
-                                  std::vector<std::vector<float>>* segments);
+/// Parse a .pat file's text into ef AppCommandState::hatchPatternLibrary. A changed library invalidates
+/// every cached pattern; the same text again changes nothing.
+void SetHatchPatternLibrary(AppCommandState& st, const std::string& patSource);
+
+/// Bring ef AppCommandState::hatchDisplayGeometry up to date with the drawing's filled regions. Called
+/// once a frame with the viewport's render revision; with the same revision it returns at once. Otherwise
+/// only a region whose boundary or pattern settings changed has its pattern re-clipped, so editing one
+/// hatch never rebuilds the others.
+void RefreshHatchDisplayGeometry(AppCommandState& st, std::uint64_t renderRevision);

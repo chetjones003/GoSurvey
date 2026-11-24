@@ -23,10 +23,19 @@ constexpr int kMaxSegments = 200000;  ///< safety cap (sparse-enough scale keeps
 
 namespace detail {
 
-// Even-odd clip of the infinite line {P = p*n + s*d} against all loop edges → sorted inside intervals in s.
-inline void ClipLine(const CadFilledRegion& fr, double px, double nx, double ny, double dx, double dy,
-                     std::vector<double>* crossings) {
-  crossings->clear();
+// One boundary edge, measured in a family's frame: p is the perpendicular offset (the family's line index
+// direction), s the position along the family lines.
+struct Edge {
+  double pLo = 0.0, pHi = 0.0;  ///< the edge's p range, pLo <= pHi
+  double pa = 0.0, sa = 0.0;    ///< first end
+  double pb = 0.0, sb = 0.0;    ///< second end
+};
+
+// Every loop edge of \p fr in the frame (n, d), sorted by pLo so a sweep over increasing p only ever
+// looks at the edges that can cross the current line (the active list), not all of them.
+inline void BuildEdgeTable(const CadFilledRegion& fr, double nx, double ny, double dx, double dy,
+                           std::vector<Edge>* edges) {
+  edges->clear();
   for (size_t loop = 0; loop < fr.loopStart.size(); ++loop) {
     const int begin = fr.loopStart[loop];
     const int cnt = fr.loopCount(loop);
@@ -35,15 +44,26 @@ inline void ClipLine(const CadFilledRegion& fr, double px, double nx, double ny,
       const int a = begin + i, b = begin + (i + 1) % cnt;
       const double ax = fr.vertsXyz[static_cast<size_t>(a) * 3], ay = fr.vertsXyz[static_cast<size_t>(a) * 3 + 1];
       const double bx = fr.vertsXyz[static_cast<size_t>(b) * 3], by = fr.vertsXyz[static_cast<size_t>(b) * 3 + 1];
-      const double ex = bx - ax, ey = by - ay;
-      const double det = ex * dy - dx * ey;
-      if (std::fabs(det) < 1e-12) continue;
-      const double rhsx = ax - px * nx, rhsy = ay - px * ny;
-      const double s = (-rhsx * ey + ex * rhsy) / det;  // param along the family line
-      const double u = (dx * rhsy - dy * rhsx) / det;   // param along the edge
-      if (u >= 0.0 && u < 1.0)                           // half-open avoids double-counting shared vertices
-        crossings->push_back(s);
+      Edge e;
+      e.pa = ax * nx + ay * ny; e.sa = ax * dx + ay * dy;
+      e.pb = bx * nx + by * ny; e.sb = bx * dx + by * dy;
+      if (std::fabs(e.pb - e.pa) < 1e-12) continue;  // parallel to the family: never crossed
+      e.pLo = std::min(e.pa, e.pb); e.pHi = std::max(e.pa, e.pb);
+      edges->push_back(e);
     }
+  }
+  std::sort(edges->begin(), edges->end(), [](const Edge& l, const Edge& r) { return l.pLo < r.pLo; });
+}
+
+// The sorted crossings of the family line at offset \p p with the active edges. Each edge counts on the
+// half-open range [first end, second end), which is what keeps a line through a shared vertex from counting
+// it twice (the even-odd rule needs exactly one crossing there).
+inline void Crossings(const std::vector<const Edge*>& active, double p, std::vector<double>* crossings) {
+  crossings->clear();
+  for (const Edge* e : active) {
+    const double t = (p - e->pa) / (e->pb - e->pa);
+    if (t >= 0.0 && t < 1.0)
+      crossings->push_back(e->sa + t * (e->sb - e->sa));
   }
   std::sort(crossings->begin(), crossings->end());
 }
@@ -51,13 +71,13 @@ inline void ClipLine(const CadFilledRegion& fr, double px, double nx, double ny,
 // Emit dashed segments of {P = p*n + s*d} over [s0,s1] given the (scaled) dash list and a phase origin.
 inline void EmitDashed(double px, double nx, double ny, double dx, double dy, double s0, double s1,
                        const std::vector<double>& dashes, double period, double phase0,
-                       std::vector<float>* out, int* count) {
+                       std::vector<double>* out, int* count) {
   auto push = [&](double a, double b) {
     if (b - a < 1e-9 || *count >= kMaxSegments) return;
-    out->push_back(static_cast<float>(px * nx + a * dx));
-    out->push_back(static_cast<float>(px * ny + a * dy));
-    out->push_back(static_cast<float>(px * nx + b * dx));
-    out->push_back(static_cast<float>(px * ny + b * dy));
+    out->push_back(px * nx + a * dx);
+    out->push_back(px * ny + a * dy);
+    out->push_back(px * nx + b * dx);
+    out->push_back(px * ny + b * dy);
     ++*count;
   };
   if (dashes.empty() || period < 1e-9) {  // solid line
@@ -94,9 +114,10 @@ inline void EmitDashed(double px, double nx, double ny, double dx, double dy, do
 
 }  // namespace detail
 
-/// Appends the clipped pattern segments (flat x0,y0,x1,y1 in the region's local coordinates) to \p outSegs,
+/// Appends the clipped pattern segments (flat x0,y0,x1,y1 in the region's local coordinates, kept in double as
+/// every coordinate store is until the GPU narrowing point, ADR-054) to \p outSegs,
 /// generated from \p def with the region's patternScale/patternAngleDeg. Returns the number appended.
-inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, std::vector<float>* outSegs) {
+inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, std::vector<double>* outSegs) {
   if (!outSegs || fr.isSolid() || fr.loopStart.empty() || fr.vertsXyz.size() < 9 || def.lines.empty())
     return 0;
   float mnX = 0, mnY = 0, mxX = 0, mxY = 0;
@@ -109,6 +130,8 @@ inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, st
 
   int count = 0;
   std::vector<double> crossings;
+  std::vector<detail::Edge> edges;
+  std::vector<const detail::Edge*> active;
   for (const hatchpat::Line& L : def.lines) {
     const double a = L.angleDeg * kDeg + rot;
     const double dx = std::cos(a), dy = std::sin(a);
@@ -123,25 +146,31 @@ inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, st
     double period = 0.0;
     for (double dval : L.dashes) { dashes.push_back(dval * scale); period += std::fabs(dval) * scale; }
 
-    // Perpendicular extent of the outer loop relative to the origin line.
-    double pMin = 1e300, pMax = -1e300;
-    const int oc = fr.loopCount(0);
-    for (int i = 0; i < oc; ++i) {
-      const double vx = fr.vertsXyz[static_cast<size_t>(i) * 3], vy = fr.vertsXyz[static_cast<size_t>(i) * 3 + 1];
-      const double pp = vx * nx + vy * ny;
-      pMin = std::min(pMin, pp);
-      pMax = std::max(pMax, pp);
-    }
+    detail::BuildEdgeTable(fr, nx, ny, dx, dy, &edges);
+    if (edges.empty()) continue;
+    double pMin = edges.front().pLo, pMax = pMin;
+    for (const detail::Edge& e : edges) pMax = std::max(pMax, e.pHi);
     const double baseP = ox * nx + oy * ny;
-    long kStart = static_cast<long>(std::floor((pMin - baseP) / std::fabs(perp))) - 1;
-    long kEnd = static_cast<long>(std::ceil((pMax - baseP) / std::fabs(perp))) + 1;
+    const double step = std::fabs(perp);
+    const long kStart = static_cast<long>(std::floor((pMin - baseP) / step)) - 1;
+    const long kEnd = static_cast<long>(std::ceil((pMax - baseP) / step)) + 1;
     if (kEnd - kStart > 200000) continue;  // pathological density (scale too small) — skip this family
     const double uOrigin = ox * dx + oy * dy;
+    // Sweep the family lines in increasing p, admitting edges as the sweep reaches them and retiring the ones
+    // it has passed, so each line tests only the edges that span it.
+    std::size_t next = 0;
+    active.clear();
     for (long k = kStart; k <= kEnd && count < kMaxSegments; ++k) {
-      const double p = baseP + static_cast<double>(k) * perp;
-      detail::ClipLine(fr, p, nx, ny, dx, dy, &crossings);
+      const double p = baseP + static_cast<double>(k) * step;
+      while (next < edges.size() && edges[next].pLo <= p) active.push_back(&edges[next++]);
+      active.erase(std::remove_if(active.begin(), active.end(), [p](const detail::Edge* e) { return e->pHi < p; }),
+                   active.end());
+      if (active.size() < 2) continue;
+      detail::Crossings(active, p, &crossings);
       if (crossings.size() < 2) continue;
-      const double phase0 = uOrigin + static_cast<double>(k) * along;
+      // The stagger follows the line's index from the pattern origin, whichever way the sweep runs.
+      const long member = perp >= 0.0 ? k : -k;
+      const double phase0 = uOrigin + static_cast<double>(member) * along;
       for (size_t c = 0; c + 1 < crossings.size(); c += 2)
         detail::EmitDashed(p, nx, ny, dx, dy, crossings[c], crossings[c + 1], dashes, period, phase0, outSegs,
                            &count);

@@ -1831,6 +1831,12 @@ Viewport* CurrentViewport(AppCommandState& st) {
   return nullptr;
 }
 
+VisualStyle EffectiveVisualStyle(const AppCommandState& st) {
+  // CurrentViewport only finds the viewport; it changes nothing.
+  const Viewport* viewport = CurrentViewport(const_cast<AppCommandState&>(st));
+  return viewport ? viewport->visualStyle : st.viewportVisualStyle;
+}
+
 // VPFREEZE / VPTHAW (REQ-046): pick entities in the current viewport; the picked layers freeze/thaw in it.
 // The pick itself is handled in the floating-viewport click path (CadUi); here we just enter the mode.
 static void StartVpFreezeThaw(AppCommandState& st, bool freeze, std::vector<std::string>& log) {
