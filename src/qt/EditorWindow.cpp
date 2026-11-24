@@ -3639,9 +3639,11 @@ void EditorWindow::ShowAdjustment() {
 }
 
 bool EditorWindow::RunSmokeChecks(QString& error) {
-  // The window opens on the Start tab, whose viewport is never shown, so its renderer cannot start.
-  // Work in the first drawing, and give the renderer the event loop it needs to initialize.
+  // The window opens on the Start tab alone, whose viewport is never shown, so its renderer cannot
+  // start. Open the first drawing, and give the renderer the event loop it needs to initialize.
+  if (m_State.drawingTabs.size() < 2) CreateDrawingFromTemplate();
   SwitchDrawing(1);
+  if (m_State.activeDrawingIdx != 1) { error = "Smoke test could not open a drawing"; return false; }
   QElapsedTimer renderWait; renderWait.start();
   while (!m_Viewport->IsRendererReady() && renderWait.elapsed() < 5000)
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
