@@ -13,10 +13,10 @@ static void ResetOffsetSelectionForNextPick(AppCommandState& st) {
   if (auto* ofs = st.sessionAs<stepengine::OffsetSession>()) {
     ofs->entityValid = false;
     ofs->entity = {};
+    ofs->hoverHighlightValid = false;
+    ofs->hoverEntity = {};
     ofs->phase = stepengine::OffsetPhase::WaitSelectEntity;
   }
-  st.offsetHoverHighlightValid = false;
-  st.offsetHoverEntity = {};
 }
 
 // Every function below (except ClosestPointOnSegment, kept `float` — it is also reused by BREAK

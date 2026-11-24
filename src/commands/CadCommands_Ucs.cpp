@@ -535,14 +535,12 @@ static const char* kUcsPrompt = "Specify origin of UCS or [Named/Previous/View/W
 
 void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::UcsSession>(), /*recordAsLastCommand=*/false);
   log.push_back(kUcsPrompt);
 }
 
 void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::PlanSession>(), /*recordAsLastCommand=*/false);
   log.push_back("PLAN - enter an option [Current/Ucs/World] <Current>:");
 }

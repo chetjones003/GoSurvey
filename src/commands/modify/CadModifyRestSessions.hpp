@@ -277,6 +277,8 @@ class OffsetSession final : public CommandSession {
   OffsetPhase phase = OffsetPhase::WaitDistanceOrThrough;
   bool entityValid = false;
   SelectedEntity entity{};
+  bool hoverHighlightValid = false;
+  SelectedEntity hoverEntity{};
   float typedDistance = 0.f;
   bool throughMode = false;
   int paperLayoutIndex = -1;
@@ -289,7 +291,6 @@ class OffsetSession final : public CommandSession {
   void onViewportPick(AppCommandState& st, const StepPickInput& pick,
                       std::vector<std::string>& log) override;
   void onCancel(AppCommandState& st, std::vector<std::string>& log) override;
-  void onReset(AppCommandState& st) override;
 };
 
 /// Active session for DELETE (selection accumulation until Enter).

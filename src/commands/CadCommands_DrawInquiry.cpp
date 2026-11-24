@@ -38,17 +38,10 @@ constexpr double kJoinTol = 1.0e-3;
   return s;
 }
 
-[[nodiscard]] bool IsCadDrawInquiryKind(AppCommandState::Kind k) {
-  using K = AppCommandState::Kind;
-  return k == K::Point || k == K::Leader || k == K::Pedit || k == K::Measure || k == K::Divide ||
-         k == K::Area || k == K::List || k == K::Table || k == K::PointTable;
-}
-
 template <typename SessionT>
 SessionT* BeginDrawInquirySession(AppCommandState& st, std::unique_ptr<SessionT> session,
                                   AppCommandState::Kind /*kind*/) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   // Ribbon commands can replace an in-progress MLEADER without passing through Escape. Clear its
   // cursor/label draft as part of the command transition or stale MLEADER dynamic input remains
   // painted while TABLE (and other draw/inquiry commands) owns the active prompt.
@@ -56,7 +49,6 @@ SessionT* BeginDrawInquirySession(AppCommandState& st, std::unique_ptr<SessionT>
   if (st.mtextRichEditorMultileaderIndex >= 0)
     CancelMtextRichEditor(st, nullptr);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   SessionT* raw = session.get();
   stepengine::BeginSession(st, std::move(session));
   return raw;
@@ -1640,10 +1632,6 @@ bool HandleAreaObjectPick(AppCommandState& st, double wx, double wy, std::vector
 
 }  // namespace
 
-void ResetCadDrawInquiryDrafts(AppCommandState& st) {
-  (void)st;
-}
-
 void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log) {
   assert(std::isfinite(x) && std::isfinite(y) && std::isfinite(z));
   PushUndoSnapshot(st, "POINT");
@@ -2029,70 +2017,76 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
   EndTableCommand(st);
 }
 
-bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  if (!IsCadDrawInquiryKind(st.active))
-    return false;
-  const double z = CadCommitElevation(st);
-  if (const auto* ts = st.sessionAs<stepengine::TableSession>()) {
-    if (ts->stage != 3) {
-      log.push_back("TABLE — answer the prompt first.");
-      return true;
-    }
-    CommitTableAt(st, wx, wy, log);
-    return true;
+void SubmitTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ts = st.sessionAs<stepengine::TableSession>();
+  if (!ts || ts->stage != 3) {
+    log.push_back("TABLE — answer the prompt first.");
+    return;
   }
-  if (const auto* pt = st.sessionAs<stepengine::PointTableSession>()) {
-    if (pt->stage != 2) {
-      log.push_back("ADDPOINTTABLE — answer the prompt first.");
-      return true;
-    }
-    CommitPointTableAt(st, wx, wy, log);
-    return true;
+  CommitTableAt(st, wx, wy, log);
+}
+
+void SubmitPointTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* pt = st.sessionAs<stepengine::PointTableSession>();
+  if (!pt || pt->stage != 2) {
+    log.push_back("ADDPOINTTABLE — answer the prompt first.");
+    return;
   }
-  if (st.active == K::Point) {
-    CommitCadPointAt(st, wx, wy, z, log);
-    return true;
+  CommitPointTableAt(st, wx, wy, log);
+}
+
+void SubmitLeaderViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* ls = st.sessionAs<stepengine::LeaderSession>();
+  if (!ls || ls->phase == stepengine::LeaderPhase::WaitAnnotation ||
+      ls->phase == stepengine::LeaderPhase::WaitFormat)
+    return;
+  ls->draftPoints.push_back({wx, wy, CadCommitElevation(st)});
+  if (ls->phase == stepengine::LeaderPhase::WaitFirst)
+    ls->phase = stepengine::LeaderPhase::WaitNext;
+  log.push_back("LEADER — specify next point (Enter = annotation):");
+}
+
+void SubmitAreaViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* as = st.sessionAs<stepengine::AreaSession>();
+  if (!as)
+    return;
+  if (as->phase == stepengine::AreaPhase::WaitObject) {
+    (void)HandleAreaObjectPick(st, wx, wy, log);
+    return;
   }
-  if (auto* ls = st.sessionAs<stepengine::LeaderSession>();
-      ls && ls->phase != stepengine::LeaderPhase::WaitAnnotation &&
-      ls->phase != stepengine::LeaderPhase::WaitFormat) {
-    ls->draftPoints.push_back({wx, wy, z});
-    if (ls->phase == stepengine::LeaderPhase::WaitFirst)
-      ls->phase = stepengine::LeaderPhase::WaitNext;
-    log.push_back("LEADER — specify next point (Enter = annotation):");
-    return true;
+  as->draftPoints.push_back({wx, wy, CadCommitElevation(st)});
+  as->phase = stepengine::AreaPhase::WaitNext;
+  log.push_back("AREA — specify next point (Enter to close):");
+}
+
+void SubmitPeditViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return;
+  if (ps->phase == stepengine::PeditPhase::WaitVertexMove) {
+    PeditMoveVertex(st, wx, wy, log);
+    return;
   }
-  if (auto* as = st.sessionAs<stepengine::AreaSession>();
-      as && as->phase != stepengine::AreaPhase::WaitObject) {
-    as->draftPoints.push_back({wx, wy, z});
-    as->phase = stepengine::AreaPhase::WaitNext;
-    log.push_back("AREA — specify next point (Enter to close):");
-    return true;
+  if (ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
+    PeditInsertVertex(st, wx, wy, log);
+    return;
   }
-  if (const auto* ps = st.sessionAs<stepengine::PeditSession>()) {
-    if (ps->phase == stepengine::PeditPhase::WaitVertexMove) {
-      PeditMoveVertex(st, wx, wy, log);
-      return true;
-    }
-    if (ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
-      PeditInsertVertex(st, wx, wy, log);
-      return true;
-    }
-    if (ps->phase == stepengine::PeditPhase::WaitJoin)
-      return HandlePeditJoinPick(st, wx, wy, log);
-    if (ps->phase == stepengine::PeditPhase::WaitObject)
-      return HandlePeditObjectPick(st, wx, wy, log);
+  if (ps->phase == stepengine::PeditPhase::WaitJoin) {
+    (void)HandlePeditJoinPick(st, wx, wy, log);
+    return;
   }
-  if (const auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
-      ms && ms->phase == stepengine::MeasurePhase::WaitObject)
-    return HandleMeasureObjectPick(st, wx, wy, log);
-  if (st.active == K::List)
-    return HandleListPick(st, wx, wy, log);
-  if (const auto* as = st.sessionAs<stepengine::AreaSession>();
-      as && as->phase == stepengine::AreaPhase::WaitObject)
-    return HandleAreaObjectPick(st, wx, wy, log);
-  return true;
+  if (ps->phase == stepengine::PeditPhase::WaitObject)
+    (void)HandlePeditObjectPick(st, wx, wy, log);
+}
+
+void SubmitMeasureDivideViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
+  if (ms && ms->phase == stepengine::MeasurePhase::WaitObject)
+    (void)HandleMeasureObjectPick(st, wx, wy, log);
+}
+
+void SubmitListViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  (void)HandleListPick(st, wx, wy, log);
 }
 
 // DATAEXTRACTION (REQ-467, issue #804). Selection first, then a typed column list, then a file.
@@ -2240,105 +2234,99 @@ bool HandleDataExtractText(const std::string& line, AppCommandState& st, std::ve
   return true;
 }
 
-bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  if (!IsCadDrawInquiryKind(st.active) && st.active != K::DataExtract)
-    return false;
+void HandlePointCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   const std::string line = StringUtil::trimCopy(lineIn);
-  const std::string opt = UpperTrim(line);
-
-  if (st.active == K::Point) {
-    if (line.empty()) {
-      stepengine::EndSession(st);
-      log.push_back("POINT ended.");
-      return true;
-    }
-    float x = 0.f, y = 0.f;
-    if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
-      log.push_back("POINT — enter a point as X,Y, or Enter to end.");
-      return true;
-    }
-    CommitCadPointAt(st, x, y, CadCommitElevation(st), log);
-    return true;
+  if (line.empty()) {
+    stepengine::EndSession(st);
+    log.push_back("POINT ended.");
+    return;
   }
-
-  if (st.active == K::Leader)
-    return HandleLeaderText(line, opt, st, log);
-
-  if (auto* ps = st.sessionAs<stepengine::PeditSession>()) {
-    if (ps->phase == stepengine::PeditPhase::WaitOption)
-      return HandlePeditOption(st, opt, log);
-    if (ps->phase == stepengine::PeditPhase::WaitVertex)
-      return HandlePeditVertex(st, opt, log);
-    if (ps->phase == stepengine::PeditPhase::WaitJoin) {
-      if (line.empty()) {
-        ps->phase = stepengine::PeditPhase::WaitOption;
-        log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
-        return true;
-      }
-      log.push_back("PEDIT — pick a touching polyline, or Enter to skip.");
-      return true;
-    }
-    if (ps->phase == stepengine::PeditPhase::WaitVertexMove ||
-        ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
-      float x = 0.f, y = 0.f;
-      if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
-        log.push_back("PEDIT — enter a point.");
-        return true;
-      }
-      if (ps->phase == stepengine::PeditPhase::WaitVertexInsert)
-        PeditInsertVertex(st, x, y, log);
-      else
-        PeditMoveVertex(st, x, y, log);
-      return true;
-    }
-    if (line.empty()) {
-      log.push_back("PEDIT — select a polyline.");
-      return true;
-    }
-    log.push_back("PEDIT — pick a polyline, line, or arc.");
-    return true;
+  float x = 0.f, y = 0.f;
+  if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
+    log.push_back("POINT — enter a point as X,Y, or Enter to end.");
+    return;
   }
-
-  if (st.active == K::Measure || st.active == K::Divide)
-    return HandleMeasureDivideText(line, st, log);
-
-  if (st.active == K::Table)
-    return HandleTableText(line, st, log);
-  if (st.active == K::PointTable)
-    return HandlePointTableText(line, st, log);
-  if (st.active == K::DataExtract)
-    return HandleDataExtractText(line, st, log);
-  if (st.active == K::Area)
-    return HandleAreaText(line, opt, st, log);
-
-  if (st.active == K::List) {
-    if (line.empty()) {
-      stepengine::EndSession(st);
-      log.push_back("LIST complete.");
-      return true;
-    }
-    log.push_back("LIST — pick objects, then Enter.");
-    return true;
-  }
-  return true;
+  CommitCadPointAt(st, x, y, CadCommitElevation(st), log);
 }
 
-const char* CadDrawInquiryCommandInputHint(const AppCommandState& st) {
-  using K = AppCommandState::Kind;
-  if (st.active == K::Point)
-    return "POINT: click or X,Y | Enter ends | ESC cancel";
-  if (st.active == K::Leader)
-    return "LEADER: next point | Annotation / Format | Enter finishes | ESC cancel";
-  if (st.active == K::Pedit)
-    return "PEDIT: pick polyline, or Close/Open/Edit/Fit/Spline/Decurve/Reverse | ESC cancel";
-  if (st.active == K::Measure)
-    return "MEASURE: pick object, then length | ESC cancel";
-  if (st.active == K::Divide)
-    return "DIVIDE: pick object, then number of segments | ESC cancel";
-  if (st.active == K::Area)
-    return "AREA: points | Object | Add | Subtract | Enter reports | ESC cancel";
-  if (st.active == K::List)
-    return "LIST: pick objects | Enter ends | ESC cancel";
-  return nullptr;
+void HandleLeaderCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  (void)HandleLeaderText(line, UpperTrim(line), st, log);
+}
+
+void HandlePeditCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string opt = UpperTrim(line);
+  if (ps->phase == stepengine::PeditPhase::WaitOption) {
+    (void)HandlePeditOption(st, opt, log);
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitVertex) {
+    (void)HandlePeditVertex(st, opt, log);
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitJoin) {
+    if (line.empty()) {
+      ps->phase = stepengine::PeditPhase::WaitOption;
+      log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
+      return;
+    }
+    log.push_back("PEDIT — pick a touching polyline, or Enter to skip.");
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitVertexMove ||
+      ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
+    float x = 0.f, y = 0.f;
+    if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
+      log.push_back("PEDIT — enter a point.");
+      return;
+    }
+    if (ps->phase == stepengine::PeditPhase::WaitVertexInsert)
+      PeditInsertVertex(st, x, y, log);
+    else
+      PeditMoveVertex(st, x, y, log);
+    return;
+  }
+  if (line.empty()) {
+    log.push_back("PEDIT — select a polyline.");
+    return;
+  }
+  log.push_back("PEDIT — pick a polyline, line, or arc.");
+}
+
+void HandleMeasureDivideCommandText(const std::string& lineIn, AppCommandState& st,
+                                    std::vector<std::string>& log) {
+  (void)HandleMeasureDivideText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandleAreaCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  (void)HandleAreaText(line, UpperTrim(line), st, log);
+}
+
+void HandleListCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (line.empty()) {
+    stepengine::EndSession(st);
+    log.push_back("LIST complete.");
+    return;
+  }
+  log.push_back("LIST — pick objects, then Enter.");
+}
+
+void HandleDataExtractCommandText(const std::string& lineIn, AppCommandState& st,
+                                  std::vector<std::string>& log) {
+  (void)HandleDataExtractText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandleTableCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  (void)HandleTableText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandlePointTableCommandText(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  (void)HandlePointTableText(StringUtil::trimCopy(lineIn), st, log);
 }

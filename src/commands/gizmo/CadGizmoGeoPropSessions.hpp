@@ -6,6 +6,8 @@
 #include "CadEntities.hpp"
 #include "engine/CommandSession.hpp"
 
+enum class CadGizmoOp : std::uint8_t;
+
 namespace stepengine {
 
 /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
@@ -21,11 +23,26 @@ enum class ChPropProperty : std::uint8_t { Color, Layer, Linetype, Lineweight };
 /// GEOMARKLATLONG / GEOREORIENTMARKER / DRAWINGSETTINGSPICK / GEOCAPTUREAREA phase.
 enum class GeoCmdPhase : std::uint8_t { WaitFirst, WaitSecond, Capturing };
 
+/// REQ-364: in-flight Capture Area progress owned by GeoCmdSession while GEOCAPTUREAREA is active.
+struct MapCaptureState {
+  bool visibleArea = true; ///< Capture what the view shows; else the picked LOCAL rectangle below.
+  double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+  int total = 0;           ///< Tiles to gather (0 until the controller has planned them).
+  int gathered = 0;
+  std::string prompt;      ///< "Capturing map… n of m tiles", kept here so the prompt can point at it.
+};
+
 class GizmoCmdSession final : public CommandSession {
  public:
-  explicit GizmoCmdSession(CadCommandKind k) : kind_(k) {}
+  explicit GizmoCmdSession(CadCommandKind k, CadGizmoOp savedOp = CadGizmoOp{})
+      : opBeforeCmd(savedOp), kind_(k) {}
 
   GizmoCmdPhase phase = GizmoCmdPhase::SelectObjects;
+  /// Base point given to 3DMOVE / 3DROTATE / 3DSCALE (D-2026-09-28-c); invalid means selection centre.
+  bool baseValid = false;
+  ray3d::Vec3 base{0.0, 0.0, 0.0};
+  /// AppCommandState::gizmoOp captured on start and restored on finish / Esc / reset.
+  CadGizmoOp opBeforeCmd{};
 
   [[nodiscard]] CadCommandKind kind() const override { return kind_; }
   [[nodiscard]] StepDescriptor currentStep(const AppCommandState& st) const override;
@@ -71,6 +88,7 @@ class GeoCmdSession final : public CommandSession {
   GeoCmdPhase phase = GeoCmdPhase::WaitFirst;
   double firstA = 0.0; ///< GEOMARKLATLONG: latitude; GEOREORIENTMARKER/pick: first X (local)
   double firstB = 0.0; ///< GEOREORIENTMARKER/pick: first Y (local)
+  MapCaptureState mapCapture; ///< GEOCAPTUREAREA area & tile progress (REQ-364)
 
   [[nodiscard]] CadCommandKind kind() const override { return kind_; }
   [[nodiscard]] StepDescriptor currentStep(const AppCommandState& st) const override;

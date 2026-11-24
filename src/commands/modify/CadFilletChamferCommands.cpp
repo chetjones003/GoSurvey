@@ -745,7 +745,6 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::FilletSession>(false), true);
   log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
 }
@@ -1741,7 +1740,6 @@ void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::ChamferSession>(false), true);
   log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
                ". ESC cancels.");

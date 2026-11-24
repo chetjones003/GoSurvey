@@ -13,63 +13,75 @@ namespace stepengine {
 
 // --- AlignmentLayoutSession ---
 
-StepDescriptor AlignmentLayoutSession::currentStep(const AppCommandState& st) const {
-  const char* p = AlignmentCommandPrompt(st);
-  return StepDescriptor::Point(p ? p : "", StepDynInputSpec{}, BlankEnterPolicy::Custom);
+StepDescriptor AlignmentLayoutSession::currentStep(const AppCommandState&) const {
+  const char* p = pis.empty()
+                      ? "ALIGNMENTLAYOUT: Specify start point (click or X,Y) | ESC ends"
+                      : "ALIGNMENTLAYOUT: Specify next point or [Undo] (click, X,Y or @dx,dy) | Enter or ESC ends";
+  return StepDescriptor::Point(p, StepDynInputSpec{}, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult AlignmentLayoutSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                                 std::vector<std::string>& log) {
-  (void)HandleAlignmentCommandText(st, trimmedLine, log);
+  (void)HandleAlignmentLayoutText(st, trimmedLine, log);
   return StepSubmitResult::Handled;
 }
 
 StepSubmitResult AlignmentLayoutSession::onBlankEnter(AppCommandState& st,
                                                       std::vector<std::string>& log) {
-  (void)HandleAlignmentCommandText(st, "", log);
+  (void)HandleAlignmentLayoutText(st, "", log);
   return StepSubmitResult::Handled;
 }
 
 void AlignmentLayoutSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                             std::vector<std::string>& log) {
-  (void)SubmitAlignmentCommandPoint(st, pick.localX, pick.localY, log);
+  (void)SubmitAlignmentLayoutPoint(st, pick.localX, pick.localY, log);
 }
 
 void AlignmentLayoutSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  CancelAlignmentCommand(st, log);
+  CancelAlignmentLayout(st, name, log);
 }
 
 // --- AlignmentFromObjectsSession ---
 
-StepDescriptor AlignmentFromObjectsSession::currentStep(const AppCommandState& st) const {
-  const char* prompt = AlignmentCommandPrompt(st);
-  if (phase == AlignmentFromObjectsPhase::WaitDirection)
-    return StepDescriptor::Custom(prompt ? prompt : "", StepClickRoute::Ignore,
-                                  BlankEnterPolicy::Custom);
-  return StepDescriptor::Custom(prompt ? prompt : "", StepClickRoute::RawEntityPick,
-                                BlankEnterPolicy::Custom);
+StepDescriptor AlignmentFromObjectsSession::currentStep(const AppCommandState&) const {
+  using P = AlignmentFromObjectsPhase;
+  const char* prompt = "";
+  switch (phase) {
+    case P::WaitFirst:
+      prompt = "CREATEALIGNMENTFROMOBJECTS: Select the first line/arc/polyline | ESC cancels";
+      break;
+    case P::WaitMore:
+      prompt = "CREATEALIGNMENTFROMOBJECTS: Select lines/arcs or polylines to create alignment | Enter when done";
+      break;
+    case P::WaitDirection:
+      prompt = "CREATEALIGNMENTFROMOBJECTS: Press Enter to accept alignment direction or [Reverse]";
+      break;
+  }
+  if (phase == P::WaitDirection)
+    return StepDescriptor::Custom(prompt, StepClickRoute::Ignore, BlankEnterPolicy::Custom);
+  return StepDescriptor::Custom(prompt, StepClickRoute::RawEntityPick, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult AlignmentFromObjectsSession::onText(AppCommandState& st,
                                                      const std::string& trimmedLine,
                                                      std::vector<std::string>& log) {
-  (void)HandleAlignmentCommandText(st, trimmedLine, log);
+  (void)HandleAlignmentFromObjectsText(st, trimmedLine, log);
   return StepSubmitResult::Handled;
 }
 
 StepSubmitResult AlignmentFromObjectsSession::onBlankEnter(AppCommandState& st,
                                                            std::vector<std::string>& log) {
-  (void)HandleAlignmentCommandText(st, "", log);
+  (void)HandleAlignmentFromObjectsText(st, "", log);
   return StepSubmitResult::Handled;
 }
 
 void AlignmentFromObjectsSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                                  std::vector<std::string>& log) {
-  (void)SubmitAlignmentCommandPoint(st, pick.localX, pick.localY, log);
+  (void)SubmitAlignmentFromObjectsPick(st, pick.localX, pick.localY, log);
 }
 
 void AlignmentFromObjectsSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  CancelAlignmentCommand(st, log);
+  CancelAlignmentFromObjects(st, log);
 }
 
 // --- StationOffsetPickSession ---

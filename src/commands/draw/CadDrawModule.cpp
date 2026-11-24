@@ -26,9 +26,22 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
 void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log);
 void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::vector<std::string>& log);
 void AbandonJustPlacedMultileader(AppCommandState& st);
-bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
-bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
-const char* CadDrawInquiryCommandInputHint(const AppCommandState& st);
+void HandlePointCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void HandleLeaderCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitLeaderViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandlePeditCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitPeditViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandleMeasureDivideCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitMeasureDivideViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandleAreaCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitAreaViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandleListCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitListViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandleDataExtractCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void HandleTableCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void HandlePointTableCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log);
+void SubmitPointTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
 
 namespace stepengine {
 
@@ -832,17 +845,17 @@ StepSubmitResult HatchSession::onBlankEnter(AppCommandState&, std::vector<std::s
   return StepSubmitResult::Handled;
 }
 
-void HatchSession::onViewportPick(AppCommandState&, const StepPickInput&, std::vector<std::string>&) {}
-
-void HatchSession::onCancel(AppCommandState& st, std::vector<std::string>&) {
-  st.hatchPreviewValid = false;
-  st.hatchPreviewLoop.clear();
+void HatchSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
+                                  std::vector<std::string>& log) {
+  std::vector<float> loop;
+  if (CadHatchTraceAt(st, pick.localX, pick.localY, &loop) && CadHatchCommitLoop(st, loop, log)) {
+    EndSession(st);
+  } else {
+    log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
+  }
 }
 
-void HatchSession::onReset(AppCommandState& st) {
-  st.hatchPreviewValid = false;
-  st.hatchPreviewLoop.clear();
-}
+void HatchSession::onCancel(AppCommandState&, std::vector<std::string>&) {}
 
 // ============================================================================
 // TEXT
@@ -1461,163 +1474,165 @@ void DistSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
 // DRAWINQUIRY: POINT, LEADER, PEDIT, MEASURE, DIVIDE, AREA, LIST, DATAEXTRACT, TABLE, POINTTABLE
 // ============================================================================
 
-StepDescriptor PointSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
-  return StepDescriptor::Custom(h ? h : "", StepClickRoute::SnappedPointPick, BlankEnterPolicy::Custom);
+StepDescriptor PointSession::currentStep(const AppCommandState&) const {
+  return StepDescriptor::Custom("POINT: click or X,Y | Enter ends | ESC cancel",
+                                StepClickRoute::SnappedPointPick, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult PointSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                       std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandlePointCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult PointSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandlePointCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void PointSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                   std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  CommitCadPointAt(st, pick.localX, pick.localY, CadCommitElevation(st), log);
 }
 
 void PointSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("POINT canceled.");
 }
 
-StepDescriptor LeaderSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
+StepDescriptor LeaderSession::currentStep(const AppCommandState&) const {
   const StepClickRoute route =
       (phase == LeaderPhase::WaitAnnotation || phase == LeaderPhase::WaitFormat)
           ? StepClickRoute::Ignore
           : StepClickRoute::SnappedPointPick;
-  return StepDescriptor::Custom(h ? h : "", route, BlankEnterPolicy::Custom);
+  return StepDescriptor::Custom("LEADER: next point | Annotation / Format | Enter finishes | ESC cancel",
+                                route, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult LeaderSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                        std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleLeaderCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult LeaderSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleLeaderCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void LeaderSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                    std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitLeaderViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void LeaderSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("LEADER canceled — nothing was added.");
 }
 
-StepDescriptor PeditSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
+StepDescriptor PeditSession::currentStep(const AppCommandState&) const {
   StepClickRoute route = StepClickRoute::Ignore;
   if (phase == PeditPhase::WaitObject || phase == PeditPhase::WaitJoin)
     route = StepClickRoute::RawEntityPick;
   else if (phase == PeditPhase::WaitVertexMove || phase == PeditPhase::WaitVertexInsert)
     route = StepClickRoute::SnappedPointPick;
-  return StepDescriptor::Custom(h ? h : "", route, BlankEnterPolicy::Custom);
+  return StepDescriptor::Custom(
+      "PEDIT: pick polyline, or Close/Open/Edit/Fit/Spline/Decurve/Reverse | ESC cancel",
+      route, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult PeditSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                       std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandlePeditCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult PeditSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandlePeditCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void PeditSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                   std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitPeditViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void PeditSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("PEDIT canceled.");
 }
 
-StepDescriptor MeasureDivideSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
+StepDescriptor MeasureDivideSession::currentStep(const AppCommandState&) const {
+  const char* prompt = divide ? "DIVIDE: pick object, then number of segments | ESC cancel"
+                              : "MEASURE: pick object, then length | ESC cancel";
   const StepClickRoute route =
       (phase == MeasurePhase::WaitObject) ? StepClickRoute::RawEntityPick : StepClickRoute::Ignore;
-  return StepDescriptor::Custom(h ? h : "", route, BlankEnterPolicy::Custom);
+  return StepDescriptor::Custom(prompt, route, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult MeasureDivideSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                               std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleMeasureDivideCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult MeasureDivideSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleMeasureDivideCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void MeasureDivideSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                           std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitMeasureDivideViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void MeasureDivideSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back(divide ? "DIVIDE canceled." : "MEASURE canceled.");
 }
 
-StepDescriptor AreaSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
+StepDescriptor AreaSession::currentStep(const AppCommandState&) const {
   const StepClickRoute route =
       (phase == AreaPhase::WaitObject) ? StepClickRoute::RawEntityPick : StepClickRoute::SnappedPointPick;
-  return StepDescriptor::Custom(h ? h : "", route, BlankEnterPolicy::Custom);
+  return StepDescriptor::Custom("AREA: points | Object | Add | Subtract | Enter reports | ESC cancel",
+                                route, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult AreaSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                      std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleAreaCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult AreaSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleAreaCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void AreaSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                  std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitAreaViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void AreaSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("AREA canceled.");
 }
 
-StepDescriptor ListSession::currentStep(const AppCommandState& st) const {
-  const char* h = CadDrawInquiryCommandInputHint(st);
-  return StepDescriptor::Custom(h ? h : "", StepClickRoute::RawEntityPick, BlankEnterPolicy::Custom);
+StepDescriptor ListSession::currentStep(const AppCommandState&) const {
+  return StepDescriptor::Custom("LIST: pick objects | Enter ends | ESC cancel",
+                                StepClickRoute::RawEntityPick, BlankEnterPolicy::Custom);
 }
 
 StepSubmitResult ListSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                      std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleListCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult ListSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleListCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void ListSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                  std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitListViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void ListSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
@@ -1630,12 +1645,12 @@ StepDescriptor DataExtractSession::currentStep(const AppCommandState&) const {
 
 StepSubmitResult DataExtractSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                             std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleDataExtractCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult DataExtractSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleDataExtractCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
@@ -1652,18 +1667,18 @@ StepDescriptor TableSession::currentStep(const AppCommandState&) const {
 
 StepSubmitResult TableSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                       std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandleTableCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult TableSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandleTableCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void TableSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                   std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitTableViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void TableSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
@@ -1677,18 +1692,18 @@ StepDescriptor PointTableSession::currentStep(const AppCommandState&) const {
 
 StepSubmitResult PointTableSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                            std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput(trimmedLine, st, log);
+  HandlePointTableCommandText(trimmedLine, st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 StepSubmitResult PointTableSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
-  (void)HandleCadDrawInquiryTextInput("", st, log);
+  HandlePointTableCommandText("", st, log);
   return st.active == CadCommandKind::None ? StepSubmitResult::Finished : StepSubmitResult::Handled;
 }
 
 void PointTableSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
                                        std::vector<std::string>& log) {
-  (void)SubmitCadDrawInquiryViewportPick(st, pick.localX, pick.localY, log);
+  SubmitPointTableViewportPick(st, pick.localX, pick.localY, log);
 }
 
 void PointTableSession::onCancel(AppCommandState&, std::vector<std::string>& log) {

@@ -100,9 +100,7 @@ void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::RevcloudSession>());
   log.push_back(CadRevcloudPromptText(st));
 }
