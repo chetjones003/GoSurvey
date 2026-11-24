@@ -3642,11 +3642,12 @@ void EditorWindow::ShowTextEditor() {
     auto* bold = toggle("Bold", "mtextBold", [](auto& f, bool on) { f.setFontWeight(on ? QFont::Bold : QFont::Normal); });
     auto* italic = toggle("Italic", "mtextItalic", [](auto& f, bool on) { f.setFontItalic(on); });
     auto* underline = toggle("Underline", "mtextUnderline", [](auto& f, bool on) { f.setFontUnderline(on); });
-    connect(editor, &QTextEdit::currentCharFormatChanged, &dialog, [=](const QTextCharFormat& format) {
+    const auto syncFormat = [=](const QTextCharFormat& format) {  // the controls show the text's format
       const QSignalBlocker b(bold), i(italic), u(underline), f(family);
       bold->setChecked(format.fontWeight() >= QFont::Bold); italic->setChecked(format.fontItalic());
       underline->setChecked(format.fontUnderline()); family->setCurrentFont(format.font());
-    });
+    };
+    connect(editor, &QTextEdit::currentCharFormatChanged, &dialog, syncFormat); syncFormat(editor->currentCharFormat());
     auto* color = new QPushButton("Color...", &dialog); tools->addWidget(color);
     connect(color, &QPushButton::clicked, &dialog, [editor, &dialog] {
       const auto chosen = QColorDialog::getColor(editor->textColor(), &dialog, "Text color");
@@ -3657,8 +3658,7 @@ void EditorWindow::ShowTextEditor() {
   layout->addWidget(editor, 1);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
   layout->addWidget(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   editor->setFocus();
   if (dialog.exec() == QDialog::Accepted) {
     // A Save without edits preserves original wire tags and inherited appearance exactly.

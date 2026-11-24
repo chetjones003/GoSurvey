@@ -185,6 +185,18 @@ TEST_CASE("Boundary trace: drawn linework that crosses, overshoots and ends mid-
   CHECK(hatchboundary::detail::LoopAreaAbs(upper) == Catch::Approx(40.0));
 }
 
+TEST_CASE("Boundary trace: a stack of long parallel lines beside the area", "[hatch][boundary]") {
+  // Thousands of long horizontal lines (contours, survey lines) sweep along Y, where they are disjoint.
+  std::vector<Seg> segs = Rect(0, 0, 10, 10);
+  for (int i = 0; i < 4000; ++i) {
+    const double y = 20.0 + i * 0.01;
+    segs.push_back({-100000.0, y, 100000.0, y});
+  }
+  std::vector<float> loop;
+  REQUIRE(hatchboundary::TraceEnclosingLoop(segs, 5.0, 5.0, &loop));
+  CHECK(hatchboundary::detail::LoopAreaAbs(loop) == Catch::Approx(100.0));
+}
+
 namespace {
 // A minimal ANSI31-like definition: one solid family at 45°, 3-unit perpendicular spacing.
 hatchpat::Def Ansi31Def() {

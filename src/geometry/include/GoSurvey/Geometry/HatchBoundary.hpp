@@ -65,16 +65,26 @@ inline double LoopAreaAbs(const std::vector<float>& loop) {
 }
 
 // Splits every segment where another crosses it, or where another's endpoint lies on it (T-junctions and
-// collinear overlaps), so each such meeting becomes a shared node. A sweep over x keeps it near-linear
-// for drawn linework, where most segment pairs are far apart.
+// collinear overlaps), so each such meeting becomes a shared node. A sweep keeps it near-linear for drawn
+// linework, where most segment pairs are far apart. It runs along the axis the segments span least in
+// total, so a stack of long parallel lines (contours, survey lines) is a stack of thin, disjoint intervals
+// rather than one pile that every line overlaps. Only linework that genuinely crosses everywhere (a
+// full grid) stays quadratic, and that many crossings must be split anyway.
 inline std::vector<Seg> SplitAtIntersections(const std::vector<Seg>& in, double tol) {
   const size_t n = in.size();
   std::vector<std::vector<double>> cuts(n);
   std::vector<size_t> order(n);
   std::iota(order.begin(), order.end(), size_t{0});
-  const auto minX = [&](size_t i) { return std::min(in[i].x0, in[i].x1) - tol; };
-  const auto maxX = [&](size_t i) { return std::max(in[i].x0, in[i].x1) + tol; };
-  std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return minX(a) < minX(b); });
+  double spanX = 0.0, spanY = 0.0;
+  for (const Seg& s : in) { spanX += std::fabs(s.x1 - s.x0); spanY += std::fabs(s.y1 - s.y0); }
+  const bool alongY = spanY < spanX;
+  const auto lo = [&](const Seg& s) { return alongY ? std::min(s.y0, s.y1) : std::min(s.x0, s.x1); };
+  const auto hi = [&](const Seg& s) { return alongY ? std::max(s.y0, s.y1) : std::max(s.x0, s.x1); };
+  const auto crossLo = [&](const Seg& s) { return alongY ? std::min(s.x0, s.x1) : std::min(s.y0, s.y1); };
+  const auto crossHi = [&](const Seg& s) { return alongY ? std::max(s.x0, s.x1) : std::max(s.y0, s.y1); };
+  const auto sweepLo = [&](size_t i) { return lo(in[i]) - tol; };
+  const auto sweepHi = [&](size_t i) { return hi(in[i]) + tol; };
+  std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return sweepLo(a) < sweepLo(b); });
   // Parameter of (px,py) on the interior of s when it lies within tol of it.
   const auto onInterior = [&](const Seg& s, double px, double py, double* t) {
     const double dx = s.x1 - s.x0, dy = s.y1 - s.y0;
@@ -91,12 +101,12 @@ inline std::vector<Seg> SplitAtIntersections(const std::vector<Seg>& in, double 
   for (size_t a = 0; a < n; ++a) {
     const size_t i = order[a];
     const Seg& p = in[i];
-    const double pMinY = std::min(p.y0, p.y1) - tol, pMaxY = std::max(p.y0, p.y1) + tol;
+    const double pCrossLo = crossLo(p) - tol, pCrossHi = crossHi(p) + tol;
     for (size_t b = a + 1; b < n; ++b) {
       const size_t j = order[b];
-      if (minX(j) > maxX(i)) break;
+      if (sweepLo(j) > sweepHi(i)) break;
       const Seg& q = in[j];
-      if (std::max(q.y0, q.y1) + tol < pMinY || std::min(q.y0, q.y1) - tol > pMaxY) continue;
+      if (crossHi(q) + tol < pCrossLo || crossLo(q) - tol > pCrossHi) continue;
       const double rx = p.x1 - p.x0, ry = p.y1 - p.y0, sx = q.x1 - q.x0, sy = q.y1 - q.y0;
       const double den = rx * sy - ry * sx;
       if (std::fabs(den) > 1e-12 * std::hypot(rx, ry) * std::hypot(sx, sy)) {
