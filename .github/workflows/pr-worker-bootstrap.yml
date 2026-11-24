@@ -25,7 +25,7 @@ jobs:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GOSURVEY_REGISTRATION_TOKEN: ${{ secrets.GOSURVEY_RUNNER_BOOTSTRAP_TOKEN }}
-        run: ./tools/register-windows-pr-workers.ps1 -Start
+        run: ./tools/register-windows-pr-workers.ps1 -Start -RegistrationTokenOnly
       - name: Require active worker launchers after startup
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |

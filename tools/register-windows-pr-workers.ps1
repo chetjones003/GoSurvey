@@ -1,9 +1,19 @@
 #Requires -Version 7.2
+<#
+.SYNOPSIS
+Registers PR listeners and reconciles the routing labels on the Victus.
+.DESCRIPTION
+Run from the normal Windows runner account with gh authenticated as a repository
+administrator. A runner registration token is needed only for new listeners.
+RegistrationTokenOnly is for bootstrap jobs that can register new listeners but
+cannot change the labels on existing GitHub runner registrations.
+#>
 param(
   [string]$BuildRunnerDirectory = 'C:\actions-runner',
   [string]$WorkersRoot = (Join-Path $env:USERPROFILE 'GoSurveyCI\pr-workers'),
   [string]$ThirdPrRunnerDirectory = 'C:\actions-pr-3',
-  [switch]$Start
+  [switch]$Start,
+  [switch]$RegistrationTokenOnly
 )
 $ErrorActionPreference = 'Stop'
 $repoUrl = 'https://github.com/chetjones003/GoSurvey'
@@ -52,10 +62,40 @@ foreach ($worker in $workers) {
     if ($LASTEXITCODE -ne 0) { throw "Registration failed for $($worker.name)." }
   } finally { Pop-Location }
 }
+
+$release = @{ role = 'build'; directory = $BuildRunnerDirectory; name = $build.agentName; labels = 'gosurvey-victus-ci' }
+$report = @($release) + $workers
+if (-not $RegistrationTokenOnly) {
+  # Add the PR slots before removing the legacy PR label from the release runner.
+  foreach ($runner in ($workers + @($release))) {
+    $settings = Get-Content -LiteralPath (Join-Path $runner.directory '.runner') -Raw | ConvertFrom-Json
+    if ($settings.agentId -notmatch '^[1-9][0-9]*$') { throw "Missing runner ID for $($runner.name)." }
+    $endpoint = "repos/chetjones003/GoSurvey/actions/runners/$($settings.agentId)"
+    $response = gh api $endpoint
+    if ($LASTEXITCODE -ne 0) { throw "GitHub runner lookup failed for $($runner.name). Authenticate gh as a repository administrator." }
+    $remote = $response | ConvertFrom-Json
+    if ($remote.name -ne $runner.name) { throw "GitHub runner ID does not match $($runner.name)." }
+
+    $currentLabels = $remote.labels.name
+    $addLabels = @($runner.labels.Split(',') | Where-Object { $_ -notin $currentLabels })
+    if ($addLabels.Count) {
+      $fields = foreach ($label in $addLabels) { '-f'; "labels[]=$label" }
+      gh api --method POST "$endpoint/labels" @fields | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not add GitHub labels for $($runner.name)." }
+      Write-Host "$($runner.name): added $($addLabels -join ', ')."
+    }
+    $removeLabel = if ($runner.role -eq 'build') { 'gosurvey-pr-build' } else { 'gosurvey-victus-ci' }
+    if ($removeLabel -in $currentLabels) {
+      gh api --method DELETE "$endpoint/labels/$removeLabel" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not remove $removeLabel from $($runner.name)." }
+      Write-Host "$($runner.name): removed $removeLabel."
+    }
+  }
+}
+
 foreach ($file in 'start-windows-pr-worker.ps1', 'start-windows-pr-workers.ps1') {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $WorkersRoot $file) -Force
 }
-$report = @(@{ role = 'build'; directory = $BuildRunnerDirectory; name = $build.agentName; labels = 'gosurvey-victus-ci' }) + $workers
 $report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $WorkersRoot 'workers.json')
 $report | ConvertTo-Json | Write-Host
 if ($Start) {
