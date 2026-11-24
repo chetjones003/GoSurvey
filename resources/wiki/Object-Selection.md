@@ -66,7 +66,11 @@ Selected objects show **grips** — small blue squares at their endpoints, centr
 
 Hover over a line, circle or polyline grip to open its editing popup. Line endpoints offer
 **Lengthen** and **Stretch**; circle and polyline grips offer **Stretch**. Rectangles and joined
-linework stored as polylines use the same popup, including 3D polylines.
+linework stored as polylines use the same popup, including 3D polylines. The popup closes by itself
+once the pointer has been off it for a second.
+
+A circle that does not lie flat (drawn on a tilted plane) shows only its centre grip: the radius
+grip edits the radius in plan.
 
 Grip size is set in **Settings → Selection → Grip size (px)**, from 2 to 20 pixels.
 

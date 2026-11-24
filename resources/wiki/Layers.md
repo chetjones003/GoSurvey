@@ -43,7 +43,7 @@ or reports why it was refused.
 | **Plot** | **Working.** When off, this layer's geometry — and any viewports on it — is excluded from plots |
 | **Current** | Makes this the current layer for new geometry |
 | **Color** | Layer colour, used by entities set to ByLayer |
-| **Linetype** | Layer linetype, used by entities set to ByLayer |
+| **Linetype** | Layer linetype, used by entities set to ByLayer. Click the cell to choose from a list showing each linetype's name and a preview of its pattern |
 | **Lineweight** | Layer lineweight, used by entities set to ByLayer |
 | **Transparency** | Layer transparency, used by entities set to defaults |
 | **VP Freeze** | Freezes this layer **in the current viewport only** |

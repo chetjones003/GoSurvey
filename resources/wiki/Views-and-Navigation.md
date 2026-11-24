@@ -74,6 +74,7 @@ ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-
 ```
 
 Free-orbits the model view. **Model space only** — `ORBIT — model space only; a paper sheet is 2D.`
+While ORBIT runs the pointer shows an orbit symbol instead of the crosshair, as PAN shows a hand.
 
 Orbit is how you check elevations. A plan view cannot show you that two lines which appear to cross
 are at different heights, or that a surface has a spike in it. Tumbling the view makes both
@@ -99,7 +100,8 @@ To get back to plan view, click **TOP**.
 
 **Ribbon:** View → Visual style **Command:** `VISUALSTYLE`, `VS`, `VSCURRENT`
 
-How the viewport draws.
+How the viewport draws. Inside a layout viewport (model space through a paper-space viewport), the
+style applies to **that viewport**; in model space it applies to the model view.
 
 | Style | Effect |
 |---|---|

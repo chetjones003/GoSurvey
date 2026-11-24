@@ -178,5 +178,7 @@ create circles. This reads selectable PDF text and does not perform OCR on scann
 
 The PDF editor's **Annotate → Dimensions** panel provides **Linear dimension** (`D`) and
 **Angular dimension** (`G`). The Measure tab also provides these tools, polyline length and area.
-For a linear dimension, pick both measured endpoints, then the dimension-line location. Set the
+For a linear dimension, pick both measured endpoints, then the dimension-line location. Both
+dimensions are drawn on the page as they will be saved: extension lines, arrowheads, the angle's arc, and
+the value along the dimension line. While you place one, a preview follows the pointer. Set the
 page scale before measuring.

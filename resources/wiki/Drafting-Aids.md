@@ -50,6 +50,10 @@ current **world** X and Y at the display precision from `UNITS`. The active fiel
 | `Enter` | Commits the point |
 | Click in the viewport | Also commits the point |
 
+The fields take your typing as soon as a point is asked for — from the drawing, from an empty
+command line (where the cursor stays after you type the command), or from any panel you are not
+typing into. **Space** still acts as Enter there.
+
 Prompts that expect a bearing, angle, distance, option, or command name show a **single** field.
 
 **Near an alignment**, the dynamic input adds a line with the alignment's name and the cursor's station, offset
