@@ -62,7 +62,8 @@ gosurvey_test(GoSurveyGeometryTests Geometry LIBS GoSurvey::Geometry SOURCES
   tests/Geometry/FilletEdgeTests.cpp tests/FilletGeomTests.cpp tests/ChamferGeomTests.cpp
   tests/Geometry/MeshGeomTests.cpp tests/Geometry/NurbsTests.cpp tests/Geometry/RevisionCloudTests.cpp)
 
-gosurvey_test(GoSurveyDocumentTests Document LIBS GoSurvey::Document SOURCES tests/Document/MtextTextOpsTests.cpp)
+gosurvey_test(GoSurveyDocumentTests Document LIBS GoSurvey::Document SOURCES
+  tests/Document/MtextTextOpsTests.cpp tests/Document/EntityRefTests.cpp)
 
 gosurvey_test(GoSurveyRendererTests Renderer LIBS GoSurvey::Renderer SOURCES
   tests/Renderer/CameraTests.cpp tests/Renderer/SectionClipTests.cpp)
@@ -173,6 +174,7 @@ add_executable(GoSurveyTests
   tests/CadPipeRunTests.cpp
   tests/Document/CadBlockTests.cpp
   tests/Document/EntityIdTests.cpp
+  tests/Document/EntityKindOpsUnitTests.cpp
   tests/Document/PaperSpaceTests.cpp
   tests/Document/DrawingSettingsTests.cpp
   tests/DrawingContentTests.cpp
