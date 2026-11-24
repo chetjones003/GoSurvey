@@ -61,6 +61,7 @@
 #include "GoSurvey/Document/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "GoSurvey/Document/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
 #include "GoSurvey/Document/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
+#include <GoSurvey/Document/EntityRef.hpp>  // EntityKind / EntityRef (ADR-0011 / #1577 phase 1)
 #include <GoSurvey/Renderer/CadSolidDisplay.hpp>   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles
@@ -1512,49 +1513,7 @@ inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& 
 #include "view/CadViewCommands.hpp"
 
 
-/// Which entity array a \ref EntityRef designates. Mirrors SelectedEntity::Type for the kinds that
-/// carry an EntityAttributes, which is exactly the set REQ-076 gives an id.
-enum class EntityKind : std::uint8_t {
-  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh,
-  FeatureLine, ///< REQ-087. Appended, never inserted — the value is not persisted, but reordering
-               ///< would still silently change every switch that lists kinds in order.
-  /// REQ-068 / ADR-036 (a). Appended for a second, sharper reason than the one above: id assignment
-  /// walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting Surface anywhere but the
-  /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
-  /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
-  /// legacy `internal document payload` loading with the ids it loaded with yesterday.
-  Surface,
-  /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
-  Table,
-  /// GitHub issue #124. Appended after Table so the id sweep does not renumber legacy drawings.
-  BlockRef,
-  /// REQ-313 / ADR-045. Appended after BlockRef, for the reason Surface's note above spells out:
-  /// the id sweep walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting anywhere
-  /// but the end would renumber every entity in every existing drawing on its next load.
-  Solid,
-  /// REQ-171 / ADR-042. Appended after Solid, for the same reason: inserting anywhere but the end
-  /// would renumber every entity in every existing drawing on its next load.
-  PointCloud,
-  /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
-  PositionMarker,
-  /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
-  Multileader,
-  /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
-  Spline,
-  /// REQ-456 / issue #1019. Appended after Spline for the same id-sweep reason.
-  Point
-};
-
-/// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
-///
-/// The index is deliberately a **return value, not something you store** — it is valid only until
-/// the next erase, which is the whole reason ids exist (architecture §11.9). Store the id; resolve
-/// when you need to touch the entity.
-struct EntityRef {
-  EntityKind kind = EntityKind::Line;
-  int        index = -1;   ///< -1 = the id does not resolve (erased, or never existed).
-  [[nodiscard]] bool valid() const { return index >= 0; }
-};
+// EntityKind and EntityRef live in <GoSurvey/Document/EntityRef.hpp> (ADR-0011 / #1577 phase 1).
 
 /// Assign a stable id to every entity that lacks one (REQ-076 / ADR-027).
 ///
