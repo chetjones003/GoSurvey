@@ -331,9 +331,7 @@
   std::uint64_t surfaceDisplayRegenCount = 0;
 
   // --- HATCH command (REQ-043) ---
-  /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
-  std::vector<float> hatchPreviewLoop;
-  bool hatchPreviewValid = false;
+  // Live hover boundary preview lives in stepengine::HatchSession.
   /// Live appearance from the HATCH ribbon (ADR-019). color/transparency/layer apply now; angle/scale are
   /// stored for the pattern render path (Phase 3). Empty pattern = SOLID.
   float hatchColorRgb[3] = {0.78f, 0.78f, 0.78f};
@@ -351,6 +349,7 @@
   std::uint64_t hatchDisplayRevisionSeen = ~0ull;
 
   // --- EXTRACTCENTERLINE command (REQ-347) ---
+  // Active hover fit and neighborhood-query cache live in stepengine::ExtractCenterlineSession.
   /// Session-global, ribbon-exposed fit parameters (Point Cloud contextual tab, "Centerline"
   /// section) — same session-global shape as \ref pointCloudDisplay above, and for the same reason:
   /// a real scan's pipe size and noise level vary drawing to drawing (field-tested: the shipped
@@ -359,32 +358,9 @@
   /// that will not fit every scan either).
   double extractCenterlineSearchRadiusFt = 0.6;
   double extractCenterlineMaxResidualRatio = 0.2;
-  /// The current hover's cylinder-axis fit, in LOCAL storage coordinates (world = local +
-  /// worldDocumentOrigin, REQ-101) — the two endpoints a click commits as a LINE. \ref
-  /// extractCenterlineHoverValid is false whenever the hover found no acceptable fit (too few
-  /// points nearby, or the residual gate rejected the neighborhood); a click while false is a miss,
-  /// logged and left for another try, exactly like HATCH's own no-boundary-found click above.
-  bool extractCenterlineHoverValid = false;
-  /// Why the last hover found no fit — surfaced on a miss-click (REQ-201: refusals are named, not
-  /// silent). Empty only before the first hover update.
-  std::string extractCenterlineHoverDiag;
-  double extractCenterlineP0X = 0, extractCenterlineP0Y = 0, extractCenterlineP0Z = 0;
-  double extractCenterlineP1X = 0, extractCenterlineP1Y = 0, extractCenterlineP1Z = 0;
-  /// A real scan's bounded REQ-171 preview sample can be far too sparse for hovering to work at
-  /// all — a multi-hundred-million-point plant scan capped to a ~2M preview strides through each
-  /// octree leaf, so BOTH finding a point near the cursor at all AND the fit neighborhood around it
-  /// can come up empty even sitting squarely on a visible pipe (field-tested twice on a real
-  /// 188M-point scan: first the neighborhood alone was too sparse, then — after reading the
-  /// neighborhood from the real cache — locating any point near the cursor in the first place was
-  /// ALSO too sparse against the preview). So both steps read the out-of-core `.gscloud` cache
-  /// (ADR-060) when a cloud has one: one open handle per cloud, opened lazily.
-  ///
-  /// Shared with the REQ-348 PointCloud object snap (`CadSnap::FindBest`), the second concrete use
-  /// that widened this from an EXTRACTCENTERLINE-only cache to a general one — same lazy-open-and-
-  /// keep shape, now keyed by \ref PointCloudOpenCacheEntry::cachePath too so a re-imported cloud
-  /// reusing the same index does not silently answer from a stale handle (EXTRACTCENTERLINE's
-  /// command-scoped `.clear()` masked this for its own single-command lifetime; a persistent snap
-  /// query has no such natural clear point).
+  /// Shared lazy-open `.gscloud` out-of-core cache handles (ADR-060), used by EXTRACTCENTERLINE
+  /// and REQ-348 PointCloud object snap (`CadSnap::FindBest`). Keyed by \ref cachePath so a
+  /// re-imported cloud reusing the same index does not silently answer from a stale handle.
   struct PointCloudOpenCacheEntry {
     int cloudIndex = -1;
     bool ok = false;
@@ -392,11 +368,3 @@
     pointcloudcache::OpenCache cache;
   };
   std::vector<PointCloudOpenCacheEntry> pointCloudOpenCaches;
-  /// Neighborhood-query hysteresis: re-reads the cache only when the hover has moved past a
-  /// fraction of the search radius since the last read, reusing \ref extractCenterlineLastNeighborhood
-  /// otherwise — so a nearly-still cursor does not re-hit disk every frame, keeping this nowhere
-  /// near the renderer's own much larger per-frame LOD reselect cost.
-  bool extractCenterlineLastQueryValid = false;
-  int extractCenterlineLastQueryCloudIndex = -1;
-  double extractCenterlineLastQueryX = 0, extractCenterlineLastQueryY = 0, extractCenterlineLastQueryZ = 0;
-  std::vector<double> extractCenterlineLastNeighborhood;

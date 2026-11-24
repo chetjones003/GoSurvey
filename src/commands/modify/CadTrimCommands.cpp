@@ -387,7 +387,6 @@ void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d
 
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   const auto initialPhase = (st.trimState == 1)
                                 ? stepengine::TrimPhase::SelectCuttingEdges
                                 : stepengine::TrimPhase::CuttingLine_WaitP1;
@@ -411,7 +410,6 @@ void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::ExtendSession>(), true);
   log.push_back("EXTEND — pick boundary edges, Enter, then click objects to extend (near the end to "
                 "stretch). ESC cancels.");
@@ -419,7 +417,6 @@ void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::TrimStateSession>(), false);
   char buf[128];
   std::snprintf(buf, sizeof(buf), "Enter new value for TRIMSTATE <%d>:  (0 = draw a line to trim, 1 = pick cutting edges)",

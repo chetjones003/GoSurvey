@@ -36,9 +36,7 @@
 // ---------------------------------------------------------------------------
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PdfAttachSession>(), /*recordAsLastCommand=*/false);
   st.pdfAttachDialogOpen = true;
   log.push_back("PDFATTACH — select PDF file and options in the dialog, then place the underlay.");

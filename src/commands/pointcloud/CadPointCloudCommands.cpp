@@ -403,11 +403,7 @@ bool PointCloudVisible(const AppCommandState& st, size_t index) {
 
 void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>& log) {
   stepengine::BeginSession(st, std::make_unique<stepengine::ExtractCenterlineSession>(), /*recordAsLastCommand=*/true);
-  st.extractCenterlineHoverValid = false;
-  st.extractCenterlineHoverDiag = "not hovering yet";
   st.pointCloudOpenCaches.clear();
-  st.extractCenterlineLastQueryValid = false;
-  st.extractCenterlineLastQueryCloudIndex = -1;
   log.push_back("EXTRACTCENTERLINE — hover a scanned pipe/pole/column and click to place its "
                 "centerline (Esc to cancel).");
 }
@@ -462,9 +458,12 @@ static void ReadExtractCenterlineNeighborhood(const pointcloudcache::OpenCache& 
 }
 
 void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
-  st.extractCenterlineHoverValid = false;
+  auto* sess = st.sessionAs<stepengine::ExtractCenterlineSession>();
+  if (!sess)
+    return;
+  sess->hoverValid = false;
   if (!ray.valid()) {
-    st.extractCenterlineHoverDiag = "invalid pick ray";
+    sess->hoverDiag = "invalid pick ray";
     return;
   }
 
@@ -550,7 +549,7 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
     }
   }
   if (bestCloud < 0) {
-    st.extractCenterlineHoverDiag =
+    sess->hoverDiag =
         anyCacheOpenFailed ? "no visible point cloud (its out-of-core cache failed to open)"
                            : "no visible point cloud";
     return;
@@ -559,10 +558,10 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
   const double gate = std::max(static_cast<double>(tol), radius);
   if (bestD2 > gate * gate) {
     // nothing close enough to the cursor to be "hovering a cloud" at all
-    st.extractCenterlineHoverDiag = "nearest scan point is " + std::to_string(std::sqrt(bestD2)) +
-                                    " ft from the cursor ray (need <= " + std::to_string(gate) + " ft)" +
-                                    (anyCacheOpenFailed ? " [a cloud's out-of-core cache failed to open]"
-                                                        : "");
+    sess->hoverDiag = "nearest scan point is " + std::to_string(std::sqrt(bestD2)) +
+                      " ft from the cursor ray (need <= " + std::to_string(gate) + " ft)" +
+                      (anyCacheOpenFailed ? " [a cloud's out-of-core cache failed to open]"
+                                          : "");
     return;
   }
 
@@ -575,15 +574,15 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
   const pointcloudcache::OpenCache* cache = GetOrOpenPointCloudCache(st, bestCloud);
   const double moveHysteresis = radius * 0.3;
   const bool reuseLast =
-      cache && st.extractCenterlineLastQueryValid && st.extractCenterlineLastQueryCloudIndex == bestCloud &&
-      (cx - st.extractCenterlineLastQueryX) * (cx - st.extractCenterlineLastQueryX) +
-              (cy - st.extractCenterlineLastQueryY) * (cy - st.extractCenterlineLastQueryY) +
-              (cz - st.extractCenterlineLastQueryZ) * (cz - st.extractCenterlineLastQueryZ) <=
+      cache && sess->lastQueryValid && sess->lastQueryCloudIndex == bestCloud &&
+      (cx - sess->lastQueryX) * (cx - sess->lastQueryX) +
+              (cy - sess->lastQueryY) * (cy - sess->lastQueryY) +
+              (cz - sess->lastQueryZ) * (cz - sess->lastQueryZ) <=
           moveHysteresis * moveHysteresis;
 
   std::vector<double> neighborhood;
   if (reuseLast) {
-    neighborhood = st.extractCenterlineLastNeighborhood;
+    neighborhood = sess->lastNeighborhood;
   } else {
     if (cache)
       ReadExtractCenterlineNeighborhood(*cache, cx, cy, cz, radius, neighborhood);
@@ -600,41 +599,43 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
       }
     }
     if (cache) {
-      st.extractCenterlineLastQueryValid = true;
-      st.extractCenterlineLastQueryCloudIndex = bestCloud;
-      st.extractCenterlineLastQueryX = cx;
-      st.extractCenterlineLastQueryY = cy;
-      st.extractCenterlineLastQueryZ = cz;
-      st.extractCenterlineLastNeighborhood = neighborhood;
+      sess->lastQueryValid = true;
+      sess->lastQueryCloudIndex = bestCloud;
+      sess->lastQueryX = cx;
+      sess->lastQueryY = cy;
+      sess->lastQueryZ = cz;
+      sess->lastNeighborhood = neighborhood;
     }
   }
 
   const cylinderfit::FitResult fit = cylinderfit::FitCylinderAxisLeastSquares(neighborhood, fitParams);
   if (!fit.ok) {
     const size_t n = neighborhood.size() / 3;
-    st.extractCenterlineHoverDiag =
+    sess->hoverDiag =
         n < 12 ? "only " + std::to_string(n) + " points in the neighborhood (need at least 12)"
                : std::to_string(n) + " points nearby, but they don't fit a cylinder closely enough";
     return;  // too few points, or not cylindrical enough (REQ-347: no misleading preview)
   }
 
-  st.extractCenterlineHoverValid = true;
-  st.extractCenterlineP0X = fit.p0X;
-  st.extractCenterlineP0Y = fit.p0Y;
-  st.extractCenterlineP0Z = fit.p0Z;
-  st.extractCenterlineP1X = fit.p1X;
-  st.extractCenterlineP1Y = fit.p1Y;
-  st.extractCenterlineP1Z = fit.p1Z;
+  sess->hoverValid = true;
+  sess->p0X = fit.p0X;
+  sess->p0Y = fit.p0Y;
+  sess->p0Z = fit.p0Z;
+  sess->p1X = fit.p1X;
+  sess->p1Y = fit.p1Y;
+  sess->p1Z = fit.p1Z;
 }
 
 void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::string>& log) {
-  if (!st.extractCenterlineHoverValid) {
-    log.push_back("EXTRACTCENTERLINE — no cylinder found there (" + st.extractCenterlineHoverDiag +
+  const auto* sess = st.sessionAs<stepengine::ExtractCenterlineSession>();
+  if (!sess || !sess->hoverValid) {
+    const std::string diag = sess ? sess->hoverDiag : std::string("not hovering yet");
+    log.push_back("EXTRACTCENTERLINE — no cylinder found there (" + diag +
                   "); hover a scanned pipe/pole/column and click (Esc to cancel).");
     return;
   }
   PushUndoSnapshot(st, "Extract Centerline");
-  st.drawing.pushLine(CadLineRecord{st.extractCenterlineP0X, st.extractCenterlineP0Y, st.extractCenterlineP0Z, st.extractCenterlineP1X, st.extractCenterlineP1Y, st.extractCenterlineP1Z});
+  st.drawing.pushLine(CadLineRecord{sess->p0X, sess->p0Y, sess->p0Z, sess->p1X, sess->p1Y, sess->p1Z});
   st.drawing.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("EXTRACTCENTERLINE — line placed along the fitted cylinder axis.");

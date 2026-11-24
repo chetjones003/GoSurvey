@@ -297,8 +297,6 @@ void BeginPropCommand(AppCommandState& st, AppCommandState::Kind k) {
     st.active = AppCommandState::Kind::None;  // restarting keeps the held selection
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PropCmdSession>(k), /*recordAsLastCommand=*/true);
 }
 

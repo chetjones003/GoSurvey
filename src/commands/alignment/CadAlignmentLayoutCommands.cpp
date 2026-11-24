@@ -1064,7 +1064,6 @@ bool BeginInteractive(AppCommandState& st, std::unique_ptr<stepengine::CommandSe
     return false;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::move(sess), true);
   return true;
 }
@@ -1447,50 +1446,34 @@ void RunAlignmentCurveSettings(AppCommandState& st, const std::string& args, std
                 ", spiral in " + spiral(cs.spiralInLength) + ", spiral out " + spiral(cs.spiralOutLength) + ".");
 }
 
-bool SubmitAlignmentCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
+bool SubmitAlignmentLayoutPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
   assert(std::isfinite(localX) && std::isfinite(localY));
-  if (st.active == AppCommandState::Kind::AlignmentLayout) return SubmitLayoutPoint(st, {localX, localY}, log);
-  if (st.active == AppCommandState::Kind::AlignmentFromObjects) return SubmitFromObjectsPick(st, localX, localY, log);
-  assert(st.active != AppCommandState::Kind::AlignmentLayout);
-  return false;
+  return SubmitLayoutPoint(st, {localX, localY}, log);
 }
 
-bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+bool HandleAlignmentLayoutText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
   assert(line.size() < line.max_size());
-  if (st.active == AppCommandState::Kind::AlignmentLayout) return HandleLayoutText(st, line, log);
-  if (st.active == AppCommandState::Kind::AlignmentFromObjects) return HandleFromObjectsText(st, line, log);
-  assert(st.active != AppCommandState::Kind::AlignmentFromObjects);
-  return false;
+  return HandleLayoutText(st, line, log);
 }
 
-void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active == AppCommandState::Kind::AlignmentLayout) {
-    // Note: when called from AlignmentLayoutSession::onCancel, activeSession has already been moved out,
-    // so st.alignmentLayoutToolsName holds the active layout name.
-    const auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>();
-    const std::string nm = sp ? sp->name : st.alignmentLayoutToolsName;
-    FinishLayout(st, nm, log);  // Civil 3D keeps what was laid out
-    return;
-  }
+void CancelAlignmentLayout(AppCommandState& st, const std::string& layoutName, std::vector<std::string>& log) {
+  FinishLayout(st, layoutName.empty() ? st.alignmentLayoutToolsName : layoutName, log);  // Civil 3D keeps what was laid out
+}
+
+bool SubmitAlignmentFromObjectsPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
+  assert(std::isfinite(localX) && std::isfinite(localY));
+  return SubmitFromObjectsPick(st, localX, localY, log);
+}
+
+bool HandleAlignmentFromObjectsText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+  assert(line.size() < line.max_size());
+  return HandleFromObjectsText(st, line, log);
+}
+
+void CancelAlignmentFromObjects(AppCommandState& st, std::vector<std::string>& log) {
   stepengine::EndSession(st);
   st.selection.clear();
   st.alignmentFromObjectsLastPickArgs.clear();
   assert(st.active == AppCommandState::Kind::None);
   log.push_back("CREATEALIGNMENTFROMOBJECTS canceled - nothing was created.");
-}
-
-const char* AlignmentCommandPrompt(const AppCommandState& st) {
-  using P = stepengine::AlignmentFromObjectsPhase;
-  if (const auto* sp = st.sessionAs<stepengine::AlignmentLayoutSession>())
-    return sp->pis.empty()
-               ? "ALIGNMENTLAYOUT: Specify start point (click or X,Y) | ESC ends"
-               : "ALIGNMENTLAYOUT: Specify next point or [Undo] (click, X,Y or @dx,dy) | Enter or ESC ends";
-  const auto* pp = st.sessionAs<stepengine::AlignmentFromObjectsSession>();
-  if (!pp) return nullptr;
-  switch (pp->phase) {
-    case P::WaitFirst: return "CREATEALIGNMENTFROMOBJECTS: Select the first line/arc/polyline | ESC cancels";
-    case P::WaitMore: return "CREATEALIGNMENTFROMOBJECTS: Select lines/arcs or polylines to create alignment | Enter when done";
-    case P::WaitDirection: return "CREATEALIGNMENTFROMOBJECTS: Press Enter to accept alignment direction or [Reverse]";
-  }
-  return nullptr;
 }

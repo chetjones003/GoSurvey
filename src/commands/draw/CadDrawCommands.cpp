@@ -425,18 +425,14 @@ bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float
 
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::LineSession>(), /*recordAsLastCommand=*/true);
   log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
 }
 
 void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::CircleSession>(), /*recordAsLastCommand=*/true);
   log.push_back(
       "CIRCLE — center + radius: click/type center, then radius (click edge), type radius, or D + diameter.");
@@ -445,9 +441,7 @@ void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PolylineSession>(false), /*recordAsLastCommand=*/true);
   log.push_back("POLYLINE — click points; click the FIRST point to close, Enter to finish open. "
                 "(CLOSE/CL, END still work.) A / 2P bearing lock; ortho; ESC cancels.");
@@ -456,9 +450,7 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::PolylineSession>(true), /*recordAsLastCommand=*/false);
   log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
                 "X,Y alone uses the snapped point's elevation, else ELEV. Click the FIRST point to "
@@ -467,27 +459,21 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) 
 
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::ArcSession>(), /*recordAsLastCommand=*/false);
   log.push_back("ARC — three picks: start, point on arc, end. ESC cancels.");
 }
 
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::EllipseSession>(), /*recordAsLastCommand=*/false);
   log.push_back("ELLIPSE — center, major axis endpoint, then minor/major ratio (0-1] on command line (Enter=0.5).");
 }
 
 void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::SplineSession>(), /*recordAsLastCommand=*/true);
   log.push_back("SPLINE — Fit points (curve passes through them). Type CV for control vertices. Pick or type X,Y; Close / End / Undo:");
 }
@@ -495,9 +481,7 @@ void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::RectSession>(), /*recordAsLastCommand=*/true);
   log.push_back("RECT — pick the first corner (or type X,Y):");
 }
@@ -556,10 +540,7 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
 
 
 void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::HatchSession>(), /*recordAsLastCommand=*/true);
-  st.hatchPreviewValid = false;
-  st.hatchPreviewLoop.clear();
   ClearCadSelection(st);
   log.push_back("HATCH — pick an internal point inside a closed area (Esc to cancel).");
 }
@@ -711,7 +692,6 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 // name for that half rather than pretending to be a full UCS.
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::ElevSession>(), /*recordAsLastCommand=*/false);
   char buf[160];
   std::snprintf(buf, sizeof(buf), "Specify new default elevation <%.4f>:  (W = back to world Z 0)",

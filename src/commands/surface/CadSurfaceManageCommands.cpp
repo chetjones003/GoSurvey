@@ -2046,7 +2046,6 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
   auto sess = std::make_unique<stepengine::SurfaceElevGradeSession>();
   sess->phase = stepengine::SurfaceElevPhase::WaitFirst;
@@ -2065,7 +2064,6 @@ void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, 
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::WaterDropSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), false);
@@ -2083,7 +2081,6 @@ void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, 
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::CatchmentSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), false);
@@ -2107,7 +2104,6 @@ void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceNam
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::SwapTinEdgeSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), true);
@@ -2129,7 +2125,6 @@ void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceNam
   if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
     return;
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::AddTinPointSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), true);
@@ -2157,7 +2152,6 @@ void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceNam
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::DelTinPointSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), true);
@@ -2178,7 +2172,6 @@ void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceNa
   if (SurfaceRefusesPointEdits(st.drawing.cadSurfaces[static_cast<size_t>(si)], "SURFACEMOVEPOINT", log))
     return;
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::MoveTinPointSession>();
   sess->surfaceName = surfaceName;
   sess->phase = stepengine::MoveTinPointPhase::WaitFrom;
@@ -2205,7 +2198,6 @@ void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::DelTinLineSession>();
   sess->surfaceName = surfaceName;
   stepengine::BeginSession(st, std::move(sess), true);
@@ -2229,7 +2221,6 @@ void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceNam
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::QuickProfileSession>();
   sess->surfaceName = surfaceName;
   sess->phase = stepengine::QuickProfilePhase::WaitFirst;
@@ -2270,7 +2261,6 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
     log.push_back("DESIGNATEBREAKLINE — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::DesignateBreaklineSession>();
   sess->surfaceName = surfaceName;
   sess->contourSource = false;
@@ -2295,7 +2285,6 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
     log.push_back("DESIGNATECONTOUR — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::DesignateBreaklineSession>();
   sess->surfaceName = surfaceName;
   sess->contourSource = true;
@@ -2320,7 +2309,6 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
     log.push_back("DESIGNATEBOUNDARY — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::DesignateBoundarySession>();
   sess->surfaceName = surfaceName;
   sess->boundaryKind = kind;

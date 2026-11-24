@@ -38,9 +38,7 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::IdPointSession>(), /*recordAsLastCommand=*/false);
   log.push_back("ID — specify point (click in drawing or type X,Y). UCS = World. ESC cancels.");
 }
@@ -53,9 +51,7 @@ void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& lo
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::SurveyInverseSession>(), /*recordAsLastCommand=*/false);
   log.push_back(
       "INVERSE — first point (World X=Easting, Y=Northing); then second. "
@@ -69,9 +65,7 @@ void StartDistCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   stepengine::BeginSession(st, std::make_unique<stepengine::DistSession>(), /*recordAsLastCommand=*/false);
   log.push_back(
       "DIST — first point (pick, snap, or type X,Y); then second (pick, snap, type X,Y, or "

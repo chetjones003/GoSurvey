@@ -176,6 +176,7 @@ add_executable(GoSurveyTests
   tests/Document/PaperSpaceTests.cpp
   tests/Document/DrawingSettingsTests.cpp
   tests/DrawingContentTests.cpp
+  tests/EntityKindOpsTests.cpp
   tests/CutClipboardTests.cpp
   # Commands, updates and crash reports
   tests/EditorInteractionTests.cpp

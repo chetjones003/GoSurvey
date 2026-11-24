@@ -226,9 +226,12 @@ StepSubmitResult ExtractCenterlineSession::onText(AppCommandState&, const std::s
   return StepSubmitResult::Unparsed;
 }
 
-void ExtractCenterlineSession::onCancel(AppCommandState& st, std::vector<std::string>&) {
-  st.extractCenterlineHoverValid = false;
+void ExtractCenterlineSession::onViewportPick(AppCommandState& st, const StepPickInput&,
+                                              std::vector<std::string>& log) {
+  SubmitExtractCenterlineViewportPick(st, log);
 }
+
+void ExtractCenterlineSession::onCancel(AppCommandState&, std::vector<std::string>&) {}
 
 // ---------------------------------------------------------------------------
 // Helper for active drawing's project UID

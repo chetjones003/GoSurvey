@@ -40,9 +40,6 @@ void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
-  st.offsetHoverHighlightValid = false;
-  st.offsetHoverEntity = {};
   stepengine::BeginSession(st, std::make_unique<stepengine::OffsetSession>(), true);
   log.push_back("OFFSET — specify offset distance, or T for through-point mode. ESC cancels.");
 }

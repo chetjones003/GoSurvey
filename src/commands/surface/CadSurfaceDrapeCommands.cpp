@@ -706,7 +706,6 @@ std::uint64_t PadSolidSelectedBoundary(AppCommandState& st, int* outCount) {
 
 void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::PadSolidSession>();
   auto* ps = sess.get();
   stepengine::BeginSession(st, std::move(sess));

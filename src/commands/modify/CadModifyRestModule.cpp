@@ -598,8 +598,6 @@ StepSubmitResult OffsetSession::onText(AppCommandState&, const std::string& trim
 StepSubmitResult OffsetSession::onBlankEnter(AppCommandState& st, std::vector<std::string>& log) {
   if (phase == OffsetPhase::WaitSelectEntity) {
     log.push_back("OFFSET complete.");
-    st.offsetHoverHighlightValid = false;
-    st.offsetHoverEntity = {};
     EndSession(st);
     return StepSubmitResult::Finished;
   }
@@ -617,15 +615,8 @@ void OffsetSession::onViewportPick(AppCommandState& st, const StepPickInput& pic
   SubmitOffsetViewportPick(st, pick.localX, pick.localY, log);
 }
 
-void OffsetSession::onCancel(AppCommandState& st, std::vector<std::string>& log) {
-  st.offsetHoverHighlightValid = false;
-  st.offsetHoverEntity = {};
+void OffsetSession::onCancel(AppCommandState&, std::vector<std::string>& log) {
   log.push_back("OFFSET canceled.");
-}
-
-void OffsetSession::onReset(AppCommandState& st) {
-  st.offsetHoverHighlightValid = false;
-  st.offsetHoverEntity = {};
 }
 
 // ============================================================================

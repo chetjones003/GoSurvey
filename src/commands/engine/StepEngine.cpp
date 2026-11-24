@@ -48,7 +48,7 @@ void CommandSession::onViewportPick(AppCommandState& st, const StepPickInput& pi
 
 void BeginSession(AppCommandState& st, std::unique_ptr<CommandSession> session,
                   bool recordAsLastCommand) {
-  ResetActiveSession(st);
+  ResetAllCadDraftTools(st);
   ClearPendingOneShotObjectSnap(st);
   st.selBoxWaitingSecond = false;
   if (!session) {
@@ -76,6 +76,7 @@ void ResetActiveSession(AppCommandState& st) {
     auto session = std::move(st.activeSession);
     session->onReset(st);
   }
+  st.active = CadCommandKind::None;
   st.selBoxWaitingSecond = false;
   st.resolvedPointZValid = false;
   st.resolvedPointZ = 0.f;

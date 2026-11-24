@@ -538,8 +538,6 @@ static void SliceEnterPlanePhase(AppCommandState& st, std::vector<std::string>& 
 }
 
 void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::SliceSession>();
   auto* ss = sess.get();
   stepengine::BeginSession(st, std::move(sess));
@@ -790,8 +788,6 @@ static void PressPullEnterDistancePhase(AppCommandState& st, std::vector<std::st
 }
 
 void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log) {
-  ResetAllCadDraftTools(st);
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::PressPullSession>();
   auto* pp = sess.get();
   stepengine::BeginSession(st, std::move(sess));

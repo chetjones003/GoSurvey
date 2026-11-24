@@ -7,15 +7,11 @@
 
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   ResetSegmentAngleLock(st);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
   auto sess = std::make_unique<stepengine::FeatureLineSession>();
   sess->draftName = name;
   stepengine::BeginSession(st, std::move(sess), false);
-  st.polylineTypedZValid = false;
-  st.polylineTypedZRelative = false;
   log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
                 " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
                 "E marks the next point an elevation point. CLOSE/CL, END, ESC cancels.");

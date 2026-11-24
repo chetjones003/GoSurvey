@@ -795,26 +795,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // derive one from). CLICK subsumes TRIMPICK; TRIMPICK stays for the transcripts using it.
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
-    case ViewportClickRoute::HatchPick: {
-      // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
-      // HatchPick case does — same two calls, same order, same miss message. Until this existed no
-      // filled region could be created headless, so nothing about hatches had a transcript at all:
-      // not their rendering, not their Z, not their round trip through `document JSON payload` or DXF.
-      //
-      // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
-      // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
-      // found, and the user gets to click again). A transcript asserts the miss with EXPECT LOG.
-      std::vector<float> loop;
-      if (CadHatchTraceAt(run.st, x, y, &loop) && CadHatchCommitLoop(run.st, loop, run.log)) {
-        run.st.active = AppCommandState::Kind::None;
-        run.st.hatchPreviewValid = false;
-        run.st.hatchPreviewLoop.clear();
-      } else {
-        run.log.push_back(
-            "HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
-      }
+    case ViewportClickRoute::HatchPick:
+      // HATCH (REQ-043): route through HatchSession::onViewportPick so trace, commit, and session
+      // teardown stay identical across Qt and headless runs.
+      SubmitViewportPick(run.st, x, y, run.log);
       break;
-    }
     case ViewportClickRoute::PdfAttachInsertPoint:
       // PDFATTACH's insertion point is a plain coordinate, handed to the same entry point the GUI
       // uses. No snapping is applied here for the same reason PICK applies none: a transcript has no

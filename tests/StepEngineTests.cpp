@@ -531,3 +531,107 @@ TEST_CASE("Session ownership: UCS, PLAN, 3DMOVE, CHPROP, MATCHPROP, BCONNECT, PD
   CHECK(st.activeSession == nullptr);
   CHECK_FALSE(st.pdfAttachDialogOpen);
 }
+
+TEST_CASE("Session ownership: OFFSET hover, HATCH pick, EXTRACTCENTERLINE, Gizmo base, and MapCapture",
+          "[stepengine][sessions]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  // Closed 10x10 square for HATCH + line for OFFSET / 3DMOVE.
+  AddLine(st, 0.0, 0.0, 10.0, 0.0);
+  AddLine(st, 10.0, 0.0, 10.0, 10.0);
+  AddLine(st, 10.0, 10.0, 0.0, 10.0);
+  AddLine(st, 0.0, 10.0, 0.0, 0.0);
+
+  // OFFSET owns hoverHighlightValid/hoverEntity and drops on Esc.
+  SubmitLine(st, "offset", log);
+  REQUIRE(st.sessionAs<stepengine::OffsetSession>() != nullptr);
+  SubmitLine(st, "2", log);
+  st.sessionAs<stepengine::OffsetSession>()->hoverHighlightValid = true;
+  st.sessionAs<stepengine::OffsetSession>()->hoverEntity = {SelectedEntity::Type::LineSeg, 0};
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+  CHECK(st.active == CadCommandKind::None);
+
+  // HATCH routes viewport pick through HatchSession::onViewportPick, keeps session on miss, drops on commit.
+  SubmitLine(st, "hatch", log);
+  REQUIRE(st.sessionAs<stepengine::HatchSession>() != nullptr);
+  CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::HatchPick);
+  SubmitViewportPick(st, 50.0, 50.0, log);  // outside square -> miss, stays active
+  CHECK(st.sessionAs<stepengine::HatchSession>() != nullptr);
+  CHECK(st.drawing.cadFilledRegions.empty());
+  SubmitViewportPick(st, 5.0, 5.0, log);    // inside square -> commits and drops session
+  CHECK(st.activeSession == nullptr);
+  CHECK(st.active == CadCommandKind::None);
+  REQUIRE(st.drawing.cadFilledRegions.size() == 1);
+
+  // EXTRACTCENTERLINE owns hover state and routes SubmitViewportPick through ExtractCenterlineSession.
+  StartExtractCenterlineCommand(st, log);
+  auto* ec = st.sessionAs<stepengine::ExtractCenterlineSession>();
+  REQUIRE(ec != nullptr);
+  CHECK_FALSE(ec->hoverValid);
+  const std::size_t linesBefore = st.drawing.lineCount();
+  SubmitViewportPick(st, 0.0, 0.0, log);  // no valid fit -> logs refusal, adds no line
+  CHECK(st.drawing.lineCount() == linesBefore);
+  ec->hoverValid = true;
+  ec->p0X = 1.0; ec->p0Y = 2.0; ec->p0Z = 3.0;
+  ec->p1X = 4.0; ec->p1Y = 5.0; ec->p1Z = 6.0;
+  SubmitViewportPick(st, 0.0, 0.0, log);  // commits fitted centerline
+  CHECK(st.drawing.lineCount() == linesBefore + 1);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+
+  // 3DMOVE owns baseValid/base/opBeforeCmd and restores gizmoOp even when silently replaced by BeginSession.
+  st.gizmoOp = CadGizmoOp::Scale;
+  st.selection.clear();
+  st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  SubmitLine(st, "3dmove", log);
+  auto* gs = st.sessionAs<stepengine::GizmoCmdSession>();
+  REQUIRE(gs != nullptr);
+  CHECK(gs->opBeforeCmd == CadGizmoOp::Scale);
+  CHECK(st.gizmoOp == CadGizmoOp::Translate);
+  SubmitLine(st, "3,4,5", log);
+  CHECK(gs->baseValid);
+  ray3d::Vec3 anchor{};
+  REQUIRE(CadGizmoAnchorWorld(st, &anchor));
+  CHECK(anchor.x == Catch::Approx(3.0));
+  CHECK(anchor.y == Catch::Approx(4.0));
+  CHECK(anchor.z == Catch::Approx(5.0));
+  // Starting another command (e.g. from the ribbon) resets the gizmo session via BeginSession and restores gizmoOp.
+  StartLineCommand(st, log);
+  CHECK(st.active == CadCommandKind::Line);
+  CHECK(st.gizmoOp == CadGizmoOp::Scale);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+
+  // GEOCAPTUREAREA owns MapCaptureState on GeoCmdSession and drops cleanly on Esc.
+  {
+    auto geo = std::make_unique<stepengine::GeoCmdSession>(CadCommandKind::GeoCaptureArea);
+    geo->phase = stepengine::GeoCmdPhase::Capturing;
+    geo->mapCapture.total = 4;
+    geo->mapCapture.gathered = 2;
+    geo->mapCapture.prompt = "Capturing map... 2 of 4 tiles";
+    stepengine::BeginSession(st, std::move(geo), false);
+    REQUIRE(st.sessionAs<stepengine::GeoCmdSession>() != nullptr);
+    CHECK(std::string(GeoCommandPrompt(st)) == "Capturing map... 2 of 4 tiles");
+    CancelActiveCommand(st, log);
+    CHECK(st.activeSession == nullptr);
+    CHECK(st.active == CadCommandKind::None);
+  }
+
+  // Direct-dispatched DrawInquiry & Alignment sessions report their own prompt hints and finish cleanly.
+  SubmitLine(st, "point", log);
+  REQUIRE(st.sessionAs<stepengine::PointSession>() != nullptr);
+  CHECK(ActiveCommandPromptHint(st).find("POINT:") == 0);
+  SubmitLine(st, "7,8", log);
+  REQUIRE(st.drawing.cadPoints.size() == 1);
+  SubmitLine(st, "", log);
+  CHECK(st.activeSession == nullptr);
+  CHECK(st.active == CadCommandKind::None);
+
+  SubmitLine(st, "createalignmentfromobjects", log);
+  REQUIRE(st.sessionAs<stepengine::AlignmentFromObjectsSession>() != nullptr);
+  CHECK(ActiveCommandPromptHint(st).find("CREATEALIGNMENTFROMOBJECTS:") == 0);
+  CancelActiveCommand(st, log);
+  CHECK(st.activeSession == nullptr);
+  CHECK(st.active == CadCommandKind::None);
+}

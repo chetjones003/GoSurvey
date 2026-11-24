@@ -832,7 +832,6 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
 
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   auto sess = std::make_unique<stepengine::GradingSession>();
   auto* gs = sess.get();
   stepengine::BeginSession(st, std::move(sess));

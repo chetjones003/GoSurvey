@@ -1691,8 +1691,8 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<double>* hl
     AppendEntityHighlight(cmd, e, hlLines, hlCircles);
   if (const auto* ofs = cmd.sessionAs<stepengine::OffsetSession>();
       ofs && ofs->phase == stepengine::OffsetPhase::WaitSelectEntity &&
-      cmd.offsetHoverHighlightValid)
-    AppendEntityHighlight(cmd, cmd.offsetHoverEntity, hlLines, hlCircles);
+      ofs->hoverHighlightValid)
+    AppendEntityHighlight(cmd, ofs->hoverEntity, hlLines, hlCircles);
   if (const auto* trim = cmd.sessionAs<stepengine::TrimSession>()) {
     for (const auto& c : trim->cutters)
       AppendEntityHighlight(cmd, c, hlLines, hlCircles);

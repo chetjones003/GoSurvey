@@ -1684,10 +1684,6 @@ bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleN
                                   std::vector<std::string>& log);
 void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
-bool HandleCadDrawInquiryTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
-bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
-[[nodiscard]] const char* CadDrawInquiryCommandInputHint(const AppCommandState& st);
-void ResetCadDrawInquiryDrafts(AppCommandState& st);
 void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.

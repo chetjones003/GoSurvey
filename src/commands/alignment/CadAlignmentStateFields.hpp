@@ -9,9 +9,6 @@
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  /// While OFFSET waits for the first pick, entity under cursor (for highlight).
-  bool offsetHoverHighlightValid = false;
-  SelectedEntity offsetHoverEntity{};
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
   /// Renderer-only invalidation. Unlike cadGpuRevision, this does not dirty the drawing or cancel surface workers.

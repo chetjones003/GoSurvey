@@ -309,11 +309,14 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
          m_State.active == AppCommandState::Kind::GeoCaptureArea);
     if (!needed) { m_MapTimer.stop(); return; }
     update();
-    if (m_LastMapLogSize != m_Log.size() || m_LastCaptureGathered != m_State.mapCapture.gathered ||
-        m_LastCaptureTotal != m_State.mapCapture.total) {
+    const auto* geoSess = m_State.sessionAs<stepengine::GeoCmdSession>();
+    const int capGathered = geoSess ? geoSess->mapCapture.gathered : 0;
+    const int capTotal = geoSess ? geoSess->mapCapture.total : 0;
+    if (m_LastMapLogSize != m_Log.size() || m_LastCaptureGathered != capGathered ||
+        m_LastCaptureTotal != capTotal) {
       m_LastMapLogSize = m_Log.size();
-      m_LastCaptureGathered = m_State.mapCapture.gathered;
-      m_LastCaptureTotal = m_State.mapCapture.total;
+      m_LastCaptureGathered = capGathered;
+      m_LastCaptureTotal = capTotal;
       if (changed) changed();
     }
   });

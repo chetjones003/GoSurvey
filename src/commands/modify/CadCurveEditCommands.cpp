@@ -343,7 +343,6 @@ void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::LengthenSession>(), true);
   log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <") +
                 LengthenModeName(st.lengthenMode) + ">. ESC cancels.");
@@ -1416,7 +1415,6 @@ void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::BreakSession>(), true);
   log.push_back("BREAK — select object (the pick is break point 1). ESC cancels.");
 }
@@ -2183,7 +2181,6 @@ void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   ClearSelection(st);
   stepengine::BeginSession(st, std::make_unique<stepengine::StretchSession>(), true);
   log.push_back(
