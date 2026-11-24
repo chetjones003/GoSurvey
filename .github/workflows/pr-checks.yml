@@ -112,7 +112,7 @@ jobs:
     name: PR gate${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
@@ -193,7 +193,7 @@ jobs:
     name: security / gitleaks${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
@@ -215,7 +215,7 @@ jobs:
     name: security / dependency-scan${{ needs.ci-event.outputs.name_suffix }}
     needs: [ci-event, classify-docs-only]
     if: >-
-      always() && needs.ci-event.outputs.relevant != 'false' &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
