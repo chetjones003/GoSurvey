@@ -78,8 +78,9 @@ These appear on the Options menu and do nothing yet — the editor says so when 
 
 A selected MTEXT shows a grip at each corner of its frame and one at its insertion point. The corner
 grips sit on the frame as drawn, so they follow the text's rotation and, for annotative text, the
-annotation scale. Drag a corner to resize the frame along the text's own direction; the opposite
-corner stays put and the rotation is kept. Drag the insertion grip to move the text. `Esc` during a
+annotation scale. Drag a corner to change the wrap width along the text's own direction; the opposite
+corner stays put and the rotation is kept. The frame's height always follows the wrapped text, as in
+AutoCAD, so the grips enclose everything that is drawn. Drag the insertion grip to move the text. `Esc` during a
 drag cancels it.
 
 MOVE, ROTATE, MIRROR, SCALE, STRETCH and ALIGN keep the insertion point, attachment, rotation and

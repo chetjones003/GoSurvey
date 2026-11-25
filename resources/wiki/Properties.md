@@ -102,7 +102,8 @@ code. Values are read-only; use the relevant contextual tools or manager to edit
 | **Rotation** | Degrees clockwise from north. MTEXT turns about its insertion point |
 | **Height** | Plotted text height. *Derived* shows the height it draws at, following the annotation scale when the text is annotative |
 | **Attachment** | MTEXT only, read-only: which point of the frame the insertion is (top left … bottom right) |
-| **Box width**, **Box height** | MTEXT only: the frame, measured along the text, in model units as drawn. Editing one keeps the insertion point fixed |
+| **Box width** | MTEXT only: the wrap width, measured along the text, in model units as drawn. Editing it keeps the insertion point fixed |
+| **Box height** | MTEXT only, read-only: the height of the wrapped text. As in AutoCAD, it follows the content |
 | **Edit text X / Y / Z** | Position of the editing box |
 
 ### Dimensions

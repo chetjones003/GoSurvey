@@ -139,7 +139,7 @@ bottom opens the full dialog.
 |---|---|
 | **Styles:** | The list of styles, with **All styles** filtering |
 | **Font** | Font Name (`(default)` unless set), **Use Big Font**, Font Style (Regular / Bold / Italic / Bold Italic) |
-| **Size** | Height, **Annotative** (new text made with an annotative style is annotative and follows the annotation scale; text already drawn keeps its own setting) |
+| **Size** | Height, **Annotative** (on unless you untick it: new text made with an annotative style is annotative and follows the annotation scale; text already drawn keeps its own setting) |
 | **Effects** | Backwards, Oblique Angle |
 | **Preview** | Live `AaBb12` sample |
 | **Buttons** | **New…**, **Set Current**, **Apply**, **Delete**, **Cancel**, **Help** |
@@ -259,9 +259,7 @@ dimension text is always horizontal, and an angular dimension measures up to 180
 ### Editing dimensions
 
 Select a dimension and drag its grips to move the dimension line or the text. Properties shows its
-layer, colour, label position, and optional one-off **Text height** and **Arrow size** overrides in
-**model units** (leave blank to follow the dimension style). Overrides stay fixed in model units at
-every annotation scale, and undo restores any override change. See [[Properties]].
+layer, colour, and geometry.
 
 > **DXF note** — aligned dimensions are written to DXF as **exploded lines plus text**, not as
 > associative `DIMENSION` entities. They will look right in another CAD program but will not be
@@ -287,14 +285,13 @@ Choosing a scale resizes them and never moves the view. Annotative objects are:
 - **survey points**, their markers and their labels (annotative by default; a point style's marker is
   sized from the annotation scale);
 - **position markers**;
-- dimensions (when the dimension or its dimension style is marked **Annotative** — text, arrows,
-  lines, offsets, and unplaced labels all scale together on screen, in PDF, DXF, and DWG; per-dimension
-  model-unit overrides in [[Properties]] stay fixed across scales), multileaders, and text marked
-  **Annotative**.
+- dimensions, multileaders and text marked **Annotative**.
 
-Objects that are not annotative keep the plot scale above (times the style's **Overall scale** for
-non-annotative dimension styles). Paper space keeps its own viewport annotation scale. See
-[[Views and Navigation]].
+New TEXT and MTEXT is annotative unless its text style has **Annotative** unticked, so it is drawn at
+the scale shown on the status bar.
+
+Objects that are not annotative keep the plot scale above. Paper space keeps its own viewport
+annotation scale. See [[Views and Navigation]].
 
 ---
 
