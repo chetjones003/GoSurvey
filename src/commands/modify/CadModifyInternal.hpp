@@ -62,11 +62,11 @@ void ReflectPtAcrossLine(double x0, double y0, double x1, double y1, T* x, T* y)
 static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnotation* ann) {
   if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
     return;
-  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  float dmx = cmx;
-  float dmy = cmy;
+  const double x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  double dmx = cmx;
+  double dmy = cmy;
   if (!ann->dimLinearVertical)
     dmy = cmy + ann->dimSignedOffset;
   else
@@ -74,8 +74,8 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
   RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
   RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
   RotateAroundBase(bx, by, rad, &dmx, &dmy);
-  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
-  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
+  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
     ann->dimSignedOffset = dmy - ncmy;
   else
@@ -92,11 +92,11 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
 static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1, CadAnnotation* ann) {
   if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
     return;
-  const float ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
-  const float cmx = 0.5f * (ex1 + ex2);
-  const float cmy = 0.5f * (ey1 + ey2);
-  float dmx = cmx;
-  float dmy = cmy;
+  const double ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
+  const double cmx = 0.5 * (ex1 + ex2);
+  const double cmy = 0.5 * (ey1 + ey2);
+  double dmx = cmx;
+  double dmy = cmy;
   if (!ann->dimLinearVertical)
     dmy = cmy + ann->dimSignedOffset;
   else
@@ -104,8 +104,8 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
   ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt1X, &ann->dimExt1Y);
   ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt2X, &ann->dimExt2Y);
   ReflectPtAcrossLine(x0, y0, x1, y1, &dmx, &dmy);
-  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
-  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
+  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
     ann->dimSignedOffset = dmy - ncmy;
   else

@@ -433,10 +433,12 @@ struct CadAnnotation {
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
-  float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
+  /// Stored in double (issue #1668): a float near 5,000 ft is spaced ~0.0005 ft apart, which turns an
+  /// exact 62° angle into 62°01'.
+  double dimExt1X = 0.0, dimExt1Y = 0.0, dimExt2X = 0.0, dimExt2Y = 0.0;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
-  float dimAngVertexX = 0.f;
-  float dimAngVertexY = 0.f;
+  double dimAngVertexX = 0.0;
+  double dimAngVertexY = 0.0;
   /// Signed distance from chord midpoint to dimension line: aligned uses N=(-T.y,T.x) with T=normalize(e2-e1); linear uses N=(0,1) for horizontal span or N=(1,0) for vertical span; angular uses arc radius (world units).
   float dimSignedOffset = 0.f;
   /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.

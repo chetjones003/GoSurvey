@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
+#include "CadDimGeom.hpp"
 #include "GsAnnotationJson.hpp"
 #include "GsIo.hpp"
 #include "GsIoTestSupport.hpp"
@@ -105,6 +107,54 @@ TEST_CASE("kind text in a saved document JSON payload reloads as TEXT, not DIMAN
   REQUIRE(loaded.drawing.cadAnnotations[0].kind == CadAnnotation::Kind::Text);
   REQUIRE(loaded.drawing.cadAnnotations[0].text == "just a label");
   REQUIRE(AnnotationKindTag(loaded.drawing.cadAnnotations[0].kind) == std::string("text"));
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+// Issue #1668 — a bolt pattern rotated exactly 62 degrees measured 62d01'07.7" because DIMANGULAR
+// kept its picks in float, which near (3230, 5290) are spaced ~0.0005 ft apart. The points must
+// survive in double, and the measured angle must be the exact one.
+TEST_CASE("DIMANGULAR at state-plane-sized coordinates measures and saves exactly (issue #1668)",
+          "[payload][dimangular]") {
+  constexpr double kPi = 3.14159265358979323846;
+  const double vx = 3230.9697, vy = 5290.5486;
+  const double a1 = 0.3;  // an arbitrary, non-axis first ray
+  const double a2 = a1 + 62.0 * kPi / 180.0;
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::DimAngular;
+  a.dimAngVertexX = vx;
+  a.dimAngVertexY = vy;
+  a.dimExt1X = vx + std::cos(a1);  // 1 ft rays: the length that showed the error
+  a.dimExt1Y = vy + std::sin(a1);
+  a.dimExt2X = vx + std::cos(a2);
+  a.dimExt2Y = vy + std::sin(a2);
+  a.dimSignedOffset = 0.5f;
+
+  float r1 = 0.f, r2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f, theta = 0.f;
+  REQUIRE(CadDimAngularComputeFrame(a, &r1, &r2, &sweep, &bisx, &bisy, &theta));
+  const double arcSecondsOff = std::fabs(static_cast<double>(theta) * 180.0 / kPi - 62.0) * 3600.0;
+  CHECK(arcSecondsOff < 0.05);  // was ~67" in float
+
+  AppCommandState st;
+  st.drawing.cadAnnotations.push_back(a);
+  EntityAttributes attr;
+  attr.id = 1;
+  st.drawing.cadAnnotationAttrs.push_back(attr);
+  st.nextEntityId = 2;
+  const std::filesystem::path path = UniqueGsPath("dimangular-precision");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
+  AppCommandState loaded;
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
+  REQUIRE(loaded.drawing.cadAnnotations.size() == 1);
+  const CadAnnotation& b = loaded.drawing.cadAnnotations[0];
+  CHECK(b.dimAngVertexX == a.dimAngVertexX);
+  CHECK(b.dimAngVertexY == a.dimAngVertexY);
+  CHECK(b.dimExt1X == a.dimExt1X);
+  CHECK(b.dimExt1Y == a.dimExt1Y);
+  CHECK(b.dimExt2X == a.dimExt2X);
+  CHECK(b.dimExt2Y == a.dimExt2Y);
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

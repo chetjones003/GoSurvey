@@ -359,13 +359,15 @@ void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float b
 }
 
 
-static void RotatePtForAnnotationPreview(float bx, float by, float rad, float* x, float* y) {
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  float dx = *x - bx;
-  float dy = *y - by;
-  *x = bx + c * dx - s * dy;
-  *y = by + s * dx + c * dy;
+// Templated: annotation insertion points are float, dimension definition points double (issue #1668).
+template <class T>
+static void RotatePtForAnnotationPreview(float bx, float by, float rad, T* x, T* y) {
+  const double c = std::cos(static_cast<double>(rad));
+  const double s = std::sin(static_cast<double>(rad));
+  const double dx = static_cast<double>(*x) - bx;
+  const double dy = static_cast<double>(*y) - by;
+  *x = static_cast<T>(bx + c * dx - s * dy);
+  *y = static_cast<T>(by + s * dx + c * dy);
 }
 
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad) {

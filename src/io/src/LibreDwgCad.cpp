@@ -2118,10 +2118,10 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
+    a.dimExt1X = x1 - st.drawing.worldDocumentOriginX;
+    a.dimExt1Y = y1 - st.drawing.worldDocumentOriginY;
+    a.dimExt2X = x2 - st.drawing.worldDocumentOriginX;
+    a.dimExt2Y = y2 - st.drawing.worldDocumentOriginY;
     if (ty == DWG_TYPE_DIMENSION_ALIGNED) {
       a.kind = CadAnnotation::Kind::DimAligned;
       const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
@@ -2156,15 +2156,15 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     a.kind = CadAnnotation::Kind::DimAngular;
     double vx = 0, vy = 0;
     xf.apply(centerOrDefPt->x, centerOrDefPt->y, &vx, &vy);
-    a.dimAngVertexX = static_cast<float>(vx - st.drawing.worldDocumentOriginX);
-    a.dimAngVertexY = static_cast<float>(vy - st.drawing.worldDocumentOriginY);
+    a.dimAngVertexX = vx - st.drawing.worldDocumentOriginX;
+    a.dimAngVertexY = vy - st.drawing.worldDocumentOriginY;
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
+    a.dimExt1X = x1 - st.drawing.worldDocumentOriginX;
+    a.dimExt1Y = y1 - st.drawing.worldDocumentOriginY;
+    a.dimExt2X = x2 - st.drawing.worldDocumentOriginX;
+    a.dimExt2Y = y2 - st.drawing.worldDocumentOriginY;
     double dpx = 0, dpy = 0;
     xf.apply(common->def_pt.x, common->def_pt.y, &dpx, &dpy);
     dpx -= st.drawing.worldDocumentOriginX;
@@ -6845,9 +6845,9 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
                                      const AppCommandState& st, const CadAnnotation& an,
                                      const EntityAttributes* at, double ox, double oy, bool r2018Write,
                                      DwgExportAnnotContext& annotCtx, DimWriteState& ds) {
-  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
-    p->x = static_cast<double>(lx) + ox;
-    p->y = static_cast<double>(ly) + oy;
+  auto world = [&](double lx, double ly, double z, dwg_point_3d* p) {  // double: dimension points (issue #1668)
+    p->x = lx + ox;
+    p->y = ly + oy;
     p->z = z;
   };
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {

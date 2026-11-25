@@ -162,7 +162,7 @@
   float dimGripDownWorldX = 0.f;
   float dimGripDownWorldY = 0.f;
   float dimGripOrigSignedOffset = 0.f;
-  float dimGripOrigExt1X = 0.f, dimGripOrigExt1Y = 0.f, dimGripOrigExt2X = 0.f, dimGripOrigExt2Y = 0.f;
+  double dimGripOrigExt1X = 0.0, dimGripOrigExt1Y = 0.0, dimGripOrigExt2X = 0.0, dimGripOrigExt2Y = 0.0;  // issue #1668
   float dimGripOrigInsX = 0.f, dimGripOrigInsY = 0.f;
   float dimGripDragNx = 0.f, dimGripDragNy = 0.f;
   /// True after first click on a dim grip until second click commits (or RMB cancels).

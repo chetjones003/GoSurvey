@@ -283,15 +283,16 @@ class DimSession final : public CommandSession {
 
   bool linear = false;
   DimPhase phase = DimPhase::WaitExt1;
-  float e1x = 0.f, e1y = 0.f;
-  float e2x = 0.f, e2y = 0.f;
+  // Double (issue #1668): the measured points; a float near 5,000 ft is ~0.0005 ft coarse.
+  double e1x = 0.0, e1y = 0.0;
+  double e2x = 0.0, e2y = 0.0;
   bool linearDraftVertical = false;
   bool linearOrientUserLock = false;
   float lockCursorWx = 0.f, lockCursorWy = 0.f;
 
   void resetDraft() {
     phase = DimPhase::WaitExt1;
-    e1x = e1y = e2x = e2y = 0.f;
+    e1x = e1y = e2x = e2y = 0.0;
     linearDraftVertical = false;
     linearOrientUserLock = false;
     lockCursorWx = lockCursorWy = 0.f;
@@ -312,14 +313,15 @@ class DimSession final : public CommandSession {
 class DimAngularSession final : public CommandSession {
  public:
   DimAngularPhase phase = DimAngularPhase::WaitVertex;
-  float vx = 0.f, vy = 0.f;
-  float e1x = 0.f, e1y = 0.f;
-  float e2x = 0.f, e2y = 0.f;
+  // Double (issue #1668): in float these picks put a minute of arc of error into the angle.
+  double vx = 0.0, vy = 0.0;
+  double e1x = 0.0, e1y = 0.0;
+  double e2x = 0.0, e2y = 0.0;
 
   void resetDraft() {
     phase = DimAngularPhase::WaitVertex;
-    vx = vy = 0.f;
-    e1x = e1y = e2x = e2y = 0.f;
+    vx = vy = 0.0;
+    e1x = e1y = e2x = e2y = 0.0;
   }
 
   [[nodiscard]] CadCommandKind kind() const override { return CadCommandKind::DimAngular; }

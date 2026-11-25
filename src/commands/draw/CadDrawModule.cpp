@@ -1226,14 +1226,14 @@ void DimSession::onViewportPick(AppCommandState& st, const StepPickInput& pick,
   const float wy = static_cast<float>(pick.localY);
   switch (phase) {
   case DimPhase::WaitExt1:
-    e1x = wx;
-    e1y = wy;
+    e1x = pick.localX;
+    e1y = pick.localY;
     phase = DimPhase::WaitExt2;
     log.push_back(std::string(linear ? "DIMLINEAR" : "DIMALIGNED") + " — second extension point:");
     break;
   case DimPhase::WaitExt2:
-    e2x = wx;
-    e2y = wy;
+    e2x = pick.localX;
+    e2y = pick.localY;
     phase = DimPhase::WaitDimLinePt;
     if (linear) {
       linearOrientUserLock = false;
@@ -1300,20 +1300,20 @@ void DimAngularSession::onViewportPick(AppCommandState& st, const StepPickInput&
   const float wy = static_cast<float>(pick.localY);
   switch (phase) {
   case DimAngularPhase::WaitVertex:
-    vx = wx;
-    vy = wy;
+    vx = pick.localX;
+    vy = pick.localY;
     phase = DimAngularPhase::WaitRay1;
     log.push_back("DIMANGULAR — first ray point (on first leg):");
     break;
   case DimAngularPhase::WaitRay1:
-    e1x = wx;
-    e1y = wy;
+    e1x = pick.localX;
+    e1y = pick.localY;
     phase = DimAngularPhase::WaitRay2;
     log.push_back("DIMANGULAR — second ray point (on second leg):");
     break;
   case DimAngularPhase::WaitRay2:
-    e2x = wx;
-    e2y = wy;
+    e2x = pick.localX;
+    e2y = pick.localY;
     phase = DimAngularPhase::WaitArc;
     log.push_back("DIMANGULAR — pick arc / label side (radius along angle bisector); type X,Y or @dx,dy from vertex.");
     break;

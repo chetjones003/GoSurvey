@@ -40,31 +40,33 @@ inline bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1
     return false;
   if (a.kind != CadAnnotation::Kind::DimAligned)
     return false;
-  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
-  float vx = x2 - x1;
-  float vy = y2 - y1;
-  const float len = std::hypot(vx, vy);
-  if (len < 1.e-8f)
+  // Double throughout (issue #1668): the points sit thousands of feet from the origin, where a float
+  // cannot hold the difference between them to the precision a dimension reports.
+  const double x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
+  double vx = x2 - x1;
+  double vy = y2 - y1;
+  const double len = std::hypot(vx, vy);
+  if (len < 1.e-8)
     return false;
   vx /= len;
   vy /= len;
-  const float n0x = -vy;
-  const float n0y = vx;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  const float dmx = cmx + n0x * a.dimSignedOffset;
-  const float dmy = cmy + n0y * a.dimSignedOffset;
-  const float t1 = (x1 - dmx) * vx + (y1 - dmy) * vy;
-  const float t2 = (x2 - dmx) * vx + (y2 - dmy) * vy;
-  *sx1 = dmx + vx * t1;
-  *sy1 = dmy + vy * t1;
-  *sx2 = dmx + vx * t2;
-  *sy2 = dmy + vy * t2;
-  *tx = vx;
-  *ty = vy;
-  *nx = n0x;
-  *ny = n0y;
-  *measLen = len;
+  const double n0x = -vy;
+  const double n0y = vx;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  const double dmx = cmx + n0x * a.dimSignedOffset;
+  const double dmy = cmy + n0y * a.dimSignedOffset;
+  const double t1 = (x1 - dmx) * vx + (y1 - dmy) * vy;
+  const double t2 = (x2 - dmx) * vx + (y2 - dmy) * vy;
+  *sx1 = static_cast<float>(dmx + vx * t1);
+  *sy1 = static_cast<float>(dmy + vy * t1);
+  *sx2 = static_cast<float>(dmx + vx * t2);
+  *sy2 = static_cast<float>(dmy + vy * t2);
+  *tx = static_cast<float>(vx);
+  *ty = static_cast<float>(vy);
+  *nx = static_cast<float>(n0x);
+  *ny = static_cast<float>(n0y);
+  *measLen = static_cast<float>(len);
   return true;
 }
 
@@ -74,37 +76,37 @@ inline bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1,
     return false;
   if (a.kind != CadAnnotation::Kind::DimLinear)
     return false;
-  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
+  const double x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;  // issue #1668
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
   if (!a.dimLinearVertical) {
-    const float span = std::fabs(x2 - x1);
-    if (span < 1.e-8f)
+    const double span = std::fabs(x2 - x1);
+    if (span < 1.e-8)
       return false;
-    const float dmy = cmy + a.dimSignedOffset;
-    *sx1 = x1;
-    *sy1 = dmy;
-    *sx2 = x2;
-    *sy2 = dmy;
+    const double dmy = cmy + a.dimSignedOffset;
+    *sx1 = static_cast<float>(x1);
+    *sy1 = static_cast<float>(dmy);
+    *sx2 = static_cast<float>(x2);
+    *sy2 = static_cast<float>(dmy);
     *tx = (x2 >= x1) ? 1.f : -1.f;
     *ty = 0.f;
     *nx = 0.f;
     *ny = 1.f;
-    *measLen = span;
+    *measLen = static_cast<float>(span);
   } else {
-    const float span = std::fabs(y2 - y1);
-    if (span < 1.e-8f)
+    const double span = std::fabs(y2 - y1);
+    if (span < 1.e-8)
       return false;
-    const float dmx = cmx + a.dimSignedOffset;
-    *sx1 = dmx;
-    *sy1 = y1;
-    *sx2 = dmx;
-    *sy2 = y2;
+    const double dmx = cmx + a.dimSignedOffset;
+    *sx1 = static_cast<float>(dmx);
+    *sy1 = static_cast<float>(y1);
+    *sx2 = static_cast<float>(dmx);
+    *sy2 = static_cast<float>(y2);
     *tx = 0.f;
     *ty = (y2 >= y1) ? 1.f : -1.f;
     *nx = 1.f;
     *ny = 0.f;
-    *measLen = span;
+    *measLen = static_cast<float>(span);
   }
   return true;
 }
@@ -124,43 +126,49 @@ inline bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, floa
     return false;
   if (a.kind != CadAnnotation::Kind::DimAngular)
     return false;
-  const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
-  const float p1x = a.dimExt1X, p1y = a.dimExt1Y, p2x = a.dimExt2X, p2y = a.dimExt2Y;
-  const float u1x = p1x - vx, u1y = p1y - vy;
-  const float u2x = p2x - vx, u2y = p2y - vy;
-  const float l1 = std::hypot(u1x, u1y);
-  const float l2 = std::hypot(u2x, u2y);
-  if (l1 < 1.e-8f || l2 < 1.e-8f)
+  // Double throughout (issue #1668): the ray directions are differences of points thousands of feet
+  // from the origin; in float those differences carried a minute of arc of error.
+  const double vx = a.dimAngVertexX, vy = a.dimAngVertexY;
+  const double u1x = a.dimExt1X - vx, u1y = a.dimExt1Y - vy;
+  const double u2x = a.dimExt2X - vx, u2y = a.dimExt2Y - vy;
+  const double l1 = std::hypot(u1x, u1y);
+  const double l2 = std::hypot(u2x, u2y);
+  if (l1 < 1.e-8 || l2 < 1.e-8)
     return false;
-  const float n1x = u1x / l1, n1y = u1y / l1;
-  const float n2x = u2x / l2, n2y = u2y / l2;
-  const float dot = n1x * n2x + n1y * n2y;
-  const float a1 = std::atan2(n1y, n1x);
-  const float a2 = std::atan2(n2y, n2x);
-  const float sweep = CadAngNormalizeMinusPiToPi(a2 - a1);
-  const float theta = std::acos(std::clamp(dot, -1.f, 1.f));
-  float bx = n1x + n2x;
-  float by = n1y + n2y;
-  const float bl = std::hypot(bx, by);
-  if (bl > 1.e-6f) {
+  const double n1x = u1x / l1, n1y = u1y / l1;
+  const double n2x = u2x / l2, n2y = u2y / l2;
+  const double dot = n1x * n2x + n1y * n2y;
+  const double cross = n1x * n2y - n1y * n2x;
+  const double a1 = std::atan2(n1y, n1x);
+  const double a2 = std::atan2(n2y, n2x);
+  double sweep = a2 - a1;
+  constexpr double kPi = 3.14159265358979323846;
+  if (sweep > kPi)
+    sweep -= 2.0 * kPi;
+  else if (sweep < -kPi)
+    sweep += 2.0 * kPi;
+  // atan2 rather than acos: acos loses precision near 0 and 180 degrees.
+  const double theta = std::atan2(std::fabs(cross), dot);
+  double bx = n1x + n2x;
+  double by = n1y + n2y;
+  const double bl = std::hypot(bx, by);
+  if (bl > 1.e-6) {
     bx /= bl;
     by /= bl;
   } else {
     bx = -n1y;
     by = n1x;
   }
-  const float mid = a1 + 0.5f * sweep;
-  const float mdx = std::cos(mid);
-  const float mdy = std::sin(mid);
-  if (bx * mdx + by * mdy < 0.f) {
+  const double mid = a1 + 0.5 * sweep;
+  if (bx * std::cos(mid) + by * std::sin(mid) < 0.0) {
     bx = -bx;
     by = -by;
   }
-  *a1Out = a1;
-  *a2Out = a2;
-  *sweepOut = sweep;
-  *bisx = bx;
-  *bisy = by;
-  *thetaInterior = theta;
-  return theta > 1.e-7f;
+  *a1Out = static_cast<float>(a1);
+  *a2Out = static_cast<float>(a2);
+  *sweepOut = static_cast<float>(sweep);
+  *bisx = static_cast<float>(bx);
+  *bisy = static_cast<float>(by);
+  *thetaInterior = static_cast<float>(theta);
+  return theta > 1.e-7;
 }
