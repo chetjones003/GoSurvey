@@ -681,8 +681,12 @@ static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& object
 }
 
 static void SyncRibbonHatchSliderRow(QWidget* ribbon, const QString& objectName, double number, int (*toSlider)(double)) {
-  if (auto* value = ribbon->findChild<QDoubleSpinBox*>(objectName); value && !value->hasFocus()) {
-    const QSignalBlocker block(value); value->setValue(number);
+  // Keep only an uncommitted typed edit; otherwise the box always follows the document (undo, selection change).
+  if (auto* value = ribbon->findChild<QDoubleSpinBox*>(objectName)) {
+    const auto* edit = value->findChild<QLineEdit*>();
+    if (!(value->hasFocus() && edit && edit->isModified())) {
+      const QSignalBlocker block(value); value->setValue(number);
+    }
   }
   if (auto* slider = ribbon->findChild<QSlider*>(objectName + "Slider"); slider && !slider->isSliderDown()) {
     const QSignalBlocker block(slider); slider->setValue(toSlider(number));

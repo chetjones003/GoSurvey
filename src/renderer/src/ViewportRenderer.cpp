@@ -2523,7 +2523,41 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDisable(GL_BLEND);
     glEnable(GL_STENCIL_TEST);
     std::vector<float> fan;
-    for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+    // Draw order: every opaque fill first, then translucent fills back to front. A blend only mixes with
+    // what is already in the frame, so a translucent fill drawn before an opaque one behind it would be
+    // painted over; sorting makes the result independent of entity order.
+    struct FillOrder { size_t index; bool translucent; double depth; };
+    std::vector<FillOrder> fillOrder;
+    fillOrder.reserve(filledRegions->size());
+    {
+      const ray3d::Vec3 fwd = cam.ForwardWorld();
+      for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+        const CadFilledRegion& fr = (*filledRegions)[fi];
+        float alphaRgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+        if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
+          const EntityAttributes& attr = (*filledRegionAttrs)[fi];
+          const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+          ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, alphaRgba);
+        }
+        double cx = 0., cy = 0., cz = 0.;
+        const size_t vertexCount = fr.vertsXyz.size() / 3;
+        for (size_t v = 0; v < vertexCount; ++v) {
+          cx += fr.vertsXyz[v * 3 + 0];
+          cy += fr.vertsXyz[v * 3 + 1];
+          cz += fr.vertsXyz[v * 3 + 2];
+        }
+        if (vertexCount > 0) { cx /= static_cast<double>(vertexCount); cy /= static_cast<double>(vertexCount); cz /= static_cast<double>(vertexCount); }
+        // Distance along the view direction; larger is farther from the eye.
+        const double depth = (cx - viewAnchorX) * fwd.x + (cy - viewAnchorY) * fwd.y + cz * fwd.z;
+        fillOrder.push_back({fi, alphaRgba[3] < 0.999f, depth});
+      }
+      std::stable_sort(fillOrder.begin(), fillOrder.end(), [](const FillOrder& a, const FillOrder& b) {
+        if (a.translucent != b.translucent) return !a.translucent;
+        return a.translucent && a.depth > b.depth;
+      });
+    }
+    for (const FillOrder& order : fillOrder) {
+      const size_t fi = order.index;
       const CadFilledRegion& fr = (*filledRegions)[fi];
       if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
