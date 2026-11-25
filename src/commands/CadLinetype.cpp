@@ -74,6 +74,83 @@ void EmitSolidSegVc(float x0, float y0, float z0, float x1, float y1, float z1, 
   o->push_back(rgba[3]);
 }
 
+constexpr int kMaxLinetypeSegmentsPerCall = 100000;
+
+/// Locate the active non-zero pattern element at \p inCyc within [0, \p cyc).
+/// Guarantees 0 <= *outIdx < pat->count and *outElWorld > 0 so callers never index out of bounds
+/// when \p inCyc lands within floating-point epsilon of \p cyc or hits a zero-length dot element.
+void FindPatternElement(const Pattern* pat, double sc, double cyc, double* inCyc, int* outIdx, double* outAcc,
+                        double* outElWorld) {
+  double c = *inCyc;
+  if (c < 0.0 || c >= cyc) {
+    c = std::fmod(c, cyc);
+    if (c < 0.0)
+      c += cyc;
+  }
+  double acc = 0.0;
+  for (int i = 0; i < pat->count; ++i) {
+    const double w = std::fabs(pat->elems[i]) * sc;
+    if (w <= 0.0)
+      continue;
+    if (c < acc + w - 1e-12) {
+      *inCyc = c;
+      *outIdx = i;
+      *outAcc = acc;
+      *outElWorld = w;
+      return;
+    }
+    acc += w;
+  }
+  // Landed within epsilon of the cycle end; wrap cleanly to the first non-zero element.
+  for (int i = 0; i < pat->count; ++i) {
+    const double w = std::fabs(pat->elems[i]) * sc;
+    if (w > 0.0) {
+      *inCyc = 0.0;
+      *outIdx = i;
+      *outAcc = 0.0;
+      *outElWorld = w;
+      return;
+    }
+  }
+  *inCyc = 0.0;
+  *outIdx = 0;
+  *outAcc = 0.0;
+  *outElWorld = cyc;
+}
+
+/// Liang-Barsky clip of the 2D segment (x0,y0)->(x1,y1) against [-halfExtent, +halfExtent]^2.
+/// Returns false when the segment lies completely outside the square; otherwise writes the visible
+/// parameter range [*t0Out, *t1Out] subset of [0, 1].
+bool ClipSegmentToOriginSquare(double x0, double y0, double x1, double y1, double halfExtent, double* t0Out,
+                               double* t1Out) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double p[4] = {-dx, dx, -dy, dy};
+  const double q[4] = {x0 + halfExtent, halfExtent - x0, y0 + halfExtent, halfExtent - y0};
+  double t0 = 0.0;
+  double t1 = 1.0;
+  for (int i = 0; i < 4; ++i) {
+    if (p[i] == 0.0) {
+      if (q[i] < 0.0)
+        return false;
+      continue;
+    }
+    const double t = q[i] / p[i];
+    if (p[i] < 0.0) {
+      if (t > t1)
+        return false;
+      t0 = std::max(t0, t);
+    } else {
+      if (t < t0)
+        return false;
+      t1 = std::min(t1, t);
+    }
+  }
+  *t0Out = t0;
+  *t1Out = t1;
+  return true;
+}
+
 } // namespace
 
 bool CadLinetypeNameEqCi(const std::string& a, const std::string& b) {
@@ -144,23 +221,26 @@ void CadTessellateLinetypeSegmentVc(float x0, float y0, float z0, float x1, floa
   double cyc = 0;
   for (int i = 0; i < pat->count; ++i)
     cyc += std::fabs(pat->elems[i]) * sc;
-  if (cyc < 1e-12) {
+  if (!std::isfinite(len) || cyc < 1e-12 ||
+      static_cast<double>(len) / cyc > static_cast<double>(kMaxLinetypeSegmentsPerCall)) {
     EmitSolidSegVc(x0, y0, z0, x1, y1, z1, rgba, outVerts7);
     return;
   }
 
   double pos = 0;
+  int emitted = 0;
   while (pos < static_cast<double>(len) - 1e-9) {
-    const double inCyc = std::fmod(pos, cyc);
+    if (emitted >= kMaxLinetypeSegmentsPerCall) {
+      const float sx = x0 + ux * static_cast<float>(pos);
+      const float sy = y0 + uy * static_cast<float>(pos);
+      EmitSolidSegVc(sx, sy, z0, x1, y1, z1, rgba, outVerts7);
+      break;
+    }
+    double inCyc = std::fmod(pos, cyc);
     double acc = 0;
     int ei = 0;
     double elWorld = 0;
-    for (ei = 0; ei < pat->count; ++ei) {
-      elWorld = std::fabs(pat->elems[ei]) * sc;
-      if (inCyc < acc + elWorld - 1e-12)
-        break;
-      acc += elWorld;
-    }
+    FindPatternElement(pat, sc, cyc, &inCyc, &ei, &acc, &elWorld);
     const double into = inCyc - acc;
     const bool draw = pat->elems[ei] > 0;
     const double remainInElem = elWorld - into;
@@ -168,20 +248,24 @@ void CadTessellateLinetypeSegmentVc(float x0, float y0, float z0, float x1, floa
     const double step = std::min(remainInElem, remainLine);
     if (step <= 1e-12)
       break;
+    const double nextPos = pos + step;
+    if (!(nextPos > pos))
+      break;
     if (draw) {
       const float sx = x0 + ux * static_cast<float>(pos);
       const float sy = y0 + uy * static_cast<float>(pos);
-      const float ex = x0 + ux * static_cast<float>(pos + step);
-      const float ey = y0 + uy * static_cast<float>(pos + step);
+      const float ex = x0 + ux * static_cast<float>(nextPos);
+      const float ey = y0 + uy * static_cast<float>(nextPos);
       EmitSolidSegVc(sx, sy, z0, ex, ey, z1, rgba, outVerts7);
+      ++emitted;
     }
-    pos += step;
+    pos = nextPos;
   }
 }
 
 void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool closed, const std::string& linetypeName,
                                   float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7,
-                                  const float* zPerPt) {
+                                  const float* zPerPt, float clipHalfExtent) {
   if (!xy || nPts < 2 || !outVerts7)
     return;
   // Elevation of point i: its own when the caller supplied a per-vertex array, else the chain's.
@@ -205,7 +289,11 @@ void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool close
   }
 
   const int nSeg = closed ? nPts : nPts - 1;
+  const double clipR = (clipHalfExtent > 0.f && std::isfinite(clipHalfExtent))
+                           ? static_cast<double>(clipHalfExtent)
+                           : 0.0;
   double patAcc = 0;
+  int emitted = 0;
   for (int si = 0; si < nSeg; ++si) {
     const int j = (si + 1) % nPts;
     const float x0 = xy[si * 2];
@@ -217,45 +305,86 @@ void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool close
     const float dx = x1 - x0;
     const float dy = y1 - y0;
     const float slen = std::hypot(dx, dy);
-    if (slen < 1e-8f)
+    if (!std::isfinite(slen) || slen < 1e-8f)
       continue;
+    const double slenD = static_cast<double>(slen);
+    double t0 = 0.0;
+    double t1 = 1.0;
+    if (clipR > 0.0) {
+      if (!ClipSegmentToOriginSquare(x0, y0, x1, y1, clipR, &t0, &t1)) {
+        // Off-screen chord: advance dash phase in O(1) without emitting vertices.
+        patAcc = std::fmod(patAcc + slenD, cyc);
+        continue;
+      }
+    }
     const float ux = dx / slen;
     const float uy = dy / slen;
     // Each dash starts and ends partway along the edge, so its endpoints take the edge's
     // elevation interpolated at the same parameter — otherwise a dashed sloped segment would
     // stair-step between two flat levels.
     const auto zAlong = [&](double along) {
-      return z0 + (z1 - z0) * static_cast<float>(along / static_cast<double>(slen));
+      return z0 + (z1 - z0) * static_cast<float>(along / slenD);
     };
-    double u = 0;
-    while (u < static_cast<double>(slen) - 1e-9) {
-      const double inCyc = std::fmod(patAcc, cyc);
+    const double uStart = t0 * slenD;
+    const double uEnd = t1 * slenD;
+    if (uStart > 0.0)
+      patAcc = std::fmod(patAcc + uStart, cyc);
+    const double visLen = uEnd - uStart;
+    if (visLen <= 1e-9) {
+      patAcc = std::fmod(patAcc + (slenD - uStart), cyc);
+      continue;
+    }
+    const int budget = kMaxLinetypeSegmentsPerCall - emitted;
+    if (budget <= 0 || visLen / cyc > static_cast<double>(budget)) {
+      // Sub-pixel dash density or safety cap reached: emit the visible span as one solid chord.
+      const float sx = x0 + ux * static_cast<float>(uStart);
+      const float sy = y0 + uy * static_cast<float>(uStart);
+      const float ex = x0 + ux * static_cast<float>(uEnd);
+      const float ey = y0 + uy * static_cast<float>(uEnd);
+      EmitSolidSegVc(sx, sy, zAlong(uStart), ex, ey, zAlong(uEnd), rgba, outVerts7);
+      ++emitted;
+      patAcc = std::fmod(patAcc + (slenD - uStart), cyc);
+      continue;
+    }
+    double u = uStart;
+    while (u < uEnd - 1e-9) {
+      if (emitted >= kMaxLinetypeSegmentsPerCall) {
+        const float sx = x0 + ux * static_cast<float>(u);
+        const float sy = y0 + uy * static_cast<float>(u);
+        const float ex = x0 + ux * static_cast<float>(uEnd);
+        const float ey = y0 + uy * static_cast<float>(uEnd);
+        EmitSolidSegVc(sx, sy, zAlong(u), ex, ey, zAlong(uEnd), rgba, outVerts7);
+        u = uEnd;
+        break;
+      }
+      double inCyc = std::fmod(patAcc, cyc);
       double acc = 0;
       int ei = 0;
       double elWorld = 0;
-      for (ei = 0; ei < pat->count; ++ei) {
-        elWorld = std::fabs(pat->elems[ei]) * sc;
-        if (inCyc < acc + elWorld - 1e-12)
-          break;
-        acc += elWorld;
-      }
+      FindPatternElement(pat, sc, cyc, &inCyc, &ei, &acc, &elWorld);
       const double into = inCyc - acc;
       const bool draw = pat->elems[ei] > 0;
       const double remainInElem = elWorld - into;
-      const double remainLine = static_cast<double>(slen) - u;
+      const double remainLine = uEnd - u;
       const double step = std::min(remainInElem, remainLine);
       if (step <= 1e-12)
+        break;
+      const double nextU = u + step;
+      if (!(nextU > u))
         break;
       if (draw) {
         const float sx = x0 + ux * static_cast<float>(u);
         const float sy = y0 + uy * static_cast<float>(u);
-        const float ex = x0 + ux * static_cast<float>(u + step);
-        const float ey = y0 + uy * static_cast<float>(u + step);
-        EmitSolidSegVc(sx, sy, zAlong(u), ex, ey, zAlong(u + step), rgba, outVerts7);
+        const float ex = x0 + ux * static_cast<float>(nextU);
+        const float ey = y0 + uy * static_cast<float>(nextU);
+        EmitSolidSegVc(sx, sy, zAlong(u), ex, ey, zAlong(nextU), rgba, outVerts7);
+        ++emitted;
       }
-      patAcc += step;
-      u += step;
+      patAcc = std::fmod(patAcc + step, cyc);
+      u = nextU;
     }
+    if (slenD > u)
+      patAcc = std::fmod(patAcc + (slenD - u), cyc);
   }
 }
 

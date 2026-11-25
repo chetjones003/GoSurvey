@@ -2,6 +2,7 @@
 
 #include "GoSurvey/Pdf/PdfSnap.hpp"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,14 +30,6 @@ struct PdfAttachment {
   int texW = 0;
   int texH = 0;
 
-  /// Snap geometry in PDF page space (pt units, Y-up, origin at page BL).
-  /// Lines: interleaved (x1,y1, x2,y2) pairs.
-  std::vector<float> snapLinesFlat;
-  /// Circles: (cx,cy,r) triplets.
-  std::vector<float> snapCirclesCxCyR;
-  /// Text insertion points: (x,y) pairs.
-  std::vector<float> snapTextPos;
-
   bool snapEnabled = true; ///< Master underlay snap toggle (ribbon Enable Snap).
   bool snapLines   = true;
   bool snapCircles = true;
@@ -57,19 +50,30 @@ struct PdfAttachment {
     std::vector<uint32_t> offsets;      ///< Size cols*rows+1
     std::vector<float>    pts;          ///< Interleaved (x,y) endpoint pairs
   };
-  SnapGrid snapEndptGrid; ///< Populated at attach-commit time; used by CadSnap.
 
-  /// Downsampled visibility mask built from the rasterised page image.
-  /// Each byte is 1 if the corresponding page tile contains any foreground
-  /// (non-background) pixel, 0 if it is visually empty.
-  /// Used by CadSnap to reject snap endpoints that land in blank areas.
+  /// Downsampled visibility mask dimensions.
   static constexpr int kVisMaskW = 256;
   static constexpr int kVisMaskH = 256;
-  std::vector<uint8_t> snapVisMask; ///< kVisMaskW × kVisMaskH
-  bool snapVisDark = false;         ///< true when foreground = bright (dark-bg PDF)
 
-  /// REQ-391 calm snap (same extraction as the PDF viewer's SnapPoints + SnapIndex).
-  pdfview::SnapIndex snapCalmIndex;
+  /// Immutable snap geometry and spatial indices for this attachment.
+  /// Held through shared_ptr<const SnapData> (matching CadPointCloud, CadMesh, and CadTin) so
+  /// DrawingGeometrySnapshot undo frames share the payload instead of deep-copying megabytes of
+  /// vectors and hash-map buckets on every unrelated edit.
+  struct SnapData {
+    /// Snap geometry in PDF page space (pt units, Y-up, origin at page BL).
+    /// Lines: interleaved (x1,y1, x2,y2) pairs.
+    std::vector<float> snapLinesFlat;
+    /// Circles: (cx,cy,r) triplets.
+    std::vector<float> snapCirclesCxCyR;
+    /// Text insertion points: (x,y) pairs.
+    std::vector<float> snapTextPos;
+    SnapGrid snapEndptGrid; ///< Populated at attach-commit time; used by CadSnap.
+    std::vector<uint8_t> snapVisMask; ///< kVisMaskW × kVisMaskH
+    /// REQ-391 calm snap (same extraction as the PDF viewer's SnapPoints + SnapIndex).
+    pdfview::SnapIndex snapCalmIndex;
+  };
+  std::shared_ptr<const SnapData> snapData;
+  bool snapVisDark = false;         ///< true when foreground = bright (dark-bg PDF)
 };
 
 /// Opaque per-document draft cache used by the PDFATTACH dialog.

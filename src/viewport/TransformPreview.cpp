@@ -844,13 +844,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       } else {
         return;
       }
-      for (int r = 0; r < rows; ++r)
-        for (int c = 0; c < cols; ++c) {
+      constexpr int kMaxArrayPreviewInstances = 1000;
+      int emittedInstances = 0;
+      for (int r = 0; r < rows && emittedInstances < kMaxArrayPreviewInstances; ++r)
+        for (int c = 0; c < cols && emittedInstances < kMaxArrayPreviewInstances; ++c) {
           if (r == 0 && c == 0)
             continue;
           const ray3d::Vec3 d = ucs::UcsVectorToWorld(
               frame, ray3d::Vec3{static_cast<double>(c) * colSpacing, static_cast<double>(r) * rowSpacing, 0.0});
           appendTranslatedInstance(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z));
+          ++emittedInstances;
         }
       return;
     }
@@ -858,6 +861,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     if (arr->phase != APh::Polar_WaitAngle && arr->phase != APh::Polar_WaitRotateAnswer)
       return;
     constexpr float kPi = 3.14159265358979323846f;
+    constexpr int kMaxArrayPreviewInstances = 1000;
     const int n = std::max(arr->itemCount, 1);
     const ray3d::Vec3 axisPoint{arr->centerX, arr->centerY, arr->centerZ};
     const ucs::Ucs centreFrame =
@@ -874,7 +878,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const float fillRad = fillDeg * (kPi / 180.f);
     const float step =
         (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n) : fillRad / static_cast<float>(n - 1));
-    for (int i = 1; i < n; ++i) {
+    const int previewCount = std::min(n, kMaxArrayPreviewInstances + 1);
+    for (int i = 1; i < previewCount; ++i) {
       const float ang = step * static_cast<float>(i);
       if (arr->rotateItems) {
         appendRotatedInstance(axisPoint, axisUnit, ang);

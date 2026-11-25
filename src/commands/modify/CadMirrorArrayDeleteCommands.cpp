@@ -441,13 +441,19 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
     return false;
   }
 
+  constexpr long long kMaxArrayInstances = 10000;
+
   if (arr->phase == AP::Rect_WaitColumns) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
       log.push_back("ARRAY Rectangular — number of columns must be a positive whole number.");
       return false;
     }
-    arr->cols = static_cast<int>(std::lround(v));
+    if (v > static_cast<float>(kMaxArrayInstances)) {
+      log.push_back("ARRAY Rectangular — maximum " + std::to_string(kMaxArrayInstances) + " items per array.");
+      return false;
+    }
+    arr->cols = static_cast<int>(std::llround(v));
     arr->phase = AP::Rect_WaitColumnSpacing;
     log.push_back("ARRAY Rectangular — column spacing (type a distance, or click):");
     return true;
@@ -469,7 +475,12 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       log.push_back("ARRAY Rectangular — number of rows must be a positive whole number.");
       return false;
     }
-    arr->rows = static_cast<int>(std::lround(v));
+    if (v > static_cast<float>(kMaxArrayInstances) ||
+        static_cast<long long>(std::llround(v)) * static_cast<long long>(std::max(arr->cols, 1)) > kMaxArrayInstances) {
+      log.push_back("ARRAY Rectangular — columns x rows cannot exceed " + std::to_string(kMaxArrayInstances) + " items.");
+      return false;
+    }
+    arr->rows = static_cast<int>(std::llround(v));
     arr->phase = AP::Rect_WaitRowSpacing;
     log.push_back("ARRAY Rectangular — row spacing (type a distance, or click):");
     return true;
@@ -496,7 +507,14 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       log.push_back("ARRAY Rectangular — number of levels must be a positive whole number (Enter for 1 = 2D).");
       return false;
     }
-    arr->levels = static_cast<int>(std::lround(v));
+    const long long base = static_cast<long long>(std::max(arr->cols, 1)) *
+                           static_cast<long long>(std::max(arr->rows, 1));
+    if (v > static_cast<float>(kMaxArrayInstances) ||
+        static_cast<long long>(std::llround(v)) * base > kMaxArrayInstances) {
+      log.push_back("ARRAY Rectangular — total items cannot exceed " + std::to_string(kMaxArrayInstances) + ".");
+      return false;
+    }
+    arr->levels = static_cast<int>(std::llround(v));
     if (arr->levels <= 1) {
       CommitArrayRectangular(st, log);
       return true;
@@ -533,7 +551,11 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       log.push_back("ARRAY Polar — number of items must be a positive whole number.");
       return false;
     }
-    arr->itemCount = static_cast<int>(std::lround(v));
+    if (v > static_cast<float>(kMaxArrayInstances)) {
+      log.push_back("ARRAY Polar — maximum " + std::to_string(kMaxArrayInstances) + " items per array.");
+      return false;
+    }
+    arr->itemCount = static_cast<int>(std::llround(v));
     arr->phase = AP::Polar_WaitAngle;
     log.push_back("ARRAY Polar — angle to fill in degrees (type, or click) <360>:");
     return true;

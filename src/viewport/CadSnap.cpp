@@ -1915,8 +1915,9 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
     for (const PdfAttachment& att : cmd.drawing.pdfAttachments) {
-      if (!att.snapEnabled)
+      if (!att.snapEnabled || !att.snapData)
         continue;
+      const PdfAttachment::SnapData& sd = *att.snapData;
       const double cosR = std::cos(static_cast<double>(att.rotationDeg) * 3.14159265358979323846 / 180.0);
       const double sinR = std::sin(static_cast<double>(att.rotationDeg) * 3.14159265358979323846 / 180.0);
       const double sc   = att.scale;
@@ -1937,7 +1938,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const float pdfTol    = (sc > 1e-9) ? static_cast<float>(static_cast<double>(tolWorld) / sc) : 0.f;
 
       // ---- Calm snap (REQ-391): same SnapPoints + SnapIndex path as the PDF viewer ----
-      const bool useCalmSnap = att.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
+      const bool useCalmSnap = sd.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
       const float calmMerge  = 0.6f * pdfTol;
       if (useCalmSnap && (wantEndpoint || wantCenter)) {
         const bool linesOk   = att.snapLines && wantEndpoint;
@@ -1945,7 +1946,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         if (linesOk || circlesOk) {
           pdfview::SnapIndex::Pt hit{};
           float weight = 0.f;
-          if (att.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
+          if (sd.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
             double lx = 0.0, ly = 0.0;
             pdfToLocal(hit.first, hit.second, &lx, &ly);
             if (weight >= 3.5f && circlesOk)
@@ -1961,7 +1962,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         // adjacent to a cell marked as having visible foreground content.
         // This filters out snap endpoints that land in visually blank areas
         // (construction lines extending past viewport, etc.).
-        const bool hasMask = !att.snapVisMask.empty();
+        const bool hasMask = !sd.snapVisMask.empty();
         constexpr int MW = PdfAttachment::kVisMaskW;
         constexpr int MH = PdfAttachment::kVisMaskH;
         auto visOk = [&](float pdfX, float pdfY) -> bool {
@@ -1973,7 +1974,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           auto cellForeground = [&](int mx, int my) -> bool {
             if (mx < 0 || mx >= MW || my < 0 || my >= MH)
               return false;
-            return att.snapVisMask[static_cast<size_t>(my) * MW + static_cast<size_t>(mx)] != 0;
+            return sd.snapVisMask[static_cast<size_t>(my) * MW + static_cast<size_t>(mx)] != 0;
           };
           if (cellForeground(cx, cy))
             return true;
@@ -1991,7 +1992,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           return false;
         };
 
-        const auto& grid = att.snapEndptGrid;
+        const auto& grid = sd.snapEndptGrid;
         if (grid.cols > 0 && !grid.pts.empty()) {
           // Enumerate all cells that overlap [cursor ± pdfTol].
           const int col0 = std::max(0, static_cast<int>(
@@ -2020,7 +2021,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         } else {
           // Fallback: linear scan for attachments built without the grid
           // (e.g. loaded from an older saved file or extremely small drawings).
-          const auto& SL = att.snapLinesFlat;
+          const auto& SL = sd.snapLinesFlat;
           for (size_t i = 0; i + 3 < SL.size(); i += 4) {
             double lx0 = 0.0, ly0 = 0.0, lx1 = 0.0, ly1 = 0.0;
             pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
@@ -2033,7 +2034,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
       // ---- Midpoint snap (snapLinesFlat with PDF-space bbox pre-filter) ----
       if (att.snapLines && wantMidpoint) {
-        const auto& SL = att.snapLinesFlat;
+        const auto& SL = sd.snapLinesFlat;
         for (size_t i = 0; i + 3 < SL.size(); i += 4) {
           // Cheap PDF-space bbox reject — avoids pdfToLocal for distant lines.
           const float bxMin = std::min(SL[i], SL[i + 2]);
@@ -2053,7 +2054,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
       // ---- Perpendicular snap (same pre-filter approach) -------------------
       if (att.snapLines && havePerpRef) {
-        const auto& SL = att.snapLinesFlat;
+        const auto& SL = sd.snapLinesFlat;
         for (size_t i = 0; i + 3 < SL.size(); i += 4) {
           const float bxMin = std::min(SL[i], SL[i + 2]);
           const float bxMax = std::max(SL[i], SL[i + 2]);
@@ -2071,7 +2072,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
       // ---- Circle center snap ---------------------------------------------
       if (att.snapCircles && wantCenter) {
-        const auto& SC = att.snapCirclesCxCyR;
+        const auto& SC = sd.snapCirclesCxCyR;
         for (size_t i = 0; i + 2 < SC.size(); i += 3) {
           double lcx = 0.0, lcy = 0.0;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);

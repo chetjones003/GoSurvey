@@ -6,7 +6,7 @@
   "src/io/src/LibreDwgCad.cpp": 9322,
   "src/qt/EditorWindow.cpp": 3671,
   "src/qt/PdfWindow.cpp": 3295,
-  "src/renderer/src/ViewportRenderer.cpp": 4207,
+  "src/renderer/src/ViewportRenderer.cpp": 4099,
   "tests/BrepTests.cpp": 9427,
   "tests/IO/LibreDwgCadTests.cpp": 9308,
   "tests/Survey/TraverseTests.cpp": 3120,
