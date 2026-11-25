@@ -25,6 +25,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorProjectAttach.cpp
   src/qt/EditorPointClouds.cpp
   src/qt/EditorUpdate.cpp
+  src/qt/EditorAutosave.cpp
   src/qt/EditorDialogs.cpp
   src/qt/StyleEditors.cpp
   src/qt/EditorPoints.cpp

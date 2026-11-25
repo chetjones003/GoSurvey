@@ -247,6 +247,16 @@
       "status": "audited"
     },
     {
+      "path": "src/qt/EditorAutosave.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorAutosave.hpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
       "path": "src/qt/EditorDialogs.cpp",
       "system": "GoSurveyEditor",
       "status": "audited"

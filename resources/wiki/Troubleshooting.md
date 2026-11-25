@@ -24,7 +24,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Problem | Cause | Solution |
 |---|---|---|
 | Opening a drawing did not replace the current one | **Open** always uses a new tab, by design | Close the tab you no longer want |
-| Work was lost after a crash | There is **no autosave and no recovery** | `Ctrl+S` often |
+| Work was lost after a crash | GoSurvey closed before a manual save | Relaunch GoSurvey to open the **Drawing Recovery** dialog (or use **File → Drawing Recovery…**) to restore the latest autosaved copy. Verify autosave is enabled under **Settings → Files → Autosave** |
 | A DWG will not open | Damaged file or unsupported DWG content | Check the error message and log; try opening a copy or importing through DXF |
 | Preferences do not persist | `gosurvey-user.json` could not be written | *"Error: failed to write gosurvey-user.json (check directory permissions)"* — `%APPDATA%\GoSurvey` must be writable |
 | New drawings do not have my layers | No startup template | **Settings → Files → Startup template (.gst)** |

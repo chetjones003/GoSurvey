@@ -121,6 +121,7 @@ add_executable(GoSurveyTests
   tests/TestSoundGuard.cpp
   # File formats
   tests/IO/AcisSatParserTests.cpp
+  tests/IO/AutosaveTests.cpp
   tests/IO/BrepJsonTests.cpp
   tests/IO/CadPointCloudE57Tests.cpp
   tests/IO/CadPointCloudLasTests.cpp
