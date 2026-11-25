@@ -669,9 +669,20 @@ static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& object
   });
   // Commit here rather than through the box: a drag has already shown the final number in the box, so
   // setting it again would not change it and its valueChanged would never fire.
-  QObject::connect(slider, &QSlider::valueChanged, value, [value, fromSlider, commit](int position) {
+  QObject::connect(slider, &QSlider::valueChanged, value, [slider, value, fromSlider, commit](int position) {
+    slider->setProperty("dragCommitted", true);
     { const QSignalBlocker block(value); value->setValue(fromSlider(position)); }
     commit(value->value());
+  });
+  // A drag released where it started commits nothing, but its preview already replaced the box's exact value
+  // with the slider's coarse one (scale 0.0001 previews as 0.01). Put the exact value back in that case.
+  QObject::connect(slider, &QSlider::sliderPressed, value, [slider, value] {
+    slider->setProperty("dragStartValue", value->value());
+    slider->setProperty("dragCommitted", false);
+  });
+  QObject::connect(slider, &QSlider::sliderReleased, value, [slider, value] {
+    if (slider->property("dragCommitted").toBool()) return;
+    const QSignalBlocker block(value); value->setValue(slider->property("dragStartValue").toDouble());
   });
   QObject::connect(value, &QDoubleSpinBox::valueChanged, slider, [slider, toSlider, commit](double number) {
     { const QSignalBlocker block(slider); slider->setValue(toSlider(number)); }
