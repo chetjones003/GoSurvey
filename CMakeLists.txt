@@ -8,7 +8,7 @@ if(POLICY CMP0141 AND (CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
 endif()
 
 # Stable releases use this version; CI passes GOSURVEY_BETA_VERSION for beta builds (ADR-074).
-set(GOSURVEY_STABLE_VERSION "0.8.0")
+set(GOSURVEY_STABLE_VERSION "0.8.9")
 set(_gosurvey_version "${GOSURVEY_STABLE_VERSION}")
 if(NOT "${GOSURVEY_BETA_VERSION}" STREQUAL "")
   set(_gosurvey_version "${GOSURVEY_BETA_VERSION}")

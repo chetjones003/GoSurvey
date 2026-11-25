@@ -1,4 +1,15 @@
-# GoSurvey 0.8.0
+# GoSurvey 0.8.9
+
+## New in 0.8.9
+
+- Improved TRIM, PIPERUN, text editing, selection, and hatch display.
+- Start opens without an empty drawing, and Properties shows more object details.
+- Undo and drawing tabs retain more drawing settings and content.
+- Fixed viewport picks and command completion for HATCH and EXTRACTCENTERLINE.
+- Improved hatch tools, PDF dimensions, viewport picking, and editor input.
+- F1 help is more context-aware, and the manual now includes searchable command pages.
+
+---
 
 ## Drawing and layout
 
@@ -28,4 +39,4 @@
 - See clearer input focus, command history, selection feedback, and PDF workflow guidance in the editor and panels.
 - The start screen shows update-checking progress before an available update is offered.
 
-See the [0.8.0 release notes](https://github.com/chetjones003/GoSurvey/releases) for the full list of changes.
+See the [0.8.9 release notes](https://github.com/chetjones003/GoSurvey/releases/tag/v0.8.9) for the full list of changes.
