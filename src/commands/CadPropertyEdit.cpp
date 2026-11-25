@@ -132,24 +132,6 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
       return Rejected("Only text has a rotation.");
     return Store(st, ann.rotationRad, MathAngleRadFromBearingCwNorthDeg(static_cast<float>(value)),
                  "Edit text rotation");
-  case F::BoxMinX: case F::BoxMinY: case F::BoxMaxX: case F::BoxMaxY: {
-    if (!isMtext)
-      return Rejected("Only multiline text has a box.");
-    float* edge = field == F::BoxMinX ? &ann.boxMinX : field == F::BoxMinY ? &ann.boxMinY
-                : field == F::BoxMaxX ? &ann.boxMaxX : &ann.boxMaxY;
-    const float next = static_cast<float>(value);
-    if (*edge == next)
-      return {};
-    PushUndoSnapshot(st, "Edit text box");
-    *edge = next;
-    // Keep min <= max and the insertion point on the box's corner, as the 0.7.4 panel does.
-    if (ann.boxMinX > ann.boxMaxX) std::swap(ann.boxMinX, ann.boxMaxX);
-    if (ann.boxMinY > ann.boxMaxY) std::swap(ann.boxMinY, ann.boxMaxY);
-    ann.insX = ann.boxMinX;
-    ann.insY = ann.boxMinY;
-    BumpCadGpuCache(st);
-    return {Result::Applied, {}};
-  }
   case F::DimTextHeightModel:
   case F::DimArrowSizeModel: {
     if (ann.kind != CadAnnotation::Kind::DimAligned && ann.kind != CadAnnotation::Kind::DimLinear &&
