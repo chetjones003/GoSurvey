@@ -1183,17 +1183,17 @@ StepSubmitResult DimSession::onText(AppCommandState& st, const std::string& trim
     CadDimLinearApplyHVHotkey(st, dimLow == "v", log);
     return StepSubmitResult::Handled;
   }
-  float px = 0.f, py = 0.f;
+  double px = 0.0, py = 0.0;  // double: a typed extension point is a measured point (issue #1668)
   bool allowRel = false;
-  float ax = 0.f, ay = 0.f;
+  double ax = 0.0, ay = 0.0;
   if (phase == DimPhase::WaitExt2) {
     allowRel = true;
     ax = e1x;
     ay = e1y;
   } else if (phase == DimPhase::WaitDimLinePt) {
     allowRel = true;
-    ax = 0.5f * (e1x + e2x);
-    ay = 0.5f * (e1y + e2y);
+    ax = 0.5 * (e1x + e2x);
+    ay = 0.5 * (e1y + e2y);
   }
   if (!ParseStoragePoint(st, trimmedLine, &px, &py, allowRel, ax, ay)) {
     log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy from chord mid; H / V locks orientation."
@@ -1277,7 +1277,7 @@ StepDescriptor DimAngularSession::currentStep(const AppCommandState&) const {
 
 StepSubmitResult DimAngularSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                            std::vector<std::string>& log) {
-  float px = 0.f, py = 0.f;
+  double px = 0.0, py = 0.0;  // double: typed vertex and ray points (issue #1668)
   const bool allowRel = (phase != DimAngularPhase::WaitVertex);
   if (!ParseStoragePoint(st, trimmedLine, &px, &py, allowRel, vx, vy)) {
     log.push_back("DIMANGULAR — X,Y or @dx,dy from vertex.");

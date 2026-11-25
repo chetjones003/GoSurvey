@@ -8,18 +8,23 @@
 /// Header-only dimension frame geometry (issue #110). Same math previously lived in CadCommands.cpp;
 /// tests and the paper-viewport overlay need it without linking the command layer.
 
-inline float CadAngNormalizeMinusPiToPi(float a) {
-  constexpr float kPi = 3.14159265358979323846f;
+template <class T>
+inline T CadAngNormalizeMinusPiToPiT(T a) {
+  constexpr T kPi = static_cast<T>(3.14159265358979323846);
   for (int n = 0; n < 16; ++n) {
     if (a > kPi)
-      a -= 2.f * kPi;
+      a -= 2 * kPi;
     else if (a < -kPi)
-      a += 2.f * kPi;
+      a += 2 * kPi;
     else
       break;
   }
   return a;
 }
+
+inline float CadAngNormalizeMinusPiToPi(float a) { return CadAngNormalizeMinusPiToPiT(a); }
+/// Double overload for the angular frame, which measures in double (issue #1668).
+inline double CadAngNormalizeMinusPiToPi(double a) { return CadAngNormalizeMinusPiToPiT(a); }
 
 /// Makes a dimension text rotation readable (REQ-477, issue #804). For an input in [-pi, pi]
 /// radians, the result is in (-pi/2, pi/2], undoing the flip caused by reversing extension points.
@@ -141,12 +146,7 @@ inline bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, floa
   const double cross = n1x * n2y - n1y * n2x;
   const double a1 = std::atan2(n1y, n1x);
   const double a2 = std::atan2(n2y, n2x);
-  double sweep = a2 - a1;
-  constexpr double kPi = 3.14159265358979323846;
-  if (sweep > kPi)
-    sweep -= 2.0 * kPi;
-  else if (sweep < -kPi)
-    sweep += 2.0 * kPi;
+  const double sweep = CadAngNormalizeMinusPiToPi(a2 - a1);
   // atan2 rather than acos: acos loses precision near 0 and 180 degrees.
   const double theta = std::atan2(std::fabs(cross), dot);
   double bx = n1x + n2x;

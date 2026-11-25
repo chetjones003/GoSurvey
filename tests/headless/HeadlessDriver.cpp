@@ -1460,6 +1460,26 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
         return false;
       }
+    } else if (what == "ANNTEXT") {
+      // EXPECT ANNTEXT <index> <text> — issue #1668: the measured value a dimension displays.
+      std::istringstream is(arg);
+      int ix = -1;
+      if (!(is >> ix) || ix < 0) {
+        Fail(run, "parse", "EXPECT ANNTEXT needs index and text, got: " + arg, sourceLine);
+        return false;
+      }
+      std::string want;
+      std::getline(is >> std::ws, want);
+      if (static_cast<size_t>(ix) >= run.st.drawing.cadAnnotations.size()) {
+        Fail(run, "state", "EXPECT ANNTEXT: annotation index out of range", sourceLine);
+        return false;
+      }
+      const std::string& got = run.st.drawing.cadAnnotations[static_cast<size_t>(ix)].text;
+      if (want != got) {
+        Fail(run, "expect", "ANNTEXT: annotation " + std::to_string(ix) + " expected " + want + ", got " + got,
+             sourceLine);
+        return false;
+      }
     } else if (what == "DYNLABELS") {
       // EXPECT DYNLABELS <labels> — the boxes the point prompt's dynamic input shows right now,
       // e.g. `X Y`, `@ ΔX ΔY ΔZ`, `Distance < Angle` (REQ-354). Nothing typed yet: the prompt's own

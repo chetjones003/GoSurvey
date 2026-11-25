@@ -21,6 +21,11 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
                        float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
+/// \ref ParseStoragePoint into a double store (issue #1668): the local coordinate is never narrowed
+/// to float, for values kept in double such as dimension definition points.
+bool ParseStoragePoint(AppCommandState& st, const std::string& raw, double* lx, double* ly, bool allowRelative,
+                       double baseLocalX, double baseLocalY, const float* baseWorldZ = nullptr);
+
 /// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
 /// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
 /// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).

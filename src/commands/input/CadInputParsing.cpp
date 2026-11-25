@@ -168,8 +168,11 @@ static bool PeelOptionalPointZ(const std::string& raw, std::string* outXy, doubl
 // caller's \p baseWorldZ when it has one (LINE's anchor), the work plane otherwise. The Z reaches
 // the ~29 commit sites the way a tilted plane's already does, through resolvedPointZ, and it beats a
 // leftover mouse snap: the user just typed it.
-bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ) {
+// The double-output core (issue #1668). Dimension points are stored in double, and a float local
+// coordinate near 5,000 ft is only good to ~0.0005 ft — a minute of arc over a 1 ft ray.
+static bool ParseStoragePointCore(AppCommandState& st, const std::string& raw, double* lx, double* ly,
+                                  double* outWorldZ, bool allowRelative, double baseLocalX, double baseLocalY,
+                                  const float* baseWorldZ) {
   if (!lx || !ly)
     return false;
   // A Z typed for an EARLIER point describes that point, not this one — including as the base of
@@ -179,8 +182,15 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     st.resolvedPointZValid = false;
     st.resolvedPointZTyped = false;
   }
-  if (TryParseAlignmentStationSnapStoragePoint(st, raw, lx, ly, outWorldZ, allowRelative, baseLocalX, baseLocalY))
-    return true;
+  {
+    float sx = 0.f, sy = 0.f;  // station snaps resolve in float; they land on alignment geometry
+    if (TryParseAlignmentStationSnapStoragePoint(st, raw, &sx, &sy, outWorldZ, allowRelative,
+                                                 static_cast<float>(baseLocalX), static_cast<float>(baseLocalY))) {
+      *lx = sx;
+      *ly = sy;
+      return true;
+    }
+  }
   if (!st.alignmentStationSnapRejectReason.empty())
     return false;
   std::string xy;
@@ -192,9 +202,8 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
   const double baseZ =
       baseWorldZ ? static_cast<double>(*baseWorldZ) : static_cast<double>(CadWorkPlaneElevation(st));
 
-  double baseWx = 0.;
-  double baseWy = 0.;
-  CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
+  const double baseWx = baseLocalX + CadCoord::WorldOriginX(st);
+  const double baseWy = baseLocalY + CadCoord::WorldOriginY(st);
 
   if (!ucs::IsWorld(st.activeUcs)) {
     double a = 0.;
@@ -259,6 +268,27 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
   if (outWorldZ)
     *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
   return true;
+}
+
+bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ) {
+  if (!lx || !ly)
+    return false;
+  double x = 0.0, y = 0.0;
+  if (!ParseStoragePointCore(st, raw, &x, &y, outWorldZ, allowRelative, baseLocalX, baseLocalY, baseWorldZ))
+    return false;
+  const float fx = static_cast<float>(x);
+  const float fy = static_cast<float>(y);
+  if (!std::isfinite(fx) || !std::isfinite(fy))
+    return false;
+  *lx = fx;
+  *ly = fy;
+  return true;
+}
+
+bool ParseStoragePoint(AppCommandState& st, const std::string& raw, double* lx, double* ly, bool allowRelative,
+                       double baseLocalX, double baseLocalY, const float* baseWorldZ) {
+  return ParseStoragePointCore(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY, baseWorldZ);
 }
 
 // The 38 existing call sites keep this two-coordinate signature: they ask "where is this point?",

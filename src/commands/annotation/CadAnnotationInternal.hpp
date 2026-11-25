@@ -58,7 +58,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
     log.push_back("DIMANGULAR — angle is zero (ray points coincide with vertex direction).");
     return;
   }
-  const float vx = ds->vx, vy = ds->vy;
+  const double vx = ds->vx, vy = ds->vy;
   const float leg = std::min(std::hypot(ds->e1x - vx, ds->e1y - vy), std::hypot(ds->e2x - vx, ds->e2y - vy));
   const float rMax = std::max(1.e-4f, 0.92f * leg);
   const float rMin = std::max(1.e-4f, 0.02f * leg);
@@ -158,7 +158,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   const double cmy = 0.5 * (y1 + y2);
   const bool vert = ds->linearDraftVertical;
   const double meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
-  if (meas < 1e-8f) {
+  if (meas < 1e-8) {
     log.push_back(vert ? "DIMLINEAR — extension points have the same Y (zero vertical span)."
                        : "DIMLINEAR — extension points have the same X (zero horizontal span).");
     return;

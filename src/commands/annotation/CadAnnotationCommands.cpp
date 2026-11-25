@@ -167,7 +167,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   const double cmy = 0.5 * (y1 + y2);
   const bool vert = ds->linearDraftVertical;
   const double meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
-  if (meas < 1.e-8f)
+  if (meas < 1.e-8)
     return false;
   double dmx = cmx;
   double dmy = cmy;
@@ -311,7 +311,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const auto* ds = st.sessionAs<stepengine::DimAngularSession>();
   if (!out || !ds || ds->phase != stepengine::DimAngularPhase::WaitArc)
     return false;
-  const float vx = ds->vx, vy = ds->vy;
+  const double vx = ds->vx, vy = ds->vy;  // double: the preview must measure what the commit will
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
