@@ -15,6 +15,7 @@ namespace {
 std::unordered_map<std::string, std::string> g_commandPageSlug;
 /// Command (lowercase) -> first non-command page with an all-caps heading naming it, e.g. "## REVCLOUD".
 std::unordered_map<std::string, std::string> g_commandHeadingSlug;
+bool                                         g_indexBuilt = false;  ///< WikiHelpBuildIndex ran on a loaded bundle
 std::string                                  g_uiHoverTooltip;
 bool                                         g_uiHoverValid = false;
 
@@ -69,7 +70,7 @@ WikiHelpTarget TargetFromPrimary(const std::string& primaryLower) {
     out.pageSlug = it->second;
   else if (const auto heading = g_commandHeadingSlug.find(primaryLower); heading != g_commandHeadingSlug.end())
     out.pageSlug = heading->second;
-  else if (g_commandPageSlug.empty() && g_commandHeadingSlug.empty())
+  else if (!g_indexBuilt)
     out.pageSlug = CommandPageSlug(primaryLower);  // no index built: keep the conventional page name
   else
     out.pageSlug = "Command-Reference";  // every command is listed there
@@ -122,6 +123,7 @@ WikiHelpTarget TargetFromUiTooltip(std::string_view tooltip) {
 void WikiHelpBuildIndex(const WikiBundle& bundle) {
   g_commandPageSlug.clear();
   g_commandHeadingSlug.clear();
+  g_indexBuilt = bundle.ok;
   if (!bundle.ok)
     return;
 

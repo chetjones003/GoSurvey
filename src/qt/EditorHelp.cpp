@@ -3,7 +3,6 @@
 #include "EditorWindow.hpp"
 #include "QtAccent.hpp"
 #include "WikiHelp.hpp"
-#include "engine/CommandRegistry.hpp"
 
 #include <QDesktopServices>
 #include <QDialog>
@@ -41,8 +40,7 @@ namespace {
 std::string HelpCommandPrimary(const QString& text) {
   const QString token = text.trimmed().section(QRegularExpression("[\\s,]+"), 0, 0);
   if (token.isEmpty() || token.startsWith('@')) return {};
-  const auto* def = stepengine::CommandRegistry::Instance().FindAny(token.toLower().toUtf8().toStdString());
-  return def ? QString::fromUtf8(def->primary).toLower().toStdString() : std::string();
+  return CommandPrimaryForName(token.toUtf8().toStdString());
 }
 
 /// Registry primary for a running command. KindName is tried first; a kind whose name is not a
@@ -51,13 +49,7 @@ std::string HelpCommandPrimaryForKind(AppCommandState::Kind kind) {
   if (kind == AppCommandState::Kind::None) return {};
   if (std::string primary = HelpCommandPrimary(QString::fromUtf8(AppCommandState::KindName(kind))); !primary.empty())
     return primary;
-  const stepengine::CommandDef* only = nullptr;
-  for (const auto& def : stepengine::CommandRegistry::Instance().All()) {
-    if (def.kind != kind) continue;
-    if (only) return {};
-    only = &def;
-  }
-  return only ? QString::fromUtf8(only->primary).toLower().toStdString() : std::string();
+  return CommandPrimaryForKind(kind);
 }
 
 /// Colours for the manual, matched to the editor theme.
@@ -481,14 +473,17 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   };
   // Opens a page and records it; `focus`/`command` as for showPage.
   const auto navigate = [showPage, history, syncButtons, selectInList](const QString& slug, const QString& focus = {}, bool command = false) {
-    if (!showPage(slug, focus, command)) return;
-    if (history->at < 0 || history->pages[static_cast<size_t>(history->at)].slug != slug) {
+    if (!showPage(slug, focus, command)) return false;
+    if (history->at >= 0 && history->pages[static_cast<size_t>(history->at)].slug == slug) {
+      history->pages[static_cast<size_t>(history->at)] = {slug, focus, command};  // same page, new match
+    } else {
       history->pages.resize(static_cast<size_t>(history->at + 1));
       history->pages.push_back({slug, focus, command});
       history->at = static_cast<int>(history->pages.size()) - 1;
     }
     selectInList(slug);
     syncButtons();
+    return true;
   };
   const auto step = [showPage, history, syncButtons, selectInList](int delta) {
     const int next = history->at + delta;
@@ -564,9 +559,13 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   connect(search, &QLineEdit::textChanged, &dialog, [fillNav, fillResults](const QString& text) {
     if (text.trimmed().isEmpty()) fillNav(); else fillResults(text.trimmed());
   });
-  connect(search, &QLineEdit::returnPressed, &dialog, [pages] {
+  // Enter opens the top result itself: when that row is already current, selecting it again would
+  // not fire currentItemChanged, and the page would not reopen.
+  connect(search, &QLineEdit::returnPressed, &dialog, [pages, navigate, search] {
     for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->flags() & Qt::ItemIsSelectable) {
-      pages->setCurrentRow(i); pages->setFocus(); return;
+      navigate(pages->item(i)->data(Qt::UserRole).toString(), search->text().trimmed().section(QRegularExpression("\\s+"), 0, 0));
+      pages->setFocus();
+      return;
     }
   });
   connect(browser, &QTextBrowser::anchorClicked, &dialog, [navigate](const QUrl& url) {
@@ -578,7 +577,9 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   const QString initial = QString::fromUtf8(target.pageSlug.c_str());
   const QString commandName = QString::fromStdString(target.commandPrimary);
   const bool ownPage = initial.compare("Commands/" + commandName, Qt::CaseInsensitive) == 0;
-  navigate(initial, ownPage ? QString() : commandName, true);
+  if (!navigate(initial, ownPage ? QString() : commandName, true) &&
+      !navigate("Command-Reference", commandName.toUpper(), true))
+    navigate("Home");
   if (!m_WikiBundle.ok) browser->setPlainText(QString::fromUtf8(m_WikiBundle.fallbackMessage.c_str()));
   syncButtons();
   search->setFocus();

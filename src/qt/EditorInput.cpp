@@ -596,4 +596,3 @@ void EditorWindow::ShowPolarSettings() {
   });
   dialog.exec(); Refresh();
 }
-
