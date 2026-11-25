@@ -233,7 +233,7 @@ open the top result. The page scrolls to the first match. Clear the box to retur
 
 The bar above the page has **Back** and **Forward** (`Alt+←` / `Alt+→`), **Home**, and the page's place
 in the manual (for example *Commands › LINE*). Each command page opens with a card listing the
-command, its aliases, its ribbon location and its overview page.
+command and, where they exist, its aliases, ribbon location and overview page.
 
 ![In-app user manual](wiki-img:20-in-app-wiki.png)
 

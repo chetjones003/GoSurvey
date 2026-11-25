@@ -8,7 +8,7 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QHBoxLayout>
-#include <QImage>
+#include <QImageReader>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -62,7 +62,7 @@ std::string HelpCommandPrimaryForKind(AppCommandState::Kind kind) {
 
 /// Colours for the manual, matched to the editor theme.
 struct ManualTheme {
-  QColor page, sidebar, text, muted, accent, rule, codeBg, codeText, tableHead, tableStripe, card, callout, calloutEdge;
+  QColor page, sidebar, text, muted, accent, rule, codeBg, codeText, tableHead, tableStripe, card, callout, calloutEdge, hover;
 };
 
 ManualTheme ManualThemeFor(bool dark) {
@@ -70,10 +70,10 @@ ManualTheme ManualThemeFor(bool dark) {
   if (dark)
     return {QColor("#1b1f22"), QColor("#22272b"), QColor("#e2e6e9"), QColor("#93a0a8"), QColor(a.link),
             QColor("#353d43"), QColor("#262c31"), QColor("#f1c08c"), QColor("#2b3237"), QColor("#20252a"),
-            QColor("#232a2f"), QColor("#33291c"), QColor(a.strong)};
+            QColor("#232a2f"), QColor("#33291c"), QColor(a.strong), QColor("#2c3338")};
   return {QColor("#ffffff"), QColor("#f3f4f6"), QColor("#1f2328"), QColor("#5d6770"), QColor(a.link),
           QColor("#d8dde2"), QColor("#f2f4f6"), QColor("#7a3f05"), QColor("#eef1f4"), QColor("#f8f9fa"),
-          QColor("#f5f7f9"), QColor("#fdf3e6"), QColor(a.strong)};
+          QColor("#f5f7f9"), QColor("#fdf3e6"), QColor(a.strong), QColor("#e6e9ec")};
 }
 
 constexpr int kReadableWidth = 860;  // px of text column; wider lines are hard to follow
@@ -127,8 +127,9 @@ void BoxBlockRuns(QTextDocument* doc, Match match, const QTextTableFormat& box, 
 /// callouts, inline code, links and image size. The Markdown importer gives every element plain
 /// default formatting, which is what made pages hard to scan.
 void StyleManualDocument(QTextDocument* doc, const ManualTheme& t) {
-  // GitHub tables escape a pipe inside code as "\|"; Qt keeps the backslash.
-  for (QTextCursor c = doc->find("\\|"); !c.isNull(); c = doc->find("\\|", c)) c.insertText("|");
+  // GitHub tables escape a pipe inside code as "\|"; Qt keeps the backslash. Fenced code is literal.
+  for (QTextCursor c = doc->find("\\|"); !c.isNull(); c = doc->find("\\|", c))
+    if (!IsCodeBlock(c.block())) c.insertText("|");
 
   // Blocks: headings, body rhythm.
   for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
@@ -154,7 +155,6 @@ void StyleManualDocument(QTextDocument* doc, const ManualTheme& t) {
     if (bf.hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)) {
       // "---" before Related: the rule draws in a hard, unthemeable colour; spacing separates it.
       bf.clearProperty(QTextFormat::BlockTrailingHorizontalRulerWidth);
-      bf.setTopMargin(6);
       c.setBlockFormat(bf);
       continue;
     }
@@ -173,16 +173,14 @@ void StyleManualDocument(QTextDocument* doc, const ManualTheme& t) {
       if (it.fragment().isValid())
         runs.push_back({it.fragment().position(), it.fragment().length(), it.fragment().charFormat(), IsCodeBlock(b)});
   for (const Run& run : runs) {
-    {
-      const bool codeBlock = run.codeBlock;
       QTextCharFormat cf = run.format;
       QTextCursor c(doc);
       c.setPosition(run.position);
       c.setPosition(run.position + run.length, QTextCursor::KeepAnchor);
       if (cf.isImageFormat()) {
         QTextImageFormat image = cf.toImageFormat();
-        const QImage source(QUrl(image.name()).toLocalFile());
-        if (!source.isNull() && source.width() > kMaxImageWidth) {
+        const QSize source = QImageReader(QUrl(image.name()).toLocalFile()).size();  // reads the header only
+        if (source.isValid() && source.width() > kMaxImageWidth) {
           image.setWidth(kMaxImageWidth);
           image.setHeight(source.height() * kMaxImageWidth / static_cast<qreal>(source.width()));
           c.setCharFormat(image);
@@ -193,14 +191,13 @@ void StyleManualDocument(QTextDocument* doc, const ManualTheme& t) {
         cf.setForeground(t.accent);
         cf.setFontUnderline(false);
         c.setCharFormat(cf);
-      } else if (cf.fontFixedPitch() || codeBlock) {
+      } else if (cf.fontFixedPitch() || run.codeBlock) {
         cf.setFontFamilies({"Cascadia Mono", "Consolas", "Courier New"});
         cf.setFontPointSize(9.5);
         cf.setForeground(t.codeText);
-        if (!codeBlock) cf.setBackground(t.codeBg);
+        if (!run.codeBlock) cf.setBackground(t.codeBg);
         c.setCharFormat(cf);
       }
-    }
   }
 
   // Tables: the leading metadata table is the page's info card; others get borders and stripes.
@@ -217,7 +214,8 @@ void StyleManualDocument(QTextDocument* doc, const ManualTheme& t) {
     tf.setCellPadding(7);
     tf.setTopMargin(4);
     tf.setBottomMargin(14);
-    const bool card = first && table->rows() > 1 && table->cellAt(0, 0).firstCursorPosition().block().text().isEmpty() &&
+    // WikiContent's MetadataCard marks the card with an empty header row (command pages only).
+    const bool card = first && table->rows() > 1 && table->columns() == 2 && table->cellAt(0, 0).firstCursorPosition().block().text().isEmpty() &&
                       table->cellAt(0, 1).firstCursorPosition().block().text().isEmpty();
     first = false;
     if (card) {
@@ -378,11 +376,12 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
       "QListWidget#manualPages::item { padding:5px 10px; border-radius:5px; }"
       "QListWidget#manualPages::item:hover { background:%6; }"
       "QListWidget#manualPages::item:selected { background:%8; color:%5; }"
+      "QListWidget#manualPages::item:disabled { background:transparent; }"
       "QWidget#manualSide { background:%2; border-right:1px solid %3; }"
       "QTextBrowser#manualContent { background:%1; color:%5; border:none; }"
       "QSplitter::handle { background:%3; width:1px; }")
       .arg(theme.page.name(), theme.sidebar.name(), theme.rule.name(), theme.muted.name(), theme.text.name(),
-           dark ? "#2c3338" : "#e6e9ec", accent.strong, accent.tint));
+           theme.hover.name(), accent.strong, accent.tint));
   auto* layout = new QVBoxLayout(&dialog); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
 
   // Top bar: back / forward / home, then where you are.
@@ -467,7 +466,8 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   };
 
   // History for back / forward. Each entry is a page slug.
-  struct History { std::vector<QString> pages; int at = -1; };
+  struct Visit { QString slug, focus; bool command = false; };
+  struct History { std::vector<Visit> pages; int at = -1; };
   auto history = std::make_shared<History>();
   const auto syncButtons = [back, forward, history] {
     back->setEnabled(history->at > 0);
@@ -482,9 +482,9 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   // Opens a page and records it; `focus`/`command` as for showPage.
   const auto navigate = [showPage, history, syncButtons, selectInList](const QString& slug, const QString& focus = {}, bool command = false) {
     if (!showPage(slug, focus, command)) return;
-    if (history->at < 0 || history->pages[static_cast<size_t>(history->at)] != slug) {
+    if (history->at < 0 || history->pages[static_cast<size_t>(history->at)].slug != slug) {
       history->pages.resize(static_cast<size_t>(history->at + 1));
-      history->pages.push_back(slug);
+      history->pages.push_back({slug, focus, command});
       history->at = static_cast<int>(history->pages.size()) - 1;
     }
     selectInList(slug);
@@ -494,25 +494,28 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
     const int next = history->at + delta;
     if (next < 0 || next >= static_cast<int>(history->pages.size())) return;
     history->at = next;
-    showPage(history->pages[static_cast<size_t>(next)]);
-    selectInList(history->pages[static_cast<size_t>(next)]);
+    const Visit& visit = history->pages[static_cast<size_t>(next)];
+    showPage(visit.slug, visit.focus, visit.command);
+    selectInList(visit.slug);
     syncButtons();
   };
   connect(back, &QToolButton::clicked, &dialog, [step] { step(-1); });
   connect(forward, &QToolButton::clicked, &dialog, [step] { step(1); });
   connect(home, &QToolButton::clicked, &dialog, [navigate] { navigate("Home"); });
 
-  const auto fillNav = [this, pages, theme] {
+  const auto styleSectionHeader = [theme](QListWidgetItem* item, int height) {
+    item->setFlags(Qt::NoItemFlags);
+    QFont font = item->font(); font.setPointSizeF(8); font.setBold(true); font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
+    item->setFont(font); item->setForeground(theme.muted);
+    item->setSizeHint(QSize(0, height)); item->setTextAlignment(Qt::AlignLeft | Qt::AlignBottom);
+  };
+  const auto fillNav = [this, pages, styleSectionHeader] {
     const QSignalBlocker block(pages);
     pages->clear();
     for (const auto& entry : m_WikiBundle.nav) {
       if (entry.isSection) {
         if (entry.label == "GoSurvey Manual") continue;  // the window title already says it
-        auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()).toUpper(), pages);
-        item->setFlags(Qt::NoItemFlags);
-        QFont font = item->font(); font.setPointSizeF(8); font.setBold(true); font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
-        item->setFont(font); item->setForeground(theme.muted);
-        item->setSizeHint(QSize(0, 34)); item->setTextAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        styleSectionHeader(new QListWidgetItem(QString::fromUtf8(entry.label.c_str()).toUpper(), pages), 34);
       } else {
         auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
         item->setData(Qt::UserRole, QString::fromUtf8(entry.slug.c_str()));
@@ -521,7 +524,7 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   };
   // Search covers every page, including the per-command pages the sidebar does not list. Every word
   // must appear somewhere on the page; title hits rank first, then pages that mention the words most.
-  const auto fillResults = [this, pages, theme](const QString& query) {
+  const auto fillResults = [this, pages, styleSectionHeader](const QString& query) {
     const QStringList words = query.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
     struct Hit { long long score; QString title; QString slug; };
     std::vector<Hit> hits;
@@ -544,9 +547,7 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
     pages->clear();
     auto* heading = new QListWidgetItem(hits.empty() ? QStringLiteral("NO MATCHES")
                                                      : QString("%1 RESULT%2").arg(hits.size()).arg(hits.size() == 1 ? "" : "S"), pages);
-    heading->setFlags(Qt::NoItemFlags);
-    QFont font = heading->font(); font.setPointSizeF(8); font.setBold(true); font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
-    heading->setFont(font); heading->setForeground(theme.muted); heading->setSizeHint(QSize(0, 30));
+    styleSectionHeader(heading, 30);
     for (const Hit& hit : hits) {
       const bool commandPage = hit.slug.startsWith("Commands/");
       auto* item = new QListWidgetItem(commandPage ? hit.title + "  ·  command" : hit.title, pages);

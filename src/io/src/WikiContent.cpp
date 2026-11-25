@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -83,10 +84,11 @@ bool StartsWith(const std::string& s, std::string_view prefix) {
 }
 
 /// Command pages open with loose metadata lines ("**Command:** `LINE` — aliases: `L`",
-/// "**Category overview:** [[Drawing Tools]]", "**Ribbon:** Draw → Line **Command:** …") that run
-/// together into one paragraph, often beside the overview image. Rewrite them as a two-column
-/// table directly under the title, with the image after it. The table's header row is left empty;
-/// the help window drops it and styles the table as the page's info card.
+/// "**Category overview:** [[Drawing Tools]]", "**Ribbon:** Draw → Line **Command:** … **Key:** …")
+/// that run together into one paragraph, often beside the overview image. Rewrite them as a
+/// two-column table directly under the title, one row per "**Label:** value" pair, with the image
+/// after the one-line description. The table's header row is left empty; the help window drops it
+/// and styles the table as the page's info card.
 std::string MetadataCard(const std::string& md) {
   std::vector<std::string> lines;
   {
@@ -104,9 +106,16 @@ std::string MetadataCard(const std::string& md) {
   if (title == lines.size())
     return md;
 
-  static constexpr std::string_view kCommand = "**Command:**", kCategory = "**Category overview:**",
-                                    kRibbon = "**Ribbon:**", kAliases = " — aliases: ";
-  std::string command, aliases, ribbon, category;
+  static const std::regex labelRe(R"(\*\*([A-Za-z][A-Za-z ]*):\*\*)");
+  std::vector<std::pair<std::string, std::string>> rows;  // label, value; first label wins
+  std::string overview;
+  const auto add = [&rows](const std::string& label, const std::string& value) {
+    for (const auto& row : rows)
+      if (row.first == label)
+        return;
+    if (!value.empty())
+      rows.emplace_back(label, value);
+  };
   std::vector<std::string> images;
   size_t end = title + 1;
   for (; end < lines.size(); ++end) {
@@ -115,45 +124,61 @@ std::string MetadataCard(const std::string& md) {
       continue;
     if (StartsWith(line, "![")) {
       images.push_back(line);
-    } else if (StartsWith(line, kCommand)) {
-      command = Trim(line.substr(kCommand.size()));
-      if (const size_t at = command.find(kAliases); at != std::string::npos) {
-        aliases = Trim(command.substr(at + kAliases.size()));
-        command = Trim(command.substr(0, at));
-      }
-    } else if (StartsWith(line, kCategory)) {
-      category = Trim(line.substr(kCategory.size()));
-    } else if (StartsWith(line, kRibbon)) {
-      ribbon = line.substr(kRibbon.size());
-      if (const size_t at = ribbon.find(kCommand); at != std::string::npos)
-        ribbon.resize(at);  // "Draw → Line **Command:** `LINE`" repeats the command row
-      ribbon = Trim(ribbon);
-    } else {
+      continue;
+    }
+    std::smatch first;
+    if (!std::regex_search(line, first, labelRe) || first.position() != 0)
       break;
+    for (std::sregex_iterator it(line.begin(), line.end(), labelRe), stop; it != stop; ++it) {
+      const auto next = std::next(it);
+      const size_t from = static_cast<size_t>(it->position() + it->length());
+      const size_t to = next == stop ? line.size() : static_cast<size_t>(next->position());
+      const std::string label = (*it)[1].str();
+      std::string value = Trim(line.substr(from, to - from));
+      if (label == "Category overview") {
+        if (overview.empty())
+          overview = value;
+      } else if (label == "Command") {
+        bool haveCommand = false;
+        for (const auto& row : rows)
+          haveCommand = haveCommand || row.first == "Command";
+        if (haveCommand)
+          continue;  // "**Ribbon:** … **Command:** `LINE`, `L`" repeats the first line
+        for (const std::string_view sep : {" — aliases:", " - aliases:"})
+          if (const size_t at = value.find(sep); at != std::string::npos) {
+            add("Aliases", Trim(value.substr(at + sep.size())));
+            value = Trim(value.substr(0, at));
+          }
+        for (const std::string_view none : {" — no alias", " - no alias"})
+          if (const size_t at = value.find(none); at != std::string::npos)
+            value = Trim(value.substr(0, at));
+        // Command and Aliases lead the card.
+        rows.insert(rows.begin(), {"Command", value});
+      } else {
+        add(label, value);
+      }
     }
   }
-  if (command.empty() && category.empty() && ribbon.empty())
+  if (rows.empty() && overview.empty())
     return md;
 
   std::string out;
   for (size_t i = 0; i <= title; ++i)
     out += lines[i] + "\n";
   out += "\n|  |  |\n|---|---|\n";
-  if (!command.empty())
-    out += "| Command | " + command + " |\n";
-  if (!aliases.empty())
-    out += "| Aliases | " + aliases + " |\n";
-  if (!ribbon.empty())
-    out += "| Ribbon | " + ribbon + " |\n";
-  if (!category.empty())
-    out += "| Overview | " + category + " |\n";
+  for (const auto& [label, value] : rows)
+    out += "| " + label + " | " + value + " |\n";
+  if (!overview.empty())
+    out += "| Overview | " + overview + " |\n";
   out += "\n";
   // The overview image follows the one-line description, so the page says what the command does
-  // before showing it. With no plain paragraph first, the image goes straight after the card.
+  // before showing it. A caption ("*…*") stays under its image; with no plain paragraph first,
+  // the image goes straight after the card.
   size_t afterIntro = end;
-  if (end < lines.size()) {
+  if (end < lines.size() && !images.empty()) {
     const std::string first = Trim(lines[end]);
-    const bool paragraph = !first.empty() && first[0] != '#' && first[0] != '|' && first[0] != '>' &&
+    const bool caption = first.size() > 1 && first[0] == '*' && first[1] != '*';
+    const bool paragraph = !first.empty() && !caption && first[0] != '#' && first[0] != '|' && first[0] != '>' &&
                            !StartsWith(first, "```") && !StartsWith(first, "- ") && !StartsWith(first, "---");
     if (paragraph)
       while (afterIntro < lines.size() && !Trim(lines[afterIntro]).empty())
@@ -170,13 +195,13 @@ std::string MetadataCard(const std::string& md) {
   return out;
 }
 
-std::string PrepareWikiMarkdown(const std::string& raw) {
+std::string PrepareWikiMarkdown(const std::string& raw, bool commandPage) {
   static const std::regex wikiLinkRe(R"(\[\[([^\]]+)\]\])");
   static const std::regex wikiImgRe(
       R"(https://raw\.githubusercontent\.com/wiki/chetjones003/GoSurvey/images/([A-Za-z0-9._-]+))");
 
   // [[Page]], [[Label|Page]]; a bare [[Commands/line]] reads as "LINE", not its path.
-  std::string out = ReplaceAllRegex(MetadataCard(raw), wikiLinkRe, [](const std::smatch& m) {
+  std::string out = ReplaceAllRegex(commandPage ? MetadataCard(raw) : raw, wikiLinkRe, [](const std::smatch& m) {
     std::string inner = Trim(m[1].str());
     std::string label = inner;
     if (const size_t bar = inner.find('|'); bar != std::string::npos) {
@@ -277,7 +302,7 @@ WikiBundle LoadWikiBundle() {
     WikiPage page;
     page.slug     = slug;
     page.title    = TitleFromMarkdown(raw, SlugFromFilename(file));
-    page.markdown = PrepareWikiMarkdown(raw);
+    page.markdown = PrepareWikiMarkdown(raw, StartsWith(slug, "Commands/"));  // only command pages get the card
     bundle.pagesBySlug.emplace(page.slug, std::move(page));
   }
 
