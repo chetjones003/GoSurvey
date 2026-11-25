@@ -9,6 +9,7 @@
 #include <functional>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 namespace {
 
@@ -77,15 +78,116 @@ std::string ReplaceAllRegex(const std::string& input, const std::regex& re,
   return out;
 }
 
+bool StartsWith(const std::string& s, std::string_view prefix) {
+  return s.compare(0, prefix.size(), prefix) == 0;
+}
+
+/// Command pages open with loose metadata lines ("**Command:** `LINE` — aliases: `L`",
+/// "**Category overview:** [[Drawing Tools]]", "**Ribbon:** Draw → Line **Command:** …") that run
+/// together into one paragraph, often beside the overview image. Rewrite them as a two-column
+/// table directly under the title, with the image after it. The table's header row is left empty;
+/// the help window drops it and styles the table as the page's info card.
+std::string MetadataCard(const std::string& md) {
+  std::vector<std::string> lines;
+  {
+    std::istringstream in(md);
+    std::string line;
+    while (std::getline(in, line)) {
+      if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+      lines.push_back(line);
+    }
+  }
+  size_t title = 0;
+  while (title < lines.size() && !StartsWith(lines[title], "# "))
+    ++title;
+  if (title == lines.size())
+    return md;
+
+  static constexpr std::string_view kCommand = "**Command:**", kCategory = "**Category overview:**",
+                                    kRibbon = "**Ribbon:**", kAliases = " — aliases: ";
+  std::string command, aliases, ribbon, category;
+  std::vector<std::string> images;
+  size_t end = title + 1;
+  for (; end < lines.size(); ++end) {
+    const std::string line = Trim(lines[end]);
+    if (line.empty())
+      continue;
+    if (StartsWith(line, "![")) {
+      images.push_back(line);
+    } else if (StartsWith(line, kCommand)) {
+      command = Trim(line.substr(kCommand.size()));
+      if (const size_t at = command.find(kAliases); at != std::string::npos) {
+        aliases = Trim(command.substr(at + kAliases.size()));
+        command = Trim(command.substr(0, at));
+      }
+    } else if (StartsWith(line, kCategory)) {
+      category = Trim(line.substr(kCategory.size()));
+    } else if (StartsWith(line, kRibbon)) {
+      ribbon = line.substr(kRibbon.size());
+      if (const size_t at = ribbon.find(kCommand); at != std::string::npos)
+        ribbon.resize(at);  // "Draw → Line **Command:** `LINE`" repeats the command row
+      ribbon = Trim(ribbon);
+    } else {
+      break;
+    }
+  }
+  if (command.empty() && category.empty() && ribbon.empty())
+    return md;
+
+  std::string out;
+  for (size_t i = 0; i <= title; ++i)
+    out += lines[i] + "\n";
+  out += "\n|  |  |\n|---|---|\n";
+  if (!command.empty())
+    out += "| Command | " + command + " |\n";
+  if (!aliases.empty())
+    out += "| Aliases | " + aliases + " |\n";
+  if (!ribbon.empty())
+    out += "| Ribbon | " + ribbon + " |\n";
+  if (!category.empty())
+    out += "| Overview | " + category + " |\n";
+  out += "\n";
+  // The overview image follows the one-line description, so the page says what the command does
+  // before showing it. With no plain paragraph first, the image goes straight after the card.
+  size_t afterIntro = end;
+  if (end < lines.size()) {
+    const std::string first = Trim(lines[end]);
+    const bool paragraph = !first.empty() && first[0] != '#' && first[0] != '|' && first[0] != '>' &&
+                           !StartsWith(first, "```") && !StartsWith(first, "- ") && !StartsWith(first, "---");
+    if (paragraph)
+      while (afterIntro < lines.size() && !Trim(lines[afterIntro]).empty())
+        ++afterIntro;
+  }
+  for (size_t i = end; i < afterIntro; ++i)
+    out += lines[i] + "\n";
+  if (!images.empty())
+    out += "\n";
+  for (const std::string& image : images)
+    out += image + "\n\n";
+  for (size_t i = afterIntro; i < lines.size(); ++i)
+    out += lines[i] + "\n";
+  return out;
+}
+
 std::string PrepareWikiMarkdown(const std::string& raw) {
   static const std::regex wikiLinkRe(R"(\[\[([^\]]+)\]\])");
   static const std::regex wikiImgRe(
       R"(https://raw\.githubusercontent\.com/wiki/chetjones003/GoSurvey/images/([A-Za-z0-9._-]+))");
 
-  std::string out = ReplaceAllRegex(raw, wikiLinkRe, [](const std::smatch& m) {
-    const std::string title = Trim(m[1].str());
-    const std::string slug  = SlugFromWikiTitle(title);
-    return "[" + title + "](wiki:" + slug + ")";
+  // [[Page]], [[Label|Page]]; a bare [[Commands/line]] reads as "LINE", not its path.
+  std::string out = ReplaceAllRegex(MetadataCard(raw), wikiLinkRe, [](const std::smatch& m) {
+    std::string inner = Trim(m[1].str());
+    std::string label = inner;
+    if (const size_t bar = inner.find('|'); bar != std::string::npos) {
+      label = Trim(inner.substr(0, bar));
+      inner = Trim(inner.substr(bar + 1));
+    } else if (StartsWith(inner, "Commands/")) {
+      label = inner.substr(std::string_view("Commands/").size());
+      for (char& c : label)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return "[" + label + "](wiki:" + SlugFromWikiTitle(inner) + ")";
   });
 
   out = ReplaceAllRegex(out, wikiImgRe, [](const std::smatch& m) {

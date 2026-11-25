@@ -12,6 +12,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/DrawingDocumentTabBar.cpp
   src/qt/EditorWindow.cpp
   src/qt/EditorInput.cpp
+  src/qt/EditorHelp.cpp
   src/qt/EditorRibbon.cpp
   src/qt/EditorChrome.cpp
   src/qt/QtAppearance.cpp

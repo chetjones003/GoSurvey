@@ -231,6 +231,10 @@ Type in **Search the manual** above the page list to search every page, includin
 command pages. All words must appear; pages with a word in the title come first. Press **Enter** to
 open the top result. The page scrolls to the first match. Clear the box to return to the contents.
 
+The bar above the page has **Back** and **Forward** (`Alt+←` / `Alt+→`), **Home**, and the page's place
+in the manual (for example *Commands › LINE*). Each command page opens with a card listing the
+command, its aliases, its ribbon location and its overview page.
+
 ![In-app user manual](wiki-img:20-in-app-wiki.png)
 
 *The bundled wiki reader — sidebar navigation on the left, markdown content on the right. The same

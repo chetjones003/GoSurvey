@@ -5,7 +5,6 @@
 #include "CadSnap.hpp"
 #include "UserPrefs.hpp"
 #include "WikiHelp.hpp"
-#include "engine/CommandRegistry.hpp"
 #include <QApplication>
 #include <QAbstractSpinBox>
 #include <QAction>
@@ -37,9 +36,6 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QCursor>
-#include <QTextBlock>
-#include <QTextCursor>
-#include <QTextDocument>
 #include <algorithm>
 #include <cmath>
 
@@ -64,31 +60,6 @@ HelpHoverTopic HelpTopicForWidget(QWidget* widget) {
     if (!w->toolTip().isEmpty()) return {{}, w->toolTip()};
   }
   return {};
-}
-
-/// Registry primary (lowercase) for the first token of a command line or ribbon route, so aliases
-/// such as "L" find the LINE page. Unlisted commands (TOOLSPACE, BPARAM, UNDO...) count too.
-/// Empty for "@" UI routes and unknown words.
-std::string HelpCommandPrimary(const QString& text) {
-  const QString token = text.trimmed().section(QRegularExpression("[\\s,]+"), 0, 0);
-  if (token.isEmpty() || token.startsWith('@')) return {};
-  const auto* def = stepengine::CommandRegistry::Instance().FindAny(token.toLower().toUtf8().toStdString());
-  return def ? QString::fromUtf8(def->primary).toLower().toStdString() : std::string();
-}
-
-/// Registry primary for a running command. KindName is tried first; a kind whose name is not a
-/// command (SOLID, ZOOM...) resolves only when exactly one command runs as that kind.
-std::string HelpCommandPrimaryForKind(AppCommandState::Kind kind) {
-  if (kind == AppCommandState::Kind::None) return {};
-  if (std::string primary = HelpCommandPrimary(QString::fromUtf8(AppCommandState::KindName(kind))); !primary.empty())
-    return primary;
-  const stepengine::CommandDef* only = nullptr;
-  for (const auto& def : stepengine::CommandRegistry::Instance().All()) {
-    if (def.kind != kind) continue;
-    if (only) return {};
-    only = &def;
-  }
-  return only ? QString::fromUtf8(only->primary).toLower().toStdString() : std::string();
 }
 
 }  // namespace
@@ -626,151 +597,3 @@ void EditorWindow::ShowPolarSettings() {
   dialog.exec(); Refresh();
 }
 
-void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString& uiTooltip) {
-  if (!m_WikiLoaded) {
-    m_WikiBundle = LoadWikiBundle();
-    WikiHelpBuildIndex(m_WikiBundle);
-    m_WikiLoaded = true;
-  }
-  // Topic order: the explicit command, then the hovered control's "Command bar:" name, its ribbon
-  // route or UI topic, then (when none of those names a page) the running or last command, then Home.
-  WikiHelpTarget uiTopic;
-  if (!uiTooltip.isEmpty()) uiTopic = WikiHelpTargetFromUiTooltip(uiTooltip.toUtf8().toStdString());
-  std::string primary = HelpCommandPrimary(topicCommand);
-  if (primary.empty()) primary = HelpCommandPrimary(QString::fromStdString(uiTopic.commandPrimary));
-  const bool uiPage = primary.empty() && !uiTopic.pageSlug.empty() && uiTopic.commandPrimary.empty();
-  if (primary.empty() && !uiPage) primary = HelpCommandPrimaryForKind(m_State.active);
-  if (primary.empty() && !uiPage) primary = HelpCommandPrimaryForKind(m_State.lastCommand);
-  WikiHelpTarget target;
-  if (!primary.empty()) target = WikiHelpLookupCommand(primary);
-  else if (uiPage) target = uiTopic;
-  if (target.pageSlug.empty()) target = WikiHelpTarget{"Home", {}};
-
-  QDialog dialog(this); dialog.setObjectName("contextualHelpDialog");
-  dialog.setWindowTitle("GoSurvey User Manual"); dialog.resize(1080, 720);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* title = new QLabel("User Manual", &dialog); title->setObjectName("manualTitle");
-  const bool darkHelp = palette().color(QPalette::Window).lightness() < 128;
-  title->setStyleSheet(QString("font-size:20px; font-weight:600; padding:10px; background:%1; color:#f1f6fa; border-radius:4px;")
-                           .arg(darkHelp ? "#30373c" : "#263e53"));
-  layout->addWidget(title);
-  auto* splitter = new QSplitter(&dialog); splitter->setObjectName("manualSplitter"); layout->addWidget(splitter, 1);
-  auto* side = new QWidget(splitter);
-  auto* sideLayout = new QVBoxLayout(side); sideLayout->setContentsMargins(0, 0, 0, 0); sideLayout->setSpacing(4);
-  auto* search = new QLineEdit(side); search->setObjectName("manualSearch");
-  search->setPlaceholderText("Search the manual"); search->setClearButtonEnabled(true);
-  auto* pages = new QListWidget(side); pages->setObjectName("manualPages");
-  sideLayout->addWidget(search); sideLayout->addWidget(pages, 1);
-  auto* browser = new QTextBrowser(splitter); browser->setObjectName("manualContent");
-  browser->setOpenLinks(false); browser->setOpenExternalLinks(false);
-  splitter->addWidget(side); splitter->addWidget(browser); splitter->setStretchFactor(1, 1);
-  splitter->setSizes({260, 820});
-  // Shows a page and scrolls to `focus`: for a command, the heading that documents it, else its first
-  // whole-word mention in capitals; for a search, the first case-insensitive match.
-  auto showPage = [this, browser, title](const QString& slug, const QString& focus = {}, bool command = false) {
-    const auto found = m_WikiBundle.pagesBySlug.find(slug.toUtf8().toStdString());
-    if (found == m_WikiBundle.pagesBySlug.end()) return;
-    title->setText(QString::fromUtf8(found->second.title.c_str()));
-    QString markdown = QString::fromUtf8(found->second.markdown.c_str());
-    QRegularExpression image("wiki-img:([A-Za-z0-9._-]+)");
-    auto match = image.globalMatch(markdown);
-    while (match.hasNext()) {
-      const auto item = match.next();
-      const auto path = std::filesystem::path(m_WikiBundle.rootPath) / "images" / item.captured(1).toStdWString();
-      markdown.replace(item.capturedStart(), item.capturedLength(), QUrl::fromLocalFile(QString::fromStdWString(path.wstring())).toString());
-    }
-    browser->setMarkdown(markdown);
-    if (focus.isEmpty()) return;
-    QTextDocument* doc = browser->document();
-    QTextCursor at;
-    if (command) {
-      const std::string primaryLower = focus.toLower().toStdString();
-      for (QTextBlock block = doc->begin(); block.isValid() && at.isNull(); block = block.next())
-        if (block.blockFormat().headingLevel() > 0 && WikiHeadingMatchesCommand(block.text().toStdString(), primaryLower))
-          at = QTextCursor(block);
-      if (at.isNull()) at = doc->find(focus.toUpper(), 0, QTextDocument::FindCaseSensitively | QTextDocument::FindWholeWords);
-    } else {
-      at = doc->find(focus);
-    }
-    if (at.isNull()) return;
-    // Jump to the end first so ensureCursorVisible brings the match to the top, not the bottom.
-    browser->moveCursor(QTextCursor::End); browser->setTextCursor(at); browser->ensureCursorVisible();
-  };
-  const auto fillNav = [this, pages] {
-    const QSignalBlocker block(pages);
-    pages->clear();
-    for (const auto& entry : m_WikiBundle.nav) {
-      auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      if (entry.isSection) {
-        item->setFlags(Qt::NoItemFlags); item->setForeground(QColor(QtAccentFor(true).quiet));
-      } else {
-        item->setData(Qt::UserRole, QString::fromUtf8(entry.slug.c_str()));
-      }
-    }
-  };
-  // Search covers every page, including the per-command pages the sidebar does not list. Every word
-  // must appear somewhere on the page; title hits rank first, then pages that mention the words most.
-  const auto fillResults = [this, pages](const QString& query) {
-    const QStringList words = query.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    struct Hit { long long score; QString title; QString slug; };
-    std::vector<Hit> hits;
-    for (const auto& [slug, page] : m_WikiBundle.pagesBySlug) {
-      const QString pageTitle = QString::fromUtf8(page.title.c_str());
-      const QString body = QString::fromUtf8(page.markdown.c_str());
-      long long score = 0; bool all = true;
-      for (const QString& word : words) {
-        const bool inTitle = pageTitle.contains(word, Qt::CaseInsensitive);
-        const qsizetype mentions = body.count(word, Qt::CaseInsensitive);
-        if (!inTitle && mentions == 0) { all = false; break; }
-        score += (inTitle ? 1000 : 0) + std::min<qsizetype>(mentions, 50);
-      }
-      if (all) hits.push_back({score, pageTitle, QString::fromUtf8(slug.c_str())});
-    }
-    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
-      return a.score != b.score ? a.score > b.score : a.title.compare(b.title, Qt::CaseInsensitive) < 0;
-    });
-    const QSignalBlocker block(pages);
-    pages->clear();
-    if (hits.empty()) {
-      auto* none = new QListWidgetItem("No matches", pages); none->setFlags(Qt::NoItemFlags);
-      return;
-    }
-    for (const Hit& hit : hits) {
-      auto* item = new QListWidgetItem(hit.title, pages);
-      item->setData(Qt::UserRole, hit.slug); item->setToolTip(hit.slug);
-    }
-  };
-  fillNav();
-  connect(pages, &QListWidget::currentItemChanged, &dialog, [showPage, search](QListWidgetItem* current) {
-    if (!current) return;
-    const QString firstWord = search->text().trimmed().section(QRegularExpression("\\s+"), 0, 0);
-    showPage(current->data(Qt::UserRole).toString(), firstWord);
-  });
-  connect(search, &QLineEdit::textChanged, &dialog, [fillNav, fillResults](const QString& text) {
-    if (text.trimmed().isEmpty()) fillNav(); else fillResults(text.trimmed());
-  });
-  connect(search, &QLineEdit::returnPressed, &dialog, [pages] {
-    for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->flags() & Qt::ItemIsSelectable) {
-      pages->setCurrentRow(i); pages->setFocus(); return;
-    }
-  });
-  connect(browser, &QTextBrowser::anchorClicked, &dialog, [pages, showPage](const QUrl& url) {
-    if (url.scheme() != "wiki") { QDesktopServices::openUrl(url); return; }
-    const QString slug = url.path().isEmpty() ? url.host() : url.path();
-    for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == slug) {
-      const QSignalBlocker block(pages); pages->setCurrentRow(i); break;
-    }
-    showPage(slug);
-  });
-  const QString initial = QString::fromUtf8(target.pageSlug.c_str());
-  for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == initial) {
-    const QSignalBlocker block(pages); pages->setCurrentRow(i); break;
-  }
-  // A command's own page opens at the top; a shared topic page scrolls to the command.
-  const QString commandName = QString::fromStdString(target.commandPrimary);
-  const bool ownPage = initial.compare("Commands/" + commandName, Qt::CaseInsensitive) == 0;
-  showPage(initial, ownPage ? QString() : commandName, true);
-  if (!m_WikiBundle.ok) browser->setPlainText(QString::fromUtf8(m_WikiBundle.fallbackMessage.c_str()));
-  search->setFocus();
-  dialog.exec();
-}
