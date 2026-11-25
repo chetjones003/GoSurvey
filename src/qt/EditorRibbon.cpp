@@ -649,6 +649,7 @@ static double HatchScaleFromSlider(int value) {
 // objectName and the slider objectName + "Slider" so Refresh can sync both.
 static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& objectName, const QString& label,
                                            double minimum, double maximum, int decimals, const QString& suffix,
+                                           int sliderMaximum, int pageStep,
                                            int (*toSlider)(double), double (*fromSlider)(int),
                                            std::function<void(double)> commit) {
   auto* row = new QWidget(panel); row->setObjectName(objectName + "Row"); row->setFixedHeight(24);
@@ -657,9 +658,7 @@ static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& object
   caption->setFixedWidth(caption->fontMetrics().horizontalAdvance(label) + 2);
   auto* slider = new QSlider(Qt::Horizontal, row); slider->setObjectName(objectName + "Slider");
   slider->setAccessibleName(label); slider->setToolTip(label); slider->setTracking(false); slider->setFixedWidth(110);
-  if (objectName.endsWith("Transparency")) { slider->setRange(0, 100); slider->setPageStep(10); }
-  else if (objectName.endsWith("Angle")) { slider->setRange(0, 359); slider->setPageStep(15); }
-  else { slider->setRange(0, 400); slider->setPageStep(30); }
+  slider->setRange(0, sliderMaximum); slider->setPageStep(pageStep);
   auto* value = new QDoubleSpinBox(row); value->setObjectName(objectName); value->setAccessibleName(label);
   value->setRange(minimum, maximum); value->setDecimals(decimals); value->setSuffix(suffix);
   value->setButtonSymbols(QAbstractSpinBox::NoButtons); value->setKeyboardTracking(false); value->setFixedSize(68, 22);
@@ -668,8 +667,11 @@ static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& object
   QObject::connect(slider, &QSlider::sliderMoved, value, [value, fromSlider](int position) {
     const QSignalBlocker block(value); value->setValue(fromSlider(position));
   });
-  QObject::connect(slider, &QSlider::valueChanged, value, [value, fromSlider](int position) {
-    value->setValue(fromSlider(position));
+  // Commit here rather than through the box: a drag has already shown the final number in the box, so
+  // setting it again would not change it and its valueChanged would never fire.
+  QObject::connect(slider, &QSlider::valueChanged, value, [value, fromSlider, commit](int position) {
+    { const QSignalBlocker block(value); value->setValue(fromSlider(position)); }
+    commit(value->value());
   });
   QObject::connect(value, &QDoubleSpinBox::valueChanged, slider, [slider, toSlider, commit](double number) {
     { const QSignalBlocker block(slider); slider->setValue(toSlider(number)); }
@@ -1535,13 +1537,13 @@ void EditorWindow::BuildRibbonPages() {
           const auto selected = QColorDialog::getColor(color->property("hatchColor").value<QColor>(), this, "Hatch color");
           if (selected.isValid()) EditRibbonHatch("color", selected.name());
         });
-        auto* transparency = CreateRibbonHatchSliderRow(panel, "ribbonHatchTransparency", "Transparency", 0, 100, 0, " %",
+        auto* transparency = CreateRibbonHatchSliderRow(panel, "ribbonHatchTransparency", "Transparency", 0, 100, 0, " %", 100, 10,
             HatchTransparencyToSlider, HatchTransparencyFromSlider,
             [this](double value) { EditRibbonHatch("transparency", QString::number(value / 100.0, 'g', 6)); });
-        auto* angle = CreateRibbonHatchSliderRow(panel, "ribbonHatchAngle", "Angle", -360, 360, 2, QString(QChar(0x00B0)),
+        auto* angle = CreateRibbonHatchSliderRow(panel, "ribbonHatchAngle", "Angle", -360, 360, 2, QString(QChar(0x00B0)), 359, 15,
             HatchAngleToSlider, HatchAngleFromSlider,
             [this](double value) { EditRibbonHatch("angle", QString::number(value, 'g', 15)); });
-        auto* scale = CreateRibbonHatchSliderRow(panel, "ribbonHatchScale", "Scale", 0.01, 1e6, 4, QString(),
+        auto* scale = CreateRibbonHatchSliderRow(panel, "ribbonHatchScale", "Scale", 0.0001, 1e9, 4, QString(), 400, 30,
             HatchScaleToSlider, HatchScaleFromSlider,
             [this](double value) { EditRibbonHatch("scale", QString::number(value, 'g', 15)); });
         grid->addWidget(layer, 0, col); grid->addWidget(color, 1, col); grid->addWidget(transparency, 2, col++);
