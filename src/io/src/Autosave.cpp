@@ -98,8 +98,8 @@ bool WriteAllBytes(const fs::path& path, std::string_view bytes) {
   return wrote && closed;
 }
 
-// Stage beside target and replace atomically; falls back to copy+remove if rename hits a
-// transient lock (matching DwgIo.cpp). Never leaves a partial file at \p target.
+// Stage beside target and replace atomically via rename. Never falls back to overwriting target
+// in place, so a failed commit always preserves the previous valid snapshot.
 bool AtomicWriteFile(const fs::path& target, std::string_view bytes, std::string* err) {
   std::error_code ec;
   if (const fs::path parent = target.parent_path(); !parent.empty()) {
@@ -121,14 +121,10 @@ bool AtomicWriteFile(const fs::path& target, std::string_view bytes, std::string
 
   fs::rename(staged, target, ec);
   if (ec) {
-    ec.clear();
-    fs::copy_file(staged, target, fs::copy_options::overwrite_existing, ec);
     std::error_code rmEc;
     fs::remove(staged, rmEc);
-    if (ec) {
-      SetErr(err, "Could not commit autosave file: " + ec.message());
-      return false;
-    }
+    SetErr(err, "Could not atomically commit autosave file: " + ec.message());
+    return false;
   }
   return true;
 }
@@ -145,25 +141,55 @@ fs::path TabMetaPath(const fs::path& sessionDir, std::uint32_t tabUid) {
   return sessionDir / (TabBaseName(tabUid) + kMetaSuffix);
 }
 
-bool HasAnyTabEntries(const fs::path& sessionDir) {
+// True when sessionDir holds any file or subdirectory other than session.json, or when the
+// directory cannot be inspected (conservative: never prune an unreadable directory).
+bool HasAnyPreservedFiles(const fs::path& sessionDir) {
   std::error_code ec;
-  if (!fs::exists(sessionDir, ec) || !fs::is_directory(sessionDir, ec))
+  if (!fs::exists(sessionDir, ec) || ec || !fs::is_directory(sessionDir, ec) || ec)
     return false;
   for (const auto& entry : fs::directory_iterator(sessionDir, ec)) {
     if (ec)
-      break;
+      return true;
     const std::string name = entry.path().filename().u8string();
-    if (StartsWith(name, "tab-") && EndsWith(name, kMetaSuffix))
+    if (name != kSessionFile)
       return true;
   }
-  return false;
+  return static_cast<bool>(ec);
 }
 
 void PruneSessionDirIfEmpty(const fs::path& sessionDir) {
-  if (sessionDir.empty() || HasAnyTabEntries(sessionDir))
+  if (sessionDir.empty() || HasAnyPreservedFiles(sessionDir))
     return;
   std::error_code ec;
-  fs::remove_all(sessionDir, ec);
+  fs::remove(sessionDir / kSessionFile, ec);
+  ec.clear();
+  // Non-recursive remove guarantees an unexpected file added concurrently is never deleted.
+  fs::remove(sessionDir, ec);
+}
+
+bool ParseSessionDirPid(std::string_view sessionId, std::uint32_t* pidOut) {
+  if (pidOut != nullptr)
+    *pidOut = 0;
+  if (!StartsWith(sessionId, kSessionPrefix))
+    return false;
+  const std::string_view rest = sessionId.substr(std::strlen(kSessionPrefix));
+  const std::size_t dash = rest.find('-');
+  if (dash == std::string_view::npos || dash == 0)
+    return false;
+  std::uint64_t value = 0;
+  for (std::size_t i = 0; i < dash; ++i) {
+    const char ch = rest[i];
+    if (ch < '0' || ch > '9')
+      return false;
+    value = value * 10u + static_cast<std::uint64_t>(ch - '0');
+    if (value > 0xFFFFFFFFu)
+      return false;
+  }
+  if (value == 0)
+    return false;
+  if (pidOut != nullptr)
+    *pidOut = static_cast<std::uint32_t>(value);
+  return true;
 }
 
 bool ReadSessionPid(const fs::path& sessionDir, std::uint32_t* pidOut) {
@@ -177,8 +203,11 @@ bool ReadSessionPid(const fs::path& sessionDir, std::uint32_t* pidOut) {
     return false;
   if (!j.contains("pid") || !j["pid"].is_number_unsigned())
     return false;
+  const std::uint32_t pid = j["pid"].get<std::uint32_t>();
+  if (pid == 0)
+    return false;
   if (pidOut != nullptr)
-    *pidOut = j["pid"].get<std::uint32_t>();
+    *pidOut = pid;
   return true;
 }
 
@@ -365,10 +394,16 @@ std::vector<RecoveryEntry> ScanRecoverable(const fs::path& autosaveRoot,
   for (const fs::path& sessionDir : sessionDirs) {
     const std::string sessionId = sessionDir.filename().u8string();
     std::uint32_t pid = 0;
-    if (ReadSessionPid(sessionDir, &pid) && pid != 0 && pidAlive && pidAlive(pid))
+    // Check session.json first, falling back to the PID embedded in session-<pid>-<ts> so a
+    // session whose directory was just created by another live instance (before session.json is
+    // committed) is never treated as dead. Unidentified directories are left untouched.
+    const bool hasPid = ReadSessionPid(sessionDir, &pid) || ParseSessionDirPid(sessionId, &pid);
+    if (!hasPid || pid == 0)
+      continue;
+    if (pidAlive && pidAlive(pid))
       continue;  // Another live GoSurvey instance owns this session.
 
-    // Dead session: remove any stray *.tmp files left by a mid-write crash and collect valid entries.
+    // Dead session: remove only explicitly disposable *.tmp files and collect valid entries.
     std::vector<fs::path> metaFiles;
     std::error_code iterEc;
     for (const auto& fileEntry : fs::directory_iterator(sessionDir, iterEc)) {
@@ -384,7 +419,6 @@ std::vector<RecoveryEntry> ScanRecoverable(const fs::path& autosaveRoot,
         metaFiles.push_back(fileEntry.path());
     }
 
-    std::size_t validCount = 0;
     for (const fs::path& metaPath : metaFiles) {
       EntryMeta meta;
       if (!ParseEntryMeta(metaPath, &meta))
@@ -406,13 +440,11 @@ std::vector<RecoveryEntry> ScanRecoverable(const fs::path& autosaveRoot,
       rec.originalFileNewer = IsOriginalFileNewer(meta.originalFilePath, meta.savedAtUnix);
       rec.meta = std::move(meta);
       out.push_back(std::move(rec));
-      ++validCount;
     }
 
-    if (validCount == 0) {
-      std::error_code rmEc;
-      fs::remove_all(sessionDir, rmEc);
-    }
+    // Prune only when genuinely empty (aside from session.json); preserve newer formatVersion
+    // entries, unreadable metadata, or orphaned payloads so older versions never erase data.
+    PruneSessionDirIfEmpty(sessionDir);
   }
 
   std::sort(out.begin(), out.end(), [](const RecoveryEntry& a, const RecoveryEntry& b) {

@@ -268,3 +268,52 @@ TEST_CASE("Autosave overwrites existing tab atomically and preserves Unicode nam
   REQUIRE(autosave::ReadPayload(found[0], &payload, &err));
   CHECK(payload == R"({"rev":2,"updated":true})");
 }
+
+TEST_CASE("Autosave protects initializing live sessions, preserves future-version entries, and fails atomically",
+          "[autosave]") {
+  TempDir tmp;
+
+  // 1. Session race: a live instance has created session-<pid>-<ts> and a .tmp file, before
+  //    session.json is written. ScanRecoverable must check the directory-name PID and leave both
+  //    the directory and its .tmp file untouched.
+  const fs::path initializingLiveDir = tmp.path / "session-4444-1000";
+  fs::create_directories(initializingLiveDir);
+  { std::ofstream(initializingLiveDir / "session.json.tmp", std::ios::binary) << "{\"pid\":4444}"; }
+
+  // Also test an unidentified session-* folder with no parseable PID anywhere: must be left alone.
+  const fs::path unknownDir = tmp.path / "session-unidentified";
+  fs::create_directories(unknownDir);
+  { std::ofstream(unknownDir / "tab-1.gsauto.tmp", std::ios::binary) << "wip"; }
+
+  // 2. Recovery deletion: a dead session containing only a newer formatVersion (or unreadable
+  //    metadata) must NOT be deleted when scanned by an older build.
+  const fs::path futureDir = tmp.path / "session-5555-2000";
+  fs::create_directories(futureDir);
+  {
+    std::ofstream(futureDir / "session.json", std::ios::binary) << R"({"formatVersion":1,"pid":5555})";
+    std::ofstream(futureDir / "tab-1.meta.json", std::ios::binary)
+        << R"({"formatVersion":99,"tabUid":1,"tabName":"FutureDoc","savedAtUnix":999})";
+    std::ofstream(futureDir / "tab-1.gsauto", std::ios::binary) << R"({"format":"gosurvey","future":true})";
+  }
+
+  const auto found = autosave::ScanRecoverable(tmp.path, "session-9999-3000",
+                                               [](std::uint32_t pid) { return pid == 4444; });
+  CHECK(found.empty());
+  CHECK(fs::exists(initializingLiveDir / "session.json.tmp"));
+  CHECK(fs::exists(unknownDir / "tab-1.gsauto.tmp"));
+  CHECK(fs::exists(futureDir / "tab-1.meta.json"));
+  CHECK(fs::exists(futureDir / "tab-1.gsauto"));
+
+  // 3. Atomic commit failure: when the target cannot be replaced by rename (e.g. an obstructing
+  //    directory at the payload path), WriteEntry must fail without leaving a stray .tmp file
+  //    or clobbering existing entries.
+  const std::string blockedSession = autosave::MakeSessionId(6666, 4000);
+  const fs::path blockedDir = autosave::SessionDirectory(tmp.path, blockedSession);
+  fs::create_directories(blockedDir / "tab-1.gsauto");
+  std::string err;
+  CHECK_FALSE(autosave::WriteEntry(tmp.path, blockedSession, 6666, 4000,
+                                   MakeMeta(1, "Blocked", 1700000500), R"({"ok":true})", &err));
+  CHECK_FALSE(err.empty());
+  CHECK_FALSE(fs::exists(blockedDir / "tab-1.gsauto.tmp"));
+  CHECK(fs::is_directory(blockedDir / "tab-1.gsauto"));
+}
