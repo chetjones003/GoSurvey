@@ -95,6 +95,27 @@ function Assert-PdbMatchesExecutable {
   $executableReportIdentity
 }
 
+function Send-ReleasePdb {
+  param(
+    [string] $AwsPath,
+    [string] $PdbPath,
+    [string] $Destination,
+    [string] $Endpoint
+  )
+
+  $PSNativeCommandUseErrorActionPreference = $false
+  # Restart the transfer if AWS CLI exhausts its retries for a multipart request.
+  foreach ($retryDelay in @(0, 5, 10)) {
+    if ($retryDelay -gt 0) {
+      Write-Warning "R2 PDB upload failed with exit code $LASTEXITCODE. Retrying in $retryDelay seconds."
+      Start-Sleep -Seconds $retryDelay
+    }
+    & $AwsPath s3 cp $PdbPath $Destination --endpoint-url $Endpoint --region auto --only-show-errors
+    if ($LASTEXITCODE -eq 0) { return }
+  }
+  throw "R2 PDB upload failed with exit code $LASTEXITCODE."
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
   foreach ($argumentName in @('ExecutablePath', 'PdbPath', 'Version', 'Commit', 'Channel')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $argumentName -ValueOnly))) {
@@ -140,8 +161,7 @@ if ($MyInvocation.InvocationName -ne '.') {
   $env:AWS_DEFAULT_REGION = 'auto'
   $endpoint = "https://$($env:CLOUDFLARE_ACCOUNT_ID).r2.cloudflarestorage.com"
   $aws = Get-Command aws.exe -ErrorAction Stop
-  & $aws.Source s3 cp $PdbPath $destination --endpoint-url $endpoint --region auto --only-show-errors
-  if ($LASTEXITCODE -ne 0) { throw "R2 PDB upload failed with exit code $LASTEXITCODE." }
+  Send-ReleasePdb -AwsPath $aws.Source -PdbPath $PdbPath -Destination $destination -Endpoint $endpoint
   # The prune step protects exactly this object, so hand its key to the workflow.
   if ($env:GITHUB_OUTPUT) { "pdb-key=$key" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
   Write-Output "Archived PDB as $destination"

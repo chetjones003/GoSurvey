@@ -59,4 +59,48 @@ $threw = $false
 $rawOrderWrongAge = ConvertFrom-PdbSummaryOutput -Lines @('Age: 8', 'GUID: {95F3EAB9-DC16-E448-AE8D-7BE49BB99584}')
 try { Assert-PdbMatchesExecutable -ExecutableIdentity $exeIdentity -PdbIdentity $rawOrderWrongAge 3>$null | Out-Null } catch { $threw = $true }
 if (-not $threw) { throw 'A raw-order PDB GUID with the wrong age was accepted.' }
+
+function Invoke-TestPdbUpload {
+  $exitCode = $script:uploadExitCodes.Dequeue()
+  if ($exitCode -ne 0) {
+    [Console]::Error.WriteLine('Connection was closed before we received a valid response from endpoint URL.')
+  }
+  & cmd.exe /d /c "exit $exitCode"
+}
+
+$uploadArguments = @{
+  AwsPath = 'Invoke-TestPdbUpload'
+  PdbPath = 'GoSurvey.pdb'
+  Destination = "s3://test-bucket/$key"
+  Endpoint = 'https://test.invalid'
+}
+
+function Start-Sleep {
+  param([int] $Seconds)
+  $script:retryDelays.Add($Seconds)
+}
+
+$uploadExitCodes = [Collections.Generic.Queue[int]]::new([int[]] @(1, 0))
+$retryDelays = [Collections.Generic.List[int]]::new()
+Send-ReleasePdb @uploadArguments
+if ($uploadExitCodes.Count -ne 0 -or ($retryDelays -join ',') -ne '5') {
+  throw 'A disconnected upload must be retried after a short delay and stop after success.'
+}
+
+$uploadExitCodes = [Collections.Generic.Queue[int]]::new([int[]] @(1, 1, 1))
+$retryDelays.Clear()
+$uploadError = $null
+try { Send-ReleasePdb @uploadArguments } catch { $uploadError = $_.Exception.Message }
+if ($uploadError -cne 'R2 PDB upload failed with exit code 1.' -or
+    $uploadExitCodes.Count -ne 0 -or ($retryDelays -join ',') -ne '5,10') {
+  throw 'A persistently failing upload must stop after three attempts and fail the archive.'
+}
+
+$uploadExitCodes = [Collections.Generic.Queue[int]]::new([int[]] @(0))
+$retryDelays.Clear()
+Send-ReleasePdb @uploadArguments
+if ($uploadExitCodes.Count -ne 0 -or $retryDelays.Count -ne 0) {
+  throw 'A successful first upload must not be retried.'
+}
+
 Write-Output 'Archive-release-PDB tests passed.'
