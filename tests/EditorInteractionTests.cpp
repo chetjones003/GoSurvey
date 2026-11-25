@@ -1,5 +1,6 @@
 #include "CadCommands.hpp"
 #include "CadDynInput.hpp"
+#include "CadPropertyEdit.hpp"
 #include "CadRubberPreview.hpp"
 #include "pipe/CadPipeCommands.hpp"
 #include "draw/CadDrawSessions.hpp"
@@ -7,6 +8,7 @@
 #include "modify/CadModifyRestSessions.hpp"
 #include "modify/CadModifySessions.hpp"
 #include "pipe/CadPipeSiteSessions.hpp"
+#include <limits>
 #include <memory>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -182,4 +184,81 @@ TEST_CASE("PIPERUN typed length follows a live object snap, not the compass", "[
   REQUIRE(pipe->draftVerts.size() == 6);
   CHECK(pipe->draftVerts[3] == Catch::Approx(4.0).margin(1e-4));
   CHECK(pipe->draftVerts[4] == Catch::Approx(3.0).margin(1e-4));
+}
+
+TEST_CASE("Dimension size overrides edit, clear, undo, and track drawn label placement (issue #1676)",
+          "[editor][dimension]") {
+  AppCommandState st;
+  st.drawing.modelUnitsPerPlottedInch = 120.f;
+  st.drawing.annotationScales = {{"1\" = 10'", 1.f, 120.f}, {"1\" = 40'", 1.f, 480.f}};
+  st.currentAnnotationScaleIndex = 1;  // 1" = 40'
+  st.viewportDimArrowScale = 1.5f;
+  st.drawing.activeDimensionStyle.textSizeInches = 0.1f;
+  st.drawing.activeDimensionStyle.arrowSizeInches = 0.1f;
+  st.drawing.activeDimensionStyle.props["annotative"] = "1";
+  st.drawing.dimensionStyles = {st.drawing.activeDimensionStyle};
+
+  CadAnnotation dim;
+  dim.kind = CadAnnotation::Kind::DimAligned;
+  dim.dimensionStyleName = st.drawing.activeDimensionStyle.name;
+  dim.dimExt1X = 0.0; dim.dimExt1Y = 0.0;
+  dim.dimExt2X = 500.0; dim.dimExt2Y = 0.0;
+  dim.dimSignedOffset = 20.f;
+  dim.insX = 250.f; dim.insY = 30.f;  // stale stored spot from 1"=10'
+  dim.text = "500.00";
+  dim.dimTextUserPlaced = false;
+  st.drawing.cadAnnotations.push_back(dim);
+
+  // Derived readout reflects annotation scale and arrow multiplier before overrides.
+  const auto base = propedit::ReadDimensionSizes(st, st.drawing.cadAnnotations[0]);
+  CHECK(base.textHeightModel == Catch::Approx(48.0));
+  CHECK(base.arrowSizeModel == Catch::Approx(72.0));
+  CHECK(base.labelY == Catch::Approx(20.0 + 1.08 * 48.0).epsilon(1e-3));
+
+  // Picking hits the lifted auto-placed label at 1"=40', not only the old stored insY.
+  CHECK(PickCadAnnotationAt(static_cast<float>(base.labelX), static_cast<float>(base.labelY), st, 100.f, 1000.f) == 0);
+
+  // Setting overrides applies and can be undone.
+  std::vector<std::string> log;
+  const auto setText = propedit::SetTextNumber(st, 0, propedit::TextField::DimTextHeightModel, 3.5);
+  CHECK(setText.result == propedit::Result::Applied);
+  const auto setArrow = propedit::SetTextNumber(st, 0, propedit::TextField::DimArrowSizeModel, 2.25);
+  CHECK(setArrow.result == propedit::Result::Applied);
+  const auto overridden = propedit::ReadDimensionSizes(st, st.drawing.cadAnnotations[0]);
+  CHECK(overridden.textHeightModel == Catch::Approx(3.5));
+  CHECK(overridden.arrowSizeModel == Catch::Approx(2.25));
+
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.drawing.cadAnnotations[0].dimArrowSizeModel == 0.0);
+  CHECK(st.drawing.cadAnnotations[0].dimTextHeightModel == Catch::Approx(3.5));
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.drawing.cadAnnotations[0].dimTextHeightModel == 0.0);
+
+  // Zero and negative clear back to "follow the style"; NaN is rejected.
+  REQUIRE(propedit::SetTextNumber(st, 0, propedit::TextField::DimTextHeightModel, 4.0).result ==
+          propedit::Result::Applied);
+  CHECK(propedit::SetTextNumber(st, 0, propedit::TextField::DimTextHeightModel, 0.0).result ==
+        propedit::Result::Applied);
+  CHECK(st.drawing.cadAnnotations[0].dimTextHeightModel == 0.0);
+  CHECK(propedit::SetTextNumber(st, 0, propedit::TextField::DimArrowSizeModel, -5.0).result ==
+        propedit::Result::Unchanged);
+  CHECK(propedit::SetTextNumber(st, 0, propedit::TextField::DimTextHeightModel,
+                                std::numeric_limits<double>::quiet_NaN()).result == propedit::Result::Rejected);
+
+  // Editing Insertion X on an auto-placed dimension marks it user-placed without jumping Y back to stale insY.
+  const auto beforeMove = propedit::ReadDimensionSizes(st, st.drawing.cadAnnotations[0]);
+  REQUIRE(propedit::SetTextNumber(st, 0, propedit::TextField::InsertionX, 260.0).result ==
+          propedit::Result::Applied);
+  CHECK(st.drawing.cadAnnotations[0].dimTextUserPlaced);
+  CHECK(st.drawing.cadAnnotations[0].insX == Catch::Approx(260.f));
+  CHECK(st.drawing.cadAnnotations[0].insY == Catch::Approx(beforeMove.labelY).epsilon(1e-3));
+  REQUIRE(DoUndo(st, log));
+  CHECK_FALSE(st.drawing.cadAnnotations[0].dimTextUserPlaced);
+
+  // Non-dimension annotations reject dimension size overrides.
+  CadAnnotation txt;
+  txt.kind = CadAnnotation::Kind::Text;
+  st.drawing.cadAnnotations.push_back(txt);
+  CHECK(propedit::SetTextNumber(st, 1, propedit::TextField::DimTextHeightModel, 2.0).result ==
+        propedit::Result::Rejected);
 }

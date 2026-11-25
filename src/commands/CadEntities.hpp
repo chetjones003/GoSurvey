@@ -441,6 +441,14 @@ struct CadAnnotation {
   float dimSignedOffset = 0.f;
   /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.
   bool dimLinearVertical = false;
+  /// Issue #1676: one-off sizes for this dimension, in MODEL units — the same size in the drawing at
+  /// every annotation scale. 0 = follow the style (scaled by the annotation scale / Overall scale).
+  double dimTextHeightModel = 0.0;
+  double dimArrowSizeModel = 0.0;
+  /// Issue #1676: true once the label has a position of its own (dragged, or read from a file). While
+  /// false, the label is placed from the current text height, so it clears the dimension line at
+  /// every annotation scale instead of growing over it.
+  bool dimTextUserPlaced = false;
   /// If >= 0, this MTEXT is the viewport label for the survey point whose \c SurveyPoint::id is this
   /// value (bidirectional link; the other half is \c SurveyPoint::labelMtextAnnId).
   ///

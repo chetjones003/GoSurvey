@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -97,6 +98,13 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
   o["dimSignedOffset"] = a.dimSignedOffset;
   if (a.kind == CadAnnotation::Kind::DimLinear)
     o["dimLinearVertical"] = a.dimLinearVertical;
+  if (a.dimTextHeightModel > 0.0)  // issue #1676: one-off sizes, model units
+    o["dimTextHeightModel"] = a.dimTextHeightModel;
+  if (a.dimArrowSizeModel > 0.0)
+    o["dimArrowSizeModel"] = a.dimArrowSizeModel;
+  if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
+      a.kind == CadAnnotation::Kind::DimAngular)
+    o["dimTextUserPlaced"] = a.dimTextUserPlaced;
   o["surveyPointLabelForId"] = a.surveyPointLabelForId;
   if (a.surfaceLabelForId != 0) {
     o["surfaceLabelForId"] = a.surfaceLabelForId;
@@ -155,6 +163,12 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.dimSignedOffset = o.value("dimSignedOffset", a.dimSignedOffset);
   if (a.kind == CadAnnotation::Kind::DimLinear)
     a.dimLinearVertical = o.value("dimLinearVertical", a.dimLinearVertical);
+  // Issue #1676. Overrides must be positive and finite; anything else means "follow the style".
+  const auto positiveOrZero = [](double v) { return std::isfinite(v) && v > 0.0 ? v : 0.0; };
+  a.dimTextHeightModel = positiveOrZero(o.value("dimTextHeightModel", 0.0));
+  a.dimArrowSizeModel = positiveOrZero(o.value("dimArrowSizeModel", 0.0));
+  // A drawing saved before the flag existed keeps every label exactly where it was saved.
+  a.dimTextUserPlaced = o.value("dimTextUserPlaced", true);
   a.surveyPointLabelForId = o.contains("surveyPointLabelForId")
                                 ? o.value("surveyPointLabelForId", -1)
                                 : o.value("surveyPointLabelFor", -1);

@@ -1,6 +1,7 @@
 #include "CadPropertyEdit.hpp"
 
 #include "CadColor.hpp"
+#include "CadDimStroke.hpp"
 #include "CadLinetype.hpp"
 
 #include <algorithm>
@@ -79,12 +80,20 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
   switch (field) {
   case F::InsertionX: {
     const float next = static_cast<float>(value - st.drawing.worldDocumentOriginX);
-    if (next == ann.insX)
+    double curX = ann.insX, curY = ann.insY;
+    const bool isDim = CadAnnotationIsDimension(ann);
+    if (isDim && !ann.dimTextUserPlaced)
+      CadDimModelSpaceLabelPosition(st, ann, &curX, &curY);
+    if (next == static_cast<float>(curX))
       return {};
     PushUndoSnapshot(st, "Edit text X");
     if (isMtext) {  // the box travels with its insertion point
       ann.boxMinX += next - ann.insX;
       ann.boxMaxX += next - ann.insX;
+    }
+    if (isDim && !ann.dimTextUserPlaced) {  // issue #1676: lock Y to its drawn position before moving X
+      ann.insY = static_cast<float>(curY);
+      ann.dimTextUserPlaced = true;
     }
     ann.insX = next;
     BumpCadGpuCache(st);
@@ -92,12 +101,20 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
   }
   case F::InsertionY: {
     const float next = static_cast<float>(value - st.drawing.worldDocumentOriginY);
-    if (next == ann.insY)
+    double curX = ann.insX, curY = ann.insY;
+    const bool isDim = CadAnnotationIsDimension(ann);
+    if (isDim && !ann.dimTextUserPlaced)
+      CadDimModelSpaceLabelPosition(st, ann, &curX, &curY);
+    if (next == static_cast<float>(curY))
       return {};
     PushUndoSnapshot(st, "Edit text Y");
     if (isMtext) {
       ann.boxMinY += next - ann.insY;
       ann.boxMaxY += next - ann.insY;
+    }
+    if (isDim && !ann.dimTextUserPlaced) {  // issue #1676: lock X to its drawn position before moving Y
+      ann.insX = static_cast<float>(curX);
+      ann.dimTextUserPlaced = true;
     }
     ann.insY = next;
     BumpCadGpuCache(st);
@@ -133,6 +150,18 @@ Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field,
     BumpCadGpuCache(st);
     return {Result::Applied, {}};
   }
+  case F::DimTextHeightModel:
+  case F::DimArrowSizeModel: {
+    if (ann.kind != CadAnnotation::Kind::DimAligned && ann.kind != CadAnnotation::Kind::DimLinear &&
+        ann.kind != CadAnnotation::Kind::DimAngular)
+      return Rejected("Only dimensions have text and arrow size overrides.");
+    const bool text = field == F::DimTextHeightModel;
+    double& slot = text ? ann.dimTextHeightModel : ann.dimArrowSizeModel;
+    const char* label = text ? "Edit dimension text height" : "Edit dimension arrow size";
+    if (value <= 0.0)  // blank, zero or negative: follow the style again
+      return Store(st, slot, 0.0, label);
+    return Store(st, slot, value, label);
+  }
   case F::Content:
     break;
   }
@@ -146,6 +175,20 @@ Outcome SetTextContent(AppCommandState& st, int annotationIndex, const std::stri
   if (ann.kind == CadAnnotation::Kind::Table)
     return Rejected("A table's text is edited cell by cell.");
   return Store(st, ann.text, text, "Edit text");
+}
+
+DimDerivedSizes ReadDimensionSizes(const AppCommandState& st, const CadAnnotation& ann) {
+  DimDerivedSizes out;
+  const DimensionStyle& dimStyle = CadDimensionStyleForAnnotation(st, ann);
+  const float dimMup = CadDimModelUnitsPerPlottedInch(
+      ann, &dimStyle, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+      st.currentAnnotationScaleIndex, nullptr, true);
+  out.textHeightModel = CadDimTextHeightWorld(ann, &dimStyle, dimMup);
+  out.arrowSizeModel = (std::isfinite(ann.dimArrowSizeModel) && ann.dimArrowSizeModel > 0.0)
+      ? ann.dimArrowSizeModel
+      : static_cast<double>(dimStyle.arrowSizeInches) * dimMup * st.viewportDimArrowScale;
+  CadDimModelSpaceLabelPosition(st, ann, &out.labelX, &out.labelY);
+  return out;
 }
 
 GeneralAttrs ReadGeneralAttrs(const AppCommandState& st) {
