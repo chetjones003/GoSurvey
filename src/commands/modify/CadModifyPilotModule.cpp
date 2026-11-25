@@ -28,7 +28,7 @@ void FinishScaleTransform(AppCommandState& st, float bx, float by, float bz, flo
   log.push_back("SCALE complete.");
 }
 
-void FinishRotateTransform(AppCommandState& st, float bx, float by, float bz, float rad, bool copyMode,
+void FinishRotateTransform(AppCommandState& st, double bx, double by, double bz, double rad, bool copyMode,
                            std::vector<std::string>& log) {
   PushUndoSnapshot(st, copyMode ? "Rotate-copy" : "Rotate");
   const bool tilted = !CadWorkPlaneIsWorldXy(st);
@@ -40,8 +40,7 @@ void FinishRotateTransform(AppCommandState& st, float bx, float by, float bz, fl
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
-      RotateSelectionAboutAxis(st, {static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)},
-                               axisUnit, rad, log, "ROTATE");
+      RotateSelectionAboutAxis(st, {bx, by, bz}, axisUnit, rad, log, "ROTATE");
       if (!st.selectedSurveyPointIndices.empty())
         log.push_back("ROTATE COPY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
                       " survey point(s) not duplicated: rotation about a tilted axis is not"
@@ -582,10 +581,10 @@ StepSubmitResult RotateSession::onBlankEnter(AppCommandState& st, std::vector<st
 
 StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& trimmedLine,
                                        std::vector<std::string>& log) {
-  constexpr float kDegToRad = 0.01745329251994329577f;
+  constexpr double kDegToRad = 0.01745329251994329577;
   if (phase == RotatePhase::NeedBase) {
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    double px = 0.0, py = 0.0;
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.0, 0.0))
       return StepSubmitResult::Unparsed;
     baseX = px;
     baseY = py;
@@ -603,7 +602,7 @@ StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& t
       log.push_back("Reference — first point:");
       return StepSubmitResult::Handled;
     }
-    float deg = 0.f;
+    double deg = 0.0;
     if (!ParseAngleDegreesInternal(trimmedLine, &deg))
       return StepSubmitResult::Unparsed;
     FinishRotateTransform(st, baseX, baseY, baseZ, -deg * kDegToRad, copyMode, log);
@@ -612,8 +611,8 @@ StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& t
   if (phase == RotatePhase::Ref_WaitP1) {
     if (TryToggleRotateCopy(*this, trimmedLine, log))
       return StepSubmitResult::Handled;
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    double px = 0.0, py = 0.0;
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.0, 0.0))
       return StepSubmitResult::Unparsed;
     refX1 = px;
     refY1 = py;
@@ -624,8 +623,8 @@ StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& t
   if (phase == RotatePhase::Ref_WaitP2) {
     if (TryToggleRotateCopy(*this, trimmedLine, log))
       return StepSubmitResult::Handled;
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    double px = 0.0, py = 0.0;
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.0, 0.0))
       return StepSubmitResult::Unparsed;
     refX2 = px;
     refY2 = py;
@@ -643,20 +642,20 @@ StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& t
     }
     if (TryToggleRotateCopy(*this, trimmedLine, log))
       return StepSubmitResult::Handled;
-    float deg = 0.f;
+    double deg = 0.0;
     if (!ParseAngleDegreesInternal(trimmedLine, &deg))
       return StepSubmitResult::Unparsed;
-    const float thetaRef = std::atan2(refY2 - refY1, refX2 - refX1);
-    const float targetMath = MathAngleRadFromBearingCwNorthDeg(deg);
-    const float delta = NormalizeAngleRadMinusPiToPi(targetMath - thetaRef);
+    const double thetaRef = std::atan2(refY2 - refY1, refX2 - refX1);
+    const double targetMath = MathAngleRadFromBearingCwNorthDegD(deg);
+    const double delta = NormalizeAngleRadMinusPiToPi(targetMath - thetaRef);
     FinishRotateTransform(st, baseX, baseY, baseZ, delta, copyMode, log);
     return StepSubmitResult::Handled;
   }
   if (phase == RotatePhase::AnglePoints_WaitP1) {
     if (TryToggleRotateCopy(*this, trimmedLine, log))
       return StepSubmitResult::Handled;
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    double px = 0.0, py = 0.0;
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.0, 0.0))
       return StepSubmitResult::Unparsed;
     anglePt1X = px;
     anglePt1Y = py;
@@ -667,10 +666,10 @@ StepSubmitResult RotateSession::onText(AppCommandState& st, const std::string& t
   if (phase == RotatePhase::AnglePoints_WaitP2) {
     if (TryToggleRotateCopy(*this, trimmedLine, log))
       return StepSubmitResult::Handled;
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.f, 0.f))
+    double px = 0.0, py = 0.0;
+    if (!ParseStoragePoint(st, trimmedLine, &px, &py, false, 0.0, 0.0))
       return StepSubmitResult::Unparsed;
-    const float delta = RotateDeltaFromReferenceAndNewSegment(refX1, refY1, refX2, refY2, anglePt1X, anglePt1Y, px, py);
+    const double delta = RotateDeltaFromReferenceAndNewSegment(refX1, refY1, refX2, refY2, anglePt1X, anglePt1Y, px, py);
     FinishRotateTransform(st, baseX, baseY, baseZ, delta, copyMode, log);
     return StepSubmitResult::Handled;
   }
@@ -686,8 +685,8 @@ void RotateSession::onViewportPick(AppCommandState& st, const StepPickInput& pic
     return;
   }
   if (phase == RotatePhase::NeedBase) {
-    baseX = static_cast<float>(pick.localX);
-    baseY = static_cast<float>(pick.localY);
+    baseX = pick.localX;
+    baseY = pick.localY;
     baseZ = CadCommitElevation(st);
     phase = RotatePhase::NeedAngleOrReference;
     log.push_back(
@@ -695,51 +694,49 @@ void RotateSession::onViewportPick(AppCommandState& st, const StepPickInput& pic
     return;
   }
   if (phase == RotatePhase::NeedAngleOrReference) {
-    float rad = 0.f;
+    double rad = 0.0;
     if (CadWorkPlaneIsWorldXy(st)) {
-      rad = static_cast<float>(-std::atan2(pick.localX - baseX, pick.localY - baseY));
+      rad = -std::atan2(pick.localX - baseX, pick.localY - baseY);
     } else {
-      float ax = 0.f, ay = 0.f, az = 0.f;
-      CadResolvePickOnWorkPlaneAnchored(st, static_cast<float>(pick.localX), static_cast<float>(pick.localY),
-                                        pick.pickRay, baseX, baseY, baseZ, &ax, &ay, &az);
+      double ax = 0.0, ay = 0.0, az = 0.0;
+      CadResolvePickOnWorkPlaneAnchored(st, pick.localX, pick.localY, pick.pickRay, baseX, baseY, baseZ, &ax, &ay, &az);
       const ucs::Point2D loc = ucs::WorldToPlane(
-          CadWorkPlaneAnchoredAt(st, baseX, baseY, baseZ), {ax, ay, static_cast<double>(az)});
-      rad = -std::atan2(static_cast<float>(loc.x), static_cast<float>(loc.y));
+          CadWorkPlaneAnchoredAt(st, baseX, baseY, baseZ), {ax, ay, az});
+      rad = -std::atan2(loc.x, loc.y);
     }
     FinishRotateTransform(st, baseX, baseY, baseZ, rad, copyMode, log);
     return;
   }
   if (phase == RotatePhase::AfterReference_WaitAngleOrP) {
-    const float thetaRef = std::atan2(refY2 - refY1, refX2 - refX1);
-    const float delta = static_cast<float>(std::atan2(pick.localY - baseY, pick.localX - baseX) - thetaRef);
+    const double thetaRef = std::atan2(refY2 - refY1, refX2 - refX1);
+    const double delta = std::atan2(pick.localY - baseY, pick.localX - baseX) - thetaRef;
     FinishRotateTransform(st, baseX, baseY, baseZ, delta, copyMode, log);
     return;
   }
   if (phase == RotatePhase::Ref_WaitP1) {
-    refX1 = static_cast<float>(pick.localX);
-    refY1 = static_cast<float>(pick.localY);
+    refX1 = pick.localX;
+    refY1 = pick.localY;
     phase = RotatePhase::Ref_WaitP2;
     log.push_back("Reference — second point:");
     return;
   }
   if (phase == RotatePhase::Ref_WaitP2) {
-    refX2 = static_cast<float>(pick.localX);
-    refY2 = static_cast<float>(pick.localY);
+    refX2 = pick.localX;
+    refY2 = pick.localY;
     phase = RotatePhase::AfterReference_WaitAngleOrP;
     log.push_back("Enter new bearing from north ° (matches properties), or P for two-point line.");
     return;
   }
   if (phase == RotatePhase::AnglePoints_WaitP1) {
-    anglePt1X = static_cast<float>(pick.localX);
-    anglePt1Y = static_cast<float>(pick.localY);
+    anglePt1X = pick.localX;
+    anglePt1Y = pick.localY;
     phase = RotatePhase::AnglePoints_WaitP2;
     log.push_back("Angle — second point:");
     return;
   }
   if (phase == RotatePhase::AnglePoints_WaitP2) {
-    const float delta = RotateDeltaFromReferenceAndNewSegment(
-        refX1, refY1, refX2, refY2, anglePt1X, anglePt1Y, static_cast<float>(pick.localX),
-        static_cast<float>(pick.localY));
+    const double delta = RotateDeltaFromReferenceAndNewSegment(
+        refX1, refY1, refX2, refY2, anglePt1X, anglePt1Y, pick.localX, pick.localY);
     FinishRotateTransform(st, baseX, baseY, baseZ, delta, copyMode, log);
   }
 }

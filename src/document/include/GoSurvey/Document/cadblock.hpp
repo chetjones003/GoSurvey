@@ -35,15 +35,15 @@ inline constexpr int kCadBlockMaxWalk = 65536;
 }
 
 struct CadBlockXform {
-  float x = 0.f;
-  float y = 0.f;
-  float z = 0.f;
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
   float sx = 1.f;
   float sy = 1.f;
   float sz = 1.f;
   float rotX = 0.f;
   float rotY = 0.f;
-  float rotZ = 0.f;
+  double rotZ = 0.0;
 };
 
 struct CadBlockAttrDef {
@@ -652,13 +652,13 @@ struct CadDrawingEntityStore : CadEntityStore {
 }
 
 struct CadBlockWorldSeg {
-  float x0 = 0.f, y0 = 0.f, z0 = 0.f;
-  float x1 = 0.f, y1 = 0.f, z1 = 0.f;
+  double x0 = 0.0, y0 = 0.0, z0 = 0.0;
+  double x1 = 0.0, y1 = 0.0, z1 = 0.0;
   EntityAttributes attr;
 };
 
 struct CadBlockWorldPoint {
-  float x = 0.f, y = 0.f, z = 0.f;
+  double x = 0.0, y = 0.0, z = 0.0;
 };
 
 /// A B-rep solid from a placed block reference, transformed into world/storage coordinates (issue #475
@@ -687,34 +687,34 @@ struct CadBlockWorldSolid {
   return true;
 }
 
-inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
-                               float* wz) {
+inline void CadBlockXformPoint(const CadBlockXform& xf, double lx, double ly, double lz, double* wx, double* wy,
+                               double* wz) {
   assert(wx != nullptr);
   assert(wy != nullptr);
-  float x = lx * xf.sx;
-  float y = ly * xf.sy;
-  float z = lz * xf.sz;
-  if (xf.rotZ != 0.f) {
-    const float c = std::cos(xf.rotZ);
-    const float s = std::sin(xf.rotZ);
-    const float nx = x * c - y * s;
-    const float ny = x * s + y * c;
+  double x = lx * static_cast<double>(xf.sx);
+  double y = ly * static_cast<double>(xf.sy);
+  double z = lz * static_cast<double>(xf.sz);
+  if (xf.rotZ != 0.0) {
+    const double c = std::cos(xf.rotZ);
+    const double s = std::sin(xf.rotZ);
+    const double nx = x * c - y * s;
+    const double ny = x * s + y * c;
     x = nx;
     y = ny;
   }
   if (xf.rotY != 0.f) {
-    const float c = std::cos(xf.rotY);
-    const float s = std::sin(xf.rotY);
-    const float nx = x * c + z * s;
-    const float nz = -x * s + z * c;
+    const double c = std::cos(static_cast<double>(xf.rotY));
+    const double s = std::sin(static_cast<double>(xf.rotY));
+    const double nx = x * c + z * s;
+    const double nz = -x * s + z * c;
     x = nx;
     z = nz;
   }
   if (xf.rotX != 0.f) {
-    const float c = std::cos(xf.rotX);
-    const float s = std::sin(xf.rotX);
-    const float ny = y * c - z * s;
-    const float nz = y * s + z * c;
+    const double c = std::cos(static_cast<double>(xf.rotX));
+    const double s = std::sin(static_cast<double>(xf.rotX));
+    const double ny = y * c - z * s;
+    const double nz = y * s + z * c;
     y = ny;
     z = nz;
   }
@@ -724,42 +724,52 @@ inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, floa
     *wz = z + xf.z;
 }
 
+inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
+                               float* wz) {
+  double x = 0.0, y = 0.0, z = 0.0;
+  CadBlockXformPoint(xf, static_cast<double>(lx), static_cast<double>(ly), static_cast<double>(lz), &x, &y, &z);
+  *wx = static_cast<float>(x);
+  *wy = static_cast<float>(y);
+  if (wz)
+    *wz = static_cast<float>(z);
+}
+
 /// Rotation part of \ref CadBlockXformPoint — scale then rotZ/rotY/rotX, no translation.
 inline void CadBlockXformDirection(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
                                    float* wz) {
   assert(wx != nullptr);
   assert(wy != nullptr);
-  float x = lx * xf.sx;
-  float y = ly * xf.sy;
-  float z = lz * xf.sz;
-  if (xf.rotZ != 0.f) {
-    const float c = std::cos(xf.rotZ);
-    const float s = std::sin(xf.rotZ);
-    const float nx = x * c - y * s;
-    const float ny = x * s + y * c;
+  double x = static_cast<double>(lx) * static_cast<double>(xf.sx);
+  double y = static_cast<double>(ly) * static_cast<double>(xf.sy);
+  double z = static_cast<double>(lz) * static_cast<double>(xf.sz);
+  if (xf.rotZ != 0.0) {
+    const double c = std::cos(xf.rotZ);
+    const double s = std::sin(xf.rotZ);
+    const double nx = x * c - y * s;
+    const double ny = x * s + y * c;
     x = nx;
     y = ny;
   }
   if (xf.rotY != 0.f) {
-    const float c = std::cos(xf.rotY);
-    const float s = std::sin(xf.rotY);
-    const float nx = x * c + z * s;
-    const float nz = -x * s + z * c;
+    const double c = std::cos(static_cast<double>(xf.rotY));
+    const double s = std::sin(static_cast<double>(xf.rotY));
+    const double nx = x * c + z * s;
+    const double nz = -x * s + z * c;
     x = nx;
     z = nz;
   }
   if (xf.rotX != 0.f) {
-    const float c = std::cos(xf.rotX);
-    const float s = std::sin(xf.rotX);
-    const float ny = y * c - z * s;
-    const float nz = y * s + z * c;
+    const double c = std::cos(static_cast<double>(xf.rotX));
+    const double s = std::sin(static_cast<double>(xf.rotX));
+    const double ny = y * c - z * s;
+    const double nz = y * s + z * c;
     y = ny;
     z = nz;
   }
-  *wx = x;
-  *wy = y;
+  *wx = static_cast<float>(x);
+  *wy = static_cast<float>(y);
   if (wz)
-    *wz = z;
+    *wz = static_cast<float>(z);
 }
 
 namespace cadblock_detail {
@@ -958,7 +968,7 @@ inline void CadBlockApplyConnectionModeOffset(const CadBlockConnection& src, con
 }
 
 [[nodiscard]] inline CadBlockXform CadBlockCompose(const CadBlockXform& parent, const CadBlockXform& child) {
-  float wx = 0.f, wy = 0.f, wz = 0.f;
+  double wx = 0.0, wy = 0.0, wz = 0.0;
   CadBlockXformPoint(parent, child.x, child.y, child.z, &wx, &wy, &wz);
   CadBlockXform out = parent;
   out.x = wx;
@@ -1057,7 +1067,8 @@ inline void CadBlockCollectWorldConnections(const std::vector<CadBlockDefinition
   return true;
 }
 
-inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const CadBlockRef& ref, float* x, float* y,
+template <class T>
+inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const CadBlockRef& ref, T* x, T* y,
                                         std::string_view prim = {}, std::string_view group = {}) {
   assert(x != nullptr);
   assert(y != nullptr);
@@ -1073,32 +1084,32 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
         CadBlockEqCi(a.applyTo, "labels") &&
         (CadBlockEqCi(a.paramName, "DistNeg") || CadBlockEqCi(a.paramName, "DistPos")))
       continue;
-    const float v = CadBlockParamValue(ref, def, a.paramName);
+    const double v = static_cast<double>(CadBlockParamValue(ref, def, a.paramName));
     if (a.kind == CadBlockActionKind::Move) {
-      *x += a.dirX * v;
-      *y += a.dirY * v;
+      *x = static_cast<T>(static_cast<double>(*x) + static_cast<double>(a.dirX) * v);
+      *y = static_cast<T>(static_cast<double>(*y) + static_cast<double>(a.dirY) * v);
     } else if (a.kind == CadBlockActionKind::Stretch) {
-      const float px = *x - a.originX;
-      const float py = *y - a.originY;
-      const float along = px * a.dirX + py * a.dirY;
-      if (along >= a.threshold) {
-        *x += a.dirX * v;
-        *y += a.dirY * v;
+      const double px = static_cast<double>(*x) - static_cast<double>(a.originX);
+      const double py = static_cast<double>(*y) - static_cast<double>(a.originY);
+      const double along = px * static_cast<double>(a.dirX) + py * static_cast<double>(a.dirY);
+      if (along >= static_cast<double>(a.threshold)) {
+        *x = static_cast<T>(static_cast<double>(*x) + static_cast<double>(a.dirX) * v);
+        *y = static_cast<T>(static_cast<double>(*y) + static_cast<double>(a.dirY) * v);
       }
     } else if (a.kind == CadBlockActionKind::Rotate) {
-      const float c = std::cos(v);
-      const float s = std::sin(v);
-      const float dx = *x - a.originX;
-      const float dy = *y - a.originY;
-      *x = a.originX + dx * c - dy * s;
-      *y = a.originY + dx * s + dy * c;
+      const double c = std::cos(v);
+      const double s = std::sin(v);
+      const double dx = static_cast<double>(*x) - static_cast<double>(a.originX);
+      const double dy = static_cast<double>(*y) - static_cast<double>(a.originY);
+      *x = static_cast<T>(static_cast<double>(a.originX) + dx * c - dy * s);
+      *y = static_cast<T>(static_cast<double>(a.originY) + dx * s + dy * c);
     } else if (a.kind == CadBlockActionKind::Scale) {
-      const float f = (v == 0.f) ? 1.f : v;
-      *x = a.originX + (*x - a.originX) * f;
-      *y = a.originY + (*y - a.originY) * f;
+      const double f = (v == 0.0) ? 1.0 : v;
+      *x = static_cast<T>(static_cast<double>(a.originX) + (static_cast<double>(*x) - static_cast<double>(a.originX)) * f);
+      *y = static_cast<T>(static_cast<double>(a.originY) + (static_cast<double>(*y) - static_cast<double>(a.originY)) * f);
     } else if (a.kind == CadBlockActionKind::Flip) {
-      if (v >= 0.5f)
-        *x = 2.f * a.originX - *x;
+      if (v >= 0.5)
+        *x = static_cast<T>(2.0 * static_cast<double>(a.originX) - static_cast<double>(*x));
     }
   }
 }
@@ -1272,9 +1283,9 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
     const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
     const CadBlockRef localRef = fr.ref ? *fr.ref : CadBlockRef{};
     const CadBlockContent& c = def.content;
-    auto xformPt = [&](float lx, float ly, float lz, float* wx, float* wy, float* wz) {
-      float ax = lx;
-      float ay = ly;
+    auto xformPt = [&](double lx, double ly, double lz, double* wx, double* wy, double* wz) {
+      double ax = lx;
+      double ay = ly;
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
       CadBlockXformPoint(fr.xf, ax, ay, lz, wx, wy, wz);
     };
@@ -1284,8 +1295,8 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
         continue;
       CadBlockWorldSeg s;
       const CadLineRecord l = c.line(i);
-      xformPt(static_cast<float>(l.x0), static_cast<float>(l.y0), static_cast<float>(l.z0), &s.x0, &s.y0, &s.z0);
-      xformPt(static_cast<float>(l.x1), static_cast<float>(l.y1), static_cast<float>(l.z1), &s.x1, &s.y1, &s.z1);
+      xformPt(l.x0, l.y0, l.z0, &s.x0, &s.y0, &s.z0);
+      xformPt(l.x1, l.y1, l.z1, &s.x1, &s.y1, &s.z1);
       EntityAttributes pa{};
       if (i < c.userLineAttrs.size())
         pa = c.userLineAttrs[i];
@@ -1297,10 +1308,10 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       if (i < c.circleVis.size() && CadBlockVisHidden(c.circleVis[i], fr.vis))
         continue;
       const CadCircleRecord cr = c.circle(i);
-      const float cx = static_cast<float>(cr.cx);
-      const float cy = static_cast<float>(cr.cy);
-      const float cz = static_cast<float>(cr.cz);
-      const float r = static_cast<float>(cr.r);
+      const double cx = cr.cx;
+      const double cy = cr.cy;
+      const double cz = cr.cz;
+      const double r = cr.r;
       EntityAttributes pa{};
       if (i < c.userCircleAttrs.size())
         pa = c.userCircleAttrs[i];
@@ -1314,31 +1325,29 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       const bool circFlat = IsFlatNormal(cnx, cny, cnz);
       const ucs::Ucs cPlane =
           circFlat ? ucs::Ucs{}
-                   : CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(cz),
-                                static_cast<double>(cnx), static_cast<double>(cny), static_cast<double>(cnz));
-      // Step \p k in block space. The flat branch is the pre-REQ-312 float arithmetic, unchanged.
-      const auto stepPt = [&](int k, float* ox, float* oy, float* oz) {
+                   : CurvePlane(cx, cy, cz, static_cast<double>(cnx), static_cast<double>(cny),
+                                static_cast<double>(cnz));
+      const auto stepPt = [&](int k, double* ox, double* oy, double* oz) {
+        constexpr double kTwoPi = 6.28318530717958647692;
         if (circFlat) {
-          const float ang = (6.28318530718f * static_cast<float>(k)) / static_cast<float>(kSteps);
+          const double ang = (kTwoPi * static_cast<double>(k)) / static_cast<double>(kSteps);
           *ox = cx + r * std::cos(ang);
           *oy = cy + r * std::sin(ang);
           *oz = cz;
           return;
         }
-        constexpr double kTwoPi = 6.283185307179586;
-        const ray3d::Vec3 p =
-            CurvePointAt(cPlane, static_cast<double>(r), CurveSampleAngle(0.0, kTwoPi, k, kSteps));
-        *ox = static_cast<float>(p.x);
-        *oy = static_cast<float>(p.y);
-        *oz = static_cast<float>(p.z);
+        const ray3d::Vec3 p = CurvePointAt(cPlane, r, CurveSampleAngle(0.0, kTwoPi, k, kSteps));
+        *ox = p.x;
+        *oy = p.y;
+        *oz = p.z;
       };
-      float bx = 0.f, by = 0.f, bz = 0.f;
-      float px = 0.f, py = 0.f, pz = 0.f;
+      double bx = 0.0, by = 0.0, bz = 0.0;
+      double px = 0.0, py = 0.0, pz = 0.0;
       stepPt(0, &bx, &by, &bz);
       xformPt(bx, by, bz, &px, &py, &pz);
       for (int k = 1; k <= kSteps; ++k) {
         stepPt(k, &bx, &by, &bz);
-        float qx = 0.f, qy = 0.f, qz = 0.f;
+        double qx = 0.0, qy = 0.0, qz = 0.0;
         xformPt(bx, by, bz, &qx, &qy, &qz);
         out->push_back(CadBlockWorldSeg{px, py, pz, qx, qy, qz, ra});
         px = qx;
@@ -1414,9 +1423,9 @@ inline void CadBlockCollectWorldCenters(const std::vector<CadBlockDefinition>& d
     const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
     const CadBlockRef localRef = fr.ref ? *fr.ref : CadBlockRef{};
     const CadBlockContent& c = def.content;
-    auto emit = [&](float lx, float ly, float lz) {
-      float ax = lx;
-      float ay = ly;
+    auto emit = [&](double lx, double ly, double lz) {
+      double ax = lx;
+      double ay = ly;
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
       CadBlockWorldPoint p;
       CadBlockXformPoint(fr.xf, ax, ay, lz, &p.x, &p.y, &p.z);
@@ -1652,7 +1661,7 @@ inline void CadBlockCollectSnapPoints(const std::vector<CadBlockDefinition>& def
   for (const CadBlockWorldSeg& s : segs) {
     out->push_back(CadBlockWorldPoint{s.x0, s.y0, s.z0});
     out->push_back(CadBlockWorldPoint{s.x1, s.y1, s.z1});
-    out->push_back(CadBlockWorldPoint{0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), 0.5f * (s.z0 + s.z1)});
+    out->push_back(CadBlockWorldPoint{0.5 * (s.x0 + s.x1), 0.5 * (s.y0 + s.y1), 0.5 * (s.z0 + s.z1)});
   }
 }
 
@@ -1662,13 +1671,13 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
   std::vector<CadBlockWorldSeg> segs;
   EntityAttributes dummy;
   CadBlockCollectWorldLines(defs, ref, dummy, &segs);
-  *mnX = *mxX = ref.xf.x;
-  *mnY = *mxY = ref.xf.y;
+  *mnX = *mxX = static_cast<float>(ref.xf.x);
+  *mnY = *mxY = static_cast<float>(ref.xf.y);
   for (const CadBlockWorldSeg& s : segs) {
-    *mnX = std::min(*mnX, std::min(s.x0, s.x1));
-    *mxX = std::max(*mxX, std::max(s.x0, s.x1));
-    *mnY = std::min(*mnY, std::min(s.y0, s.y1));
-    *mxY = std::max(*mxY, std::max(s.y0, s.y1));
+    *mnX = std::min(*mnX, static_cast<float>(std::min(s.x0, s.x1)));
+    *mxX = std::max(*mxX, static_cast<float>(std::max(s.x0, s.x1)));
+    *mnY = std::min(*mnY, static_cast<float>(std::min(s.y0, s.y1)));
+    *mxY = std::max(*mxY, static_cast<float>(std::max(s.y0, s.y1)));
   }
   std::vector<CadAnnotation> anns;
   CadBlockCollectWorldAnnotations(defs, ref, &anns);
@@ -1702,55 +1711,55 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
 }
 
 [[nodiscard]] inline bool CadBlockHitWorld(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& ref,
-                                           float wx, float wy, float tol) {
+                                           double wx, double wy, double tol) {
   std::vector<CadBlockWorldSeg> segs;
   EntityAttributes dummy;
   CadBlockCollectWorldLines(defs, ref, dummy, &segs);
-  const float t2 = tol * tol;
-  const float dx0 = wx - ref.xf.x;
-  const float dy0 = wy - ref.xf.y;
+  const double t2 = tol * tol;
+  const double dx0 = wx - ref.xf.x;
+  const double dy0 = wy - ref.xf.y;
   if (dx0 * dx0 + dy0 * dy0 <= t2)
     return true;
   for (const CadBlockWorldSeg& s : segs) {
-    const float vx = s.x1 - s.x0;
-    const float vy = s.y1 - s.y0;
-    const float len2 = vx * vx + vy * vy;
-    float t = 0.f;
-    if (len2 > 1.e-20f)
-      t = std::clamp(((wx - s.x0) * vx + (wy - s.y0) * vy) / len2, 0.f, 1.f);
-    const float px = s.x0 + t * vx - wx;
-    const float py = s.y0 + t * vy - wy;
+    const double vx = s.x1 - s.x0;
+    const double vy = s.y1 - s.y0;
+    const double len2 = vx * vx + vy * vy;
+    double t = 0.0;
+    if (len2 > 1.e-24)
+      t = std::clamp(((wx - s.x0) * vx + (wy - s.y0) * vy) / len2, 0.0, 1.0);
+    const double px = s.x0 + t * vx - wx;
+    const double py = s.y0 + t * vy - wy;
     if (px * px + py * py <= t2)
       return true;
   }
   return false;
 }
 
-inline void CadBlockTranslate(CadBlockRef* r, float dx, float dy, float dz) {
+inline void CadBlockTranslate(CadBlockRef* r, double dx, double dy, double dz) {
   assert(r != nullptr);
   r->xf.x += dx;
   r->xf.y += dy;
   r->xf.z += dz;
 }
 
-inline void CadBlockRotateZ(CadBlockRef* r, float baseX, float baseY, float rad) {
+inline void CadBlockRotateZ(CadBlockRef* r, double baseX, double baseY, double rad) {
   assert(r != nullptr);
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  const float dx = r->xf.x - baseX;
-  const float dy = r->xf.y - baseY;
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  const double dx = r->xf.x - baseX;
+  const double dy = r->xf.y - baseY;
   r->xf.x = baseX + dx * c - dy * s;
   r->xf.y = baseY + dx * s + dy * c;
   r->xf.rotZ += rad;
 }
 
-inline void CadBlockScaleAbout(CadBlockRef* r, float baseX, float baseY, float factor) {
+inline void CadBlockScaleAbout(CadBlockRef* r, double baseX, double baseY, double factor) {
   assert(r != nullptr);
   r->xf.x = baseX + (r->xf.x - baseX) * factor;
   r->xf.y = baseY + (r->xf.y - baseY) * factor;
-  r->xf.sx *= factor;
-  r->xf.sy *= factor;
-  r->xf.sz *= factor;
+  r->xf.sx = static_cast<float>(static_cast<double>(r->xf.sx) * factor);
+  r->xf.sy = static_cast<float>(static_cast<double>(r->xf.sy) * factor);
+  r->xf.sz = static_cast<float>(static_cast<double>(r->xf.sz) * factor);
 }
 
 inline void CadBlockMirror(CadBlockRef* r, float ax, float ay, float bx, float by) {

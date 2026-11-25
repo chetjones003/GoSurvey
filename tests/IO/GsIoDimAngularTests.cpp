@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -16,6 +17,7 @@
 #include "CadCommands.hpp"
 #include "CadDimGeom.hpp"
 #include "CadField.hpp"
+#include "CadSnap.hpp"
 #include "GsAnnotationJson.hpp"
 #include "GsIo.hpp"
 #include "GsIoTestSupport.hpp"
@@ -231,4 +233,150 @@ TEST_CASE("DIMLINEAR and DIMALIGNED keep double measurement precision at large s
   CadDimRefreshMeasurementText(&linH, st.drawing.activeDimensionStyle, angle);
   CHECK(linH.text == "1000000.02");  // 1000000.025 exact rounds half-to-even in %.2f
   CHECK(CadAnnotationResolvedText(st, aligned) == "1000000.03");
+}
+
+// Issue #1668 follow-up: OSNAP (CadSnap::FindBest) and ROTATE (in-place, copy mode, reference mode,
+// and rotated BlockRefs) must preserve double precision end-to-end so snapping to a bolt pattern at
+// survey-scale coordinates, rotating by exact 62 degrees CW, and snapping DIMANGULAR onto the result
+// measures exact 62d00'00.0" (not ~62d01'07.7" from float pivot/snap quantization).
+TEST_CASE("OSNAP + ROTATE + DIMANGULAR stay exact at survey-scale coordinates (issue #1668)",
+          "[payload][dimangular][snap][rotate]") {
+  constexpr double kPi = 3.14159265358979323846;
+  const double cx = 3230.9697, cy = 5290.5486;
+  const double radius = 0.75;  // typical bolt circle radius (ft)
+
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnapCenter = true;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = true;
+  st.angleDisplayType = static_cast<int>(AngleDisplayType::DegMinSec);
+  st.angleDisplayPrecision = 1;
+
+  // Bolt-pattern pivot circle (index 0) and one bolt-hole circle (index 1) + reference radial line (index 0).
+  st.drawing.pushCircle(CadCircleRecord{cx, cy, 0.0, 0.1});
+  st.drawing.userCircleAttrs.push_back(EntityAttributes{});
+  st.drawing.pushCircle(CadCircleRecord{cx, cy + radius, 0.0, 0.05});
+  st.drawing.userCircleAttrs.push_back(EntityAttributes{});
+  st.drawing.pushLine(CadLineRecord{cx, cy, 0.0, cx, cy + radius, 0.0});
+  st.drawing.userLineAttrs.push_back(EntityAttributes{});
+
+  // 1. OSNAP must return exact double coordinates (not float-quantized ~0.0005 ft off).
+  const CadSnap::Kind centerOnly = CadSnap::Kind::Center;
+  const CadSnap::Hit snapPivot = CadSnap::FindBest(cx + 0.01, cy - 0.01, st, true, 0.2f, {}, nullptr, &centerOnly);
+  REQUIRE(snapPivot.valid);
+  CHECK(snapPivot.kind == CadSnap::Kind::Center);
+  CHECK(std::fabs(snapPivot.x - cx) < 1e-12);
+  CHECK(std::fabs(snapPivot.y - cy) < 1e-12);
+
+  const CadSnap::Hit snapLineEnd = CadSnap::FindBest(cx + 0.01, cy - 0.01, st, true, 0.2f);
+  REQUIRE(snapLineEnd.valid);
+  CHECK(snapLineEnd.kind == CadSnap::Kind::Endpoint);
+  CHECK(std::fabs(snapLineEnd.x - cx) < 1e-12);
+  CHECK(std::fabs(snapLineEnd.y - cy) < 1e-12);
+
+  const CadSnap::Hit snapOrigBolt = CadSnap::FindBest(cx + 0.01, cy + radius + 0.01, st, true, 0.1f);
+  REQUIRE(snapOrigBolt.valid);
+  CHECK(std::fabs(snapOrigBolt.x - cx) < 1e-12);
+  CHECK(std::fabs(snapOrigBolt.y - (cy + radius)) < 1e-12);
+
+  std::vector<std::string> log;
+  auto submitCmd = [&](const char* text) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s", text);
+    ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), st, log);
+  };
+
+  // 2. ROTATE with Copy mode by exact 62 degrees CW about the OSNAP-picked center.
+  st.selection = {
+      SelectedEntity{SelectedEntity::Type::Circle, 1},
+      SelectedEntity{SelectedEntity::Type::LineSeg, 0},
+  };
+  submitCmd("ROTATE");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  submitCmd("C");
+  submitCmd("62");
+  REQUIRE(st.drawing.circleCount() == 3);
+  REQUIRE(st.drawing.lineCount() == 2);
+
+  // Verify the rotated bolt-hole circle (index 2) lies at exact 62 deg CW from +Y around (cx, cy).
+  const CadCircleRecord rotBolt = st.drawing.circle(2);
+  const double expectedRad = 62.0 * kPi / 180.0;
+  const double expectedX = cx + radius * std::sin(expectedRad);
+  const double expectedY = cy + radius * std::cos(expectedRad);
+  CHECK(std::fabs(rotBolt.cx - expectedX) < 1e-12);
+  CHECK(std::fabs(rotBolt.cy - expectedY) < 1e-12);
+
+  const std::filesystem::path path = UniqueGsPath("bolt-pattern-rotation");
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(st, path, log));
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  // 3. Snap the rotated bolt hole after reopening and measure it with DIMANGULAR.
+  const CadSnap::Hit snapRotBolt = CadSnap::FindBest(expectedX + 0.01, expectedY - 0.01, st, true, 0.1f);
+  REQUIRE(snapRotBolt.valid);
+  CHECK(std::fabs(snapRotBolt.x - expectedX) < 1e-12);
+  CHECK(std::fabs(snapRotBolt.y - expectedY) < 1e-12);
+
+  submitCmd("DIMANGULAR");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  SubmitViewportPick(st, snapOrigBolt.x, snapOrigBolt.y, log);
+  SubmitViewportPick(st, snapRotBolt.x, snapRotBolt.y, log);
+  SubmitViewportPick(st, cx + 0.25, cy + 0.4, log);
+  REQUIRE(st.drawing.cadAnnotations.size() == 1);
+  const CadAnnotation& dim = st.drawing.cadAnnotations.back();
+  REQUIRE(dim.kind == CadAnnotation::Kind::DimAngular);
+  float r1 = 0.f, r2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
+  REQUIRE(CadDimAngularComputeFrame(dim, &r1, &r2, &sweep, &bisx, &bisy, &theta));
+  const double arcSecondsOff = std::fabs(theta * 180.0 / kPi - 62.0) * 3600.0;
+  CHECK(arcSecondsOff < 1e-5);
+  CancelActiveCommand(st, log);  // DIMANGULAR stays armed for another dimension until ESC
+
+  // 4. In-place ROTATE by exact 62 degrees CW (non-copy path) + Reference-mode ROTATE.
+  st.selection = {SelectedEntity{SelectedEntity::Type::Circle, 1}};
+  submitCmd("ROTATE");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  submitCmd("62");
+  const CadCircleRecord inPlaceBolt = st.drawing.circle(1);
+  CHECK(std::fabs(inPlaceBolt.cx - expectedX) < 1e-12);
+  CHECK(std::fabs(inPlaceBolt.cy - expectedY) < 1e-12);
+
+  // Reference mode: rotate circle 1 back from 62 deg CW to 0 deg (north) using snapped points.
+  st.selection = {SelectedEntity{SelectedEntity::Type::Circle, 1}};
+  submitCmd("ROTATE");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  submitCmd("R");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  SubmitViewportPick(st, snapRotBolt.x, snapRotBolt.y, log);
+  submitCmd("0");
+  const CadCircleRecord restoredBolt = st.drawing.circle(1);
+  CHECK(std::fabs(restoredBolt.cx - cx) < 1e-12);
+  CHECK(std::fabs(restoredBolt.cy - (cy + radius)) < 1e-12);
+
+  // 5. Block INSERT bolt pattern rotated 62 deg CW around (cx, cy) also preserves double precision.
+  CadBlockDefinition bdef;
+  bdef.name = "BOLT_PAT";
+  bdef.content.pushCircle(CadCircleRecord{0.0, radius, 0.0, 0.05});
+  bdef.content.userCircleAttrs.push_back(EntityAttributes{});
+  st.drawing.blockDefs.push_back(bdef);
+
+  CadBlockRef bref;
+  bref.defName = "BOLT_PAT";
+  bref.xf.x = cx;
+  bref.xf.y = cy;
+  st.drawing.cadBlockRefs.push_back(bref);
+  st.drawing.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  st.selection = {SelectedEntity{SelectedEntity::Type::BlockRef, 0}};
+  submitCmd("ROTATE");
+  SubmitViewportPick(st, snapPivot.x, snapPivot.y, log);
+  submitCmd("62");
+
+  std::vector<CadBlockWorldPoint> centers;
+  CadBlockCollectWorldCenters(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], &centers);
+  REQUIRE(centers.size() == 1);
+  const double blockAngleDeg = std::atan2(centers[0].x - cx, centers[0].y - cy) * 180.0 / kPi;
+  CHECK(std::fabs(blockAngleDeg - 62.0) * 3600.0 < 1e-5);
 }

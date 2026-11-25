@@ -440,7 +440,7 @@ struct CadAnnotation {
   double dimAngVertexX = 0.0;
   double dimAngVertexY = 0.0;
   /// Signed distance from chord midpoint to dimension line: aligned uses N=(-T.y,T.x) with T=normalize(e2-e1); linear uses N=(0,1) for horizontal span or N=(1,0) for vertical span; angular uses arc radius (world units).
-  float dimSignedOffset = 0.f;
+  double dimSignedOffset = 0.0;
   /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.
   bool dimLinearVertical = false;
   /// Issue #1676: one-off sizes for this dimension, in MODEL units — the same size in the drawing at
@@ -1589,7 +1589,7 @@ static_assert(std::is_same_v<decltype(CadFilledRegion::vertsXyz)::value_type, do
               "CadFilledRegion::vertsXyz must stay double (ADR-054 (a), REQ-101)");
 
 /// The pattern linework of every patterned hatch (REQ-043), derived from the filled regions and kept
-/// outside every undo snapshot, like the solid display cache. ef RefreshHatchDisplayGeometry keeps it
+/// outside every undo snapshot, like the solid display cache. \ref RefreshHatchDisplayGeometry keeps it
 /// current; the renderer draws it as depth-tested lines.
 struct CadHatchDisplayGeometry {
   /// Parallel to the drawing's filled regions: x0,y0,x1,y1 per segment in local coordinates, in double

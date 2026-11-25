@@ -264,10 +264,10 @@ TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue
   CadBlockParamSet(&r, "DistNeg", 1.f);
   segs.clear();
   CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
-  float minY = 1.e9f;
+  double minY = 1.e9;
   for (const CadBlockWorldSeg& s : segs)
     minY = std::min(minY, std::min(s.y0, s.y1));
-  CHECK(minY == Catch::Approx(-3.f));
+  CHECK(minY == Catch::Approx(-3.0));
 
   std::vector<CadAnnotation> annsAtStretch;
   CadBlockCollectWorldAnnotations(defs, r, &annsAtStretch);

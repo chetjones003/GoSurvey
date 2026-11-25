@@ -239,7 +239,7 @@ inline bool CadDimBuildAngularStrokes(const CadAnnotation& a, const CadDimStroke
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(a, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return false;
-  const float R = (std::max)(a.dimSignedOffset, 1.e-6f);
+  const float R = (std::max)(a.dimSignedOffset, 1.e-6);
   const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
   const float hWorld = CadDimTextHeightWorld(a, p.style, p.modelUnitsPerPlottedInch);  // issue #1676
   const float gapWorld = p.style ? static_cast<float>(StyleNumber(p.style->props, "offsetFromOrigin", .012)) * p.modelUnitsPerPlottedInch :
@@ -316,7 +316,7 @@ inline bool CadDimBuildWorldStrokes(const CadAnnotation& a, const CadDimStrokePa
     if (a.kind == CadAnnotation::Kind::DimAngular) {
       float a1 = 0, a2 = 0, sweep = 0, bx = 0, by = 0, theta = 0;
       if (CadDimAngularComputeFrame(a, &a1, &a2, &sweep, &bx, &by, &theta)) {
-        const float R = (std::max)(a.dimSignedOffset, 1.e-6f);
+        const float R = (std::max)(a.dimSignedOffset, 1.e-6);
         const float midAng = a1 + 0.5f * sweep;
         out->labelX = static_cast<float>(a.dimAngVertexX + std::cos(midAng) * R + bx * 1.12f * h);
         out->labelY = static_cast<float>(a.dimAngVertexY + std::sin(midAng) * R + by * 1.12f * h);

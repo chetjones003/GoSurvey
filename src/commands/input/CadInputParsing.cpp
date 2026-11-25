@@ -33,10 +33,14 @@
 #include <utility>
 #include <vector>
 
-float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
-  constexpr float kDegToRad = 0.01745329251994329577f;
-  const float br = bearingDegClockwiseFromNorth * kDegToRad;
+double MathAngleRadFromBearingCwNorthDegD(double bearingDegClockwiseFromNorth) {
+  constexpr double kDegToRad = 0.01745329251994329577;
+  const double br = bearingDegClockwiseFromNorth * kDegToRad;
   return std::atan2(std::cos(br), std::sin(br));
+}
+
+float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
+  return static_cast<float>(MathAngleRadFromBearingCwNorthDegD(static_cast<double>(bearingDegClockwiseFromNorth)));
 }
 
 float BearingCwNorthDegFromMathAngleRad(float mathAngleRadFromEastCcw) {
@@ -172,7 +176,7 @@ static bool PeelOptionalPointZ(const std::string& raw, std::string* outXy, doubl
 // coordinate near 5,000 ft is only good to ~0.0005 ft — a minute of arc over a 1 ft ray.
 static bool ParseStoragePointCore(AppCommandState& st, const std::string& raw, double* lx, double* ly,
                                   double* outWorldZ, bool allowRelative, double baseLocalX, double baseLocalY,
-                                  const float* baseWorldZ) {
+                                  const float* baseWorldZ, bool requireFloatOutput) {
   if (!lx || !ly)
     return false;
   // A Z typed for an EARLIER point describes that point, not this one — including as the base of
@@ -202,8 +206,12 @@ static bool ParseStoragePointCore(AppCommandState& st, const std::string& raw, d
   const double baseZ =
       baseWorldZ ? static_cast<double>(*baseWorldZ) : static_cast<double>(CadWorkPlaneElevation(st));
 
-  const double baseWx = baseLocalX + CadCoord::WorldOriginX(st);
-  const double baseWy = baseLocalY + CadCoord::WorldOriginY(st);
+  double baseWx = 0.0, baseWy = 0.0;
+  CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
+  const auto validLocal = [requireFloatOutput](double value) {
+    return std::isfinite(value) &&
+           (!requireFloatOutput || std::abs(value) <= std::numeric_limits<float>::max());
+  };
 
   if (!ucs::IsWorld(st.activeUcs)) {
     double a = 0.;
@@ -226,7 +234,7 @@ static bool ParseStoragePointCore(AppCommandState& st, const std::string& raw, d
     if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
       return false;
     CadCoord::LocalFromWorld(st, world.x, world.y, lx, ly);
-    if (!std::isfinite(*lx) || !std::isfinite(*ly))
+    if (!validLocal(*lx) || !validLocal(*ly))
       return false;
     if (outWorldZ)
       *outWorldZ = world.z;
@@ -251,7 +259,7 @@ static bool ParseStoragePointCore(AppCommandState& st, const std::string& raw, d
   if (!ParseWorldPointD(xy, &wx, &wy, allowRelative, baseWx, baseWy))
     return false;
   CadCoord::LocalFromWorld(st, wx, wy, lx, ly);
-  if (!std::isfinite(*lx) || !std::isfinite(*ly))
+  if (!validLocal(*lx) || !validLocal(*ly))
     return false;
   if (hasZ) {
     const double z = relText ? baseZ + typedZ : typedZ;
@@ -275,20 +283,16 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
   if (!lx || !ly)
     return false;
   double x = 0.0, y = 0.0;
-  if (!ParseStoragePointCore(st, raw, &x, &y, outWorldZ, allowRelative, baseLocalX, baseLocalY, baseWorldZ))
+  if (!ParseStoragePointCore(st, raw, &x, &y, outWorldZ, allowRelative, baseLocalX, baseLocalY, baseWorldZ, true))
     return false;
-  const float fx = static_cast<float>(x);
-  const float fy = static_cast<float>(y);
-  if (!std::isfinite(fx) || !std::isfinite(fy))
-    return false;
-  *lx = fx;
-  *ly = fy;
+  *lx = static_cast<float>(x);
+  *ly = static_cast<float>(y);
   return true;
 }
 
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, double* lx, double* ly, bool allowRelative,
                        double baseLocalX, double baseLocalY, const float* baseWorldZ) {
-  return ParseStoragePointCore(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY, baseWorldZ);
+  return ParseStoragePointCore(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY, baseWorldZ, false);
 }
 
 // The 38 existing call sites keep this two-coordinate signature: they ask "where is this point?",

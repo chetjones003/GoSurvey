@@ -564,7 +564,7 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, const stepeng
     // Bounded to a half-circle of drag range either way (NormalizeAngleRadMinusPiToPi) — a
     // deliberately simple, directionally-honest live-preview approximation; a change larger than
     // that is what Total mode's typed value is for.
-    const float delta = NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle);
+    const float delta = static_cast<float>(NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle));
     *outLen = static_cast<float>(std::max<double>(a.r * std::fabs(delta), 1e-6));
     return true;
   }

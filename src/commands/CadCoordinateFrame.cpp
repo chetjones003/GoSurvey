@@ -16,11 +16,11 @@ void LocalFromWorld(const AppCommandState& st, double wx, double wy, float* lx, 
   *ly = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
 }
 
-void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, double* wy) {
+void WorldFromLocal(const AppCommandState& st, double lx, double ly, double* wx, double* wy) {
   if (!wx || !wy)
     return;
-  *wx = static_cast<double>(lx) + st.drawing.worldDocumentOriginX;
-  *wy = static_cast<double>(ly) + st.drawing.worldDocumentOriginY;
+  *wx = lx + st.drawing.worldDocumentOriginX;
+  *wy = ly + st.drawing.worldDocumentOriginY;
 }
 
 void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {

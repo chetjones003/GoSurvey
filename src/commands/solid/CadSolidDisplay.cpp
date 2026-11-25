@@ -332,8 +332,10 @@ static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
   mix(st.drawing.cadBlockRefs.size());
   for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
     const CadBlockRef& r = st.drawing.cadBlockRefs[bi];
-    for (float v : {r.xf.x, r.xf.y, r.xf.z, r.xf.sx, r.xf.sy, r.xf.sz, r.xf.rotX, r.xf.rotY, r.xf.rotZ}) {
-      std::uint32_t bits = 0;
+    for (double v : {r.xf.x, r.xf.y, r.xf.z, static_cast<double>(r.xf.sx), static_cast<double>(r.xf.sy),
+                     static_cast<double>(r.xf.sz), static_cast<double>(r.xf.rotX), static_cast<double>(r.xf.rotY),
+                     r.xf.rotZ}) {
+      std::uint64_t bits = 0;
       std::memcpy(&bits, &v, sizeof(bits));
       mix(bits);
     }

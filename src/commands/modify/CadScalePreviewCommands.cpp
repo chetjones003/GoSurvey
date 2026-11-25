@@ -376,15 +376,17 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
     return false;
   using RP = stepengine::RotatePhase;
   if (rs->phase == RP::NeedAngleOrReference) {
-    const float dx = curX - rs->baseX;
-    const float dy = curY - rs->baseY;
-    *outThetaRad = -std::atan2(dx, dy);
+    const double dx = static_cast<double>(curX) - rs->baseX;
+    const double dy = static_cast<double>(curY) - rs->baseY;
+    *outThetaRad = static_cast<float>(-std::atan2(dx, dy));
   } else if (rs->phase == RP::AfterReference_WaitAngleOrP) {
-    const float thetaRef = std::atan2(rs->refY2 - rs->refY1, rs->refX2 - rs->refX1);
-    *outThetaRad = std::atan2(curY - rs->baseY, curX - rs->baseX) - thetaRef;
+    const double thetaRef = std::atan2(rs->refY2 - rs->refY1, rs->refX2 - rs->refX1);
+    *outThetaRad = static_cast<float>(std::atan2(static_cast<double>(curY) - rs->baseY,
+                                                 static_cast<double>(curX) - rs->baseX) -
+                                      thetaRef);
   } else if (rs->phase == RP::AnglePoints_WaitP2) {
-    *outThetaRad = RotateDeltaFromReferenceAndNewSegment(rs->refX1, rs->refY1, rs->refX2, rs->refY2,
-                                                         rs->anglePt1X, rs->anglePt1Y, curX, curY);
+    *outThetaRad = static_cast<float>(RotateDeltaFromReferenceAndNewSegment(
+        rs->refX1, rs->refY1, rs->refX2, rs->refY2, rs->anglePt1X, rs->anglePt1Y, curX, curY));
   } else {
     return false;
   }

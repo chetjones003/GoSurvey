@@ -505,6 +505,7 @@ void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log)
 
 bool ParseTwoDoubles(std::string s, double* x, double* y);
 bool ParseOneFloat(const std::string& s, float* v);
+bool ParseAngleDegreesInternal(const std::string& raw, double* degreesOut);
 bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut);
 void ExecuteGradingGroupCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);

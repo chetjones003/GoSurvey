@@ -1954,7 +1954,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
               const float dmx = .5f * (sx1 + sx2), dmy = .5f * (sy1 + sy2);
               m_State.dimGripTextAlongN = (annotation.insX - dmx) * nx + (annotation.insY - dmy) * ny;
               m_State.dimGripTextAlongT = (annotation.insX - dmx) * tx + (annotation.insY - dmy) * ty;
-              m_State.dimGripDownWorldX = static_cast<float>(m_Cursor.x); m_State.dimGripDownWorldY = static_cast<float>(m_Cursor.y);
+              m_State.dimGripDownWorldX = m_Cursor.x; m_State.dimGripDownWorldY = m_Cursor.y;
               m_State.dimGripMoveActive = true;
               m_GripMovedWithButton = false;
               if (changed) changed(); update(); return;
@@ -2551,7 +2551,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
-      const float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y);
+      const double x = m_Cursor.x, y = m_Cursor.y;
       switch (m_State.dimGripWhich) {
         case 0: ann.dimExt1X = m_Cursor.x; ann.dimExt1Y = m_Cursor.y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
         case 1: ann.dimExt2X = m_Cursor.x; ann.dimExt2Y = m_Cursor.y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;

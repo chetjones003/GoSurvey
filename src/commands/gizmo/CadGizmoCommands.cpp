@@ -662,10 +662,9 @@ static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& l
     // The Z ring is typed ROTATE exactly (REQ-060's agreement, byte-identical in plan); the X and Y
     // rings turn about their own UCS axis through the same anchor (D-2026-09-28-b).
     if (axis == 2)
-      ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
-                             static_cast<float>(anchor.z), static_cast<float>(dist), log);
+      ApplyRotationAboutUcsZ(st, anchor.x, anchor.y, anchor.z, dist, log);
     else
-      ApplyRotationAboutAxis(st, anchor, u, static_cast<float>(dist), log);
+      ApplyRotationAboutAxis(st, anchor, u, dist, log);
     char rbuf[128];
     std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS %s axis.",
                   dist * 180.0 / 3.14159265358979323846, axis == 0 ? "X" : axis == 1 ? "Y" : "Z");

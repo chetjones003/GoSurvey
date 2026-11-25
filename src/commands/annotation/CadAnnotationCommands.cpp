@@ -45,7 +45,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
       return;
-    const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+    const float R = std::max(ann->dimSignedOffset, 1.e-6);
     const float mid = a1 + 0.5f * sweep;
     const float mx = vx + std::cos(mid) * R;
     const float my = vy + std::sin(mid) * R;
@@ -299,7 +299,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return;
-  const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+  const float R = std::max(ann->dimSignedOffset, 1.e-6);
   const float mid = a1 + 0.5f * sweep;
   const float mx = vx + std::cos(mid) * R;
   const float my = vy + std::sin(mid) * R;
