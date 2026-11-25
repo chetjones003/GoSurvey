@@ -99,9 +99,9 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     att.insertY     = wy;
     att.scale       = st.pdfAttachScale;
     att.rotationDeg = st.pdfAttachRotDeg;
-    const int nSnapLines   = static_cast<int>(att.snapLinesFlat.size())    / 4;
-    const int nSnapCircles = static_cast<int>(att.snapCirclesCxCyR.size()) / 3;
-    const int nSnapText    = static_cast<int>(att.snapTextPos.size())      / 2;
+    const int nSnapLines   = att.snapData ? static_cast<int>(att.snapData->snapLinesFlat.size())    / 4 : 0;
+    const int nSnapCircles = att.snapData ? static_cast<int>(att.snapData->snapCirclesCxCyR.size()) / 3 : 0;
+    const int nSnapText    = att.snapData ? static_cast<int>(att.snapData->snapTextPos.size())      / 2 : 0;
     PushUndoSnapshot(st, "PDF attach");
     st.drawing.pdfAttachments.push_back(std::move(att));
     char snapMsg[128];
@@ -136,11 +136,11 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
   if (pdfIndex < 0 || pdfIndex >= static_cast<int>(st.drawing.pdfAttachments.size()))
     return;
   const PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(pdfIndex)];
-  const auto& snap = att.snapLinesFlat;
-  if (snap.empty()) {
+  if (!att.snapData || att.snapData->snapLinesFlat.empty()) {
     log.push_back("Vectorize — no line snap geometry in this PDF underlay.");
     return;
   }
+  const auto& snap = att.snapData->snapLinesFlat;
   PushUndoSnapshot(st, "Vectorize PDF");
   constexpr float kPi = 3.14159265f;
   const float cosR = std::cos(att.rotationDeg * kPi / 180.f);

@@ -113,11 +113,19 @@ static void AppendDashedPreviewSegment(std::vector<float>& lines, double ax, dou
                                        double bx, double by, double bz, double orthoHalfH, int heightPx) {
   const double dx = bx - ax, dy = by - ay, dz = bz - az;
   const double length = std::sqrt(dx * dx + dy * dy + dz * dz);
-  if (!(length > 1e-12) || heightPx <= 0)
+  if (!(length > 1e-12) || !std::isfinite(length) || heightPx <= 0 || !(orthoHalfH > 0.0) || !std::isfinite(orthoHalfH))
     return;
   const double worldPerPixel = 2.0 * orthoHalfH / heightPx;
   const double dash = 8.0 * worldPerPixel;
   const double period = 14.0 * worldPerPixel;
+  if (!(period > 0.0) || !std::isfinite(period))
+    return;
+  constexpr int kMaxPreviewDashes = 4096;
+  if (length / period > kMaxPreviewDashes) {
+    lines.insert(lines.end(), {static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(az),
+                               static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)});
+    return;
+  }
   for (double start = 0.0; start < length; start += period) {
     const double end = std::min(length, start + dash);
     const double t0 = start / length, t1 = end / length;

@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -821,4 +822,54 @@ TEST_CASE("Clearing CAD geometry replaces CAD content but keeps drawing setup", 
   CHECK(state.currentAnnotationScaleIndex == -1);
   CHECK(state.currentViewportZoomScaleIndex == -1);
   CHECK(state.nextEntityId == 1);
+}
+
+TEST_CASE("PdfAttachment snap payload is shared across undo snapshots instead of deep-copied", "[undo][pdf]") {
+  AppCommandState state;
+  PdfAttachment pdf;
+  pdf.filePath = "plans.pdf";
+  auto snapData = std::make_shared<PdfAttachment::SnapData>();
+  snapData->snapLinesFlat = {0.f, 0.f, 100.f, 0.f, 0.f, 0.f, 0.f, 100.f};
+  pdf.snapData = snapData;
+  state.drawing.pdfAttachments.push_back(std::move(pdf));
+
+  const DrawingGeometrySnapshot frame1 = CadCaptureGeometrySnapshot(state, "Edit 1");
+  const DrawingGeometrySnapshot frame2 = CadCaptureGeometrySnapshot(state, "Edit 2");
+
+  REQUIRE(frame1.content.pdfAttachments.size() == 1);
+  REQUIRE(frame2.content.pdfAttachments.size() == 1);
+  CHECK(frame1.content.pdfAttachments[0].snapData.get() == state.drawing.pdfAttachments[0].snapData.get());
+  CHECK(frame2.content.pdfAttachments[0].snapData.get() == state.drawing.pdfAttachments[0].snapData.get());
+  CHECK(state.drawing.pdfAttachments[0].snapData.use_count() == 4);
+}
+
+TEST_CASE("ARRAY rejects runaway instance counts before allocating", "[array][memory]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  state.drawing.pushCircle(CadCircleRecord{0.0, 0.0, 0.0, 1.0});
+  EnsureAttrCounts(state);
+  state.selection.push_back({SelectedEntity::Type::Circle, 0});
+
+  auto submit = [&](const char* cmd) {
+    char buf[128]{};
+    std::snprintf(buf, sizeof(buf), "%s", cmd);
+    ProcessCommandLineSubmit(buf, sizeof(buf), state, log);
+  };
+
+  submit("ARRAY");
+  submit("R");
+  submit("1e25");   // float larger than int64 must be rejected without overflow
+  CHECK(state.drawing.circleCount() == 1);
+  CHECK(log.back().find("maximum") != std::string::npos);
+
+  submit("50000");  // exceeds 10,000 cap
+  CHECK(state.drawing.circleCount() == 1);
+  REQUIRE(!log.empty());
+  CHECK(log.back().find("maximum") != std::string::npos);
+
+  submit("200");
+  submit("1");
+  submit("200");  // 200 x 200 = 40,000 exceeds 10,000 cap
+  CHECK(state.drawing.circleCount() == 1);
+  CHECK(log.back().find("cannot exceed") != std::string::npos);
 }

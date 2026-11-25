@@ -251,7 +251,7 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
                         const std::vector<double>* V, const std::vector<int>* O,
                         const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
                         float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
-                        double viewAnchorY) {
+                        double viewAnchorY, float clipHalfExtent = 0.f) {
   if (!V || !O || O->size() < 2)
     return;
   const int np = static_cast<int>(O->size()) - 1;
@@ -353,13 +353,13 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
       }
     }
     const int chainN = static_cast<int>(zs.size());
-    CadTessellateLinetypeChainVc(xy.data(), chainN, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
+    CadTessellateLinetypeChainVc(xy.data(), chainN, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data(), clipHalfExtent);
   }
 }
 
 void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z, float dashPatScale,
                        const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB,
-                       double viewAnchorX, double viewAnchorY) {
+                       double viewAnchorX, double viewAnchorY, float clipHalfExtent = 0.f) {
   if (a.r <= 1e-6f || n < 2)
     return;
   float rgba[4];
@@ -385,7 +385,7 @@ void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z,
       xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
       zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
     }
-    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out, zs.data());
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out, zs.data(), clipHalfExtent);
     return;
   }
   for (int i = 0; i <= n; ++i) {
@@ -396,12 +396,12 @@ void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z,
     xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + dr * c);
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + dr * s);
   }
-  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out);
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out, nullptr, clipHalfExtent);
 }
 
 void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n, float z, float dashPatScale,
                            const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB,
-                           double viewAnchorX, double viewAnchorY) {
+                           double viewAnchorX, double viewAnchorY, float clipHalfExtent = 0.f) {
   const float ma = std::hypot(el.majVx, el.majVy);
   if (ma < 1e-8f || n < 3)
     return;
@@ -433,7 +433,7 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
       xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
       zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
     }
-    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out, zs.data());
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out, zs.data(), clipHalfExtent);
     return;
   }
   for (int i = 0; i <= n; ++i) {
@@ -443,7 +443,7 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
     xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + ux * (dma * c0) + px * (dmb * s0));
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
-  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out, nullptr, clipHalfExtent);
 }
 
 /// REQ-443: a spline as a chain of chords no further than \p chordTolerance from the curve, dashed to its
@@ -452,7 +452,7 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
 /// tessellation already returns to its first point.
 void AppendSplineVcDashed(std::vector<float>& out, const CadSpline& sp, double chordTolerance, float dashPatScale,
                           const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG,
-                          float defB, double viewAnchorX, double viewAnchorY) {
+                          float defB, double viewAnchorX, double viewAnchorY, float clipHalfExtent = 0.f) {
   std::vector<ray3d::Vec3> pts;
   spline::Tessellate(sp, chordTolerance, &pts);
   if (pts.size() < 2)
@@ -467,13 +467,13 @@ void AppendSplineVcDashed(std::vector<float>& out, const CadSpline& sp, double c
     zs[i] = static_cast<float>(pts[i].z);
   }
   CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba, &out,
-                               zs.data());
+                               zs.data(), clipHalfExtent);
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                           float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
                           float defG, float defB, double viewAnchorX, double viewAnchorY, float nx = kFlatNormalX,
-                          float ny = kFlatNormalY, float nz = kFlatNormalZ) {
+                          float ny = kFlatNormalY, float nz = kFlatNormalZ, float clipHalfExtent = 0.f) {
   if (r <= 1e-6f || segments < 1)
     return;
   float rgba[4];
@@ -498,7 +498,7 @@ void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, 
       xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
       zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
     }
-    CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out, zs.data());
+    CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out, zs.data(), clipHalfExtent);
     return;
   }
   for (int i = 0; i <= segments; ++i) {
@@ -509,7 +509,7 @@ void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, 
     xy[static_cast<size_t>(i * 2)] = rx;
     xy[static_cast<size_t>(i * 2 + 1)] = ry;
   }
-  CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out);
+  CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out, nullptr, clipHalfExtent);
 }
 
 /// A snap glyph's drawing frame: the point it marks, plus the camera's right/up axes in world
@@ -2510,185 +2510,12 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     ReleaseSolidGpu();
   }
 
-  // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
-  // and behind outlines. Each loop is fan-triangulated and INVERTed into the stencil (concave + holes via
-  // even-odd parity); a covering quad then fills where parity is odd and resets the stencil to 0. ---
-  if (filledRegions && !filledRegions->empty()) {
-    glUseProgram(lineProgram_);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
-    glBindVertexArray(vaoLines_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
-    glDisable(GL_BLEND);
-    glEnable(GL_STENCIL_TEST);
-    std::vector<float> fan;
-    // Draw order: every opaque fill first, then translucent fills back to front. A blend only mixes with
-    // what is already in the frame, so a translucent fill drawn before an opaque one behind it would be
-    // painted over; sorting makes the result independent of entity order.
-    struct FillOrder { size_t index; bool translucent; double depth; };
-    std::vector<FillOrder> fillOrder;
-    fillOrder.reserve(filledRegions->size());
-    {
-      const ray3d::Vec3 fwd = cam.ForwardWorld();
-      for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
-        const CadFilledRegion& fr = (*filledRegions)[fi];
-        float alphaRgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
-        if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
-          const EntityAttributes& attr = (*filledRegionAttrs)[fi];
-          const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
-          ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, alphaRgba);
-        }
-        double cx = 0., cy = 0., cz = 0.;
-        const size_t vertexCount = fr.vertsXyz.size() / 3;
-        for (size_t v = 0; v < vertexCount; ++v) {
-          cx += fr.vertsXyz[v * 3 + 0];
-          cy += fr.vertsXyz[v * 3 + 1];
-          cz += fr.vertsXyz[v * 3 + 2];
-        }
-        if (vertexCount > 0) { cx /= static_cast<double>(vertexCount); cy /= static_cast<double>(vertexCount); cz /= static_cast<double>(vertexCount); }
-        // Distance along the view direction; larger is farther from the eye.
-        const double depth = (cx - viewAnchorX) * fwd.x + (cy - viewAnchorY) * fwd.y + cz * fwd.z;
-        fillOrder.push_back({fi, alphaRgba[3] < 0.999f, depth});
-      }
-      std::stable_sort(fillOrder.begin(), fillOrder.end(), [](const FillOrder& a, const FillOrder& b) {
-        if (a.translucent != b.translucent) return !a.translucent;
-        return a.translucent && a.depth > b.depth;
-      });
-    }
-    for (const FillOrder& order : fillOrder) {
-      const size_t fi = order.index;
-      const CadFilledRegion& fr = (*filledRegions)[fi];
-      if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
-        continue;
-      if (!fr.isSolid())
-        continue;  // line-pattern hatches are drawn as clipped lines in the viewport overlay (REQ-043)
-      // REQ-084 (d): a fill isolated out is not drawn.
-      if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
-          CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
-        continue;
-      if (!CadAnnotativeVisibleAtActiveScale(
-              fr.annotative, fr.annotativeVisibleScaleNames,
-              extended ? extended->annotationScales : nullptr,
-              extended ? extended->currentAnnotationScaleIndex : -1,
-              extended ? extended->annotativeViewport : nullptr,
-              extended ? extended->drawingModelUnitsPerPlottedInch : 0.f))
-        continue;
-      fan.clear();
-      double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
-      // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
-      // region is planar in practice, so the mean vertex Z is that plane and is exact whenever the
-      // loops share an elevation (REQ-058).
-      double zSum = 0.;
-      int zCount = 0;
-      auto vx = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 0]; };
-      auto vy = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 1]; };
-      auto vz = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 2]; };
-      for (size_t li = 0; li < fr.loopStart.size(); ++li) {
-        const int begin = fr.loopStart[li];
-        const int cnt = fr.loopCount(li);
-        if (cnt < 3)
-          continue;
-        for (int v = 1; v + 1 < cnt; ++v) {
-          fan.push_back(vx(begin) - static_cast<float>(viewAnchorX));
-          fan.push_back(vy(begin) - static_cast<float>(viewAnchorY));
-          fan.push_back(vz(begin));
-          fan.push_back(vx(begin + v) - static_cast<float>(viewAnchorX));
-          fan.push_back(vy(begin + v) - static_cast<float>(viewAnchorY));
-          fan.push_back(vz(begin + v));
-          fan.push_back(vx(begin + v + 1) - static_cast<float>(viewAnchorX));
-          fan.push_back(vy(begin + v + 1) - static_cast<float>(viewAnchorY));
-          fan.push_back(vz(begin + v + 1));
-        }
-        for (int v = 0; v < cnt; ++v) {
-          mnx = std::min(mnx, static_cast<double>(vx(begin + v)));
-          mxx = std::max(mxx, static_cast<double>(vx(begin + v)));
-          mny = std::min(mny, static_cast<double>(vy(begin + v)));
-          mxy = std::max(mxy, static_cast<double>(vy(begin + v)));
-          zSum += static_cast<double>(vz(begin + v));
-          ++zCount;
-        }
-      }
-      if (fan.empty())
-        continue;
-      // Pass 1: parity into stencil (no color write).
-      //
-      // Depth WRITES are off for this pass even when depth testing is on (REQ-064). The fan covers
-      // the whole loop including area that even-odd parity will subtract — the holes in a hatch with
-      // islands — so letting it write depth would occlude geometry seen through those holes. Only
-      // pass 2, which the stencil confines to the region's true area, writes depth.
-      const GLboolean wantDepthWrite = depthOn ? GL_TRUE : GL_FALSE;
-      glDepthMask(GL_FALSE);
-      glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-      glStencilFunc(GL_ALWAYS, 0, 0xFF);
-      glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
-      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(fan.size() * sizeof(float)), fan.data(), GL_STREAM_DRAW);
-      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fan.size() / 3));
-      glDepthMask(wantDepthWrite);
-      // Pass 2: fill the odd-parity region, resetting stencil to 0 as the covering quad draws.
-      float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
-      if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
-        const EntityAttributes& attr = (*filledRegionAttrs)[fi];
-        const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
-        ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, rgba);
-      }
-      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-      glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
-      glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
-      // Entity / layer transparency: the stencil confines the cover quad to each pixel once, so a plain
-      // alpha blend is exact. A see-through fill must not write depth, or it hides what lies behind it.
-      const bool translucent = rgba[3] < 0.999f;
-      if (translucent) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-      }
-      const float qx0 = static_cast<float>(mnx - viewAnchorX), qy0 = static_cast<float>(mny - viewAnchorY);
-      const float qx1 = static_cast<float>(mxx - viewAnchorX), qy1 = static_cast<float>(mxy - viewAnchorY);
-      const float qz = (zCount > 0) ? static_cast<float>(zSum / static_cast<double>(zCount)) : 0.f;
-
-      if (shadeSurfaces) {
-        // Shaded: the same stencil-confined quad, through the lit program. A filled region is
-        // planar and parallel to XY (ADR-025), so its normal is +Z — which is why this dims as the
-        // view orbits toward edge-on, and is the visible proof that lighting is live before REQ-063
-        // brings surfaces with varied normals.
-        const float sq[36] = {qx0, qy0, qz, 0.f, 0.f, 1.f, qx1, qy0, qz, 0.f, 0.f, 1.f,
-                              qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy0, qz, 0.f, 0.f, 1.f,
-                              qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy1, qz, 0.f, 0.f, 1.f};
-        glUseProgram(shadedProgram_);
-        glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
-        glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), rgba[0], rgba[1], rgba[2], rgba[3]);
-        const ray3d::Vec3 fwd = cam.ForwardWorld();
-        glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(fwd.x),
-                    static_cast<float>(fwd.y), static_cast<float>(fwd.z));
-        glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
-        glBindVertexArray(vaoShaded_);
-        glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(sq), sq, GL_STREAM_DRAW);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        // Back to the flat program and its buffer for the next region's parity pass.
-        glUseProgram(lineProgram_);
-        glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-        glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
-        glBindVertexArray(vaoLines_);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
-      } else {
-        glUniform4f(locCol, rgba[0], rgba[1], rgba[2], rgba[3]);
-        const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
-                                qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
-        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-      }
-      if (translucent) {
-        glDisable(GL_BLEND);
-        glDepthMask(wantDepthWrite);
-      }
-    }
-    glDisable(GL_STENCIL_TEST);
-    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glBindVertexArray(0);
+  // --- Solid-filled regions (ADR-011): ViewportHatchPass.cpp.
+  {
+    const ray3d::Vec3 fwd = cam.ForwardWorld();
+    DrawSolidFilledRegions(SolidFillPassInput{extended, filledRegions, filledRegionAttrs, drawingLayers, mvp, locMvp,
+                                              locCol, viewAnchorX, viewAnchorY, fwd.x, fwd.y, fwd.z, depthOn,
+                                              shadeSurfaces, kShadedAmbient});
   }
 
   // --- Patterned hatches (REQ-043): ViewportHatchPass.cpp.
@@ -2735,10 +2562,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         fbHeight != cachedFbHeight_ ||
         std::fabs(halfHd - cachedHalfHd_) > std::max(cachedHalfHd_ * 0.001, 1.e-12);
     if (cadGpuRevision != cachedCadGpuRevision_ || viewAnchorChanged || viewScaleChanged) {
-      cpuVcLines_.clear();
-      cpuVcCircles_.clear();
-      vcLineBatches_.clear();
-      vcCircleBatches_.clear();
+      cpuVcLines_.clear(); cpuVcCircles_.clear();
+      vcLineBatches_.clear(); vcCircleBatches_.clear();
       const float dashPatScale = std::max(halfW, halfH) * 0.045f;
 
       int lineVertTotal = 0;
@@ -2833,7 +2658,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             // The arc's own elevation, not 0 — a curve drawn on an ELEV work plane must render on
             // that plane, exactly as line segments already do (REQ-058).
             AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], arcSegs, a.z, dashPatScale, attr, lr, kLineDefaultR,
-                              kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+                              kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY, static_cast<float>(lineClipR));
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -2855,7 +2680,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 16, CircleTessellationSegmentCount(majLen, static_cast<double>(halfH), fbHeight,
                                                    tuning.arcCircleSmoothnessCap));
             AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, e.z, dashPatScale, attr, lr,
-                                   kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+                                   kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY, static_cast<float>(lineClipR));
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -2874,7 +2699,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
             AppendSplineVcDashed(cpuVcLines_, (*extended->splines)[i], splineTol, dashPatScale, attr, lr,
-                                 kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+                                 kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY, static_cast<float>(lineClipR));
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -2934,7 +2759,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
               }
               CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba,
-                                          &cpuVcLines_);
+                                          &cpuVcLines_, nullptr, static_cast<float>(lineClipR));
               lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
             }
           }
@@ -3031,7 +2856,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
           AppendChainEdgesVc(cpuVcLines_, *extended, V, O, Cl, At, kLineDefaultR, kLineDefaultG,
-                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
+                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY, static_cast<float>(lineClipR));
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         };
         appendChainStore(extended->polylineVerts, extended->polylineOffsets, extended->polylineClosed,
@@ -3106,7 +2931,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             CircleNormalAt(*extended->circleNormals, ci, &cnx, &cny, &cnz);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyZR[ci * 4], circlesCxCyZR[ci * 4 + 1], cr,
                                circSegs, circlesCxCyZR[ci * 4 + 2], dashPatScale, attr, lr, kCircDefaultR,
-                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY, cnx, cny, cnz);
+                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY, cnx, cny, cnz, static_cast<float>(lineClipR));
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
         if (circVert > circBatchStart && circBatchPx >= 0.f)
@@ -3120,6 +2945,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuVcCircles_.size() * sizeof(float)),
                    cpuVcCircles_.empty() ? nullptr : cpuVcCircles_.data(), GL_DYNAMIC_DRAW);
       glBindBuffer(GL_ARRAY_BUFFER, 0);
+      if (cpuVcLines_.capacity() > 262144 && cpuVcLines_.capacity() > cpuVcLines_.size() * 4) cpuVcLines_.shrink_to_fit();
+      if (cpuVcCircles_.capacity() > 262144 && cpuVcCircles_.capacity() > cpuVcCircles_.size() * 4) cpuVcCircles_.shrink_to_fit();
       cachedCadGpuRevision_ = cadGpuRevision;
       cachedViewAnchorX_ = panX;
       cachedViewAnchorY_ = panY;
