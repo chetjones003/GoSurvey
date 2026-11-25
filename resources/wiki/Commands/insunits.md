@@ -6,7 +6,8 @@
 Shows or sets the drawing unit.
 
 `INSUNITS` reports the unit. `INSUNITS <unit>` sets it: `inches` (`in`), `feet` (`ft`),
-`millimeters` (`mm`) or `meters` (`m`). Undo restores the previous unit. See also [[Commands/units]].
+`millimeters` (`mm`) or `meters` (`m`). Any other word sets the drawing to Unitless. Undo restores
+the previous unit. See also [[Commands/units]].
 
 ---
 

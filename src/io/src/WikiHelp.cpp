@@ -88,7 +88,6 @@ WikiHelpTarget TargetFromUiTooltip(std::string_view tooltip) {
       {"OSNAP (", "Object-Snaps"},
       {"ORTHO (", "Drafting-Aids"},
       {"POLAR (", "Drafting-Aids"},
-      {"GRID (", "Drafting-Aids"},
       {"3D Object snap", "Object-Snaps"},
       {"Ortho mode", "Drafting-Aids"},
       {"Polar tracking", "Drafting-Aids"},
@@ -144,12 +143,18 @@ void WikiHelpBuildIndex(const WikiBundle& bundle) {
   for (const std::string& slug : topicSlugs) {
     std::istringstream lines(bundle.pagesBySlug.at(slug).markdown);
     std::string line;
+    bool inFence = false;  // "# comment" lines inside ``` examples are not headings
     while (std::getline(lines, line)) {
+      const size_t indent = line.find_first_not_of(" \t");
+      if (indent != std::string::npos && line.compare(indent, 3, "```") == 0) {
+        inFence = !inFence;
+        continue;
+      }
       size_t i = 0;
       while (i < line.size() && line[i] == '#')
         ++i;
-      if (i == 0)
-        continue;
+      if (inFence || i == 0 || i >= line.size() || line[i] != ' ')
+        continue;  // a heading is "#... " followed by text
       while (i < line.size() && (line[i] == ' ' || line[i] == '`'))
         ++i;
       size_t end = i;

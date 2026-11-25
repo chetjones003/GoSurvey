@@ -5,6 +5,7 @@
 #include "CadSnap.hpp"
 #include "UserPrefs.hpp"
 #include "WikiHelp.hpp"
+#include "engine/CommandRegistry.hpp"
 #include <QApplication>
 #include <QAbstractSpinBox>
 #include <QAction>
@@ -66,13 +67,28 @@ HelpHoverTopic HelpTopicForWidget(QWidget* widget) {
 }
 
 /// Registry primary (lowercase) for the first token of a command line or ribbon route, so aliases
-/// such as "L" find the LINE page. Empty for "@" UI routes and unknown words.
+/// such as "L" find the LINE page. Unlisted commands (TOOLSPACE, BPARAM, UNDO...) count too.
+/// Empty for "@" UI routes and unknown words.
 std::string HelpCommandPrimary(const QString& text) {
   const QString token = text.trimmed().section(QRegularExpression("[\\s,]+"), 0, 0);
   if (token.isEmpty() || token.startsWith('@')) return {};
-  const auto match = FuzzyCommandSuggestions(token.toUtf8().toStdString(), 1);
-  if (match.empty() || !match.front().exactMatch) return {};
-  return QString::fromStdString(match.front().name).toLower().toStdString();
+  const auto* def = stepengine::CommandRegistry::Instance().FindAny(token.toLower().toUtf8().toStdString());
+  return def ? QString::fromUtf8(def->primary).toLower().toStdString() : std::string();
+}
+
+/// Registry primary for a running command. KindName is tried first; a kind whose name is not a
+/// command (SOLID, ZOOM...) resolves only when exactly one command runs as that kind.
+std::string HelpCommandPrimaryForKind(AppCommandState::Kind kind) {
+  if (kind == AppCommandState::Kind::None) return {};
+  if (std::string primary = HelpCommandPrimary(QString::fromUtf8(AppCommandState::KindName(kind))); !primary.empty())
+    return primary;
+  const stepengine::CommandDef* only = nullptr;
+  for (const auto& def : stepengine::CommandRegistry::Instance().All()) {
+    if (def.kind != kind) continue;
+    if (only) return {};
+    only = &def;
+  }
+  return only ? QString::fromUtf8(only->primary).toLower().toStdString() : std::string();
 }
 
 }  // namespace
@@ -353,7 +369,11 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     // F1 over a ribbon flyout entry documents that entry; the menus must close before the modal opens.
     auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
     const QAction* action = menu ? menu->activeAction() : nullptr;
-    if (action && action->property("ribbonCommand").isValid()) {
+    // Only menus opened from this window: walk submenus up to the widget that owns the menu.
+    QWidget* owner = menu ? menu->parentWidget() : nullptr;
+    while (qobject_cast<QMenu*>(owner)) owner = owner->parentWidget();
+    const bool ownMenu = owner && (owner == this || isAncestorOf(owner));
+    if (ownMenu && action && action->property("ribbonCommand").isValid()) {
       const HelpHoverTopic topic = HelpTopicForAction(action);
       while (auto* open = qobject_cast<QMenu*>(QApplication::activePopupWidget())) open->close();
       ShowContextualHelp(topic.command, topic.tooltip);
@@ -619,10 +639,8 @@ void EditorWindow::ShowContextualHelp(const QString& topicCommand, const QString
   std::string primary = HelpCommandPrimary(topicCommand);
   if (primary.empty()) primary = HelpCommandPrimary(QString::fromStdString(uiTopic.commandPrimary));
   const bool uiPage = primary.empty() && !uiTopic.pageSlug.empty() && uiTopic.commandPrimary.empty();
-  if (primary.empty() && !uiPage && m_State.active != AppCommandState::Kind::None)
-    primary = HelpCommandPrimary(QString::fromUtf8(AppCommandState::KindName(m_State.active)));
-  if (primary.empty() && !uiPage && m_State.lastCommand != AppCommandState::Kind::None)
-    primary = HelpCommandPrimary(QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand)));
+  if (primary.empty() && !uiPage) primary = HelpCommandPrimaryForKind(m_State.active);
+  if (primary.empty() && !uiPage) primary = HelpCommandPrimaryForKind(m_State.lastCommand);
   WikiHelpTarget target;
   if (!primary.empty()) target = WikiHelpLookupCommand(primary);
   else if (uiPage) target = uiTopic;
