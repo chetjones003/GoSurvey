@@ -9,6 +9,8 @@
 
 namespace update { struct UpdateState; }
 namespace telemetry { struct TelemetryTask; }
+namespace autosave { struct RecoveryEntry; }
+struct EditorAutosaveState;
 
 class EditorViewport;
 class QTabBar;
@@ -201,6 +203,19 @@ private:
   void ServiceUpdate();
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
+  void InitAutosave(const std::filesystem::path& userDataDir = {});
+  void StartAutosave();
+  void SyncAutosaveSettings();
+  void RunAutosavePass();
+  bool AutosaveTabAtIndex(int index);
+  void OnDrawingSaved(std::uint32_t tabUid);
+  void OnDrawingClosed(std::uint32_t tabUid);
+  void ShutdownAutosave();
+  bool CheckForAutosaveRecovery(bool userInitiated);
+  void ShowAutosaveRecoveryDialog(bool userInitiated);
+  void ShowAutosaveRecoveryDialog(const std::vector<autosave::RecoveryEntry>& entries, bool userInitiated);
+  bool RecoverAutosaveEntry(const autosave::RecoveryEntry& entry);
+  [[nodiscard]] std::filesystem::path AutosaveRootDirectory() const;
   QString m_DevelopmentBranchLabel;
   std::uint64_t m_DocumentGeneration = 0;
   bool m_ModalOpen = false;
@@ -271,6 +286,7 @@ private:
   std::function<bool(update::UpdateState&)> m_LaunchInstaller;
   bool m_UpdateExitPending = false;
   std::unique_ptr<telemetry::TelemetryTask> m_TelemetryTask;
+  std::shared_ptr<EditorAutosaveState> m_Autosave;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };

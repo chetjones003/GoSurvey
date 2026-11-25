@@ -21,6 +21,11 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
                        float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
+/// \ref ParseStoragePoint into a double store (issue #1668): the local coordinate is never narrowed
+/// to float, for values kept in double such as dimension definition points.
+bool ParseStoragePoint(AppCommandState& st, const std::string& raw, double* lx, double* ly, bool allowRelative,
+                       double baseLocalX, double baseLocalY, const float* baseWorldZ = nullptr);
+
 /// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
 /// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
 /// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
@@ -115,11 +120,12 @@ bool ParseAngleDegrees(const std::string& raw, float* degreesOut);
 
 /// App angle convention: **north (+Y) = 0°, clockwise positive** (survey bearing).
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth);
+double MathAngleRadFromBearingCwNorthDegD(double bearingDegClockwiseFromNorth);
 float BearingCwNorthDegFromMathAngleRad(float mathAngleRadFromEastCcw);
 
 /// Rotation (rad, CCW from +X / math \c atan2(dy,dx)) mapping reference segment ref1→ref2 onto new1→new2.
-float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
-                                             float newX1, float newY1, float newX2, float newY2);
+double RotateDeltaFromReferenceAndNewSegment(double refX1, double refY1, double refX2, double refY2,
+                                             double newX1, double newY1, double newX2, double newY2);
 
 
 /// Build the angle-display settings (REQ-021) from the live UNITS state.

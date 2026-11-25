@@ -45,7 +45,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
       return;
-    const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+    const float R = std::max(ann->dimSignedOffset, 1.e-6);
     const float mid = a1 + 0.5f * sweep;
     const float mx = vx + std::cos(mid) * R;
     const float my = vy + std::sin(mid) * R;
@@ -71,28 +71,28 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const auto* ds = st.sessionAs<stepengine::DimSession>();
   if (!out || !ds || ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return false;
-  const float x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
-  const float lx = cursorWx, ly = cursorWy;
-  float vx = x2 - x1;
-  float vy = y2 - y1;
-  const float len = std::hypot(vx, vy);
-  if (len < 1.e-8f)
+  const double x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
+  const double lx = cursorWx, ly = cursorWy;
+  double vx = x2 - x1;
+  double vy = y2 - y1;
+  const double len = std::hypot(vx, vy);
+  if (len < 1.e-8)
     return false;
   vx /= len;
   vy /= len;
-  const float t1 = (x1 - lx) * vx + (y1 - ly) * vy;
-  const float t2 = (x2 - lx) * vx + (y2 - ly) * vy;
-  const float sx1 = lx + vx * t1;
-  const float sy1 = ly + vy * t1;
-  const float sx2 = lx + vx * t2;
-  const float sy2 = ly + vy * t2;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  const float n0x = -vy;
-  const float n0y = vx;
-  const float dmx = 0.5f * (sx1 + sx2);
-  const float dmy = 0.5f * (sy1 + sy2);
-  const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
+  const double t1 = (x1 - lx) * vx + (y1 - ly) * vy;
+  const double t2 = (x2 - lx) * vx + (y2 - ly) * vy;
+  const double sx1 = lx + vx * t1;
+  const double sy1 = ly + vy * t1;
+  const double sx2 = lx + vx * t2;
+  const double sy2 = ly + vy * t2;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  const double n0x = -vy;
+  const double n0y = vx;
+  const double dmx = 0.5 * (sx1 + sx2);
+  const double dmy = 0.5 * (sy1 + sy2);
+  const double dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
@@ -121,10 +121,10 @@ void CadDimLinearUpdateDraftOrientation(AppCommandState& st, float cursorWx, flo
   const float chord = std::hypot(ds->e2x - ds->e1x, ds->e2y - ds->e1y);
   const float unlockTol = 1.e-3f * std::max(1.f, chord);
 
-  const float dxSpan = std::fabs(ds->e2x - ds->e1x);
-  const float dySpan = std::fabs(ds->e2y - ds->e1y);
-  const float spanTol =
-      std::max(1e-8f, 1e-12f * std::max(std::max(std::fabs(ds->e1x), std::fabs(ds->e1y)),
+  const double dxSpan = std::fabs(ds->e2x - ds->e1x);
+  const double dySpan = std::fabs(ds->e2y - ds->e1y);
+  const double spanTol =
+      std::max(1e-8, 1e-12 * std::max(std::max(std::fabs(ds->e1x), std::fabs(ds->e1y)),
                                         std::max(std::fabs(ds->e2x), std::fabs(ds->e2y))));
   const bool mustVertical = dxSpan <= spanTol && dySpan > spanTol;
   const bool mustHorizontal = dySpan <= spanTol && dxSpan > spanTol;
@@ -163,18 +163,18 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   if (!out || !ds || !ds->linear || ds->phase != stepengine::DimPhase::WaitDimLinePt)
     return false;
   CadDimLinearUpdateDraftOrientation(st, cursorWx, cursorWy);
-  const float x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
+  const double x1 = ds->e1x, y1 = ds->e1y, x2 = ds->e2x, y2 = ds->e2y;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
   const bool vert = ds->linearDraftVertical;
-  const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
-  if (meas < 1.e-8f)
+  const double meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
+  if (meas < 1.e-8)
     return false;
-  float dmx = cmx;
-  float dmy = cmy;
+  double dmx = cmx;
+  double dmy = cmy;
   float n0x = 0.f;
   float n0y = 1.f;
-  float dOff = 0.f;
+  double dOff = 0.0;
   if (!vert) {
     dmy = cursorWy;
     dOff = dmy - cmy;
@@ -276,17 +276,19 @@ void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& styl
   if (!ann || !ann->dimensionTextOverride.empty())
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
-    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f;
+    double ml = 0.0;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
     // REQ-459 (issue #804): the value uses the dimension style's unit scale, format and precision, the same
     // formatting the commit path uses, so moving a dimension never changes its number.
-    ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), style);
+    ann->text = DimensionStyles::FormatLinearDim(ml, style);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
-    float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+    float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+    double theta = 0.0;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
       return;
-    ann->text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), angle);
+    ann->text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), angle);
   }
 }
 
@@ -297,7 +299,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return;
-  const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+  const float R = std::max(ann->dimSignedOffset, 1.e-6);
   const float mid = a1 + 0.5f * sweep;
   const float mx = vx + std::cos(mid) * R;
   const float my = vy + std::sin(mid) * R;
@@ -330,7 +332,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const auto* ds = st.sessionAs<stepengine::DimAngularSession>();
   if (!out || !ds || ds->phase != stepengine::DimAngularPhase::WaitArc)
     return false;
-  const float vx = ds->vx, vy = ds->vy;
+  const double vx = ds->vx, vy = ds->vy;  // double: the preview must measure what the commit will
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
   d.dimensionStyleName = st.drawing.activeDimensionStyle.name;
@@ -341,7 +343,8 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimExt1Y = ds->e1y;
   d.dimExt2X = ds->e2x;
   d.dimExt2Y = ds->e2y;
-  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return false;
   const float leg = std::min(std::hypot(d.dimExt1X - vx, d.dimExt1Y - vy), std::hypot(d.dimExt2X - vx, d.dimExt2Y - vy));
@@ -351,7 +354,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimSignedOffset = R;
   d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.drawing.activeDimensionStyle.textFont;
-  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
+  d.text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   *out = std::move(d);
   return true;

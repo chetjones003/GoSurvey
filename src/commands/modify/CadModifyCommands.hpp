@@ -124,14 +124,14 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 /// world-Z-parallel and `RotateSelectionInPlaceAboutAxis` when it is tilted. A gizmo that called
 /// only the inner function would agree with the typed command in plan view and diverge from it under
 /// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
-void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
+void ApplyRotationAboutUcsZ(AppCommandState& st, double bx, double by, double bz, double rad,
                             std::vector<std::string>& log);
 
 /// Rotate the whole selection in place by \p rad about the line through \p axisPoint along
 /// \p axisUnit — the rotate gizmo's X and Y rings (D-2026-09-28-b). The same in-place 3D turn typed
 /// ROTATE uses under a tilted UCS, with the same refusals. The caller owns the undo snapshot.
 void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log);
+                            const ray3d::Vec3& axisUnit, double rad, std::vector<std::string>& log);
 
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.

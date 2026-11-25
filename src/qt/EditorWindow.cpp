@@ -440,7 +440,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
-  InitUpdates();
+  InitUpdates(); InitAutosave(UserDataDirectory());
   setObjectName("GoSurveyQtEditor");
   const QString title = m_DevelopmentBranchLabel.isEmpty()
       ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
@@ -1025,13 +1025,13 @@ void EditorWindow::ServiceTelemetry() {
 }
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
+  StartAutosave();
   // The entry point exits its splash wait when the worker marks the task done, before the UI
   // thread has consumed that result. Resolve it here so only a confirmed offer takes priority;
   // a completed no-update check must return to Idle before REQ-336 evaluates startup eligibility.
   ServiceUpdate();
-  // REQ-078 before REQ-336: when the startup check found an update, What's New does not
-  // auto-open on this launch. The check has already answered by now (the splash waits for it).
-  if (UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
+  // REQ-078 before REQ-336: when the startup check found an update or recovery ran, What's New does not auto-open.
+  if (CheckForAutosaveRecovery(false) || UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
   MaybeAutoOpenWhatsNew();
 }
 
@@ -1077,7 +1077,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
-  file->addAction(CommandAction("Save as &Template...", "Save_As.png", "SAVETEMPLATE"));
+  file->addAction(CommandAction("Save as &Template...", "Save_As.png", "SAVETEMPLATE")); file->addAction(CommandAction("Drawing &Recovery...", "Open.png", "DRAWINGRECOVERY"));
   file->addSeparator();
   file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
   file->addSeparator();
@@ -1589,6 +1589,7 @@ void EditorWindow::Submit(const QString& command) {
   } else if (verb == "SAVE" || verb == "QSAVE") SaveDrawing();
   else if (verb == "SAVEAS") SaveDrawing(true);
   else if (verb == "SAVETEMPLATE") SaveDrawingTemplate();
+  else if (verb == "DRAWINGRECOVERY" || verb == "RECOVER") ShowAutosaveRecoveryDialog(true);
   else if (verb == "PDFVIEW") ShowPdf();
   else if (verb == "LSA" || verb == "TRAVERSE") ShowAdjustment();
   else if (verb == "POINTDATABASE") ShowPoints(true);
@@ -2344,17 +2345,16 @@ bool EditorWindow::SaveDrawing(bool saveAs) {
   }
   QString path = QString::fromUtf8(m_State.activeDocFilePath.c_str());
   if (saveAs || path.isEmpty()) {
-    path = QFileDialog::getSaveFileName(this, "Save drawing", path, "Drawing (*.dwg)");
+    const QString initial = path.isEmpty() ? QString::fromUtf8(m_State.drawingTabs[m_State.activeDrawingIdx].recoverySuggestedPath.c_str()) : path;
+    path = QFileDialog::getSaveFileName(this, "Save drawing", initial, "Drawing (*.dwg)");
     if (path.isEmpty()) return false;
     if (!path.endsWith(".dwg", Qt::CaseInsensitive)) path += ".dwg";
   }
   if (!SaveDrawingDocument(m_State, path.toUtf8().constData(), m_Log)) {
-    QMessageBox::warning(this, "Save drawing", "The drawing could not be saved. See the command log.");
-    Refresh();
-    return false;
+    QMessageBox::warning(this, "Save drawing", "The drawing could not be saved. See the command log."); Refresh(); return false;
   }
-  m_State.activeDocFilePath = path.toUtf8().toStdString();
-  m_State.activeDocSavedRevision = m_State.cadGpuRevision;
+  m_State.activeDocFilePath = path.toUtf8().toStdString(); m_State.activeDocSavedRevision = m_State.cadGpuRevision;
+  m_State.drawingTabs[m_State.activeDrawingIdx].recoverySuggestedPath.clear(); OnDrawingSaved(m_State.drawingTabs[m_State.activeDrawingIdx].uid);
   SyncProjectFilesOnSave(m_State, m_State.activeDrawingIdx, path.toUtf8().toStdString(), m_Log);
   m_State.drawingTabs[m_State.activeDrawingIdx].name = QFileInfo(path).completeBaseName().toUtf8().toStdString();
   std::error_code ec;
@@ -2432,7 +2432,7 @@ void EditorWindow::CloseDrawing(int index) {
     QMessageBox::warning(this, "Unsaved project points", "Project points could not be saved. Resolve the write error before closing this drawing.");
     return;
   }
-  CancelActiveCommand(m_State, m_Log);
+  CancelActiveCommand(m_State, m_Log); OnDrawingClosed(m_State.drawingTabs[index].uid);
   m_State.drawingTabs.erase(m_State.drawingTabs.begin() + index);
   m_State.documents.erase(m_State.documents.begin() + index);
   const int next = std::min(index, static_cast<int>(m_State.drawingTabs.size()) - 1);
@@ -2481,7 +2481,7 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
     event->ignore();
     return;
   }
-  event->accept();
+  ShutdownAutosave(); event->accept();
 }
 
 namespace {

@@ -26,7 +26,7 @@ float WorldToleranceFromPixels(float viewportHeightPx, float orthoHalfHeightWorl
 
 namespace {
 
-constexpr float kHugePickDistSq = 1.e30f;
+constexpr double kHugePickDistSq = 1.e300;
 
 /// Closest point in plan view on a spline's adaptive chord list, carrying Z along the chosen chord.
 [[nodiscard]] spline::Vec3 ClosestOnSplineChords(const std::vector<spline::Vec3>& points, double x, double y) {
@@ -46,28 +46,28 @@ constexpr float kHugePickDistSq = 1.e30f;
   return nearest;
 }
 
-[[nodiscard]] float DistSqPointToSegment(float px, float py, float ax, float ay, float bx, float by) {
-  const float vx = bx - ax;
-  const float vy = by - ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1.e-18f) {
-    const float dx = px - ax;
-    const float dy = py - ay;
+[[nodiscard]] double DistSqPointToSegment(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1.e-24) {
+    const double dx = px - ax;
+    const double dy = py - ay;
     return dx * dx + dy * dy;
   }
-  float t = ((px - ax) * vx + (py - ay) * vy) / len2;
-  t = std::clamp(t, 0.f, 1.f);
-  const float qx = ax + t * vx;
-  const float qy = ay + t * vy;
-  const float dx = px - qx;
-  const float dy = py - qy;
+  double t = ((px - ax) * vx + (py - ay) * vy) / len2;
+  t = std::clamp(t, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
+  const double dx = px - qx;
+  const double dy = py - qy;
   return dx * dx + dy * dy;
 }
 
-[[nodiscard]] float MinDistSqToSurveyMarker(float wx, float wy, float e, float n, float halfArmWorld) {
-  const float s = std::max(halfArmWorld, 1.e-8f);
-  const float d1 = DistSqPointToSegment(wx, wy, e - s, n - s, e + s, n + s);
-  const float d2 = DistSqPointToSegment(wx, wy, e - s, n + s, e + s, n - s);
+[[nodiscard]] double MinDistSqToSurveyMarker(double wx, double wy, double e, double n, double halfArmWorld) {
+  const double s = std::max(halfArmWorld, 1.e-8);
+  const double d1 = DistSqPointToSegment(wx, wy, e - s, n - s, e + s, n + s);
+  const double d2 = DistSqPointToSegment(wx, wy, e - s, n + s, e + s, n - s);
   return std::min(d1, d2);
 }
 
@@ -89,20 +89,16 @@ constexpr float kHugePickDistSq = 1.e30f;
 /// A snap has to offer points that are ON the drawn curve. A tilted arc walked in the XY projection
 /// puts every candidate somewhere the curve does not go, so the glyph marks empty space and a click
 /// commits to a point that is not on the object it claims to have snapped to (REQ-062, REQ-201).
-void ArcSnapPoint(const CadArc& a, const ucs::Ucs& plane, bool flat, double t, float* ox, float* oy, float* oz) {
+void ArcSnapPoint(const CadArc& a, const ucs::Ucs& plane, bool flat, double t, double* ox, double* oy, double* oz) {
   if (flat) {
-    double x = 0.;
-    double y = 0.;
-    CirclePointWorld(static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r), t, &x, &y);
-    *ox = static_cast<float>(x);
-    *oy = static_cast<float>(y);
+    CirclePointWorld(a.cx, a.cy, a.r, t, ox, oy);
     *oz = a.z;
     return;
   }
-  const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), t);
-  *ox = static_cast<float>(p.x);
-  *oy = static_cast<float>(p.y);
-  *oz = static_cast<float>(p.z);
+  const ray3d::Vec3 p = CurvePointAt(plane, a.r, t);
+  *ox = p.x;
+  *oy = p.y;
+  *oz = p.z;
 }
 
 // --- Quadrant snap (REQ-330) -------------------------------------------------------------------
@@ -160,98 +156,97 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
 }
 
 /// The plane a standalone circle lies in (REQ-312 side-car normal), world +Z for a flat circle.
-[[nodiscard]] ucs::Ucs CircleSnapPlane(const std::vector<float>& circleNormals, size_t circleIdx, float cx,
-                                       float cy, float cz) {
+[[nodiscard]] ucs::Ucs CircleSnapPlane(const std::vector<float>& circleNormals, size_t circleIdx, double cx,
+                                       double cy, double cz) {
   float nx = kFlatNormalX;
   float ny = kFlatNormalY;
   float nz = kFlatNormalZ;
   CircleNormalAt(circleNormals, circleIdx, &nx, &ny, &nz);
-  return CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(cz),
-                    static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz));
+  return CurvePlane(cx, cy, cz, static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz));
 }
 
-[[nodiscard]] float CircleCenterPickDistSq(float wx, float wy, float cx, float cy, float r, float tolWorld) {
-  if (r <= 1.e-6f)
+[[nodiscard]] double CircleCenterPickDistSq(double wx, double wy, double cx, double cy, double r, double tolWorld) {
+  if (r <= 1.e-6)
     return kHugePickDistSq;
-  const float d = std::hypot(wx - cx, wy - cy);
+  const double d = std::hypot(wx - cx, wy - cy);
   if (d <= r)
-    return 0.f;
-  const float out = d - r;
+    return 0.0;
+  const double out = d - r;
   if (out <= tolWorld)
     return out * out;
   return kHugePickDistSq;
 }
 
-[[nodiscard]] bool EllipseContainsPoint(float wx, float wy, const CadEllipse& el) {
+[[nodiscard]] bool EllipseContainsPoint(double wx, double wy, const CadEllipse& el) {
   if (!EllipseIsFlat(el))
     return false;  // a tilted ellipse is not picked in plan (GitHub #531)
-  const float ma = std::hypot(el.majVx, el.majVy);
-  if (ma < 1.e-8f)
+  const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+  if (ma < 1.e-8)
     return false;
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  const float dx = wx - el.cx;
-  const float dy = wy - el.cy;
-  const float u = dx * ux + dy * uy;
-  const float v = dx * px + dy * py;
-  const float uu = u / std::max(ma, 1.e-8f);
-  const float vv = v / std::max(mb, 1.e-8f);
-  return (uu * uu + vv * vv) <= 1.f + 1.e-5f;
+  const double ux = static_cast<double>(el.majVx) / ma;
+  const double uy = static_cast<double>(el.majVy) / ma;
+  const double px = -uy;
+  const double py = ux;
+  const double mb = ma * static_cast<double>(el.ratio);
+  const double dx = wx - el.cx;
+  const double dy = wy - el.cy;
+  const double u = dx * ux + dy * uy;
+  const double v = dx * px + dy * py;
+  const double uu = u / std::max(ma, 1.e-8);
+  const double vv = v / std::max(mb, 1.e-8);
+  return (uu * uu + vv * vv) <= 1.0 + 1.e-5;
 }
 
-[[nodiscard]] float EllipseCenterPickDistSq(float wx, float wy, const CadEllipse& el, float tolWorld) {
+[[nodiscard]] double EllipseCenterPickDistSq(double wx, double wy, const CadEllipse& el, double tolWorld) {
   if (EllipseContainsPoint(wx, wy, el))
-    return 0.f;
+    return 0.0;
   constexpr int kSeg = 48;
-  constexpr float kTwoPi = 6.28318530718f;
+  constexpr double kTwoPi = 6.28318530717958647692;
   if (!EllipseIsFlat(el))
     return kHugePickDistSq;  // a tilted ellipse is not picked in plan (GitHub #531)
-  const float ma = std::hypot(el.majVx, el.majVy);
-  if (ma < 1.e-8f)
+  const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+  if (ma < 1.e-8)
     return kHugePickDistSq;
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  float minD2 = kHugePickDistSq;
+  const double ux = static_cast<double>(el.majVx) / ma;
+  const double uy = static_cast<double>(el.majVy) / ma;
+  const double px = -uy;
+  const double py = ux;
+  const double mb = ma * static_cast<double>(el.ratio);
+  double minD2 = kHugePickDistSq;
   for (int i = 0; i < kSeg; ++i) {
-    const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kSeg);
-    const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kSeg);
-    const float c0 = std::cos(ang0);
-    const float s0 = std::sin(ang0);
-    const float c1 = std::cos(ang1);
-    const float s1 = std::sin(ang1);
-    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+    const double ang0 = kTwoPi * static_cast<double>(i) / static_cast<double>(kSeg);
+    const double ang1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(kSeg);
+    const double c0 = std::cos(ang0);
+    const double s0 = std::sin(ang0);
+    const double c1 = std::cos(ang1);
+    const double s1 = std::sin(ang1);
+    const double x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+    const double y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+    const double x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+    const double y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
     minD2 = std::min(minD2, DistSqPointToSegment(wx, wy, x0, y0, x1, y1));
   }
-  const float md = std::sqrt(std::min(std::max(minD2, 0.f), 1.e20f));
+  const double md = std::sqrt(std::min(std::max(minD2, 0.0), 1.e200));
   if (md <= tolWorld)
     return minD2;
   return kHugePickDistSq;
 }
 
 template <class VT>
-[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<VT>& V, int v0, int v1) {
+[[nodiscard]] bool PointInClosedPoly(double wx, double wy, const std::vector<VT>& V, int v0, int v1) {
   const int n = v1 - v0;
   if (n < 3)
     return false;
   bool c = false;
   for (int i = 0, j = n - 1; i < n; j = i++) {
-    const float yi = V[static_cast<size_t>((v0 + i) * 3 + 1)];
-    const float yj = V[static_cast<size_t>((v0 + j) * 3 + 1)];
+    const double yi = static_cast<double>(V[static_cast<size_t>((v0 + i) * 3 + 1)]);
+    const double yj = static_cast<double>(V[static_cast<size_t>((v0 + j) * 3 + 1)]);
     if ((yi > wy) == (yj > wy))
       continue;
-    const float xi = V[static_cast<size_t>((v0 + i) * 3)];
-    const float xj = V[static_cast<size_t>((v0 + j) * 3)];
-    const float t = (yj - yi);
-    const float xInt = (t > 1.e-12f || t < -1.e-12f) ? (xj - xi) * (wy - yi) / t + xi : xi;
+    const double xi = static_cast<double>(V[static_cast<size_t>((v0 + i) * 3)]);
+    const double xj = static_cast<double>(V[static_cast<size_t>((v0 + j) * 3)]);
+    const double t = (yj - yi);
+    const double xInt = (t > 1.e-12 || t < -1.e-12) ? (xj - xi) * (wy - yi) / t + xi : xi;
     if (wx < xInt)
       c = !c;
   }
@@ -259,42 +254,44 @@ template <class VT>
 }
 
 template <class VT>
-[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<VT>& V, int v0,
-                                                  int v1) {
+[[nodiscard]] double ClosedPolyGeometricPickDistSq(double wx, double wy, const std::vector<VT>& V, int v0,
+                                                   int v1) {
   const int n = v1 - v0;
   if (n < 3)
     return kHugePickDistSq;
-  float minD2 = kHugePickDistSq;
+  double minD2 = kHugePickDistSq;
   for (int i = 0; i < n; ++i) {
     const int ia = v0 + i;
     const int ib = v0 + ((i + 1) % n);
-    const float ax = V[static_cast<size_t>(ia * 3)];
-    const float ay = V[static_cast<size_t>(ia * 3 + 1)];
-    const float bx = V[static_cast<size_t>(ib * 3)];
-    const float by = V[static_cast<size_t>(ib * 3 + 1)];
+    const double ax = static_cast<double>(V[static_cast<size_t>(ia * 3)]);
+    const double ay = static_cast<double>(V[static_cast<size_t>(ia * 3 + 1)]);
+    const double bx = static_cast<double>(V[static_cast<size_t>(ib * 3)]);
+    const double by = static_cast<double>(V[static_cast<size_t>(ib * 3 + 1)]);
     minD2 = std::min(minD2, DistSqPointToSegment(wx, wy, ax, ay, bx, by));
   }
   if (PointInClosedPoly(wx, wy, V, v0, v1))
-    return 0.f;
+    return 0.0;
   return minD2;
 }
 
 template <class VT>
-[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<VT>& V, int v0, int v1, float* outCx,
-                                          float* outCy) {
+[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<VT>& V, int v0, int v1, double* outCx,
+                                          double* outCy) {
   const int n = v1 - v0;
   if (n < 3 || !outCx || !outCy)
     return false;
+  const double ox = static_cast<double>(V[static_cast<size_t>(v0 * 3)]);
+  const double oy = static_cast<double>(V[static_cast<size_t>(v0 * 3 + 1)]);
   double a2 = 0.0;
   double cxa = 0.0;
   double cya = 0.0;
   for (int i = 0; i < n; ++i) {
     const int ia = v0 + i;
     const int ib = v0 + ((i + 1) % n);
-    const double xi = static_cast<double>(V[static_cast<size_t>(ia * 3)]);
-    const double yi = static_cast<double>(V[static_cast<size_t>(ia * 3 + 1)]);
-    const double xj = static_cast<double>(V[static_cast<size_t>(ib * 3)]);
-    const double yj = static_cast<double>(V[static_cast<size_t>(ib * 3 + 1)]);
+    const double xi = static_cast<double>(V[static_cast<size_t>(ia * 3)]) - ox;
+    const double yi = static_cast<double>(V[static_cast<size_t>(ia * 3 + 1)]) - oy;
+    const double xj = static_cast<double>(V[static_cast<size_t>(ib * 3)]) - ox;
+    const double yj = static_cast<double>(V[static_cast<size_t>(ib * 3 + 1)]) - oy;
     const double cross = xi * yj - xj * yi;
     a2 += cross;
     cxa += (xi + xj) * cross;
@@ -303,17 +300,17 @@ template <class VT>
   if (std::fabs(a2) < 1.e-12) {
     double sx = 0.0, sy = 0.0;
     for (int i = 0; i < n; ++i) {
-      sx += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3)]);
-      sy += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3 + 1)]);
+      sx += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3)]) - ox;
+      sy += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3 + 1)]) - oy;
     }
-    *outCx = static_cast<float>(sx / static_cast<double>(n));
-    *outCy = static_cast<float>(sy / static_cast<double>(n));
+    *outCx = ox + sx / static_cast<double>(n);
+    *outCy = oy + sy / static_cast<double>(n);
     return true;
   }
   const double inv = 1.0 / (3.0 * a2);
-  *outCx = static_cast<float>(cxa * inv);
-  *outCy = static_cast<float>(cya * inv);
-  return std::isfinite(static_cast<double>(*outCx)) && std::isfinite(static_cast<double>(*outCy));
+  *outCx = ox + cxa * inv;
+  *outCy = oy + cya * inv;
+  return std::isfinite(*outCx) && std::isfinite(*outCy);
 }
 
 // Does polyline \p pi bound an area, so a geometric center is meaningful? Two ways to be closed: the
@@ -337,8 +334,8 @@ template <class VT>
     mxY = std::max(mxY, V[static_cast<size_t>(i * 3 + 1)]);
   }
   const double tol = std::max<double>(1.e-6 * std::hypot(mxX - mnX, mxY - mnY), 1.e-9);
-  const float dx = V[static_cast<size_t>((v1 - 1) * 3)] - V[static_cast<size_t>(v0 * 3)];
-  const float dy = V[static_cast<size_t>((v1 - 1) * 3 + 1)] - V[static_cast<size_t>(v0 * 3 + 1)];
+  const double dx = V[static_cast<size_t>((v1 - 1) * 3)] - V[static_cast<size_t>(v0 * 3)];
+  const double dy = V[static_cast<size_t>((v1 - 1) * 3 + 1)] - V[static_cast<size_t>(v0 * 3 + 1)];
   return std::hypot(dx, dy) <= tol;
 }
 
@@ -353,7 +350,7 @@ struct SnapPickAccum {
   /// a candidate whose ACCEPTANCE test is a heuristic (e.g. a circle's distance-to-rim, so hovering
   /// anywhere on a large circle still offers its center) never wins purely because that heuristic
   /// reads small — only because its actual point is genuinely the nearest valid candidate.
-  float bestRankDistSq = 0.f;
+  double bestRankDistSq = 0.0;
   int bestPri = -1;
   /// The EFFECTIVE \ref SnapClass of \c best: 1 only when its true point was inside the aperture.
   int bestCls = 0;
@@ -378,10 +375,12 @@ struct SnapPickAccum {
 ///        that crossing does not exist (an edge-on view). With it set, the ray path accepts on
 ///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
 ///        #372). Ranking is always the true ray distance, as issue #103 requires.
-void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false, bool solid = false) {
-  const float tol2 = tolWorld * tolWorld;
-  float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
+void ConsiderSnap(SnapPickAccum* acc, double wx, double wy, double snapX, double snapY, Kind kind, double pickDistSq,
+                  double tolWorld, double snapZ = 0.0, bool heuristicAccept = false, bool solid = false) {
+  const double tol2 = tolWorld * tolWorld;
+  const double rdx = snapX - wx;
+  const double rdy = snapY - wy;
+  double rankDistSq = rdx * rdx + rdy * rdy;
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
   // place every candidate funnels through — means each generator keeps its own 2D construction
   // logic and only the comparison changes. The ray distance to the actual point is always the
@@ -389,9 +388,8 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
   // pickDistSq means nothing once the view tilts). A \p heuristicAccept kind keeps the caller's
   // pickDistSq — which for the orbited path the caller has already recomputed in the shape's plane.
   if (acc->ray) {
-    const double d = ray3d::RayPointDistance(
-        *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
-    rankDistSq = static_cast<float>(d * d);
+    const double d = ray3d::RayPointDistance(*acc->ray, ray3d::Vec3{snapX, snapY, snapZ});
+    rankDistSq = d * d;
     // Ordinary kind: the ray distance IS the acceptance test. Heuristic kind: accept on EITHER the
     // shape heuristic (cursor is over the shape) OR the plain ray distance (cursor points almost
     // straight at the point) — the latter keeps the pre-#372 envelope for a shape smaller than the
@@ -399,12 +397,12 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     // taking the min never revives one.
     pickDistSq = heuristicAccept ? std::min(pickDistSq, rankDistSq) : rankDistSq;
   }
-  if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
+  if (!(pickDistSq <= tol2) || pickDistSq > 1.e290)
     return;
   if (acc->clip.active && !acc->clip.KeepsWorldPoint(snapX, snapY, snapZ))
     return;
   const int pri = Priority(kind);
-  const float eps = 1.e-9f * std::max(tol2, 1.f);
+  const double eps = 1.e-9 * std::max(tol2, 1.0);
   // A named feature only gets its class once its ACTUAL point is inside the aperture. Several
   // class-1 kinds are accepted on a "cursor is over the shape" heuristic — a circle's or closed
   // polyline's centre anywhere inside it, a survey point across its marker, `CenterOfFace` anywhere
@@ -465,16 +463,11 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
   }
 }
 
-void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld,
-              float pz = 0.f, bool solid = false) {
-  const float dx = px - wx;
-  const float dy = py - wy;
+void Consider(SnapPickAccum* acc, double wx, double wy, double px, double py, Kind kind, double tolWorld,
+              double pz = 0.0, bool solid = false) {
+  const double dx = px - wx;
+  const double dy = py - wy;
   ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
-}
-
-/// Convert a double spline coordinate to the float precision used by snap accumulation.
-[[nodiscard]] float SnapFloatCoordinate(double value) {
-  return static_cast<float>(value); // NOLINT(bugprone-narrowing-conversions): snap accumulator is float-backed.
 }
 
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
@@ -483,13 +476,13 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
 /// centroid already is in X and Y (REQ-058). Exact for the planar case, which is every rectangle
 /// and every pre-3D polyline.
 template <class VT>
-[[nodiscard]] float PolylineLoopMeanZ(const std::vector<VT>& verts, int v0, int v1) {
+[[nodiscard]] double PolylineLoopMeanZ(const std::vector<VT>& verts, int v0, int v1) {
   if (v1 <= v0)
-    return 0.f;
+    return 0.0;
   double zSum = 0.;
   for (int vi = v0; vi < v1; ++vi)
     zSum += static_cast<double>(verts[static_cast<size_t>(vi * 3 + 2)]);
-  return static_cast<float>(zSum / static_cast<double>(v1 - v0));
+  return zSum / static_cast<double>(v1 - v0);
 }
 
 /// Where the cursor ray crosses the horizontal plane z = \p planeZ, as XY. Returns false when the
@@ -504,15 +497,15 @@ template <class VT>
 /// the cursor position in that same plane. A ray parallel to the plane (an edge-on FRONT / LEFT /
 /// RIGHT / BACK view of a plan drawing) has no crossing; the caller then falls back to accepting
 /// CENTRE only when the ray points almost exactly at the point (see \ref CenterHeuristicPoint).
-[[nodiscard]] bool RayXyAtPlaneZ(const ray3d::Ray& ray, double planeZ, float* hx, float* hy) {
+[[nodiscard]] bool RayXyAtPlaneZ(const ray3d::Ray& ray, double planeZ, double* hx, double* hy) {
   const double dz = ray.dir.z;
   if (dz > -1.e-6 && dz < 1.e-6)
     return false;
   const double t = (planeZ - ray.origin.z) / dz;
   if (t < 0.0)
     return false;
-  *hx = static_cast<float>(ray.origin.x + t * ray.dir.x);
-  *hy = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  *hx = ray.origin.x + t * ray.dir.x;
+  *hy = ray.origin.y + t * ray.dir.y;
   return true;
 }
 
@@ -526,13 +519,13 @@ template <class VT>
 /// caller should fall back to the plain ray-distance acceptance (\c heuristicAccept = false) —
 /// i.e. the CENTRE still resolves when the ray points almost exactly at it, as it did before
 /// issue #372, just not from "anywhere over the shape".
-[[nodiscard]] bool CenterHeuristicPoint(const SnapPickAccum& acc, double wx, double wy, float planeZ, float* px,
-                                        float* py) {
-  *px = static_cast<float>(wx);
-  *py = static_cast<float>(wy);
+[[nodiscard]] bool CenterHeuristicPoint(const SnapPickAccum& acc, double wx, double wy, double planeZ, double* px,
+                                        double* py) {
+  *px = wx;
+  *py = wy;
   if (!acc.ray)
     return true;
-  return RayXyAtPlaneZ(*acc.ray, static_cast<double>(planeZ), px, py);
+  return RayXyAtPlaneZ(*acc.ray, planeZ, px, py);
 }
 
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
@@ -541,17 +534,17 @@ template <class VT>
 ///        is the same interpolation (REQ-058). Without it the candidate defaulted to Z 0 and was
 ///        measured against the cursor ray at the wrong depth — the snap was either missed entirely
 ///        or accepted and then committed on the datum instead of on the segment.
-void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, float ax, float ay, float bx, float by,
-                                float tolWorld, SnapPickAccum* acc, float az = 0.f, float bz = 0.f) {
-  const float vx = bx - ax;
-  const float vy = by - ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1.e-12f)
+void AppendPerpendicularFromRef(double refX, double refY, double wx, double wy, double ax, double ay, double bx,
+                                double by, double tolWorld, SnapPickAccum* acc, double az = 0.0, double bz = 0.0) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1.e-18)
     return;
-  float t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
-  t = std::clamp(t, 0.f, 1.f);
-  const float qx = ax + t * vx;
-  const float qy = ay + t * vy;
+  double t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
+  t = std::clamp(t, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
   Consider(acc, wx, wy, qx, qy, Kind::Perpendicular, tolWorld, az + t * (bz - az));
 }
 
@@ -856,7 +849,7 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
   }
 }
 
-[[nodiscard]] bool PerpendicularReference(const AppCommandState& cmd, float* refX, float* refY) {
+[[nodiscard]] bool PerpendicularReference(const AppCommandState& cmd, double* refX, double* refY) {
   if (const auto* ls = cmd.sessionAs<stepengine::LineSession>();
       ls && ls->phase == stepengine::LinePhase::NeedNextPoint) {
     *refX = cmd.anchorX;
@@ -1016,23 +1009,22 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
   return axisParallel(ucs.xAxis.x, ucs.xAxis.y) || axisParallel(ucs.yAxis.x, ucs.yAxis.y);
 }
 
-void ConsiderSegmentQuadrant(SnapPickAccum* acc, float wx, float wy, double x0, double y0, double x1, double y1,
-                             float tolWorld) {
+void ConsiderSegmentQuadrant(SnapPickAccum* acc, double wx, double wy, double x0, double y0, double x1, double y1,
+                             double tolWorld) {
   assert(acc != nullptr);
   const double dx = x1 - x0;
   const double dy = y1 - y0;
   const double len2 = dx * dx + dy * dy;
   if (len2 < 1.e-24)
     return;
-  const double t =
-      std::clamp(((static_cast<double>(wx) - x0) * dx + (static_cast<double>(wy) - y0) * dy) / len2, 0.0, 1.0);
+  const double t = std::clamp(((wx - x0) * dx + (wy - y0) * dy) / len2, 0.0, 1.0);
   const double px = x0 + t * dx;
   const double py = y0 + t * dy;
-  Consider(acc, wx, wy, SnapFloatCoordinate(px), SnapFloatCoordinate(py), Kind::Quadrant, tolWorld, 0.0f);
+  Consider(acc, wx, wy, px, py, Kind::Quadrant, tolWorld, 0.0);
 }
 
-void AppendAlignmentQuadrantCandidates(SnapPickAccum* acc, float wx, float wy, const alignment::Alignment& al,
-                                       const ucs::Ucs& activeUcs, float tolWorld) {
+void AppendAlignmentQuadrantCandidates(SnapPickAccum* acc, double wx, double wy, const alignment::Alignment& al,
+                                       const ucs::Ucs& activeUcs, double tolWorld) {
   assert(acc != nullptr);
   const std::vector<alignment::Entity>& ents = al.Entities();
   for (size_t ei = 0; ei < ents.size(); ++ei) {
@@ -1059,7 +1051,7 @@ void AppendAlignmentQuadrantCandidates(SnapPickAccum* acc, float wx, float wy, c
       const bool card = AlignmentDirectionCardinalInUcs(al.GetBearingAtStation(sta), activeUcs);
       if (card && !prevCard) {
         const alignment::Point2 p = al.GetPointAtStation(sta);
-        Consider(acc, wx, wy, SnapFloatCoordinate(p.x), SnapFloatCoordinate(p.y), Kind::Quadrant, tolWorld, 0.0f);
+        Consider(acc, wx, wy, p.x, p.y, Kind::Quadrant, tolWorld, 0.0);
       }
       prevCard = card;
     }
@@ -1101,8 +1093,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const bool wantCenterOfFace = want(Kind::CenterOfFace, cmd.objectSnap3dEnabled && cmd.objectSnap3dCenterFace);
   const bool wantKnot = want(Kind::Knot, cmd.objectSnap3dEnabled && cmd.objectSnap3dKnot);
 
-  float refPx = 0.f;
-  float refPy = 0.f;
+  double refPx = 0.0;
+  double refPy = 0.0;
   const bool havePerpRef = commandActive && wantPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
   // 3D Object Snap's own Perpendicular mode (REQ-325/#395) uses the SAME reference-point machinery
   // as the 2D Perpendicular toggle above, but is gated independently by the F4 master + its own
@@ -1133,18 +1125,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (isolatedOut(cmd.drawing.userLineAttrs, i)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
           exclude.index == static_cast<int>(i)) continue;
-      const float x0 = ln.x0;
-      const float y0 = ln.y0;
-      const float x1 = ln.x1;
-      const float y1 = ln.y1;
-      const float z0 = ln.z0;
-      const float z1 = ln.z1;
+      const double x0 = ln.x0;
+      const double y0 = ln.y0;
+      const double x1 = ln.x1;
+      const double y1 = ln.y1;
+      const double z0 = ln.z0;
+      const double z1 = ln.z1;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld, z0);
         Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld, z1);
       }
       if (wantMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
+        Consider(&acc, wx, wy, 0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, tolWorld, 0.5 * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
@@ -1164,10 +1156,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       CadPipeRunEndPort start, end;
       if (!CadPipeRunEndPorts(run, &start, &end))
         continue;
-      Consider(&acc, wx, wy, static_cast<float>(start.point.x), static_cast<float>(start.point.y), Kind::Endpoint,
-               tolWorld, static_cast<float>(start.point.z));
-      Consider(&acc, wx, wy, static_cast<float>(end.point.x), static_cast<float>(end.point.y), Kind::Endpoint,
-               tolWorld, static_cast<float>(end.point.z));
+      Consider(&acc, wx, wy, start.point.x, start.point.y, Kind::Endpoint, tolWorld, start.point.z);
+      Consider(&acc, wx, wy, end.point.x, end.point.y, Kind::Endpoint, tolWorld, end.point.z);
     }
   }
 
@@ -1177,26 +1167,25 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i)) continue;
       const CadCircleRecord c = cmd.drawing.circle(i);
-      const float cx = static_cast<float>(c.cx);
-      const float cy = static_cast<float>(c.cy);
-      const float cz = static_cast<float>(c.cz);
-      const float r = static_cast<float>(c.r);
+      const double cx = c.cx;
+      const double cy = c.cy;
+      const double cz = c.cz;
+      const double r = c.r;
       if (wantCenter) {
-        float hx = 0.f;
-        float hy = 0.f;
+        double hx = 0.0;
+        double hy = 0.0;
         const bool heur = CenterHeuristicPoint(acc, wx, wy, cz, &hx, &hy);
-        const float p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
+        const double p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
         ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, cz, /*heuristicAccept=*/heur);
       }
-      if (wantQuadrant && r > 1.e-6f) {
+      if (wantQuadrant && r > 1.e-6) {
         // REQ-330: four points one radius out along the active UCS X/Y axes projected onto the
         // circle's own plane (REQ-312) — so they land exactly on the circle at any orientation.
         const ucs::Ucs plane = CircleSnapPlane(cmd.drawing.userCircleNormals, i, cx, cy, cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir) {
-          Consider(&acc, wx, wy, static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y),
-                   Kind::Quadrant, tolWorld, static_cast<float>(cz + r * d.z));
+          Consider(&acc, wx, wy, cx + r * d.x, cy + r * d.y, Kind::Quadrant, tolWorld, cz + r * d.z);
         }
       }
     }
@@ -1212,12 +1201,14 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const bool closed =
         static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto considerEdge = [&](int ia, int ib) {
-      const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
-      const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
-      const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
-      const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
-      const float az = cmd.drawing.vertex(static_cast<size_t>(ia)).z;
-      const float bz = cmd.drawing.vertex(static_cast<size_t>(ib)).z;
+      const CadPolyVertex va = cmd.drawing.vertex(static_cast<size_t>(ia));
+      const CadPolyVertex vb = cmd.drawing.vertex(static_cast<size_t>(ib));
+      const double ax = va.x;
+      const double ay = va.y;
+      const double bx = vb.x;
+      const double by = vb.y;
+      const double az = va.z;
+      const double bz = vb.z;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
@@ -1226,7 +1217,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
                               ? cmd.drawing.userPolylineVertsBulge[static_cast<size_t>(ia)] : 0.f;
       if (bulge == 0.f) {
         if (wantMidpoint)
-          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+          Consider(&acc, wx, wy, 0.5 * (ax + bx), 0.5 * (ay + by), Kind::Midpoint, tolWorld, 0.5 * (az + bz));
         if (havePerpRef)
           AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
         return;
@@ -1256,34 +1247,34 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (!arc.valid) {
         // Degenerate bulge or plane — same fallback the chord path above already uses.
         if (wantMidpoint)
-          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+          Consider(&acc, wx, wy, 0.5 * (ax + bx), 0.5 * (ay + by), Kind::Midpoint, tolWorld, 0.5 * (az + bz));
         if (havePerpRef)
           AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
         return;
       }
-      auto sampleWorld = [&](double u, float* ox, float* oy, float* oz) {
+      auto sampleWorld = [&](double u, double* ox, double* oy, double* oz) {
         const double lx = arc.cx + arc.radius * std::cos(u);
         const double ly = arc.cy + arc.radius * std::sin(u);
         if (flat) {
-          *ox = static_cast<float>(lx);
-          *oy = static_cast<float>(ly);
+          *ox = lx;
+          *oy = ly;
           *oz = az;  // both ends share Z on a flat (world +Z) segment
           return;
         }
         const ray3d::Vec3 wp = ucs::PlaneToWorld(plane, ucs::Point2D{lx, ly});
-        *ox = static_cast<float>(wp.x);
-        *oy = static_cast<float>(wp.y);
-        *oz = static_cast<float>(wp.z);
+        *ox = wp.x;
+        *oy = wp.y;
+        *oz = wp.z;
       };
       constexpr int kPolyArcSnapSeg = 24;  // matches the standalone ARC entity's own kArcSnapSeg
       for (int i = 0; i < kPolyArcSnapSeg; ++i) {
         const double t0 = arc.startAngle + arc.sweep * (static_cast<double>(i) / kPolyArcSnapSeg);
         const double t1 = arc.startAngle + arc.sweep * (static_cast<double>(i + 1) / kPolyArcSnapSeg);
-        float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
+        double x0 = 0.0, y0 = 0.0, z0 = 0.0, x1 = 0.0, y1 = 0.0, z1 = 0.0;
         sampleWorld(t0, &x0, &y0, &z0);
         sampleWorld(t1, &x1, &y1, &z1);
         if (wantMidpoint)
-          Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
+          Consider(&acc, wx, wy, 0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, tolWorld, 0.5 * (z0 + z1));
         if (havePerpRef)
           AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
       }
@@ -1294,14 +1285,14 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       considerEdge(v1 - 1, v0);
 
     if (wantGeometricCenter && PolylineBoundsArea(cmd, pi, v0, v1)) {
-      float gcx = 0.f;
-      float gcy = 0.f;
+      double gcx = 0.0;
+      double gcy = 0.0;
       if (ClosedPolylineCentroid(cmd.drawing.userPolylineVerts, v0, v1, &gcx, &gcy)) {
-        const float meanZ = PolylineLoopMeanZ(cmd.drawing.userPolylineVerts, v0, v1);
-        float hx = 0.f;
-        float hy = 0.f;
+        const double meanZ = PolylineLoopMeanZ(cmd.drawing.userPolylineVerts, v0, v1);
+        double hx = 0.0;
+        double hy = 0.0;
         const bool heur = CenterHeuristicPoint(acc, wx, wy, meanZ, &hx, &hy);
-        const float p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.drawing.userPolylineVerts, v0, v1);
+        const double p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.drawing.userPolylineVerts, v0, v1);
         ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld, meanZ, /*heuristicAccept=*/heur);
       }
     }
@@ -1327,15 +1318,15 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
     const CadArc& a = cmd.drawing.userArcs[arcIdx];
-    if (a.r <= 1e-6f)
+    if (a.r <= 1e-6)
       continue;
     ucs::Ucs arcPlane;
     const bool arcFlat = ArcSnapPlane(a, &arcPlane);
     const double tEnd = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad);
     if (wantEndpoint) {
-      float ex = 0.f;
-      float ey = 0.f;
-      float ez = 0.f;
+      double ex = 0.0;
+      double ey = 0.0;
+      double ez = 0.0;
       ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
       Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
       ArcSnapPoint(a, arcPlane, arcFlat, tEnd, &ex, &ey, &ez);
@@ -1347,15 +1338,14 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const ucs::Ucs plane = CurvePlane(a);
       ray3d::Vec3 dir[4];
       QuadrantDirections(plane, cmd.activeUcs, dir);
-      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      const ray3d::Vec3 c{a.cx, a.cy, a.z};
       for (const ray3d::Vec3& d : dir) {
-        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, a.r));
         const ucs::Point2D local = ucs::WorldToPlane(plane, p);
         const double phi = std::atan2(local.y, local.x);
         if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), phi))
           continue;
-        Consider(&acc, wx, wy, static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, tolWorld,
-                 static_cast<float>(p.z));
+        Consider(&acc, wx, wy, p.x, p.y, Kind::Quadrant, tolWorld, p.z);
       }
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
@@ -1363,33 +1353,29 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
                                          kArcSnapSeg);
       const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
                                          kArcSnapSeg);
-      float x0 = 0.f;
-      float y0 = 0.f;
-      float z0 = 0.f;
-      float x1 = 0.f;
-      float y1 = 0.f;
-      float z1 = 0.f;
+      double x0 = 0.0, y0 = 0.0, z0 = 0.0;
+      double x1 = 0.0, y1 = 0.0, z1 = 0.0;
       ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
       ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
       if (wantMidpoint)
         // The chord's own midpoint, elevation included. On a flat arc both ends share a.z and this
         // is the previous value exactly; on a tilted one the two ends genuinely differ in Z.
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
-                 0.5f * (z0 + z1));
+        Consider(&acc, wx, wy, 0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, tolWorld,
+                 0.5 * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
   }
 
   constexpr int kEllSnapSeg = 36;
-  constexpr float kTwoPi = 6.28318530718f;
+  constexpr double kTwoPi = 6.28318530717958647692;
   for (size_t ellIdx = 0; ellIdx < cmd.drawing.userEllipses.size(); ++ellIdx) {
     if (isolatedOut(cmd.drawing.userEllAttrs, ellIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
         exclude.index == static_cast<int>(ellIdx)) continue;
     const CadEllipse& el = cmd.drawing.userEllipses[ellIdx];
-    const float ma = std::hypot(el.majVx, el.majVy);
-    if (ma < 1e-8f)
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-8)
       continue;
     // A TILTED ellipse (GitHub #531) is walked in the plane it actually lies in, the way a tilted arc
     // is: a snap has to offer points that are ON the drawn curve, and the XY projection of this one
@@ -1397,13 +1383,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     // way; its curve samples carry their own height.
     const bool ellFlat = EllipseIsFlat(el);
     if (wantCenter) {
-      float hx = 0.f;
-      float hy = 0.f;
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(el.z), &hx, &hy);
-      const float p2 = ellFlat ? EllipseCenterPickDistSq(hx, hy, el, tolWorld)
-                               : static_cast<float>((hx - el.cx) * (hx - el.cx) + (hy - el.cy) * (hy - el.cy));
-      ConsiderSnap(&acc, wx, wy, static_cast<float>(el.cx), static_cast<float>(el.cy), Kind::Center, p2,
-                   tolWorld, static_cast<float>(el.z), /*heuristicAccept=*/heur);
+      double hx = 0.0;
+      double hy = 0.0;
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, el.z, &hx, &hy);
+      const double p2 = ellFlat ? EllipseCenterPickDistSq(hx, hy, el, tolWorld)
+                                : (hx - el.cx) * (hx - el.cx) + (hy - el.cy) * (hy - el.cy);
+      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z, /*heuristicAccept=*/heur);
     }
     if (!ellFlat) {
       // Sampled through the ellipse's own plane; each candidate carries the height it really has.
@@ -1414,42 +1399,31 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         const ray3d::Vec3 p0 = EllipseWorldPointAt(el, a0);
         const ray3d::Vec3 p1 = EllipseWorldPointAt(el, a1);
         if (wantMidpoint)
-          Consider(&acc, wx, wy, static_cast<float>(0.5 * (p0.x + p1.x)),
-                   static_cast<float>(0.5 * (p0.y + p1.y)), Kind::Midpoint, tolWorld,
-                   static_cast<float>(0.5 * (p0.z + p1.z)));
+          Consider(&acc, wx, wy, 0.5 * (p0.x + p1.x), 0.5 * (p0.y + p1.y), Kind::Midpoint, tolWorld,
+                   0.5 * (p0.z + p1.z));
         if (havePerpRef)
-          AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(p0.x), static_cast<float>(p0.y),
-                                     static_cast<float>(p1.x), static_cast<float>(p1.y), tolWorld, &acc,
-                                     static_cast<float>(p0.z), static_cast<float>(p1.z));
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, p0.x, p0.y, p1.x, p1.y, tolWorld, &acc, p0.z, p1.z);
       }
       continue;
     }
-    const float ux = el.majVx / ma;
-    const float uy = el.majVy / ma;
-    const float px = -uy;
-    const float py = ux;
-    const float mb = ma * el.ratio;
+    const double ux = static_cast<double>(el.majVx) / ma;
+    const double uy = static_cast<double>(el.majVy) / ma;
+    const double px = -uy;
+    const double py = ux;
+    const double mb = ma * static_cast<double>(el.ratio);
     for (int i = 0; i < kEllSnapSeg; ++i) {
-      const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kEllSnapSeg);
-      const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kEllSnapSeg);
-      const float c0 = std::cos(ang0);
-      const float s0 = std::sin(ang0);
-      const float c1 = std::cos(ang1);
-      const float s1 = std::sin(ang1);
-      const float x0 = static_cast<float>(static_cast<double>(el.cx) +
-                                          static_cast<double>(ux) * (static_cast<double>(ma) * static_cast<double>(c0)) +
-                                          static_cast<double>(px) * (static_cast<double>(mb) * static_cast<double>(s0)));
-      const float y0 = static_cast<float>(static_cast<double>(el.cy) +
-                                          static_cast<double>(uy) * (static_cast<double>(ma) * static_cast<double>(c0)) +
-                                          static_cast<double>(py) * (static_cast<double>(mb) * static_cast<double>(s0)));
-      const float x1 = static_cast<float>(static_cast<double>(el.cx) +
-                                          static_cast<double>(ux) * (static_cast<double>(ma) * static_cast<double>(c1)) +
-                                          static_cast<double>(px) * (static_cast<double>(mb) * static_cast<double>(s1)));
-      const float y1 = static_cast<float>(static_cast<double>(el.cy) +
-                                          static_cast<double>(uy) * (static_cast<double>(ma) * static_cast<double>(c1)) +
-                                          static_cast<double>(py) * (static_cast<double>(mb) * static_cast<double>(s1)));
+      const double ang0 = kTwoPi * static_cast<double>(i) / static_cast<double>(kEllSnapSeg);
+      const double ang1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(kEllSnapSeg);
+      const double c0 = std::cos(ang0);
+      const double s0 = std::sin(ang0);
+      const double c1 = std::cos(ang1);
+      const double s1 = std::sin(ang1);
+      const double x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+      const double y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+      const double x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+      const double y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
       if (wantMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
+        Consider(&acc, wx, wy, 0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, tolWorld,
                  el.z);  // the ellipse's plane, same as its centre candidate above
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, el.z, el.z);
@@ -1466,19 +1440,13 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     if (wantEndpoint) {
       for (size_t p = 0; p < spline::EditablePointCount(sp); ++p) {
         const auto v = spline::EditablePoint(sp, p);
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
-                 SnapFloatCoordinate(v.x), SnapFloatCoordinate(v.y), Kind::Endpoint, tolWorld,
-                 SnapFloatCoordinate(v.z));
+        Consider(&acc, wx, wy, v.x, v.y, Kind::Endpoint, tolWorld, v.z);
       }
       if (!sp.periodic) {
         const auto a = spline::Evaluate(sp, spline::DomainMin(sp));
         const auto b = spline::Evaluate(sp, spline::DomainMax(sp));
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
-                 SnapFloatCoordinate(a.x), SnapFloatCoordinate(a.y), Kind::Endpoint, tolWorld,
-                 SnapFloatCoordinate(a.z));
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
-                 SnapFloatCoordinate(b.x), SnapFloatCoordinate(b.y), Kind::Endpoint, tolWorld,
-                 SnapFloatCoordinate(b.z));
+        Consider(&acc, wx, wy, a.x, a.y, Kind::Endpoint, tolWorld, a.z);
+        Consider(&acc, wx, wy, b.x, b.y, Kind::Endpoint, tolWorld, b.z);
       }
     }
     if (havePerpRef || wantNearest) {
@@ -1486,16 +1454,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       spline::Tessellate(sp, kSplineSampleTolerance, &points);
       if (wantNearest && !points.empty()) {
         const spline::Vec3 nearest = ClosestOnSplineChords(points, wx, wy);
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
-                 SnapFloatCoordinate(nearest.x), SnapFloatCoordinate(nearest.y), Kind::Nearest,
-                 tolWorld, SnapFloatCoordinate(nearest.z));
+        Consider(&acc, wx, wy, nearest.x, nearest.y, Kind::Nearest, tolWorld, nearest.z);
       }
       if (!havePerpRef) continue;
       for (size_t p = 1; p < points.size(); ++p)
-        AppendPerpendicularFromRef(refPx, refPy, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
-                                   SnapFloatCoordinate(points[p - 1].x), SnapFloatCoordinate(points[p - 1].y),
-                                   SnapFloatCoordinate(points[p].x), SnapFloatCoordinate(points[p].y), tolWorld, &acc,
-                                   SnapFloatCoordinate(points[p - 1].z), SnapFloatCoordinate(points[p].z));
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, points[p - 1].x, points[p - 1].y,
+                                   points[p].x, points[p].y, tolWorld, &acc, points[p - 1].z, points[p].z);
     }
   }
 
@@ -1510,8 +1474,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         using GC = alignment::GeometryPointCode;
         const bool pi = gp.code == GC::TanTan || gp.code == GC::CurvePI || gp.code == GC::SpiralPI;
         if (pi && wantNode)  // REQ-490.2: the PIs are Node points; Endpoint keeps offering them too
-          Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
-                   SnapFloatCoordinate(gp.point.y), Kind::Node, tolWorld, 0.0f);
+          Consider(&acc, wx, wy, gp.point.x, gp.point.y, Kind::Node, tolWorld, 0.0);
         Kind k = Kind::Endpoint;
         if (gp.code == GC::CurveCenter) {
           if (!wantCenter) continue;
@@ -1522,14 +1485,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         } else if (!wantEndpoint) {
           continue;
         }
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
-                 SnapFloatCoordinate(gp.point.y), k, tolWorld, 0.0f);
+        Consider(&acc, wx, wy, gp.point.x, gp.point.y, k, tolWorld, 0.0);
       }
     }
     if (wantNearest) {
-      const alignment::Point2 n = al.GetClosestPoint(static_cast<double>(wx), static_cast<double>(wy));
-      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(n.x),
-               SnapFloatCoordinate(n.y), Kind::Nearest, tolWorld, 0.0f);
+      const alignment::Point2 n = al.GetClosestPoint(wx, wy);
+      Consider(&acc, wx, wy, n.x, n.y, Kind::Nearest, tolWorld, 0.0);
     }
     if (wantQuadrant)
       AppendAlignmentQuadrantCandidates(&acc, wx, wy, al, cmd.activeUcs, tolWorld);
@@ -1542,8 +1503,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
       for (const double raw : raws) {
         const alignment::Point2 p = al.GetPointAtStation(raw);
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
-                 SnapFloatCoordinate(p.y), Kind::Station, tolWorld, 0.0f);
+        Consider(&acc, wx, wy, p.x, p.y, Kind::Station, tolWorld, 0.0);
       }
     }
   }
@@ -1555,11 +1515,9 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         continue;
       const CadPoint& p = cmd.drawing.cadPoints[pi];
       if (wantEndpoint)
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
-                 SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+        Consider(&acc, wx, wy, p.x, p.y, Kind::Endpoint, tolWorld, p.z);
       if (wantNode)
-        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
-                 SnapFloatCoordinate(p.y), Kind::Node, tolWorld, SnapFloatCoordinate(p.z));
+        Consider(&acc, wx, wy, p.x, p.y, Kind::Node, tolWorld, p.z);
     }
   }
 
@@ -1574,27 +1532,25 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (wantIntersection) {
         ComputeTrueIntersections(isectSegs, isectConics, &cand);
         for (const IsectCandidate& c : cand)
-          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
-                   static_cast<float>(c.y), Kind::Intersection, tolWorld, static_cast<float>(c.z));
+          Consider(&acc, wx, wy, c.x, c.y, Kind::Intersection, tolWorld, c.z);
       }
       if (wantApparentIntersection) {
         cand.clear();
         ComputeApparentIntersections(CadViewCamera(cmd), isectSegs, isectConics, &cand);
         for (const IsectCandidate& c : cand)
-          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
-                   static_cast<float>(c.y), Kind::ApparentIntersection, tolWorld, static_cast<float>(c.z));
+          Consider(&acc, wx, wy, c.x, c.y, Kind::ApparentIntersection, tolWorld, c.z);
       }
     }
   }
 
   if (wantSurveyPoint) {
     for (const SurveyPoint& sp : cmd.drawing.surveyPoints) {
-      const float ex = static_cast<float>(sp.easting);
-      const float ey = static_cast<float>(sp.northing);
-      const float ez = static_cast<float>(sp.elevation);
+      const double ex = sp.easting;
+      const double ey = sp.northing;
+      const double ez = sp.elevation;
       // Same size as the drawn marker: annotative markers follow the current annotation scale (D-2026-11-06-a).
       const SurveyPointStyleDefinition* markerStyle = FindSurveyPointStyle(cmd.drawing.surveyPointStyles, sp.styleName);
-      const float arm = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches,
+      const double arm = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches,
           ModelObjectUnitsPerPlottedInch(markerStyle == nullptr || markerStyle->annotative,
               cmd.activeSpaceIndex == kModelSpaceIndex, cmd.drawing.modelUnitsPerPlottedInch, cmd.drawing.annotationScales,
               cmd.currentAnnotationScaleIndex));
@@ -1604,13 +1560,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
       // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
       // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
-      float hx = 0.f;
-      float hy = 0.f;
-      // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
-      // double survey-point coordinate here, same as every other entity kind in this loop.
+      double hx = 0.0;
+      double hy = 0.0;
       const bool heur = CenterHeuristicPoint(acc, wx, wy, ez, &hx, &hy);
-      const float p2 =
-          MinDistSqToSurveyMarker(hx, hy, ex, ey, arm);
+      const double p2 = MinDistSqToSurveyMarker(hx, hy, ex, ey, arm);
       ConsiderSnap(&acc, wx, wy, ex, ey, Kind::SurveyCenter,
                    p2, tolWorld, ez,
                    /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
@@ -1621,9 +1574,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // (node) snap, and the Center snap as the centre of its circle.
   if (wantSurveyPoint || wantCenter) {
     for (const CadPositionMarker& m : cmd.drawing.cadPositionMarkers) {
-      const float mx = static_cast<float>(m.x);
-      const float my = static_cast<float>(m.y);
-      Consider(&acc, wx, wy, mx, my, wantSurveyPoint ? Kind::SurveyCenter : Kind::Center, tolWorld, m.z);
+      Consider(&acc, wx, wy, m.x, m.y, wantSurveyPoint ? Kind::SurveyCenter : Kind::Center, tolWorld, m.z);
     }
   }
 
@@ -1660,8 +1611,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
             Consider(&acc, wx, wy, s.x1, s.y1, Kind::Endpoint, tolWorld, s.z1);
           }
           if (wantMidpoint)
-            Consider(&acc, wx, wy, 0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, tolWorld,
-                     0.5f * (s.z0 + s.z1));
+            Consider(&acc, wx, wy, 0.5 * (s.x0 + s.x1), 0.5 * (s.y0 + s.y1), Kind::Midpoint, tolWorld,
+                     0.5 * (s.z0 + s.z1));
         }
       }
       if (wantCenter) {
@@ -1726,14 +1677,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (wantSolidVertex || wantSolidMidpoint || wantSolidNearest) {
         if (wantSolidVertex) {
           for (const brep::Vertex& v : sp->vertices)
-            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(v.p.x),
-                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z), true);
+            Consider(&acc, wx, wy, v.p.x, v.p.y, Kind::Endpoint, tolWorld, v.p.z, true);
         }
         for (const brep::Edge& e : sp->edges) {
           if (wantSolidMidpoint) {
             const ray3d::Vec3 mid = brep::EdgePointAt(*sp, e, 0.5);
-            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(mid.x),
-                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z), true);
+            Consider(&acc, wx, wy, mid.x, mid.y, Kind::Midpoint, tolWorld, mid.z, true);
           }
           if (wantSolidNearest) {
             // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
@@ -1747,8 +1696,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
             // of the edge is offered, never in whether the point is on it.
             const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
             const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
-            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
-                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z), true);
+            Consider(&acc, wx, wy, on.x, on.y, Kind::Edge, tolWorld, on.z, true);
           }
         }
       }
@@ -1769,8 +1717,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
               static_cast<size_t>(faceIndex) < sp->faces.size()) {
             // The triangle told us WHICH face; the surface tells us WHERE on it.
             const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
-            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
-                     static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z), true);
+            Consider(&acc, wx, wy, exact.x, exact.y, Kind::Face, tolWorld, exact.z, true);
           }
         }
 
@@ -1806,18 +1753,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
               // the ordinary aperture of the centroid itself. pickDistSq=0 always clears the
               // tolerance test; ranking against other candidates still uses the true ray distance to
               // the centroid, so a genuinely closer Endpoint/Edge on the same face still wins.
-              ConsiderSnap(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
-                           static_cast<float>(c.y), Kind::CenterOfFace, 0.f, tolWorld, static_cast<float>(c.z),
+              ConsiderSnap(&acc, wx, wy, c.x, c.y, Kind::CenterOfFace, 0.0, tolWorld, c.z,
                            /*heuristicAccept=*/true, /*solid=*/true);
             }
 
             if (have3dPerpRef && face.surface.kind == brep::SurfaceKind::Plane) {
               // A true 90-degree foot only exists for a planar feature; curved faces have no single
               // well-defined "perpendicular" point in general, matching AutoCAD's own 3D Perpendicular.
-              const ray3d::Vec3 refW{static_cast<double>(refPx), static_cast<double>(refPy), 0.0};
+              const ray3d::Vec3 refW{refPx, refPy, 0.0};
               const ray3d::Vec3 foot = brep::ClosestPointOnSurface(face.surface, refW);
-              Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(foot.x),
-                       static_cast<float>(foot.y), Kind::Perpendicular, tolWorld, static_cast<float>(foot.z), true);
+              Consider(&acc, wx, wy, foot.x, foot.y, Kind::Perpendicular, tolWorld, foot.z, true);
             }
           }
         }
@@ -1842,8 +1787,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
             for (double u : us) {
               for (double v : vs) {
                 const ray3d::Vec3 p = nurbs::Evaluate(patch, u, v);
-                Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(p.x),
-                         static_cast<float>(p.y), Kind::Knot, tolWorld, static_cast<float>(p.z), true);
+                Consider(&acc, wx, wy, p.x, p.y, Kind::Knot, tolWorld, p.z, true);
               }
             }
           }
@@ -1855,8 +1799,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   if (wantSurface) {
     float z = 0.f;
     if (SurfaceSnapElevation(cmd, wx, wy, &z))
-      Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(wx),
-               static_cast<float>(wy), Kind::Surface, tolWorld, z);
+      Consider(&acc, wx, wy, wx, wy, Kind::Surface, tolWorld, z);
   }
 
   if (wantPointCloud) {
@@ -1965,8 +1908,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         }
       }
       if (found)
-        Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(bestPx),
-                 static_cast<float>(bestPy), Kind::PointCloud, tolWorld, static_cast<float>(bestPz));
+        Consider(&acc, wx, wy, bestPx, bestPy, Kind::PointCloud, tolWorld, bestPz);
     }
   }
 
@@ -1976,24 +1918,24 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (!att.snapEnabled || !att.snapData)
         continue;
       const PdfAttachment::SnapData& sd = *att.snapData;
-      const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
-      const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
-      const float sc   = att.scale;
+      const double cosR = std::cos(static_cast<double>(att.rotationDeg) * 3.14159265358979323846 / 180.0);
+      const double sinR = std::sin(static_cast<double>(att.rotationDeg) * 3.14159265358979323846 / 180.0);
+      const double sc   = att.scale;
 
       // Transform a PDF-space point to local (drawing / world) space.
-      auto pdfToLocal = [&](float px, float py, float* lx, float* ly) {
-        *lx = att.insertX + (px * sc * cosR - py * sc * sinR);
-        *ly = att.insertY + (px * sc * sinR + py * sc * cosR);
+      auto pdfToLocal = [&](double px, double py, double* lx, double* ly) {
+        *lx = static_cast<double>(att.insertX) + (px * sc * cosR - py * sc * sinR);
+        *ly = static_cast<double>(att.insertY) + (px * sc * sinR + py * sc * cosR);
       };
 
       // Inverse: transform world cursor to PDF-page space for spatial queries.
       // PDF rotation is counter-clockwise by att.rotationDeg.
       // Inverse transform: rotate by -rotationDeg, then divide by scale.
-      const float dxW       = wx - att.insertX;
-      const float dyW       = wy - att.insertY;
-      const float pdfCurX   = ( dxW * cosR + dyW * sinR) / sc;
-      const float pdfCurY   = (-dxW * sinR + dyW * cosR) / sc;
-      const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
+      const double dxW      = wx - static_cast<double>(att.insertX);
+      const double dyW      = wy - static_cast<double>(att.insertY);
+      const float pdfCurX   = static_cast<float>(( dxW * cosR + dyW * sinR) / sc);
+      const float pdfCurY   = static_cast<float>((-dxW * sinR + dyW * cosR) / sc);
+      const float pdfTol    = (sc > 1e-9) ? static_cast<float>(static_cast<double>(tolWorld) / sc) : 0.f;
 
       // ---- Calm snap (REQ-391): same SnapPoints + SnapIndex path as the PDF viewer ----
       const bool useCalmSnap = sd.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
@@ -2005,7 +1947,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           pdfview::SnapIndex::Pt hit{};
           float weight = 0.f;
           if (sd.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
-            float lx = 0.f, ly = 0.f;
+            double lx = 0.0, ly = 0.0;
             pdfToLocal(hit.first, hit.second, &lx, &ly);
             if (weight >= 3.5f && circlesOk)
               Consider(&acc, wx, wy, lx, ly, Kind::Center, tolWorld);
@@ -2070,7 +2012,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
                 const float epdfX = grid.pts[static_cast<size_t>(k) * 2];
                 const float epdfY = grid.pts[static_cast<size_t>(k) * 2 + 1];
                 if (!visOk(epdfX, epdfY)) continue; // blank area → skip
-                float lx = 0.f, ly = 0.f;
+                double lx = 0.0, ly = 0.0;
                 pdfToLocal(epdfX, epdfY, &lx, &ly);
                 Consider(&acc, wx, wy, lx, ly, Kind::Endpoint, tolWorld);
               }
@@ -2081,7 +2023,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           // (e.g. loaded from an older saved file or extremely small drawings).
           const auto& SL = sd.snapLinesFlat;
           for (size_t i = 0; i + 3 < SL.size(); i += 4) {
-            float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+            double lx0 = 0.0, ly0 = 0.0, lx1 = 0.0, ly1 = 0.0;
             pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
             pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
             Consider(&acc, wx, wy, lx0, ly0, Kind::Endpoint, tolWorld);
@@ -2102,10 +2044,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           if (pdfCurX < bxMin - pdfTol || pdfCurX > bxMax + pdfTol ||
               pdfCurY < byMin - pdfTol || pdfCurY > byMax + pdfTol)
             continue;
-          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+          double lx0 = 0.0, ly0 = 0.0, lx1 = 0.0, ly1 = 0.0;
           pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
           pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
-          Consider(&acc, wx, wy, 0.5f * (lx0 + lx1), 0.5f * (ly0 + ly1),
+          Consider(&acc, wx, wy, 0.5 * (lx0 + lx1), 0.5 * (ly0 + ly1),
                    Kind::Midpoint, tolWorld);
         }
       }
@@ -2121,7 +2063,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           if (pdfCurX < bxMin - pdfTol || pdfCurX > bxMax + pdfTol ||
               pdfCurY < byMin - pdfTol || pdfCurY > byMax + pdfTol)
             continue;
-          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+          double lx0 = 0.0, ly0 = 0.0, lx1 = 0.0, ly1 = 0.0;
           pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
           pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
           AppendPerpendicularFromRef(refPx, refPy, wx, wy, lx0, ly0, lx1, ly1, tolWorld, &acc);
@@ -2132,18 +2074,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (att.snapCircles && wantCenter) {
         const auto& SC = sd.snapCirclesCxCyR;
         for (size_t i = 0; i + 2 < SC.size(); i += 3) {
-          float lcx = 0.f, lcy = 0.f;
+          double lcx = 0.0, lcy = 0.0;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
-          const float lr = SC[i + 2] * sc;
+          const double lr = static_cast<double>(SC[i + 2]) * sc;
           // Small plan symbols: snap when the cursor is near the centre point itself.
-          Consider(&acc, wx, wy, lcx, lcy, Kind::Center, tolWorld, 0.f);
-          float hx = 0.f;
-          float hy = 0.f;
+          Consider(&acc, wx, wy, lcx, lcy, Kind::Center, tolWorld, 0.0);
+          double hx = 0.0;
+          double hy = 0.0;
           // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
           // the committed snapZ (0, below) already makes. If underlays gain an elevation both move.
-          const bool heur = CenterHeuristicPoint(acc, wx, wy, 0.f, &hx, &hy);
-          const float p2 = CircleCenterPickDistSq(hx, hy, lcx, lcy, lr, tolWorld);
-          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
+          const bool heur = CenterHeuristicPoint(acc, wx, wy, 0.0, &hx, &hy);
+          const double p2 = CircleCenterPickDistSq(hx, hy, lcx, lcy, lr, tolWorld);
+          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.0, /*heuristicAccept=*/heur);
         }
       }
       } // !useCalmSnap
@@ -2164,39 +2106,39 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive, bool ignoreToggle) {
   if (!commandActive || (!ignoreToggle && !cmd.objectSnapPerpendicular))
     return false;
-  float rx = 0.f;
-  float ry = 0.f;
+  double rx = 0.0;
+  double ry = 0.0;
   return PerpendicularReference(cmd, &rx, &ry);
 }
 
 /// \param pz the candidate's elevation (REQ-058). The picker hands its chosen entry straight back
 ///        as the snap result, so an entry built without a Z commits on the datum however carefully
 ///        FindBest resolves elevation for the same point.
-void PushSnapPickerEntry(float px, float py, Kind kind, float sortWx, float sortWy,
-                         std::vector<SnapCandidateEntry>& out, float pz = 0.f) {
+void PushSnapPickerEntry(double px, double py, Kind kind, double sortWx, double sortWy,
+                         std::vector<SnapCandidateEntry>& out, double pz = 0.0) {
   SnapCandidateEntry e;
   e.hit.valid = true;
   e.hit.kind = kind;
   e.hit.x = px;
   e.hit.y = py;
   e.hit.z = pz;
-  const float dx = px - sortWx;
-  const float dy = py - sortWy;
-  e.distSq = dx * dx + dy * dy;
+  const double dx = px - sortWx;
+  const double dy = py - sortWy;
+  e.distSq = static_cast<float>(dx * dx + dy * dy);
   out.push_back(e);
 }
 
-void PushPerpFootEntry(float refX, float refY, float ax, float ay, float bx, float by, float sortWx, float sortWy,
-                       std::vector<SnapCandidateEntry>& out, float az = 0.f, float bz = 0.f) {
-  const float vx = bx - ax;
-  const float vy = by - ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1.e-12f)
+void PushPerpFootEntry(double refX, double refY, double ax, double ay, double bx, double by, double sortWx,
+                       double sortWy, std::vector<SnapCandidateEntry>& out, double az = 0.0, double bz = 0.0) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1.e-18)
     return;
-  float t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
-  t = std::clamp(t, 0.f, 1.f);
-  const float qx = ax + t * vx;
-  const float qy = ay + t * vy;
+  double t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
+  t = std::clamp(t, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
   PushSnapPickerEntry(qx, qy, Kind::Perpendicular, sortWx, sortWy, out, az + t * (bz - az));
 }
 
@@ -2208,8 +2150,8 @@ void SortDedupeSnapPicker(std::vector<SnapCandidateEntry>& v) {
   for (const auto& c : v) {
     bool dup = false;
     for (const auto& p : u) {
-      if (p.hit.kind == c.hit.kind && std::fabs(p.hit.x - c.hit.x) < 1e-5f &&
-          std::fabs(p.hit.y - c.hit.y) < 1e-5f) {
+      if (p.hit.kind == c.hit.kind && std::fabs(p.hit.x - c.hit.x) < 1e-5 &&
+          std::fabs(p.hit.y - c.hit.y) < 1e-5) {
         dup = true;
         break;
       }
@@ -2220,11 +2162,11 @@ void SortDedupeSnapPicker(std::vector<SnapCandidateEntry>& v) {
   v.swap(u);
 }
 
-void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const AppCommandState& cmd,
+void GatherAllSnapsOfKind(Kind kind, double sortWorldX, double sortWorldY, const AppCommandState& cmd,
                           bool commandActive, std::vector<SnapCandidateEntry>& out) {
   out.clear();
-  float refPx = 0.f;
-  float refPy = 0.f;
+  double refPx = 0.0;
+  double refPy = 0.0;
   const bool havePerpRef = commandActive && cmd.objectSnapPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
 
   switch (kind) {
@@ -2253,14 +2195,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdge = [&](int ia, int ib) {
-        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
-        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
-        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
-        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
-        PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.drawing.vertex(static_cast<size_t>(ia)).z);
-        PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.drawing.vertex(static_cast<size_t>(ib)).z);
+        const CadPolyVertex va = cmd.drawing.vertex(static_cast<size_t>(ia));
+        const CadPolyVertex vb = cmd.drawing.vertex(static_cast<size_t>(ib));
+        PushSnapPickerEntry(va.x, va.y, Kind::Endpoint, sortWorldX, sortWorldY, out, va.z);
+        PushSnapPickerEntry(vb.x, vb.y, Kind::Endpoint, sortWorldX, sortWorldY, out, vb.z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdge(vi, vi + 1);
@@ -2268,16 +2206,14 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         pushEdge(v1 - 1, v0);
     }
     for (const CadArc& a : cmd.drawing.userArcs) {
-      if (a.r <= 1e-6f)
+      if (a.r <= 1e-6)
         continue;
       // Through the arc's own plane (REQ-312), and through the same walk the live snap uses. This
       // list and the live accumulator previously computed the same two endpoints in different
       // precisions, which is the shape of defect the shared parametrisation exists to remove.
       ucs::Ucs arcPlane;
       const bool arcFlat = ArcSnapPlane(a, &arcPlane);
-      float ex = 0.f;
-      float ey = 0.f;
-      float ez = 0.f;
+      double ex = 0.0, ey = 0.0, ez = 0.0;
       ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
       PushSnapPickerEntry(ex, ey, Kind::Endpoint, sortWorldX, sortWorldY, out, ez);
       ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad), &ex,
@@ -2290,20 +2226,16 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     if (cmd.drawing.lineStoreWellFormed()) {
       for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
         const CadLineRecord ln = cmd.drawing.line(i);
-        const float x0 = ln.x0;
-        const float y0 = ln.y0;
-        const float x1 = ln.x1;
-        const float y1 = ln.y1;
-        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (ln.z0 + ln.z1));
+        PushSnapPickerEntry(0.5 * (ln.x0 + ln.x1), 0.5 * (ln.y0 + ln.y1), Kind::Midpoint, sortWorldX, sortWorldY,
+                            out, 0.5 * (ln.z0 + ln.z1));
       }
     }
     for (const CadBlockRef& br : cmd.drawing.cadBlockRefs) {
       std::vector<CadBlockWorldSeg> segs;
       CadBlockCollectWorldLines(cmd.drawing.blockDefs, br, EntityAttributes{}, &segs);
       for (const CadBlockWorldSeg& s : segs)
-        PushSnapPickerEntry(0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, sortWorldX, sortWorldY,
-                            out, 0.5f * (s.z0 + s.z1));
+        PushSnapPickerEntry(0.5 * (s.x0 + s.x1), 0.5 * (s.y0 + s.y1), Kind::Midpoint, sortWorldX, sortWorldY,
+                            out, 0.5 * (s.z0 + s.z1));
     }
     const int polyCount =
         static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
@@ -2313,13 +2245,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgeMid = [&](int ia, int ib) {
-        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
-        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
-        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
-        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
-        PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (cmd.drawing.vertex(static_cast<size_t>(ia)).z +
-                                    cmd.drawing.vertex(static_cast<size_t>(ib)).z));
+        const CadPolyVertex va = cmd.drawing.vertex(static_cast<size_t>(ia));
+        const CadPolyVertex vb = cmd.drawing.vertex(static_cast<size_t>(ib));
+        PushSnapPickerEntry(0.5 * (va.x + vb.x), 0.5 * (va.y + vb.y), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5 * (va.z + vb.z));
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgeMid(vi, vi + 1);
@@ -2328,7 +2257,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.drawing.userArcs) {
-      if (a.r <= 1e-6f)
+      if (a.r <= 1e-6)
         continue;
       ucs::Ucs arcPlane;
       const bool arcFlat = ArcSnapPlane(a, &arcPlane);
@@ -2337,16 +2266,12 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
                                            kArcSnapSeg);
         const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
                                            kArcSnapSeg);
-        float x0 = 0.f;
-        float y0 = 0.f;
-        float z0 = 0.f;
-        float x1 = 0.f;
-        float y1 = 0.f;
-        float z1 = 0.f;
+        double x0 = 0.0, y0 = 0.0, z0 = 0.0;
+        double x1 = 0.0, y1 = 0.0, z1 = 0.0;
         ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
         ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
-        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (z0 + z1));
+        PushSnapPickerEntry(0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5 * (z0 + z1));
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -2362,8 +2287,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const double px = -uy;
       const double py = ux;
       const double mb = ma * static_cast<double>(el.ratio);
-      const double ecx = static_cast<double>(el.cx);
-      const double ecy = static_cast<double>(el.cy);
+      const double ecx = el.cx;
+      const double ecy = el.cy;
       for (int i = 0; i < kEllSnapSeg; ++i) {
         const double ang0 = kTwoPi * static_cast<double>(i) / static_cast<double>(kEllSnapSeg);
         const double ang1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(kEllSnapSeg);
@@ -2375,8 +2300,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const double y0 = ecy + uy * (ma * c0) + py * (mb * s0);
         const double x1 = ecx + ux * (ma * c1) + px * (mb * s1);
         const double y1 = ecy + uy * (ma * c1) + py * (mb * s1);
-        PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                            sortWorldX, sortWorldY, out, el.z);
+        PushSnapPickerEntry(0.5 * (x0 + x1), 0.5 * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out, el.z);
       }
     }
     break;
@@ -2389,8 +2313,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       }
     }
     for (const CadEllipse& el : cmd.drawing.userEllipses) {
-      const float ma = std::hypot(el.majVx, el.majVy);
-      if (ma < 1e-8f)
+      const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+      if (ma < 1e-8)
         continue;
       if (!EllipseIsFlat(el))
         continue;  // tilted: not this plan-space path (GitHub #531)
@@ -2403,35 +2327,30 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     if (cmd.drawing.circleStoreWellFormed()) {
       for (size_t i = 0; i < cmd.drawing.circleCount(); ++i) {
         const CadCircleRecord c = cmd.drawing.circle(i);
-        const float cx = static_cast<float>(c.cx);
-        const float cy = static_cast<float>(c.cy);
-        const float cz = static_cast<float>(c.cz);
-        const float r = static_cast<float>(c.r);
-        if (r <= 1e-6f)
+        if (c.r <= 1e-6)
           continue;
-        const ucs::Ucs plane = CircleSnapPlane(cmd.drawing.userCircleNormals, i, cx, cy, cz);
+        const ucs::Ucs plane = CircleSnapPlane(cmd.drawing.userCircleNormals, i, c.cx, c.cy, c.cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir)
-          PushSnapPickerEntry(static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y), Kind::Quadrant,
-                              sortWorldX, sortWorldY, out, static_cast<float>(cz + r * d.z));
+          PushSnapPickerEntry(c.cx + c.r * d.x, c.cy + c.r * d.y, Kind::Quadrant,
+                              sortWorldX, sortWorldY, out, c.cz + c.r * d.z);
       }
     }
     for (const CadArc& a : cmd.drawing.userArcs) {
-      if (a.r <= 1e-6f)
+      if (a.r <= 1e-6)
         continue;
       const ucs::Ucs plane = CurvePlane(a);
       ray3d::Vec3 dir[4];
       QuadrantDirections(plane, cmd.activeUcs, dir);
-      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      const ray3d::Vec3 c{a.cx, a.cy, a.z};
       for (const ray3d::Vec3& d : dir) {
-        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, a.r));
         const ucs::Point2D local = ucs::WorldToPlane(plane, p);
         if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad),
                               std::atan2(local.y, local.x)))
           continue;
-        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, sortWorldX,
-                            sortWorldY, out, static_cast<float>(p.z));
+        PushSnapPickerEntry(p.x, p.y, Kind::Quadrant, sortWorldX, sortWorldY, out, p.z);
       }
     }
     break;
@@ -2445,21 +2364,18 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
       for (const double raw : raws) {
         const alignment::Point2 p = al.GetPointAtStation(raw);
-        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Station, sortWorldX, sortWorldY,
-                            out, 0.f);
+        PushSnapPickerEntry(p.x, p.y, Kind::Station, sortWorldX, sortWorldY, out, 0.0);
       }
     }
     break;
   case Kind::Node:  // REQ-490.2: drawing points, and every PI and spiral PI of an alignment
     for (const CadPoint& p : cmd.drawing.cadPoints)
-      PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Node, sortWorldX, sortWorldY, out,
-                          static_cast<float>(p.z));
+      PushSnapPickerEntry(p.x, p.y, Kind::Node, sortWorldX, sortWorldY, out, p.z);
     for (const alignment::Alignment& al : cmd.drawing.alignments) {
       for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
         using GC = alignment::GeometryPointCode;
         if (gp.code != GC::TanTan && gp.code != GC::CurvePI && gp.code != GC::SpiralPI) continue;
-        PushSnapPickerEntry(static_cast<float>(gp.point.x), static_cast<float>(gp.point.y), Kind::Node, sortWorldX,
-                            sortWorldY, out, 0.f);
+        PushSnapPickerEntry(gp.point.x, gp.point.y, Kind::Node, sortWorldX, sortWorldY, out, 0.0);
       }
     }
     break;
@@ -2469,8 +2385,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       spline::Tessellate(sp, kSplineSampleTolerance, &points);
       if (points.empty()) continue;
       const spline::Vec3 nearest = ClosestOnSplineChords(points, sortWorldX, sortWorldY);
-      PushSnapPickerEntry(static_cast<float>(nearest.x), static_cast<float>(nearest.y), Kind::Nearest,
-                          sortWorldX, sortWorldY, out, static_cast<float>(nearest.z));
+      PushSnapPickerEntry(nearest.x, nearest.y, Kind::Nearest, sortWorldX, sortWorldY, out, nearest.z);
     }
     break;
   case Kind::Perpendicular: {
@@ -2491,13 +2406,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const bool closed =
           static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgePerp = [&](int ia, int ib) {
-        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
-        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
-        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
-        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
-        PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out,
-                          cmd.drawing.vertex(static_cast<size_t>(ia)).z,
-                          cmd.drawing.vertex(static_cast<size_t>(ib)).z);
+        const CadPolyVertex va = cmd.drawing.vertex(static_cast<size_t>(ia));
+        const CadPolyVertex vb = cmd.drawing.vertex(static_cast<size_t>(ib));
+        PushPerpFootEntry(refPx, refPy, va.x, va.y, vb.x, vb.y, sortWorldX, sortWorldY, out, va.z, vb.z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgePerp(vi, vi + 1);
@@ -2506,7 +2417,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.drawing.userArcs) {
-      if (a.r <= 1e-6f)
+      if (a.r <= 1e-6)
         continue;
       ucs::Ucs arcPlane;
       const bool arcFlat = ArcSnapPlane(a, &arcPlane);
@@ -2515,41 +2426,37 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
                                            kArcSnapSeg);
         const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
                                            kArcSnapSeg);
-        float x0 = 0.f;
-        float y0 = 0.f;
-        float z0 = 0.f;
-        float x1 = 0.f;
-        float y1 = 0.f;
-        float z1 = 0.f;
+        double x0 = 0.0, y0 = 0.0, z0 = 0.0;
+        double x1 = 0.0, y1 = 0.0, z1 = 0.0;
         ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
         ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
         PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, z0, z1);
       }
     }
     constexpr int kEllSnapSeg = 36;
-    constexpr float kTwoPi = 6.28318530718f;
+    constexpr double kTwoPi = 6.28318530717958647692;
     for (const CadEllipse& el : cmd.drawing.userEllipses) {
-      const float ma = std::hypot(el.majVx, el.majVy);
-      if (ma < 1e-8f)
+      const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+      if (ma < 1e-8)
         continue;
       if (!EllipseIsFlat(el))
         continue;  // tilted: not this plan-space path (GitHub #531)
-      const float ux = el.majVx / ma;
-      const float uy = el.majVy / ma;
-      const float px = -uy;
-      const float py = ux;
-      const float mb = ma * el.ratio;
+      const double ux = static_cast<double>(el.majVx) / ma;
+      const double uy = static_cast<double>(el.majVy) / ma;
+      const double px = -uy;
+      const double py = ux;
+      const double mb = ma * static_cast<double>(el.ratio);
       for (int i = 0; i < kEllSnapSeg; ++i) {
-        const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kEllSnapSeg);
-        const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kEllSnapSeg);
-        const float c0 = std::cos(ang0);
-        const float s0 = std::sin(ang0);
-        const float c1 = std::cos(ang1);
-        const float s1 = std::sin(ang1);
-        const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-        const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-        const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-        const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+        const double ang0 = kTwoPi * static_cast<double>(i) / static_cast<double>(kEllSnapSeg);
+        const double ang1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(kEllSnapSeg);
+        const double c0 = std::cos(ang0);
+        const double s0 = std::sin(ang0);
+        const double c1 = std::cos(ang1);
+        const double s1 = std::sin(ang1);
+        const double x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+        const double y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+        const double x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+        const double y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
         PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, el.z, el.z);
       }
     }
@@ -2563,8 +2470,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       if (!PolylineBoundsArea(cmd, pi, v0, v1))
         continue;
-      float gcx = 0.f;
-      float gcy = 0.f;
+      double gcx = 0.0;
+      double gcy = 0.0;
       if (ClosedPolylineCentroid(cmd.drawing.userPolylineVerts, v0, v1, &gcx, &gcy))
         PushSnapPickerEntry(gcx, gcy, Kind::GeometricCenter, sortWorldX, sortWorldY, out,
                             PolylineLoopMeanZ(cmd.drawing.userPolylineVerts, v0, v1));
@@ -2573,9 +2480,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::SurveyCenter:
     for (const SurveyPoint& sp : cmd.drawing.surveyPoints)
-      PushSnapPickerEntry(static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
-                          sortWorldX, sortWorldY, out,
-                          static_cast<float>(sp.elevation));  // elevation IS the point's Z (REQ-057)
+      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter,
+                          sortWorldX, sortWorldY, out, sp.elevation);  // elevation IS the point's Z (REQ-057)
     break;
   case Kind::Intersection:
   case Kind::ApparentIntersection: {
@@ -2596,8 +2502,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     else
       ComputeApparentIntersections(CadViewCamera(cmd), segs, conics, &cand);
     for (const IsectCandidate& c : cand)
-      PushSnapPickerEntry(static_cast<float>(c.x), static_cast<float>(c.y), kind, sortWorldX, sortWorldY, out,
-                          static_cast<float>(c.z));
+      PushSnapPickerEntry(c.x, c.y, kind, sortWorldX, sortWorldY, out, c.z);
     break;
   }
   case Kind::Grip:
@@ -2617,7 +2522,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   case Kind::Surface: {
     float z = 0.f;
-    if (SurfaceSnapElevation(cmd, static_cast<double>(sortWorldX), static_cast<double>(sortWorldY), &z))
+    if (SurfaceSnapElevation(cmd, sortWorldX, sortWorldY, &z))
       PushSnapPickerEntry(sortWorldX, sortWorldY, Kind::Surface, sortWorldX, sortWorldY, out, z);
     break;
   }
@@ -2627,16 +2532,16 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
 
 Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorld) {
   SnapPickAccum acc{};
-  const float tol2 = tolWorld * tolWorld;
+  const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
 
   /// \param gz the grip's own elevation (REQ-058). Grip snap outranks every geometry snap
   ///        (Priority(Grip) == 4), so a grip reported at Z 0 does not merely miss — it WINS over
   ///        a correct endpoint candidate and drags the commit down to the datum.
-  auto gripCandidate = [&](float gx, float gy, float gz) {
-    const float dx = gx - static_cast<float>(wx);
-    const float dy = gy - static_cast<float>(wy);
+  auto gripCandidate = [&](double gx, double gy, double gz) {
+    const double dx = gx - wx;
+    const double dy = gy - wy;
     if (dx * dx + dy * dy <= tol2)
-      ConsiderSnap(&acc, wx, wy, gx, gy, Kind::Grip, 0.f, tolWorld, gz);
+      ConsiderSnap(&acc, wx, wy, gx, gy, Kind::Grip, 0.0, tolWorld, gz);
   };
 
   // CAD entity grips
@@ -2660,11 +2565,8 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
       const size_t ci = static_cast<size_t>(sel.index);
       if (ci < cmd.drawing.circleCount()) {
         const CadCircleRecord c = cmd.drawing.circle(ci);
-        const float cx = static_cast<float>(c.cx);
-        const float cy = static_cast<float>(c.cy);
-        const float cz = static_cast<float>(c.cz);
-        gripCandidate(cx, cy, cz);
-        if (CircleHasRadiusGrip(cmd, ci)) gripCandidate(cx + static_cast<float>(c.r), cy, cz);
+        gripCandidate(c.cx, c.cy, c.cz);
+        if (CircleHasRadiusGrip(cmd, ci)) gripCandidate(c.cx + c.r, c.cy, c.cz);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
       const int np = static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
@@ -2674,22 +2576,23 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         for (int vi = 0; vi < endV - startV; ++vi) {
           const size_t xIdx = static_cast<size_t>(startV + vi);
           if (xIdx >= cmd.drawing.vertexCount()) break;
-          gripCandidate(cmd.drawing.vertex(xIdx).x, cmd.drawing.vertex(xIdx).y,
-                        cmd.drawing.vertex(xIdx).z);
+          const CadPolyVertex v = cmd.drawing.vertex(xIdx);
+          gripCandidate(v.x, v.y, v.z);
         }
       }
     } else if (sel.type == SelectedEntity::Type::Arc) {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userArcs.size()) {
         const CadArc& a = cmd.drawing.userArcs[static_cast<size_t>(sel.index)];
-        const float endRad = a.startRad + a.sweepRad;
+        const double startRad = static_cast<double>(a.startRad);
+        const double endRad = startRad + static_cast<double>(a.sweepRad);
         gripCandidate(a.cx, a.cy, a.z);
-        gripCandidate(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z);
-        gripCandidate(a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     a.z);
+        gripCandidate(a.cx + a.r * std::cos(startRad), a.cy + a.r * std::sin(startRad), a.z);
+        gripCandidate(a.cx + a.r * std::cos(endRad),   a.cy + a.r * std::sin(endRad),   a.z);
       }
     } else if (sel.type == SelectedEntity::Type::Ellipse) {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userEllipses.size()) {
         const CadEllipse& el = cmd.drawing.userEllipses[static_cast<size_t>(sel.index)];
-        const float perpX = -el.majVy, perpY = el.majVx;
+        const double perpX = -static_cast<double>(el.majVy), perpY = static_cast<double>(el.majVx);
         gripCandidate(el.cx, el.cy, el.z);
         gripCandidate(el.cx + el.majVx,            el.cy + el.majVy,            el.z);
         gripCandidate(el.cx + perpX * el.ratio,     el.cy + perpY * el.ratio,    el.z);
@@ -2699,7 +2602,7 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         const CadAnnotation& a = cmd.drawing.cadAnnotations[static_cast<size_t>(sel.index)];
         if (a.kind == CadAnnotation::Kind::Mtext) {
           if (a.surveyPointLabelForId >= 0) {
-            gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY), a.insZ);
+            gripCandidate(0.5 * (a.boxMinX + a.boxMaxX), 0.5 * (a.boxMinY + a.boxMaxY), a.insZ);
           } else {
             gripCandidate(a.boxMinX, a.boxMinY, a.insZ);
             gripCandidate(a.boxMaxX, a.boxMinY, a.insZ);
@@ -2714,10 +2617,9 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
   // Survey point grips (selected survey points)
   for (const int idx : cmd.selectedSurveyPointIndices) {
     if (idx >= 0 && static_cast<size_t>(idx) < cmd.drawing.surveyPoints.size())
-      gripCandidate(static_cast<float>(cmd.drawing.surveyPoints[static_cast<size_t>(idx)].easting),
-                    static_cast<float>(cmd.drawing.surveyPoints[static_cast<size_t>(idx)].northing),
-                    static_cast<float>(
-                        cmd.drawing.surveyPoints[static_cast<size_t>(idx)].elevation));  // elevation IS Z (REQ-057)
+      gripCandidate(cmd.drawing.surveyPoints[static_cast<size_t>(idx)].easting,
+                    cmd.drawing.surveyPoints[static_cast<size_t>(idx)].northing,
+                    cmd.drawing.surveyPoints[static_cast<size_t>(idx)].elevation);  // elevation IS Z (REQ-057)
   }
 
   return acc.best;

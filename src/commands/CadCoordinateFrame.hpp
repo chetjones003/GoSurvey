@@ -47,14 +47,14 @@ inline void LocalFromWorld(const AppCommandState& st, double wx, double wy, doub
   *lx = wx - st.drawing.worldDocumentOriginX;
   *ly = wy - st.drawing.worldDocumentOriginY;
 }
-void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, double* wy);
+void WorldFromLocal(const AppCommandState& st, double lx, double ly, double* wx, double* wy);
 
 inline float WorldXFromLocal(const AppCommandState& st, float lx) {
-  return static_cast<float>(static_cast<double>(lx) + st.drawing.worldDocumentOriginX);
+  return static_cast<float>(lx + st.drawing.worldDocumentOriginX);
 }
 
 inline float WorldYFromLocal(const AppCommandState& st, float ly) {
-  return static_cast<float>(static_cast<double>(ly) + st.drawing.worldDocumentOriginY);
+  return static_cast<float>(ly + st.drawing.worldDocumentOriginY);
 }
 
 /// `double` overloads for callers carrying a full-precision coordinate (survey points, Phase F) —
