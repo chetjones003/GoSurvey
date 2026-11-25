@@ -259,7 +259,9 @@ dimension text is always horizontal, and an angular dimension measures up to 180
 ### Editing dimensions
 
 Select a dimension and drag its grips to move the dimension line or the text. Properties shows its
-layer, colour, and geometry.
+layer, colour, label position, and optional one-off **Text height** and **Arrow size** overrides in
+**model units** (leave blank to follow the dimension style). Overrides stay fixed in model units at
+every annotation scale, and undo restores any override change. See [[Properties]].
 
 > **DXF note** — aligned dimensions are written to DXF as **exploded lines plus text**, not as
 > associative `DIMENSION` entities. They will look right in another CAD program but will not be
@@ -285,10 +287,14 @@ Choosing a scale resizes them and never moves the view. Annotative objects are:
 - **survey points**, their markers and their labels (annotative by default; a point style's marker is
   sized from the annotation scale);
 - **position markers**;
-- dimensions, multileaders and text marked **Annotative**.
+- dimensions (when the dimension or its dimension style is marked **Annotative** — text, arrows,
+  lines, offsets, and unplaced labels all scale together on screen, in PDF, DXF, and DWG; per-dimension
+  model-unit overrides in [[Properties]] stay fixed across scales), multileaders, and text marked
+  **Annotative**.
 
-Objects that are not annotative keep the plot scale above. Paper space keeps its own viewport
-annotation scale. See [[Views and Navigation]].
+Objects that are not annotative keep the plot scale above (times the style's **Overall scale** for
+non-annotative dimension styles). Paper space keeps its own viewport annotation scale. See
+[[Views and Navigation]].
 
 ---
 

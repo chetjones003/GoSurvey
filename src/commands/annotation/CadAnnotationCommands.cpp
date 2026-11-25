@@ -4,6 +4,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
 #include "CadField.hpp"
+#include "CadDimStroke.hpp"
 #include "GoSurvey/Document/MtextRichFormat.hpp"
 #include <algorithm>
 #include <array>
@@ -305,6 +306,24 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   ann->insX = mx + bisx * lift;
   ann->insY = my + bisy * lift;
   ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
+}
+
+void CadDimModelSpaceLabelPosition(const AppCommandState& st, const CadAnnotation& a, double* x, double* y) {
+  if (!x || !y)
+    return;
+  *x = a.insX;
+  *y = a.insY;
+  if (a.dimTextUserPlaced)
+    return;
+  const DimensionStyle& style = CadDimensionStyleForAnnotation(st, a);
+  const CadDimStrokeParams p = CadDimStrokeParamsFor(
+      a, style, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+      st.currentAnnotationScaleIndex, nullptr, true, st.viewportDimArrowScale);
+  CadDimWorldStrokes strokes;
+  if (CadDimBuildWorldStrokes(a, p, &strokes)) {
+    *x = strokes.labelX;
+    *y = strokes.labelY;
+  }
 }
 
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
