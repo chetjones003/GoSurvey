@@ -367,6 +367,11 @@
   /// UTF-8 path to optional startup .gst template (Settings → Startup). Empty = use bundled resources/default-template.gst.
   char defaultWorkspaceTemplatePathUtf8[768]{};
   char defaultDrawingTemplatePathUtf8[768]{};
+  /// Periodic crash-recovery autosave (Settings → Files → Autosave). On by default.
+  bool autosaveEnabled = true;
+  int  autosaveIntervalMinutes = 5;
+  static constexpr int kAutosaveMinIntervalMinutes = 1;
+  static constexpr int kAutosaveMaxIntervalMinutes = 120;
   /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
   char activeUiLayoutNameUtf8[64]{"default"};
   bool openSaveLayoutAsPopup = false;

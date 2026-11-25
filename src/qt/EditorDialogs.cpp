@@ -1,4 +1,7 @@
 #include "EditorWindow.hpp"
+#include "EditorAutosave.hpp"
+#include "GsIo.hpp"
+#include "Project.hpp"
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
@@ -46,6 +49,10 @@
 #include <QListWidgetItem>
 #include <QTimer>
 #include <QFileDialog>
+#include <QDesktopServices>
+#include <QStatusBar>
+#include <QUrl>
+#include <chrono>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTabWidget>
@@ -450,6 +457,56 @@ void EditorWindow::ShowSettings() {
     CopyUtf8PathCapped(m_State.defaultDrawingTemplatePathUtf8,
                        sizeof(m_State.defaultDrawingTemplatePathUtf8), path.constData());
   });
+
+  auto *autosaveHeading = new QLabel("Autosave", dialog);
+  autosaveHeading->setObjectName("autosaveSettingsHeading");
+  autosaveHeading->setStyleSheet("font-size:16px; font-weight:600; margin-top:10px;");
+  layout->addWidget(autosaveHeading);
+  auto *autosaveEnabledBox = new QCheckBox("Automatically save recovery copies of unsaved drawings", dialog);
+  autosaveEnabledBox->setObjectName("settingsAutosaveEnabled");
+  autosaveEnabledBox->setChecked(m_State.autosaveEnabled);
+  layout->addWidget(autosaveEnabledBox);
+  auto *autosaveForm = new QFormLayout();
+  layout->addLayout(autosaveForm);
+  auto *autosaveInterval = new QSpinBox(dialog);
+  autosaveInterval->setObjectName("settingsAutosaveInterval");
+  autosaveInterval->setRange(AppCommandState::kAutosaveMinIntervalMinutes,
+                             AppCommandState::kAutosaveMaxIntervalMinutes);
+  autosaveInterval->setValue(std::clamp(m_State.autosaveIntervalMinutes,
+                                        AppCommandState::kAutosaveMinIntervalMinutes,
+                                        AppCommandState::kAutosaveMaxIntervalMinutes));
+  autosaveInterval->setSuffix(" min");
+  autosaveInterval->setMinimumHeight(26);
+  autosaveInterval->setKeyboardTracking(false);
+  autosaveInterval->setEnabled(autosaveEnabledBox->isChecked());
+  autosaveForm->addRow("Autosave interval", autosaveInterval);
+  connect(autosaveEnabledBox, &QCheckBox::toggled, autosaveInterval, &QSpinBox::setEnabled);
+
+  auto *autosaveDirRow = new QWidget(dialog);
+  auto *autosaveDirLayout = new QHBoxLayout(autosaveDirRow);
+  autosaveDirLayout->setContentsMargins(0, 0, 0, 0);
+  auto *autosaveFolderEdit = new QLineEdit(QString::fromStdWString(AutosaveRootDirectory().wstring()), dialog);
+  autosaveFolderEdit->setObjectName("settingsAutosaveFolder");
+  autosaveFolderEdit->setReadOnly(true);
+  auto *openAutosaveFolder = new QPushButton("Open Folder", autosaveDirRow);
+  openAutosaveFolder->setObjectName("openAutosaveFolder");
+  autosaveDirLayout->addWidget(autosaveFolderEdit, 1);
+  autosaveDirLayout->addWidget(openAutosaveFolder);
+  autosaveForm->addRow("Recovery folder", autosaveDirRow);
+  connect(openAutosaveFolder, &QPushButton::clicked, dialog, [this] {
+    std::error_code ec;
+    std::filesystem::create_directories(AutosaveRootDirectory(), ec);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdWString(AutosaveRootDirectory().wstring())));
+  });
+  auto *autosaveNote = new QLabel(
+      "Recovery copies are written separately without modifying your .dwg files. "
+      "If GoSurvey closes unexpectedly, you will be prompted to restore them on the next launch.", dialog);
+  autosaveNote->setWordWrap(true);
+  layout->addWidget(autosaveNote);
+  commits->push_back([this, autosaveEnabledBox, autosaveInterval] {
+    m_State.autosaveEnabled = autosaveEnabledBox->isChecked();
+    m_State.autosaveIntervalMinutes = autosaveInterval->value();
+  });
   layout->addStretch();
 
   // ---- Display page (REQ-449) ------------------------------------------------------------
@@ -698,6 +755,7 @@ void EditorWindow::ShowSettings() {
       return false;
     }
     for (const auto &commit : *commits) commit();
+    SyncAutosaveSettings();
     BumpCadGpuCache(m_State);
     Refresh();
     if (!SaveUserStartupPrefs(m_State)) {
@@ -2376,4 +2434,413 @@ void EditorWindow::ShowViewportScale() {
   if (m_Log.size() > previous && m_Log.back().find("could not read") != std::string::npos)
     QMessageBox::warning(this, "Viewport Scale", QString::fromUtf8(m_Log.back().c_str()));
   Refresh();
+}
+
+namespace {
+
+std::int64_t AutosaveNowUnixSeconds() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+std::int64_t AutosaveNowUnixMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+// Serializes an inactive tab's DrawingDocument using SerializeGoSurveyJson without mutating the
+// active tab or deep-copying geometry vectors: moves doc.content into a temporary AppCommandState
+// and restores it via RAII even if an exception occurs.
+std::string SerializeInactiveDocumentJson(const AppCommandState& live, DrawingDocument& doc) {
+  auto temp = std::make_unique<AppCommandState>();
+
+  struct RestoreGuard {
+    DrawingContent* target = nullptr;
+    DrawingContent* source = nullptr;
+    ~RestoreGuard() {
+      if (target != nullptr && source != nullptr)
+        *target = std::move(*source);
+    }
+  };
+
+  temp->drawing = std::move(doc.content);
+  RestoreGuard restore{&doc.content, &temp->drawing};
+
+  temp->currentViewportZoomScaleIndex = doc.currentViewportZoomScaleIndex;
+  temp->currentAnnotationScaleIndex = doc.currentAnnotationScaleIndex;
+  temp->viewportPanX = doc.viewportPanX;
+  temp->viewportPanY = doc.viewportPanY;
+  temp->viewportZoom = doc.viewportZoom;
+  temp->viewportPanZ = doc.viewportPanZ;
+  temp->viewportAzimuthDeg = doc.viewportAzimuthDeg;
+  temp->viewportElevationDeg = doc.viewportElevationDeg;
+  temp->viewportRollDeg = doc.viewportRollDeg;
+  temp->viewportProjection = doc.viewportProjection;
+  temp->viewportFovDeg = doc.viewportFovDeg;
+  temp->viewportSectionClip = doc.viewportSectionClip;
+  temp->viewportSectionClipOffset = doc.viewportSectionClipOffset;
+  temp->viewportSectionClipFlip = doc.viewportSectionClipFlip;
+  temp->viewportSectionClipFrameValid = doc.viewportSectionClipFrameValid;
+  temp->viewportSectionClipFrame = doc.viewportSectionClipFrame;
+  temp->viewportSectionClipExtent = doc.viewportSectionClipExtent;
+  temp->activeUcs = doc.activeUcs;
+  temp->ucsPrevious = doc.ucsPrevious;
+  temp->activeViewName = doc.activeViewName;
+  temp->ucsFollow = doc.ucsFollow;
+  temp->nextEntityId = doc.nextEntityId;
+  temp->activeSpaceIndex = doc.activeSpaceIndex;
+  temp->dwgImportedLights = doc.dwgImportedLights;
+  temp->dwgImportedSun = doc.dwgImportedSun;
+  temp->dwgImportedSunPresent = doc.dwgImportedSunPresent;
+  temp->dwgImportedLightList = doc.dwgImportedLightList;
+  temp->dwgImportedLightListPresent = doc.dwgImportedLightListPresent;
+  temp->dwgImportedLightListDictKey = doc.dwgImportedLightListDictKey;
+  temp->blockRecent = doc.blockRecent;
+  temp->blockFavorites = doc.blockFavorites;
+  temp->floatingUcsSwapActive = false;
+
+  temp->viewportBgR = live.viewportBgR;
+  temp->viewportBgG = live.viewportBgG;
+  temp->viewportBgB = live.viewportBgB;
+  temp->viewportCrosshair3d = live.viewportCrosshair3d;
+  temp->viewportCrosshairR = live.viewportCrosshairR;
+  temp->viewportCrosshairG = live.viewportCrosshairG;
+  temp->viewportCrosshairB = live.viewportCrosshairB;
+  temp->viewportCrosshairHairPx = live.viewportCrosshairHairPx;
+  temp->viewportCrosshairArmFracX = live.viewportCrosshairArmFracX;
+  temp->viewportCrosshairArmFracY = live.viewportCrosshairArmFracY;
+  temp->viewportCrosshairPickHalfPxX = live.viewportCrosshairPickHalfPxX;
+  temp->viewportCrosshairPickHalfPxY = live.viewportCrosshairPickHalfPxY;
+  temp->viewportTextMinPx = live.viewportTextMinPx;
+  temp->viewportTextMaxPx = live.viewportTextMaxPx;
+  temp->viewportMtextMinPx = live.viewportMtextMinPx;
+  temp->viewportMtextMaxPx = live.viewportMtextMaxPx;
+  temp->viewportDimExtLinePx = live.viewportDimExtLinePx;
+  temp->viewportDimDimLinePx = live.viewportDimDimLinePx;
+  temp->viewportDimArrowScale = live.viewportDimArrowScale;
+  temp->viewportDimTextMinPx = live.viewportDimTextMinPx;
+  temp->viewportDimTextMaxPx = live.viewportDimTextMaxPx;
+  temp->viewportVisualStyle = live.viewportVisualStyle;
+  temp->viewportSolidIsolines = live.viewportSolidIsolines;
+  temp->objectSnapEnabled = live.objectSnapEnabled;
+  temp->objectSnapEndpoint = live.objectSnapEndpoint;
+  temp->objectSnapMidpoint = live.objectSnapMidpoint;
+  temp->objectSnapCenter = live.objectSnapCenter;
+  temp->objectSnapQuadrant = live.objectSnapQuadrant;
+  temp->objectSnapStation = live.objectSnapStation;
+  temp->objectSnapNode = live.objectSnapNode;
+  temp->objectSnapPerpendicular = live.objectSnapPerpendicular;
+  temp->objectSnapSurveyPoint = live.objectSnapSurveyPoint;
+  temp->objectSnapGeometricCenter = live.objectSnapGeometricCenter;
+  temp->objectSnapIntersection = live.objectSnapIntersection;
+  temp->objectSnapApparentIntersection = live.objectSnapApparentIntersection;
+  temp->objectSnapSurface = live.objectSnapSurface;
+  temp->objectSnap3dEnabled = live.objectSnap3dEnabled;
+  temp->objectSnapAperturePx = live.objectSnapAperturePx;
+  temp->objectSnapGlyphHalfPx = live.objectSnapGlyphHalfPx;
+  temp->surveyPointCrossSpanPlottedInches = live.surveyPointCrossSpanPlottedInches;
+  temp->surveyPointShowIdInViewport = live.surveyPointShowIdInViewport;
+  temp->surveyPointLabelPlottedHeightInches = live.surveyPointLabelPlottedHeightInches;
+  temp->surveyLabelTemplates = live.surveyLabelTemplates;
+  temp->surveyLabelOffsetEastPlottedIn = live.surveyLabelOffsetEastPlottedIn;
+  temp->surveyLabelOffsetNorthPlottedIn = live.surveyLabelOffsetNorthPlottedIn;
+  temp->surveyLabelBoxWidthPlottedIn = live.surveyLabelBoxWidthPlottedIn;
+  temp->surveyLabelBoxHeightPlottedIn = live.surveyLabelBoxHeightPlottedIn;
+  temp->surveyLabelLeaderArrowPx = live.surveyLabelLeaderArrowPx;
+
+  return SerializeGoSurveyJson(*temp);
+}
+
+std::string ProjectFilePathForUid(const AppCommandState& st, std::uint32_t projectUid) {
+  if (projectUid == 0)
+    return {};
+  for (const auto& session : st.openProjects) {
+    if (session.uid == projectUid && !session.project.file.empty())
+      return session.project.file.u8string();
+  }
+  return {};
+}
+
+}  // namespace
+
+void EditorWindow::InitAutosave(const std::filesystem::path& userDataDir) {
+  m_Autosave = std::make_shared<EditorAutosaveState>();
+  m_Autosave->rootDir = userDataDir.empty() ? std::filesystem::path("autosave") : (userDataDir / "autosave");
+  m_Autosave->pid = static_cast<std::uint32_t>(std::max<qint64>(0, QCoreApplication::applicationPid()));
+  m_Autosave->startedAtUnix = AutosaveNowUnixSeconds();
+  m_Autosave->sessionId = autosave::MakeSessionId(m_Autosave->pid, AutosaveNowUnixMilliseconds());
+
+  m_Autosave->timer = new QTimer(this);
+  connect(m_Autosave->timer, &QTimer::timeout, this, [this] { RunAutosavePass(); });
+
+  m_Autosave->retryTimer = new QTimer(this);
+  m_Autosave->retryTimer->setSingleShot(true);
+  m_Autosave->retryTimer->setInterval(2000);
+  connect(m_Autosave->retryTimer, &QTimer::timeout, this, [this] { RunAutosavePass(); });
+}
+
+void EditorWindow::StartAutosave() {
+  if (!m_Autosave)
+    InitAutosave(UserDataDirectory());
+  m_Autosave->started = true;
+  SyncAutosaveSettings();
+}
+
+void EditorWindow::SyncAutosaveSettings() {
+  if (!m_Autosave || !m_Autosave->timer || !m_Autosave->started)
+    return;
+  if (!m_State.autosaveEnabled) {
+    m_Autosave->timer->stop();
+    if (m_Autosave->retryTimer)
+      m_Autosave->retryTimer->stop();
+    return;
+  }
+  const int minutes = std::clamp(m_State.autosaveIntervalMinutes,
+                                 AppCommandState::kAutosaveMinIntervalMinutes,
+                                 AppCommandState::kAutosaveMaxIntervalMinutes);
+  const int intervalMs = minutes * 60 * 1000;
+  if (m_Autosave->timer->interval() != intervalMs || !m_Autosave->timer->isActive())
+    m_Autosave->timer->start(intervalMs);
+}
+
+std::filesystem::path EditorWindow::AutosaveRootDirectory() const {
+  if (m_Autosave && !m_Autosave->rootDir.empty())
+    return m_Autosave->rootDir;
+  const std::filesystem::path dir = UserDataDirectory();
+  return dir.empty() ? std::filesystem::path("autosave") : (dir / "autosave");
+}
+
+bool EditorWindow::AutosaveTabAtIndex(int index) {
+  if (!m_Autosave || index < FirstDrawingTabIndex() ||
+      index >= static_cast<int>(m_State.drawingTabs.size()) ||
+      index >= static_cast<int>(m_State.documents.size()))
+    return false;
+
+  const bool isActive = index == m_State.activeDrawingIdx;
+  if (isActive && m_State.blockEditActive)
+    return false;
+
+  const auto& tab = m_State.drawingTabs[static_cast<std::size_t>(index)];
+  const std::uint32_t currentRev =
+      isActive ? m_State.cadGpuRevision : m_State.documents[static_cast<std::size_t>(index)].cadGpuRevision;
+  const std::uint32_t savedRev =
+      isActive ? m_State.activeDocSavedRevision : m_State.documents[static_cast<std::size_t>(index)].savedRevision;
+
+  if (currentRev == savedRev) {
+    if (m_Autosave->lastAutosavedRevision.erase(tab.uid) > 0)
+      autosave::RemoveTabEntry(m_Autosave->rootDir, m_Autosave->sessionId, tab.uid);
+    return false;
+  }
+
+  const auto prevIt = m_Autosave->lastAutosavedRevision.find(tab.uid);
+  if (prevIt != m_Autosave->lastAutosavedRevision.end() && prevIt->second == currentRev)
+    return false;
+
+  std::string payload;
+  try {
+    payload = isActive ? SerializeGoSurveyJson(m_State)
+                       : SerializeInactiveDocumentJson(
+                             m_State, m_State.documents[static_cast<std::size_t>(index)]);
+  } catch (const std::exception& e) {
+    m_Log.push_back(std::string("Autosave failed for ") + tab.name + ": " + e.what());
+    return false;
+  }
+
+  autosave::EntryMeta meta;
+  meta.tabUid = tab.uid;
+  meta.tabName = tab.name;
+  meta.originalFilePath = isActive ? m_State.activeDocFilePath
+                                   : m_State.documents[static_cast<std::size_t>(index)].filePath;
+  if (meta.originalFilePath.empty())
+    meta.originalFilePath = tab.recoverySuggestedPath;
+  meta.projectFilePath = ProjectFilePathForUid(m_State, tab.projectUid);
+  meta.savedAtUnix = AutosaveNowUnixSeconds();
+  meta.appVersion = GOSURVEY_VERSION_FULL;
+
+  std::string err;
+  if (!autosave::WriteEntry(m_Autosave->rootDir, m_Autosave->sessionId, m_Autosave->pid,
+                            m_Autosave->startedAtUnix, meta, payload, &err)) {
+    m_Log.push_back("Autosave failed for " + tab.name + (err.empty() ? "." : ": " + err));
+    if (statusBar())
+      statusBar()->showMessage("Autosave failed for " + QString::fromUtf8(tab.name.c_str()), 5000);
+    return false;
+  }
+
+  m_Autosave->lastAutosavedRevision[tab.uid] = currentRev;
+
+  const auto srcIt = m_Autosave->pendingRecoveredSources.find(tab.uid);
+  if (srcIt != m_Autosave->pendingRecoveredSources.end()) {
+    autosave::DiscardEntry(srcIt->second);
+    m_Autosave->pendingRecoveredSources.erase(srcIt);
+  }
+  return true;
+}
+
+void EditorWindow::RunAutosavePass() {
+  if (!m_Autosave || !m_State.autosaveEnabled)
+    return;
+  if (m_State.entityGripMoveActive || m_State.alignLabelDragActive) {
+    if (m_Autosave->retryTimer)
+      m_Autosave->retryTimer->start();
+    return;
+  }
+
+  QStringList savedNames;
+  const int count = static_cast<int>(std::min(m_State.drawingTabs.size(), m_State.documents.size()));
+  for (int i = FirstDrawingTabIndex(); i < count; ++i) {
+    if (AutosaveTabAtIndex(i))
+      savedNames << QString::fromUtf8(m_State.drawingTabs[static_cast<std::size_t>(i)].name.c_str());
+  }
+
+  if (!savedNames.isEmpty() && statusBar()) {
+    const QString msg = savedNames.size() == 1
+                            ? QString("Autosaved %1").arg(savedNames.front())
+                            : QString("Autosaved %1 drawings").arg(savedNames.size());
+    statusBar()->showMessage(msg, 4000);
+  }
+}
+
+void EditorWindow::OnDrawingSaved(std::uint32_t tabUid) {
+  if (!m_Autosave || tabUid == 0)
+    return;
+  m_Autosave->lastAutosavedRevision.erase(tabUid);
+  autosave::RemoveTabEntry(m_Autosave->rootDir, m_Autosave->sessionId, tabUid);
+  const auto srcIt = m_Autosave->pendingRecoveredSources.find(tabUid);
+  if (srcIt != m_Autosave->pendingRecoveredSources.end()) {
+    autosave::DiscardEntry(srcIt->second);
+    m_Autosave->pendingRecoveredSources.erase(srcIt);
+  }
+}
+
+void EditorWindow::OnDrawingClosed(std::uint32_t tabUid) {
+  OnDrawingSaved(tabUid);
+}
+
+void EditorWindow::ShutdownAutosave() {
+  if (!m_Autosave)
+    return;
+  if (m_Autosave->timer)
+    m_Autosave->timer->stop();
+  if (m_Autosave->retryTimer)
+    m_Autosave->retryTimer->stop();
+  for (const auto& [uid, entry] : m_Autosave->pendingRecoveredSources) {
+    (void)uid;
+    autosave::DiscardEntry(entry);
+  }
+  m_Autosave->pendingRecoveredSources.clear();
+  m_Autosave->lastAutosavedRevision.clear();
+  autosave::CleanupSession(m_Autosave->rootDir, m_Autosave->sessionId);
+}
+
+bool EditorWindow::RecoverAutosaveEntry(const autosave::RecoveryEntry& entry) {
+  std::string json;
+  std::string err;
+  if (!autosave::ReadPayload(entry, &json, &err)) {
+    QMessageBox::warning(this, "Drawing Recovery",
+                         QString("Could not read autosaved drawing “%1”.\n%2")
+                             .arg(QString::fromUtf8(entry.meta.tabName.c_str()),
+                                  QString::fromUtf8(err.c_str())));
+    return false;
+  }
+
+  std::uint32_t projectUid = 0;
+  if (!entry.meta.projectFilePath.empty()) {
+    std::error_code ec;
+    const std::filesystem::path projPath = std::filesystem::u8path(entry.meta.projectFilePath);
+    if (std::filesystem::is_regular_file(projPath, ec) && !ec)
+      projectUid = OpenProject(QString::fromStdWString(projPath.wstring()), false);
+  }
+
+  const int previous = m_State.activeDrawingIdx;
+  CreateDrawingFromTemplate(projectUid);
+  auto& openingTab = m_State.drawingTabs[static_cast<std::size_t>(m_State.activeDrawingIdx)];
+  openingTab.pointsMode = AppCommandState::DrawingTab::PointsMode::Unattached;
+  openingTab.pointsBaseWorld.clear();
+  openingTab.pointsRevision = 0;
+
+  if (!LoadGoSurveyFromJsonUtf8(m_State, json, m_Log)) {
+    m_State.drawingTabs.pop_back();
+    m_State.documents.pop_back();
+    RestoreDocumentFromSnapshot(m_State, previous);
+    m_State.activeDrawingIdx = previous;
+    m_State.prevDrawingIdx = previous;
+    m_Viewport->InvalidateGeometry();
+    Refresh();
+    QMessageBox::warning(this, "Drawing Recovery",
+                         QString("The autosaved copy of “%1” could not be loaded. See the command log.")
+                             .arg(QString::fromUtf8(entry.meta.tabName.c_str())));
+    return false;
+  }
+
+  LoadUserStartupPrefSettings(m_State);
+  if (projectUid != 0)
+    RefreshProjects();
+
+  m_State.activeDocFilePath.clear();
+  auto& recoveredTab = m_State.drawingTabs[static_cast<std::size_t>(m_State.activeDrawingIdx)];
+  recoveredTab.recoverySuggestedPath = entry.meta.originalFilePath;
+  recoveredTab.name = MakeRecoveredTabName(entry.meta.tabName);
+
+  BumpCadGpuCache(m_State);
+  m_State.activeDocSavedRevision = m_State.cadGpuRevision - 1u;
+  SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
+
+  if (m_Autosave) {
+    m_Autosave->pendingRecoveredSources[recoveredTab.uid] = entry;
+    if (m_State.autosaveEnabled)
+      AutosaveTabAtIndex(m_State.activeDrawingIdx);
+  }
+
+  m_Log.push_back("Recovered autosaved drawing: " + recoveredTab.name);
+  m_Viewport->InvalidateGeometry();
+  Refresh();
+  return true;
+}
+
+bool EditorWindow::CheckForAutosaveRecovery(bool userInitiated) {
+  if (!m_Autosave)
+    InitAutosave(UserDataDirectory());
+
+  const auto entries = autosave::ScanRecoverable(
+      m_Autosave->rootDir, m_Autosave->sessionId,
+      [](std::uint32_t pid) { return gsproj::ProcessIsRunning(pid); });
+
+  if (entries.empty()) {
+    if (userInitiated) {
+      QMessageBox::information(
+          this, "Drawing Recovery",
+          QString("No autosaved recovery drawings were found.\n\nAutosave folder:\n%1")
+              .arg(QString::fromStdWString(m_Autosave->rootDir.wstring())));
+    }
+    return false;
+  }
+
+  ShowAutosaveRecoveryDialog(entries, userInitiated);
+  return true;
+}
+
+void EditorWindow::ShowAutosaveRecoveryDialog(bool userInitiated) {
+  CheckForAutosaveRecovery(userInitiated);
+}
+
+void EditorWindow::ShowAutosaveRecoveryDialog(const std::vector<autosave::RecoveryEntry>& entries,
+                                              bool userInitiated) {
+  m_ModalOpen = true;
+  const AutosaveRecoveryChoice choice =
+      RunAutosaveRecoveryDialog(this, AutosaveRootDirectory(), entries, userInitiated);
+  m_ModalOpen = false;
+
+  if (choice.action == AutosaveRecoveryChoice::Action::DiscardAll) {
+    autosave::DiscardAll(entries);
+    m_Log.push_back("Discarded all autosaved recovery drawings.");
+    return;
+  }
+  if (choice.action == AutosaveRecoveryChoice::Action::Recover) {
+    for (int row : choice.selectedRows) {
+      if (row >= 0 && row < static_cast<int>(entries.size()))
+        RecoverAutosaveEntry(entries[static_cast<std::size_t>(row)]);
+    }
+  }
 }

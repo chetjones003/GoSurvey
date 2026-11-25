@@ -368,15 +368,17 @@ void EditorWindow::RefreshProperties() {
   };
   // A numeric field: commits on Enter/focus-out when its text really changed; an unparsable entry
   // is refused with a message and the field goes back to the drawing's value.
+  // blankClears (issue #1676): an emptied field means "no override" and applies 0.
   auto numberField = [&](const char* name, const QString& shown, std::function<propedit::Outcome(double)> apply,
-                         bool enabled = true) {
+                         bool enabled = true, bool blankClears = false) {
     auto* edit = new QLineEdit(shown, body);
     edit->setObjectName(name);
     edit->setEnabled(enabled);
     edit->setAlignment(Qt::AlignRight);
-    connect(edit, &QLineEdit::editingFinished, edit, [edit, shown, apply, finish] {
+    connect(edit, &QLineEdit::editingFinished, edit, [edit, shown, apply, finish, blankClears] {
       const QString typed = edit->text().trimmed();
       if (typed == shown) return;
+      if (typed.isEmpty() && blankClears) { finish(apply(0.0)); return; }
       bool ok = false;
       const double value = typed.toDouble(&ok);
       if (!ok) { finish({propedit::Result::Rejected, "Enter a number."}); return; }
@@ -673,18 +675,34 @@ void EditorWindow::RefreshProperties() {
         return propedit::SetTextNumber(m_State, i, field, value);
       }), axis);
     };
-    number("Insertion X", "propTextInsertionX", F::InsertionX, fmt(ann.insX + ox), 'X');
-    number("Insertion Y", "propTextInsertionY", F::InsertionY, fmt(ann.insY + oy), 'Y');
+    const bool dimension = ann.kind == CadAnnotation::Kind::DimAligned || ann.kind == CadAnnotation::Kind::DimLinear ||
+                           ann.kind == CadAnnotation::Kind::DimAngular;
+    const propedit::DimDerivedSizes dimSizes =
+        dimension ? propedit::ReadDimensionSizes(m_State, ann) : propedit::DimDerivedSizes{};
+    number("Insertion X", "propTextInsertionX", F::InsertionX, fmt((dimension ? dimSizes.labelX : ann.insX) + ox), 'X');
+    number("Insertion Y", "propTextInsertionY", F::InsertionY, fmt((dimension ? dimSizes.labelY : ann.insY) + oy), 'Y');
     number("Insertion Z", "propTextInsertionZ", F::InsertionZ, fmt(ann.insZ), 'Z');
-    number("Plotted height (in)", "propTextHeight", F::PlottedHeightInches, QString::asprintf("%.4f", static_cast<double>(ann.plottedHeightInches)));
+    if (dimension) {
+      // Issue #1676: one-off sizes in model units, the same at every annotation scale. Blank = style.
+      auto overrideField = [&](const char* label, const char* name, F field, double value) {
+        auto* edit = numberField(name, value > 0.0 ? fmt(value) : QString(), [this, i, field](double typed) {
+          return propedit::SetTextNumber(m_State, i, field, typed);
+        }, true, true);
+        edit->setPlaceholderText("By style");
+        edit->setToolTip(
+            "Model units. Stays this size at every annotation scale. Clear the field to follow the dimension style.");
+        addRow(geometryRows, label, edit);
+      };
+      overrideField("Text height", "propDimTextHeight", F::DimTextHeightModel, ann.dimTextHeightModel);
+      overrideField("Arrow size", "propDimArrowSize", F::DimArrowSizeModel, ann.dimArrowSizeModel);
+    } else {
+      number("Plotted height (in)", "propTextHeight", F::PlottedHeightInches, QString::asprintf("%.4f", static_cast<double>(ann.plottedHeightInches)));
+    }
     if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext)
       number("Rotation (CW from N)", "propTextRotation", F::RotationBearingDeg,
              QString::asprintf("%.2f", static_cast<double>(BearingCwNorthDegFromMathAngleRad(ann.rotationRad))));
     if (ann.kind == CadAnnotation::Kind::Mtext) {
-      number("Box min X", "propTextBoxMinX", F::BoxMinX, fmt(ann.boxMinX));
-      number("Box min Y", "propTextBoxMinY", F::BoxMinY, fmt(ann.boxMinY));
-      number("Box max X", "propTextBoxMaxX", F::BoxMaxX, fmt(ann.boxMaxX));
-      number("Box max Y", "propTextBoxMaxY", F::BoxMaxY, fmt(ann.boxMaxY));
+      number("Box width", "propTextFrameWidth", F::FrameWidth, fmt(CadMtextFrameWidth(ann)));
     }
     if (ann.kind != CadAnnotation::Kind::Table) {
       auto* content = new ContentEdit(body);
@@ -700,8 +718,15 @@ void EditorWindow::RefreshProperties() {
       addRow(geometryRows, "Content", content);
     }
     auto* derived = section("Derived", "propertiesDerived");
-    readOnly(derived, "Model text height", fmt(CadAnnotationHeightWorld(ann, m_State.drawing.modelUnitsPerPlottedInch)) + " model units", "propDerivedTextHeight");
+    if (dimension) {
+      // What is drawn right now: the dimension's own scale (issue #1676), overrides included.
+      readOnly(derived, "Model text height", fmt(dimSizes.textHeightModel) + " model units", "propDerivedTextHeight");
+      readOnly(derived, "Model arrow size", fmt(dimSizes.arrowSizeModel) + " model units", "propDerivedArrowSize");
+    } else {
+      readOnly(derived, "Model text height", fmt(CadAnnotationHeightWorld(ann, m_State.drawing.modelUnitsPerPlottedInch)) + " model units", "propDerivedTextHeight");
+    }
     if (ann.kind == CadAnnotation::Kind::Mtext) {
+      readOnly(derived, "Box height", fmt(CadMtextFrameHeight(ann)), "propDerivedBoxHeight");
       readOnly(derived, "Box width", fmt(std::fabs(ann.boxMaxX - ann.boxMinX)), "propDerivedBoxWidth");
       readOnly(derived, "Box height", fmt(std::fabs(ann.boxMaxY - ann.boxMinY)), "propDerivedBoxHeight");
     }

@@ -1,7 +1,7 @@
   // --- Deferred survey-duplicate modal state (survives after COPY/ROTATE/MIRROR session ends) ---
   /// COPY modal: when true, duplicate survey selection by pending rotation instead of translation.
   bool pendingSurveyDupIsRotate = false;
-  float pendingRotateCopyBx = 0.f, pendingRotateCopyBy = 0.f, pendingRotateCopyRad = 0.f;
+  double pendingRotateCopyBx = 0.0, pendingRotateCopyBy = 0.0, pendingRotateCopyRad = 0.0;
   /// COPY modal: when true, duplicate survey selection by pending reflection instead of
   /// translation/rotation. Checked ahead of \ref pendingSurveyDupIsRotate.
   bool pendingSurveyDupIsMirror = false;

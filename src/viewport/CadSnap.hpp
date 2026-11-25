@@ -116,7 +116,7 @@ struct SnapExclude {
 [[nodiscard]] Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorld);
 
 /// All snap targets of a single \p kind in the drawing (no aperture). Sorted by distance to (\p sortWorldX,\p sortWorldY).
-void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const AppCommandState& cmd,
+void GatherAllSnapsOfKind(Kind kind, double sortWorldX, double sortWorldY, const AppCommandState& cmd,
                           bool commandActive, std::vector<SnapCandidateEntry>& out);
 
 /// True when perpendicular snap has a command reference (same rules as object snap).

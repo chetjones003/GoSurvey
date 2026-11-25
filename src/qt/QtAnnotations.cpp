@@ -101,6 +101,76 @@ bool DrawStrokeText(QPainter& painter, const CadAnnotation& annotation, float pi
   return true;
 }
 
+/// SHX MTEXT inside its frame (issue #1667): word-wraps at \p boxWidth and places the block by the
+/// attachment — horizontally per line, vertically within \p boxHeight — as the Qt-document path does.
+/// Painter coordinates start at the frame's top-left, y down, in the same pixels as \p pixels.
+/// Greedy word wrap of SHX MTEXT at \p boxWidth pixels; a word wider than the box gets a line of its own.
+std::vector<std::string> WrapStrokeLines(Shx::Font& font, float pixels, const std::string& text, double boxWidth) {
+  const auto measure = [&](const std::string& s) { return static_cast<double>(Shx::MeasureWidthPx(font, s, pixels)); };
+  std::vector<std::string> lines;
+  const std::string plain = MtextRichFlattenToPlain(text);
+  std::size_t start = 0;
+  while (start <= plain.size()) {
+    const std::size_t end = std::min(plain.find('\n', start), plain.size());
+    const std::string paragraph = plain.substr(start, end - start);
+    std::string line;
+    std::size_t pos = 0;
+    while (pos < paragraph.size()) {  // greedy word wrap; a word wider than the box gets a line of its own
+      const std::size_t space = paragraph.find(' ', pos);
+      const std::size_t wordEnd = space == std::string::npos ? paragraph.size() : space;
+      const std::string word = paragraph.substr(pos, wordEnd - pos);
+      const std::string candidate = line.empty() ? word : line + " " + word;
+      if (!line.empty() && boxWidth > 0 && measure(candidate) > boxWidth) {
+        lines.push_back(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+      pos = wordEnd + 1;
+    }
+    lines.push_back(line);
+    if (end >= plain.size()) break;
+    start = end + 1;
+  }
+  return lines;
+}
+
+/// Height of \p lineCount SHX lines: cap height, 1.4 × pitch between baselines, room for descenders.
+double StrokeBlockHeight(float pixels, std::size_t lineCount) {
+  return pixels * (1.3 + 1.4 * static_cast<double>(std::max<std::size_t>(lineCount, 1) - 1));
+}
+
+bool DrawStrokeMtext(QPainter& painter, const CadAnnotation& annotation, float pixels, const std::string& text,
+                     double boxWidth, double boxHeight) {
+  if (!cadfont::PreferShxStrokes(annotation.fontFamily, text)) return false;
+  auto* font = Shx::Resolve(annotation.fontFamily);
+  if (!font || !font->valid()) return false;
+  const auto measure = [&](const std::string& s) { return static_cast<double>(Shx::MeasureWidthPx(*font, s, pixels)); };
+  const std::vector<std::string> lines = WrapStrokeLines(*font, pixels, text, boxWidth);
+  const float scale = pixels / font->capHeight();
+  const float shear = std::tan(annotation.obliqueDeg * 3.14159265358979323846f / 180.f);
+  const int attach = std::clamp(annotation.mtextAttach, 1, 9) - 1, column = attach % 3, row = attach / 3;
+  const double pitch = pixels * 1.4;
+  const double blockHeight = StrokeBlockHeight(pixels, lines.size());
+  double y = pixels + (row == 1 ? (boxHeight - blockHeight) * 0.5 : row == 2 ? boxHeight - blockHeight : 0.0);
+  for (const std::string& line : lines) {
+    const double width = measure(line);
+    double x = column == 1 ? (boxWidth - width) * 0.5 : column == 2 ? boxWidth - width : 0.0;
+    for (const unsigned char character : line) {
+      const auto* glyph = font->glyph(character);
+      if (!glyph) continue;
+      for (const auto& stroke : glyph->strokes) {
+        QPolygonF path;
+        for (const auto& point : stroke) path << QPointF(x + (point.x + shear * point.y) * scale, y - point.y * scale);
+        if (path.size() > 1) painter.drawPolyline(path);
+      }
+      x += glyph->advance * scale;
+    }
+    y += pitch;
+  }
+  return true;
+}
+
 void DrawPointMarkerBlock(QPainter& painter, const AppCommandState& state, const SurveyPoint& point,
                           const SurveyPointStyleDefinition& style, const SurveyPointStyleComponent& component,
                           const Camera& camera, float width, float height, double span, QColor highlight) {
@@ -803,6 +873,17 @@ void DrawQtAlignmentOverlay(QPainter& painter, const AppCommandState& state, Ali
 
 }  // namespace
 
+float MeasureQtMtextHeight(float pixels, const std::string& wire, const std::string& family, float wrapWidthPx) {
+  // The same two layouts DrawQtModelAnnotations draws with: SHX strokes, else a Qt text document.
+  if (cadfont::PreferShxStrokes(family, wire))
+    if (auto* font = Shx::Resolve(family); font && font->valid())
+      return static_cast<float>(StrokeBlockHeight(pixels, WrapStrokeLines(*font, pixels, wire, wrapWidthPx).size()));
+  QTextDocument document;
+  PopulateQtText(document, pixels, wire, family);
+  document.setTextWidth(std::max(1.f, wrapWidthPx));
+  return static_cast<float>(document.size().height());
+}
+
 void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, float width, float height) {
   const auto camera = CadViewCamera(state);
   const auto activeScaleName = CadActiveAnnotationScaleName(&state.drawing.annotationScales,
@@ -818,9 +899,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     CadAnnotation annotation = state.drawing.cadAnnotations[i];
     if (CadAnnotationIsDimension(annotation)) {
       const auto& style = CadDimensionStyleForAnnotation(state, annotation);
+      // Size (style height, Overall scale, annotation scale, overrides) is resolved below by
+      // CadDimTextHeightWorld, the same rule the arrows use (issue #1676) — not baked in here.
       if (!annotation.ovHeight) annotation.plottedHeightInches = style.textSizeInches;
-      if (!StyleFlag(style.props, "annotative"))
-        annotation.plottedHeightInches *= static_cast<float>(StyleNumber(style.props, "overallScale", 1));
       if (!annotation.ovFont) {
         const auto* textStyle = TextStyles::Find(state.drawing.textStyles, style.textFont);
         annotation.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
@@ -836,6 +917,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     if (annotation.annotative && !annotation.annotativeVisibleScaleNames.empty() && !activeScaleName.empty() &&
         std::find(annotation.annotativeVisibleScaleNames.begin(), annotation.annotativeVisibleScaleNames.end(), activeScaleName) ==
             annotation.annotativeVisibleScaleNames.end()) continue;
+    // Issue #1667: an annotative MTEXT's frame (wrap width, box) follows the annotation scale with its text.
+    annotation = CadAnnotationAsDrawn(annotation, nullptr, state.drawing.modelUnitsPerPlottedInch,
+                                      &state.drawing.annotationScales, state.currentAnnotationScaleIndex);
     const CadLayerRow* layer = nullptr;
     if (attrs) {
       for (const auto& row : state.drawing.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
@@ -861,12 +945,14 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     painter.setPen(pen); painter.setBrush(Qt::NoBrush);
     double x = annotation.insX, y = annotation.insY, rotation = annotation.rotationRad;
     const bool dimension = CadAnnotationIsDimension(annotation);
+    double dimensionTextWorld = 0.0;
     if (dimension) {
       const DimensionStyle& dimStyle = CadDimensionStyleForAnnotation(state, annotation);
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
-          annotation.annotative || StyleFlag(dimStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
+      parameters.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(  // issue #1676
+          annotation, &dimStyle, state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales,
+          state.currentAnnotationScaleIndex, nullptr, state.activeSpaceIndex == kModelSpaceIndex);
+      dimensionTextWorld = CadDimTextHeightWorld(annotation, &dimStyle, parameters.modelUnitsPerPlottedInch);
       parameters.arrowSizeInches = dimStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = dimStyle.arrowType;
@@ -892,7 +978,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     } else if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext) continue;
     const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
         state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales, state.currentAnnotationScaleIndex);
-    const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
+    const double textWorld = dimension ? dimensionTextWorld : CadAnnotationHeightWorld(annotation, annotationMup);
     if (!(textWorld > 0) || !std::isfinite(textWorld)) continue;
     std::string text = CadAnnotationResolvedText(state, annotation);
     if (annotation.bold) { text.insert(0, "[[b]]"); text.append("[[/b]]"); }
@@ -985,6 +1071,11 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         painter.restore(); continue;
       }
     }
+    if (annotation.kind == CadAnnotation::Kind::Mtext &&
+        DrawStrokeMtext(painter, annotation, fontPixels, text, CadMtextFrameWidth(annotation) / worldPerPixel,
+                        CadMtextFrameHeight(annotation) / worldPerPixel)) {
+      painter.restore(); continue;
+    }
     if (DrawStrokeText(painter, annotation, fontPixels, text, annotation.kind == CadAnnotation::Kind::Text)) {
       painter.restore(); continue;
     }
@@ -1049,9 +1140,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         textColor = QColor::fromRgbF(trgb[0], trgb[1], trgb[2]);
       }
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
-          StyleFlag(state.drawing.activeDimensionStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
+      parameters.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(  // issue #1676
+          draft, &state.drawing.activeDimensionStyle, state.drawing.modelUnitsPerPlottedInch,
+          &state.drawing.annotationScales, state.currentAnnotationScaleIndex, nullptr,
+          state.activeSpaceIndex == kModelSpaceIndex);
       parameters.arrowSizeInches = state.drawing.activeDimensionStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = state.drawing.activeDimensionStyle.arrowType;
@@ -1068,7 +1160,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           painter.drawPolygon(QPolygonF{project(arrow.x0, arrow.y0, draft.insZ),
                                         project(arrow.x1, arrow.y1, draft.insZ),
                                         project(arrow.x2, arrow.y2, draft.insZ)});
-        const double textWorld = CadAnnotationHeightWorld(draft, state.drawing.modelUnitsPerPlottedInch);
+        const double textWorld =
+            CadDimTextHeightWorld(draft, &state.drawing.activeDimensionStyle, parameters.modelUnitsPerPlottedInch);
         const QPointF base = project(strokes.labelX, strokes.labelY, draft.insZ);
         const QPointF top = project(strokes.labelX, strokes.labelY + textWorld, draft.insZ);
         QFont font = painter.font();
@@ -1435,6 +1528,12 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
       continue;
     painter.save();
     painter.setWorldTransform(QTransform(right.x(), right.y(), down.x(), down.y(), origin.x(), origin.y()));
+    if (annotation.kind == CadAnnotation::Kind::Mtext &&
+        DrawStrokeMtext(painter, annotation, fontPixels, text, CadMtextFrameWidth(annotation) / worldPerPixel,
+                        CadMtextFrameHeight(annotation) / worldPerPixel)) {
+      painter.restore();
+      continue;
+    }
     if (DrawStrokeText(painter, annotation, fontPixels, text, annotation.kind == CadAnnotation::Kind::Text)) {
       painter.restore();
       continue;

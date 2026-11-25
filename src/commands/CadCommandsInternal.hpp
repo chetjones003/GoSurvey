@@ -505,6 +505,7 @@ void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log)
 
 bool ParseTwoDoubles(std::string s, double* x, double* y);
 bool ParseOneFloat(const std::string& s, float* v);
+bool ParseAngleDegreesInternal(const std::string& raw, double* degreesOut);
 bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut);
 void ExecuteGradingGroupCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);
@@ -571,11 +572,11 @@ static void ScalePtAroundBase(double bx, double by, double sc, T* x, T* y) {
 static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotation* ann) {
   if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
     return;
-  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  float dmx = cmx;
-  float dmy = cmy;
+  const double x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  double dmx = cmx;
+  double dmy = cmy;
   if (!ann->dimLinearVertical)
     dmy = cmy + ann->dimSignedOffset;
   else
@@ -583,8 +584,8 @@ static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotat
   ScalePtAroundBase(bx, by, sc, &ann->dimExt1X, &ann->dimExt1Y);
   ScalePtAroundBase(bx, by, sc, &ann->dimExt2X, &ann->dimExt2Y);
   ScalePtAroundBase(bx, by, sc, &dmx, &dmy);
-  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
-  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
+  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
     ann->dimSignedOffset = dmy - ncmy;
   else
@@ -599,14 +600,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
   } else if (a.kind == CadAnnotation::Kind::Mtext) {
-    ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
-    ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
-    if (a.boxMinX > a.boxMaxX)
-      std::swap(a.boxMinX, a.boxMaxX);
-    if (a.boxMinY > a.boxMaxY)
-      std::swap(a.boxMinY, a.boxMaxY);
-    a.insX = a.boxMinX;
-    a.insY = a.boxMinY;
+    // Issue #1667: the insertion scales about the base; the frame keeps its rotation and attachment.
+    CadMtextTransform(a, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); }, 0.f, sc);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
   } else if (a.kind == CadAnnotation::Kind::DimLinear) {
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);

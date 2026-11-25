@@ -563,6 +563,22 @@ private:
   double hatchAnchorY_ = 0.0;
   std::vector<float> hatchUpload_;
   void ReleaseHatchGpu();
+  /// What the solid-filled regions pass (ViewportHatchPass.cpp) reads from the frame being rendered.
+  struct SolidFillPassInput {
+    const CadExtendedGeometryInput* extended;
+    const std::vector<CadFilledRegion>* filledRegions;
+    const std::vector<EntityAttributes>* filledRegionAttrs;
+    const std::vector<CadLayerRow>* drawingLayers;
+    const float* mvp;
+    int locMvp;
+    int locCol;
+    double viewAnchorX, viewAnchorY;
+    double camFwdX, camFwdY, camFwdZ;
+    bool depthOn;
+    bool shadeSurfaces;
+    float shadedAmbient;
+  };
+  void DrawSolidFilledRegions(const SolidFillPassInput& in);
   /// What the hatch pass (ViewportHatchPass.cpp) reads from the frame being rendered.
   struct HatchPassInput {
     const CadExtendedGeometryInput* extended;

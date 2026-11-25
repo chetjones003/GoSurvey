@@ -1,0 +1,24 @@
+# Issue #1668 — DIMANGULAR read 62d01'07.7" for an exact 62 degree angle near (3230, 5290).
+#
+# Below the 100,000 ft rebase threshold the document origin stays at zero, so local coordinates
+# are ~5,000 and a float holds them only to ~0.0005 ft. Typed points (not just snaps) must stay
+# double, and the DWG round-trip must keep them. Ray 2 is 1 ft at exactly 62 degrees from ray 1.
+
+NEW
+
+CMD DIMANGULAR
+CMD 3230.9697,5290.5486
+CMD @0.8,0.6
+CMD @-0.15419130548664356,0.988041011958676
+CMD @0.3,0.3
+ESC
+
+EXPECT ANNOTATIONS 1
+EXPECT ANNKIND 0 dimangular
+EXPECT ANNTEXT 0 62°00'00.0"
+
+SAVEAS %OUT%/dimangular-1668.dwg
+OPEN %OUT%/dimangular-1668.dwg
+CHECK ALL
+EXPECT ANNOTATIONS 1
+EXPECT ANNTEXT 0 62°00'00.0"

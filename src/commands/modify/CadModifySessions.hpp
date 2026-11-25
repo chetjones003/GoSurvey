@@ -147,15 +147,15 @@ class RotateSession final : public CommandSession {
   explicit RotateSession(RotatePhase initialPhase) : phase(initialPhase) {}
 
   RotatePhase phase = RotatePhase::PickSelection;
-  float baseX = 0.f;
-  float baseY = 0.f;
-  float baseZ = 0.f;
-  float refX1 = 0.f;
-  float refY1 = 0.f;
-  float refX2 = 0.f;
-  float refY2 = 0.f;
-  float anglePt1X = 0.f;
-  float anglePt1Y = 0.f;
+  double baseX = 0.0;
+  double baseY = 0.0;
+  double baseZ = 0.0;
+  double refX1 = 0.0;
+  double refY1 = 0.0;
+  double refX2 = 0.0;
+  double refY2 = 0.0;
+  double anglePt1X = 0.0;
+  double anglePt1Y = 0.0;
   bool copyMode = false;
 
   [[nodiscard]] CadCommandKind kind() const override { return CadCommandKind::Rotate; }

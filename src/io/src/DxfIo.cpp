@@ -137,11 +137,11 @@ struct DxfArcAsWritten {
   if (cy > 1e-6) {
     out->rotX = static_cast<float>(std::atan2(-m[1][2], m[2][2]));
     out->rotY = static_cast<float>(std::atan2(m[0][2], cy));
-    out->rotZ = static_cast<float>(std::atan2(-m[0][1], m[0][0]));
+    out->rotZ = std::atan2(-m[0][1], m[0][0]);
   } else {
     out->rotX = 0.f;
     out->rotY = static_cast<float>(std::copysign(kPi / 2.0, m[0][2]));
-    out->rotZ = static_cast<float>(std::atan2(m[1][0], m[1][1]));
+    out->rotZ = std::atan2(m[1][0], m[1][1]);
   }
   return true;
 }
@@ -1973,10 +1973,6 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double boxW = (refW > 1e-9 ? refW * a.scaleX : textW);
       if (boxW < hWorld) boxW = std::max(textW, hWorld);
       const double boxH = std::max(hWorld * 1.3, lineCount * hWorld * 1.3);
-      const int col = (attach - 1) % 3;  // 0 left, 1 center, 2 right
-      const int row = (attach - 1) / 3;  // 0 top, 1 middle, 2 bottom
-      const double left = a.insX - (col == 0 ? 0.0 : col == 1 ? boxW * 0.5 : boxW);
-      const double top  = a.insY + (row == 0 ? 0.0 : row == 1 ? boxH * 0.5 : boxH);
       CadAnnotation an;
       an.kind = CadAnnotation::Kind::Mtext;
       an.mtextAttach = std::clamp(attach, 1, 9);
@@ -1989,12 +1985,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       // per-text override so the imported box height is preserved.
       an.styleName = styleRef;
       an.ovHeight = true;
-      an.boxMinX = static_cast<float>(left);
-      an.boxMaxX = static_cast<float>(left + boxW);
-      an.boxMinY = static_cast<float>(top - boxH);
-      an.boxMaxY = static_cast<float>(top);
-      an.insX = an.boxMinX;  // GoSurvey stores the box bottom-left as the insertion point
-      an.insY = an.boxMinY;
+      // Issue #1667: the insertion is the group-71 attachment point; the frame turns with the text.
+      an.insX = static_cast<float>(a.insX);
+      an.insY = static_cast<float>(a.insY);
+      CadMtextPlaceFrame(an, static_cast<float>(boxW), static_cast<float>(boxH));
       st.drawing.cadAnnotations.push_back(an);
       st.drawing.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb, plotStyleNamesByHandle));
       i = j;
@@ -2169,9 +2163,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           i = j;
           continue;
         }
-        ref.xf.x = static_cast<float>(worldInsert.x - st.drawing.worldDocumentOriginX);
-        ref.xf.y = static_cast<float>(worldInsert.y - st.drawing.worldDocumentOriginY);
-        ref.xf.z = static_cast<float>(worldInsert.z);
+        ref.xf.x = worldInsert.x - st.drawing.worldDocumentOriginX;
+        ref.xf.y = worldInsert.y - st.drawing.worldDocumentOriginY;
+        ref.xf.z = worldInsert.z;
         ref.xf.sx = static_cast<float>(sx);
         ref.xf.sy = static_cast<float>(sy);
         ref.xf.sz = static_cast<float>(sz);
@@ -4065,11 +4059,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
   // extension rays and no vertex (issue #252). Sharing the module fixes that kind, fixes every kind
   // added later for free, and stops the three output paths disagreeing about what a dimension is.
-  CadDimStrokeParams dxfDimParams;
-  dxfDimParams.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
-  dxfDimParams.arrowSizeInches = st.drawing.activeDimensionStyle.arrowSizeInches;
-  dxfDimParams.arrowScale = 1.f;
-  dxfDimParams.arrowType = st.drawing.activeDimensionStyle.arrowType;
+  // Model space is exported at the current annotation scale with the drawing arrow multiplier (issue #1676).
+  auto dxfDimParamsFor = [&](const CadAnnotation& an, const DimensionStyle& style) {
+    return CadDimStrokeParamsFor(an, style, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+                                 st.currentAnnotationScaleIndex, nullptr, true, st.viewportDimArrowScale);
+  };
   // An exploded dimension costs one LINE per stroke (strokes.segs already includes the arrowhead
   // outline as Arrow-kind segments - this writer has no filled-triangle entity, and strokes.arrows
   // only repeats those same three edges) plus one TEXT for the label. The count pre-pass and the
@@ -4084,10 +4078,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
       const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
-      dxfDimParams.style = &dimensionStyle;
-      dxfDimParams.arrowType = dimensionStyle.arrowType;
-      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
-      if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
+      if (!CadDimBuildWorldStrokes(an, dxfDimParamsFor(an, dimensionStyle), &strokes))
         continue;
       entityHandleCount += dxfDimEntityCount(strokes);
     } else
@@ -6037,9 +6028,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     } else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
       const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
-      dxfDimParams.style = &dimensionStyle;
-      dxfDimParams.arrowType = dimensionStyle.arrowType;
-      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
+      const CadDimStrokeParams dxfDimParams = dxfDimParamsFor(an, dimensionStyle);
       if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
       auto emitLine = [&](float x0, float y0, float x1, float y1) {
@@ -6086,8 +6075,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.x = std::to_string(static_cast<double>(strokes.labelX));
       rec.y = std::to_string(static_cast<double>(strokes.labelY));
       rec.z = std::to_string(static_cast<double>(an.insZ));  // elevation (REQ-057)
-      rec.height =
-          std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch)));
+      rec.height = std::to_string(static_cast<double>(
+          CadDimTextHeightWorld(an, &dimensionStyle, dxfDimParams.modelUnitsPerPlottedInch)));  // issue #1676
       rec.text = txt;
       rec.rotationDeg =
           std::to_string(static_cast<double>(strokes.labelRotRad) * (180.0 / kPi)); // group 50 is DEGREES
@@ -6115,15 +6104,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(100, "AcDbMText");
       // Insertion point is the box corner/edge selected by the attachment (group 71):
       // col 0/1/2 = left/center/right (min/mid/max X), row 0/1/2 = top/middle/bottom (max/mid/min Y).
+      // Issue #1667: the attachment point on the rotated frame.
       const int attach = std::clamp(an.mtextAttach, 1, 9);
-      const int acol = (attach - 1) % 3;
-      const int arow = (attach - 1) / 3;
-      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
-      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
-      const double insXw = acol == 0 ? bMnX : acol == 1 ? 0.5 * (bMnX + bMxX) : bMxX;
-      const double insYw = arow == 0 ? bMxY : arow == 1 ? 0.5 * (bMnY + bMxY) : bMnY;
-      emitPair(10, std::to_string(insXw));
-      emitPair(20, std::to_string(insYw));
+      float insXf = 0.f, insYf = 0.f;
+      CadMtextInsertionFromBox(an, &insXf, &insYf);
+      emitPair(10, std::to_string(static_cast<double>(insXf)));
+      emitPair(20, std::to_string(static_cast<double>(insYf)));
       emitPair(30, std::to_string(static_cast<double>(an.insZ)));  // elevation (REQ-057)
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));

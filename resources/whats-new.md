@@ -1,13 +1,13 @@
-# GoSurvey 0.8.9
+# GoSurvey 0.8.13
 
-## New in 0.8.9
+## New in 0.8.13
 
-- Improved TRIM, PIPERUN, text editing, selection, and hatch display.
-- Start opens without an empty drawing, and Properties shows more object details.
-- Undo and drawing tabs retain more drawing settings and content.
-- Fixed viewport picks and command completion for HATCH and EXTRACTCENTERLINE.
-- Improved hatch tools, PDF dimensions, viewport picking, and editor input.
-- F1 help is more context-aware, and the manual now includes searchable command pages.
+- Crash-recovery autosave with a Drawing Recovery dialog.
+- New TEXT and MTEXT is annotative by default; MTEXT rotation, grips and scaling are consistent.
+- Per-dimension text and arrow size overrides with unified annotation scaling.
+- Exact rotations and dimension measurements at survey coordinates.
+- Fixed UI freezes and memory spikes while drafting.
+- Improved hatch slider controls and translucent fills.
 
 ---
 
@@ -39,4 +39,4 @@
 - See clearer input focus, command history, selection feedback, and PDF workflow guidance in the editor and panels.
 - The start screen shows update-checking progress before an available update is offered.
 
-See the [0.8.9 release notes](https://github.com/chetjones003/GoSurvey/releases/tag/v0.8.9) for the full list of changes.
+See the [0.8.13 release notes](https://github.com/chetjones003/GoSurvey/releases/tag/v0.8.13) for the full list of changes.

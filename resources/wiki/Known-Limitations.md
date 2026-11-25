@@ -81,7 +81,6 @@ presets
 
 | Missing | Notes |
 |---|---|
-| **Autosave, backup files, drawing recovery** | Save deliberately with `Ctrl+S` |
 | **Recent files list** | Use File → Open |
 | **Customisable keyboard shortcuts or aliases** | Fixed in the program. Right-click behaviour *is* configurable |
 | **Command macros or scripting** | None |

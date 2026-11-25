@@ -2,6 +2,7 @@
 
 #include "CadDimGeom.hpp"
 #include "DimensionStyle.hpp"
+#include "PaperSpace.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,51 @@ struct CadDimStrokeParams {
 inline bool CadAnnotationIsDimension(const CadAnnotation& a) {
   return a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
          a.kind == CadAnnotation::Kind::DimAngular;
+}
+
+/// Issue #1676: the ONE scale a dimension is sized by — text, arrows, lines, offsets and label
+/// placement all read it, so they can no longer disagree. Annotative when the dimension OR its style
+/// says so: the viewport's annotation scale on a sheet (\p vp), the current annotation scale in model
+/// space. Otherwise the drawing plot scale times the style's Overall scale (DIMSCALE).
+[[nodiscard]] inline float CadDimModelUnitsPerPlottedInch(const CadAnnotation& a, const DimensionStyle* style,
+                                                         float drawingMup,
+                                                         const std::vector<CadAnnotationScale>* scales,
+                                                         int currentScaleIndex, const Viewport* vp,
+                                                         bool modelSpace) {
+  const bool annotative = a.annotative || (style != nullptr && StyleFlag(style->props, "annotative"));
+  if (annotative) {
+    if (vp != nullptr)
+      return ViewportAnnotationScaleModelUnitsPerPaperInch(*vp, scales);
+    if (modelSpace)
+      return ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingMup, scales, currentScaleIndex);
+    return drawingMup;
+  }
+  const double overall = style != nullptr ? StyleNumber(style->props, "overallScale", 1) : 1.0;
+  return drawingMup * static_cast<float>((std::isfinite(overall) && overall > 0.0) ? overall : 1.0);  // 0 = AutoCAD's "scale to layout"
+}
+
+/// Issue #1676: populate CadDimStrokeParams from the dimension, its style, and the active scale.
+[[nodiscard]] inline CadDimStrokeParams CadDimStrokeParamsFor(
+    const CadAnnotation& a, const DimensionStyle& style, float drawingMup,
+    const std::vector<CadAnnotationScale>* scales, int currentScaleIndex, const Viewport* vp, bool modelSpace,
+    float arrowScale) {
+  CadDimStrokeParams p;
+  p.modelUnitsPerPlottedInch =
+      CadDimModelUnitsPerPlottedInch(a, &style, drawingMup, scales, currentScaleIndex, vp, modelSpace);
+  p.arrowSizeInches = style.arrowSizeInches;
+  p.arrowScale = arrowScale;
+  p.arrowType = style.arrowType;
+  p.style = &style;
+  return p;
+}
+
+/// Issue #1676: label height in model units. A per-dimension override (model units) wins outright;
+/// otherwise the style's height (or a per-dimension plotted-inch override) at scale \p mup.
+[[nodiscard]] inline float CadDimTextHeightWorld(const CadAnnotation& a, const DimensionStyle* style, float mup) {
+  if (std::isfinite(a.dimTextHeightModel) && a.dimTextHeightModel > 0.0)
+    return static_cast<float>(a.dimTextHeightModel);
+  const float inches = (style != nullptr && !a.ovHeight) ? style->textSizeInches : a.plottedHeightInches;
+  return inches * (std::max)(mup, 1.e-6f);
 }
 
 inline bool CadClipSegToRect(float xmin, float ymin, float xmax, float ymax, float& x0, float& y0, float& x1,
@@ -155,7 +201,9 @@ inline bool CadDimBuildLinearStrokes(const CadAnnotation& a, const CadDimStrokeP
   if (!p.style || !StyleFlag(p.style->props, "suppressExt2"))
     CadDimPushSeg(out, ex2, ey2, sx2 + nx * over, sy2 + ny * over, CadDimWorldSeg::Kind::Extension);
   const float styleArrowWorld = p.arrowSizeInches * (std::max)(p.modelUnitsPerPlottedInch, 1.e-6f);
-  const float alenW = p.style ? styleArrowWorld * p.arrowScale :
+  const float alenW = (std::isfinite(a.dimArrowSizeModel) && a.dimArrowSizeModel > 0.0)
+      ? static_cast<float>(a.dimArrowSizeModel)  // issue #1676
+      : p.style ? styleArrowWorld * p.arrowScale :
       (std::max)(styleArrowWorld * p.arrowScale * 0.10f, p.arrowScale * 0.012f * meas);
   const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
   if (dlen > 1.e-6f) {
@@ -191,9 +239,9 @@ inline bool CadDimBuildAngularStrokes(const CadAnnotation& a, const CadDimStroke
   float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
   if (!CadDimAngularComputeFrame(a, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return false;
-  const float R = (std::max)(a.dimSignedOffset, 1.e-6f);
+  const float R = (std::max)(a.dimSignedOffset, 1.e-6);
   const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
-  const float hWorld = a.plottedHeightInches * (std::max)(p.modelUnitsPerPlottedInch, 1.e-6f);
+  const float hWorld = CadDimTextHeightWorld(a, p.style, p.modelUnitsPerPlottedInch);  // issue #1676
   const float gapWorld = p.style ? static_cast<float>(StyleNumber(p.style->props, "offsetFromOrigin", .012)) * p.modelUnitsPerPlottedInch :
       (std::max)(0.12f * hWorld, 0.015f * R);
   const float overWorld = p.style ? static_cast<float>(StyleNumber(p.style->props, "extendBeyondDimLines", .02)) * p.modelUnitsPerPlottedInch :
@@ -222,7 +270,9 @@ inline bool CadDimBuildAngularStrokes(const CadAnnotation& a, const CadDimStroke
   }
   const float styleArrowWorld = p.arrowSizeInches * (std::max)(p.modelUnitsPerPlottedInch, 1.e-6f);
   const float arcLen = R * std::fabs(sweep);
-  const float arrowWorld = p.style ? styleArrowWorld * p.arrowScale :
+  const float arrowWorld = (std::isfinite(a.dimArrowSizeModel) && a.dimArrowSizeModel > 0.0)
+      ? static_cast<float>(a.dimArrowSizeModel)  // issue #1676
+      : p.style ? styleArrowWorld * p.arrowScale :
       (std::max)(styleArrowWorld * p.arrowScale * 0.10f, p.arrowScale * 0.012f * arcLen);
   const float maxArrowForArc = 0.47f * (std::max)(0.f, R * std::fabs(sweep) - 0.15f * arrowWorld);
   const float alenUse = (std::max)(1.e-6f, (std::min)(arrowWorld, maxArrowForArc));
@@ -249,18 +299,39 @@ inline bool CadDimBuildWorldStrokes(const CadAnnotation& a, const CadDimStrokePa
   out->labelX = a.insX;
   out->labelY = a.insY;
   out->labelRotRad = CadDimReadableTextRotation(a.rotationRad);
-  CadDimStrokeParams effective = p;
-  if (p.style && !StyleFlag(p.style->props, "annotative"))
-    effective.modelUnitsPerPlottedInch *= static_cast<float>(StyleNumber(p.style->props, "overallScale", 1));
+  // p.modelUnitsPerPlottedInch is already the dimension's own scale, Overall scale included
+  // (CadDimModelUnitsPerPlottedInch, issue #1676) — callers resolve it, nothing rescales it here.
+  const CadDimStrokeParams& effective = p;
   bool built = false;
   if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear)
     built = CadDimBuildLinearStrokes(a, effective, out);
   else if (a.kind == CadAnnotation::Kind::DimAngular)
     built = CadDimBuildAngularStrokes(a, effective, out);
+  const float mup = (std::max)(effective.modelUnitsPerPlottedInch, 1.e-6f);
+  const float h = (std::max)(CadDimTextHeightWorld(a, p.style, mup), 1.e-6f);
+  // Issue #1676: a label nobody has moved sits just beyond the dimension line at the CURRENT text
+  // height (the placement DIM* commits with), so a larger annotation scale lifts it clear of the line
+  // instead of growing it over the line. A styled placement below still takes precedence.
+  if (built && !a.dimTextUserPlaced) {
+    if (a.kind == CadAnnotation::Kind::DimAngular) {
+      float a1 = 0, a2 = 0, sweep = 0, bx = 0, by = 0, theta = 0;
+      if (CadDimAngularComputeFrame(a, &a1, &a2, &sweep, &bx, &by, &theta)) {
+        const float R = (std::max)(a.dimSignedOffset, 1.e-6);
+        const float midAng = a1 + 0.5f * sweep;
+        out->labelX = static_cast<float>(a.dimAngVertexX + std::cos(midAng) * R + bx * 1.12f * h);
+        out->labelY = static_cast<float>(a.dimAngVertexY + std::sin(midAng) * R + by * 1.12f * h);
+      }
+    } else {
+      float x1 = 0, y1 = 0, x2 = 0, y2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, measured = 0;
+      if (CadDimAnyGeometry(a, &x1, &y1, &x2, &y2, &tx, &ty, &nx, &ny, &measured)) {
+        const float side = a.dimSignedOffset < -1.e-8f ? -1.f : 1.f;
+        out->labelX = 0.5f * (x1 + x2) + nx * side * 1.08f * h;
+        out->labelY = 0.5f * (y1 + y2) + ny * side * 1.08f * h;
+      }
+    }
+  }
   if (built && p.style) {
     const auto& style = *p.style;
-    const float mup = effective.modelUnitsPerPlottedInch;
-    const float h = std::max(style.textSizeInches * mup, 1.e-6f);
     const float gap = static_cast<float>(StyleNumber(style.props, "textOffset", .0625)) * mup;
     const auto vertical = StyleProperty(style.props, "textVertical",
         style.textAlign == DimTextAlign::Above ? "Above" : style.textAlign == DimTextAlign::Beside ? "Outside" : "Centered");

@@ -139,7 +139,7 @@ bottom opens the full dialog.
 |---|---|
 | **Styles:** | The list of styles, with **All styles** filtering |
 | **Font** | Font Name (`(default)` unless set), **Use Big Font**, Font Style (Regular / Bold / Italic / Bold Italic) |
-| **Size** | Height, **Annotative** (new text made with an annotative style is annotative and follows the annotation scale; text already drawn keeps its own setting) |
+| **Size** | Height, **Annotative** (on unless you untick it: new text made with an annotative style is annotative and follows the annotation scale; text already drawn keeps its own setting) |
 | **Effects** | Backwards, Oblique Angle |
 | **Preview** | Live `AaBb12` sample |
 | **Buttons** | **New…**, **Set Current**, **Apply**, **Delete**, **Cancel**, **Help** |
@@ -286,6 +286,9 @@ Choosing a scale resizes them and never moves the view. Annotative objects are:
   sized from the annotation scale);
 - **position markers**;
 - dimensions, multileaders and text marked **Annotative**.
+
+New TEXT and MTEXT is annotative unless its text style has **Annotative** unticked, so it is drawn at
+the scale shown on the status bar.
 
 Objects that are not annotative keep the plot scale above. Paper space keeps its own viewport
 annotation scale. See [[Views and Navigation]].

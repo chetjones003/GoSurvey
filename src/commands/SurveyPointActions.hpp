@@ -52,7 +52,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, dou
                                              SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 /// Same ID policy as translated copy; positions are rotated about (\p bx,\p by) by \p rad radians.
-void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
+void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, double rad,
                                           SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 /// Same ID policy as translated copy; positions are reflected across the line through

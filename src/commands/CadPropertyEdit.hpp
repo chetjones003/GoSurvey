@@ -35,9 +35,13 @@ enum class LineField : std::uint8_t { StartX, StartY, StartZ, EndX, EndY, EndZ }
 enum class CircleField : std::uint8_t { CenterX, CenterY, CenterZ, Radius };
 enum class TextField : std::uint8_t {
   InsertionX, InsertionY, InsertionZ, PlottedHeightInches,
-  RotationBearingDeg,  ///< TEXT only (MTEXT has none).
-  BoxMinX, BoxMinY, BoxMaxX, BoxMaxY,  ///< MTEXT only.
+  RotationBearingDeg,  ///< TEXT and MTEXT; MTEXT turns about its insertion point.
+  /// MTEXT only: the frame (wrap) width along the text, in model units as drawn (an annotative MTEXT at
+  /// the current annotation scale). The insertion point stays put; the height follows the content.
+  FrameWidth,
   Content,
+  /// Dimensions only (issue #1676): one-off sizes in MODEL units; 0 or less clears back to the style.
+  DimTextHeightModel, DimArrowSizeModel,
 };
 
 /// The smallest radius a circle keeps — the 0.7.4 panel floors a typed radius at this value.
@@ -49,6 +53,16 @@ inline constexpr float kDefaultPlottedTextHeightInches = 0.0625f;
 [[nodiscard]] Outcome SetCircleField(AppCommandState& st, int circleIndex, CircleField field, double value);
 [[nodiscard]] Outcome SetTextNumber(AppCommandState& st, int annotationIndex, TextField field, double value);
 [[nodiscard]] Outcome SetTextContent(AppCommandState& st, int annotationIndex, const std::string& text);
+
+/// Live model-space readout for a dimension in Properties (issue #1676): drawn text height,
+/// arrow length, and label anchor (auto-placed until dragged or edited).
+struct DimDerivedSizes {
+  double textHeightModel = 0.0;
+  double arrowSizeModel = 0.0;
+  double labelX = 0.0;
+  double labelY = 0.0;
+};
+[[nodiscard]] DimDerivedSizes ReadDimensionSizes(const AppCommandState& st, const CadAnnotation& ann);
 
 /// The General-section values of the current selection. \c *Mixed means the selected objects
 /// disagree (the field then shows "varies" and an edit applies to all of them).

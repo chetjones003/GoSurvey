@@ -217,6 +217,13 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
 
+  // --- Autosave ---
+  b("autosaveEnabled", &st.autosaveEnabled);
+  if (s.contains("autosaveIntervalMinutes") && s["autosaveIntervalMinutes"].is_number_integer())
+    st.autosaveIntervalMinutes = std::clamp(s["autosaveIntervalMinutes"].get<int>(),
+                                            AppCommandState::kAutosaveMinIntervalMinutes,
+                                            AppCommandState::kAutosaveMaxIntervalMinutes);
+
   // --- Floating command bar (REQ-040) ---
   b  ("cmdLineClassicDock", &st.cmdLineClassicDock);
   b  ("cmdBarVisible",      &st.cmdBarVisible);
@@ -467,6 +474,10 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   // Object snap
   // Undo/Redo
   s["undoHistoryMaxSize"]         = st.undoHistoryMaxSize;
+
+  // Autosave
+  s["autosaveEnabled"]            = st.autosaveEnabled;
+  s["autosaveIntervalMinutes"]    = st.autosaveIntervalMinutes;
 
   // Floating command bar (REQ-040)
   s["cmdLineClassicDock"] = st.cmdLineClassicDock;

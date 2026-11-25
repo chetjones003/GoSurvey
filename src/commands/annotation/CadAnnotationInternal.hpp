@@ -49,16 +49,17 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   d.dimExt1Y = ds->e1y;
   d.dimExt2X = ds->e2x;
   d.dimExt2Y = ds->e2y;
-  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
     log.push_back("DIMANGULAR — points are degenerate or collinear.");
     return;
   }
-  if (theta < 1e-5f) {
+  if (theta < 1e-5) {
     log.push_back("DIMANGULAR — angle is zero (ray points coincide with vertex direction).");
     return;
   }
-  const float vx = ds->vx, vy = ds->vy;
+  const double vx = ds->vx, vy = ds->vy;
   const float leg = std::min(std::hypot(ds->e1x - vx, ds->e1y - vy), std::hypot(ds->e2x - vx, ds->e2y - vy));
   const float rMax = std::max(1.e-4f, 0.92f * leg);
   const float rMin = std::max(1.e-4f, 0.02f * leg);
@@ -66,7 +67,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   d.dimSignedOffset = R;
   d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.drawing.activeDimensionStyle.textFont;
-  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
+  d.text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
@@ -92,30 +93,30 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   auto* ds = st.sessionAs<stepengine::DimSession>();
   if (!ds)
     return;
-  const float x1 = ds->e1x, y1 = ds->e1y;
-  const float x2 = ds->e2x, y2 = ds->e2y;
-  float vx = x2 - x1;
-  float vy = y2 - y1;
-  const float len = std::hypot(vx, vy);
-  if (len < 1e-8f) {
+  const double x1 = ds->e1x, y1 = ds->e1y;
+  const double x2 = ds->e2x, y2 = ds->e2y;
+  double vx = x2 - x1;
+  double vy = y2 - y1;
+  const double len = std::hypot(vx, vy);
+  if (len < 1e-8) {
     log.push_back("DIMALIGNED — extension points coincide.");
     return;
   }
   vx /= len;
   vy /= len;
-  const float t1 = (x1 - lx) * vx + (y1 - ly) * vy;
-  const float t2 = (x2 - lx) * vx + (y2 - ly) * vy;
-  const float sx1 = lx + vx * t1;
-  const float sy1 = ly + vy * t1;
-  const float sx2 = lx + vx * t2;
-  const float sy2 = ly + vy * t2;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  const float n0x = -vy;
-  const float n0y = vx;
-  const float dmx = 0.5f * (sx1 + sx2);
-  const float dmy = 0.5f * (sy1 + sy2);
-  const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
+  const double t1 = (x1 - lx) * vx + (y1 - ly) * vy;
+  const double t2 = (x2 - lx) * vx + (y2 - ly) * vy;
+  const double sx1 = lx + vx * t1;
+  const double sy1 = ly + vy * t1;
+  const double sx2 = lx + vx * t2;
+  const double sy2 = ly + vy * t2;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  const double n0x = -vy;
+  const double n0y = vx;
+  const double dmx = 0.5 * (sx1 + sx2);
+  const double dmy = 0.5 * (sy1 + sy2);
+  const double dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
   ann.dimensionStyleName = st.drawing.activeDimensionStyle.name;
@@ -152,22 +153,22 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   if (!ds)
     return;
   CadDimLinearUpdateDraftOrientation(st, lx, ly);
-  const float x1 = ds->e1x, y1 = ds->e1y;
-  const float x2 = ds->e2x, y2 = ds->e2y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
+  const double x1 = ds->e1x, y1 = ds->e1y;
+  const double x2 = ds->e2x, y2 = ds->e2y;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
   const bool vert = ds->linearDraftVertical;
-  const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
-  if (meas < 1e-8f) {
+  const double meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
+  if (meas < 1e-8) {
     log.push_back(vert ? "DIMLINEAR — extension points have the same Y (zero vertical span)."
                        : "DIMLINEAR — extension points have the same X (zero horizontal span).");
     return;
   }
-  float dmx = cmx;
-  float dmy = cmy;
+  double dmx = cmx;
+  double dmy = cmy;
   float n0x = 0.f;
   float n0y = 1.f;
-  float dOff = 0.f;
+  double dOff = 0.0;
   if (!vert) {
     dmy = ly;
     dOff = dmy - cmy;

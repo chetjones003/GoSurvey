@@ -564,7 +564,7 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, const stepeng
     // Bounded to a half-circle of drag range either way (NormalizeAngleRadMinusPiToPi) — a
     // deliberately simple, directionally-honest live-preview approximation; a change larger than
     // that is what Total mode's typed value is for.
-    const float delta = NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle);
+    const float delta = static_cast<float>(NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle));
     *outLen = static_cast<float>(std::max<double>(a.r * std::fabs(delta), 1e-6));
     return true;
   }
@@ -1981,6 +1981,7 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     if (k >= st.drawing.cadAnnotations.size())
       continue;
     CadAnnotation& a = st.drawing.cadAnnotations[k];
+    CadMtextSyncInsertion(a);  // issue #1667: an MTEXT stretches with its attachment point
     if (!inBox(a.insX, a.insY, a.insZ))
       continue;
     a.insX += dx;

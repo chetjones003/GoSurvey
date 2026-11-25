@@ -33,6 +33,18 @@ workspace template. New drawings in an active project continue to use that proje
 The tab reports where the bundled template resolved to, or says it was not found. See
 [[Files and Drawings]].
 
+### Autosave
+
+In **Settings → Files → Autosave**, GoSurvey configures automatic crash-recovery saves:
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Automatically save recovery copies of unsaved drawings** | On | Periodically writes lossless recovery snapshots of modified drawings to `%APPDATA%\GoSurvey\autosave` without touching your `.dwg` files |
+| **Autosave interval** | 5 min | How often dirty drawings are checkpointed (`1` to `120` minutes) |
+| **Recovery folder / Open Folder** | `%APPDATA%\GoSurvey\autosave` | Shows the local recovery directory and opens it in File Explorer |
+
+Recovery files are cleaned up automatically when a drawing is saved or closed normally, or when GoSurvey exits cleanly. If GoSurvey closes unexpectedly, the **Drawing Recovery** dialog appears on the next launch (and can also be opened via **File → Drawing Recovery…**).
+
 ---
 
 ## Display
@@ -183,7 +195,7 @@ bounds text is drawn within, so annotation stays legible without becoming a wall
 | Setting | What it does |
 |---|---|
 | **Extension line px**, **Dimension line px** | On-screen line weights |
-| **Arrow size scale** | *Multiplies arrow length derived from dimension text height (paper × plot scale)* |
+| **Dimension arrow size** | Drawing-wide multiplier (`0.2x`–`4.0x`) applied to style-sized dimension arrows on screen, in PDF plots, and in DXF/DWG exports. A per-dimension **Arrow size** override in [[Properties]] takes precedence |
 | **Value text min px** / **max px** | Screen-size bounds for dimension text |
 
 ### Undo / Redo

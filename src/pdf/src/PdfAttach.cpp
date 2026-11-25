@@ -875,18 +875,16 @@ static void ExtractSnapFromPage(FPDF_PAGE page, bool doLines, bool doCircles, bo
 // ---------------------------------------------------------------------------
 
 /// Build a CSR (Compressed Sparse Row) spatial grid from the (x1,y1,x2,y2)
-/// snap lines already stored in \p att.snapLinesFlat.
+/// snap lines already stored in \p snap.snapLinesFlat.
 /// Cells cover the page; each cell stores all endpoint (x,y) pairs that fall
 /// inside it.  Grid dimensions are chosen to target ~200 endpoints per cell.
-static void BuildSnapEndptGrid(PdfAttachment& att) {
-  auto& grid = att.snapEndptGrid;
+static void BuildSnapEndptGrid(PdfAttachment::SnapData& snap, float pageW, float pageH) {
+  auto& grid = snap.snapEndptGrid;
   grid = PdfAttachment::SnapGrid{};  // clear any previous data
 
-  const auto& SL = att.snapLinesFlat;
+  const auto& SL = snap.snapLinesFlat;
   if (SL.empty()) return;
 
-  const float pageW = att.pageWidthPts;
-  const float pageH = att.pageHeightPts;
   if (pageW <= 0.f || pageH <= 0.f) return;
 
   // Choose grid dimensions so cells are roughly square and hold ~200 pts each.
@@ -1759,15 +1757,16 @@ bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath
   att.pageHeightPts   = res.pageHeightPts;
   att.texW            = res.texW;
   att.texH            = res.texH;
-  att.snapLinesFlat   = res.snapLinesFlat;
-  att.snapCirclesCxCyR= res.snapCirclesCxCyR;
-  att.snapTextPos     = res.snapTextPos;
-  att.snapCalmIndex   = std::move(res.snapCalmIndex);
-  att.snapLines       = !res.snapLinesFlat.empty();
-  att.snapCircles     = !res.snapCirclesCxCyR.empty();
-  att.snapText        = !res.snapTextPos.empty();
-  if (att.snapCalmIndex.Size() == 0)
-    BuildCalmSnapIndex(filePath, pageIndex, att.snapCalmIndex);
+  auto snap = std::make_shared<PdfAttachment::SnapData>();
+  snap->snapLinesFlat    = res.snapLinesFlat;
+  snap->snapCirclesCxCyR = res.snapCirclesCxCyR;
+  snap->snapTextPos      = res.snapTextPos;
+  snap->snapCalmIndex    = res.snapCalmIndex;
+  att.snapLines          = !res.snapLinesFlat.empty();
+  att.snapCircles        = !res.snapCirclesCxCyR.empty();
+  att.snapText           = !res.snapTextPos.empty();
+  if (snap->snapCalmIndex.Size() == 0)
+    BuildCalmSnapIndex(filePath, pageIndex, snap->snapCalmIndex);
 
   // Detect background type for snap-mask and shader selection.
   // Both light-bg and dark-bg PDFs now default to showBackground=false: the shader
@@ -1780,25 +1779,27 @@ bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath
 
   { PdfTimer t;
     BuildVisibilityMask(res.pixelBuf, res.texW, res.texH,
-                        att.snapVisDark, att.snapVisMask);
-    DilateVisMask(att.snapVisMask, PdfAttachment::kVisMaskW, PdfAttachment::kVisMaskH, 1);
+                        att.snapVisDark, snap->snapVisMask);
+    DilateVisMask(snap->snapVisMask, PdfAttachment::kVisMaskW, PdfAttachment::kVisMaskH, 1);
     PdfLog("[PDF] FinishBuild: BuildVisibilityMask %.1f ms\n", t.ms()); }
 
   // For dense PDFs (GIS exports, scanned drawings) the path-based snap extraction
   // yields unreliable endpoints. Switch to image-based topology analysis when the
   // path extractor returned more than 2 000 segments (a sign that path endpoints
   // don't correspond to visible geometry corners).
-  if (att.snapLinesFlat.size() / 4 > 2000) {
+  if (snap->snapLinesFlat.size() / 4 > 2000) {
     PdfTimer t;
     BuildImageSnapPts(res.pixelBuf, res.texW, res.texH,
                       att.pageWidthPts, att.pageHeightPts,
-                      att.snapVisDark, att.snapLinesFlat);
+                      att.snapVisDark, snap->snapLinesFlat);
     PdfLog("[PDF] FinishBuild: BuildImageSnapPts %.1f ms\n", t.ms());
   }
 
   { PdfTimer t;
-    BuildSnapEndptGrid(att);
+    BuildSnapEndptGrid(*snap, att.pageWidthPts, att.pageHeightPts);
     PdfLog("[PDF] FinishBuild: BuildSnapEndptGrid %.1f ms\n", t.ms()); }
+
+  att.snapData = std::move(snap);
 
   PdfTimer t;
   att.glTexId = UploadBgraTexture(res.pixelBuf, res.texW, res.texH);
@@ -1852,20 +1853,23 @@ bool PdfAttach_Build(const char* filePath, int pageIndex, float dpi,
   out.snapCircles = doSnapCircles;
   out.snapText    = doSnapText;
 
+  auto snap = std::make_shared<PdfAttachment::SnapData>();
   { PdfTimer t;
     ExtractSnapFromPage(page, doSnapLines, doSnapCircles, doSnapText,
-                        out.snapLinesFlat, out.snapCirclesCxCyR, out.snapTextPos);
+                        snap->snapLinesFlat, snap->snapCirclesCxCyR, snap->snapTextPos);
     PdfLog("[PDF]   ExtractSnapFromPage: %.1f ms  (lines=%zu circles=%zu text=%zu)\n",
            t.ms(),
-           out.snapLinesFlat.size() / 4,
-           out.snapCirclesCxCyR.size() / 3,
-           out.snapTextPos.size() / 2); }
+           snap->snapLinesFlat.size() / 4,
+           snap->snapCirclesCxCyR.size() / 3,
+           snap->snapTextPos.size() / 2); }
 
-  BuildCalmSnapIndex(filePath, pageIndex, out.snapCalmIndex);
+  BuildCalmSnapIndex(filePath, pageIndex, snap->snapCalmIndex);
 
   { PdfTimer t;
-    BuildSnapEndptGrid(out);
+    BuildSnapEndptGrid(*snap, out.pageWidthPts, out.pageHeightPts);
     PdfLog("[PDF]   BuildSnapEndptGrid: %.1f ms\n", t.ms()); }
+
+  out.snapData = std::move(snap);
 
   FPDF_ClosePage(page);
   FPDF_CloseDocument(doc);

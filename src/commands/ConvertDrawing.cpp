@@ -110,8 +110,13 @@ void MoveAnnotations(std::vector<CadAnnotation>& annotations, const Xf& f, doubl
   for (CadAnnotation& a : annotations) {
     if (a.surveyPointLabelForId >= 0)
       continue;  // a point's label is rebuilt from the point
-    f.Pt(&a.insX, &a.insY);
     f.Z(&a.insZ);
+    if (a.kind == CadAnnotation::Kind::Mtext) {  // issue #1667: the frame turns and scales about its insertion
+      CadMtextTransform(a, [&](float* x, float* y) { f.Pt(x, y); }, static_cast<float>(rotationRad),
+                        static_cast<float>(f.s));
+      continue;
+    }
+    f.Pt(&a.insX, &a.insY);
     a.rotationRad += static_cast<float>(rotationRad);
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
     float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -124,7 +129,7 @@ void MoveAnnotations(std::vector<CadAnnotation>& annotations, const Xf& f, doubl
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       f.Pt(&a.dimExt1X, &a.dimExt1Y);
       f.Pt(&a.dimExt2X, &a.dimExt2Y);
-      a.dimSignedOffset *= static_cast<float>(f.s);
+      a.dimSignedOffset *= f.s;
     }
     if (a.kind == CadAnnotation::Kind::DimAngular)
       f.Pt(&a.dimAngVertexX, &a.dimAngVertexY);

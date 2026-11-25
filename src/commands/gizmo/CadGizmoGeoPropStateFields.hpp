@@ -159,11 +159,12 @@
   /// Aligned dimension grip drag (viewport): which grip on \ref dimGripAnnotationIndex.
   int dimGripAnnotationIndex = -1;
   int dimGripWhich = -1; ///< 0 ext1, 1 ext2, 2 dim foot 1, 3 dim foot 2, 4 text
-  float dimGripDownWorldX = 0.f;
-  float dimGripDownWorldY = 0.f;
-  float dimGripOrigSignedOffset = 0.f;
-  float dimGripOrigExt1X = 0.f, dimGripOrigExt1Y = 0.f, dimGripOrigExt2X = 0.f, dimGripOrigExt2Y = 0.f;
-  float dimGripOrigInsX = 0.f, dimGripOrigInsY = 0.f;
+  double dimGripDownWorldX = 0.0;
+  double dimGripDownWorldY = 0.0;
+  double dimGripOrigSignedOffset = 0.0;
+  double dimGripOrigExt1X = 0.0, dimGripOrigExt1Y = 0.0, dimGripOrigExt2X = 0.0, dimGripOrigExt2Y = 0.0;  // issue #1668
+  double dimGripOrigInsX = 0.0, dimGripOrigInsY = 0.f;
+  bool dimGripOrigTextUserPlaced = false;  // issue #1676: CancelGripEdit restores auto-placement
   float dimGripDragNx = 0.f, dimGripDragNy = 0.f;
   /// True after first click on a dim grip until second click commits (or RMB cancels).
   bool dimGripMoveActive = false;

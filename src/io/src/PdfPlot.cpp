@@ -867,7 +867,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       CadDimStrokeParams dsp;
       dsp.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
       dsp.arrowSizeInches = st.drawing.activeDimensionStyle.arrowSizeInches;
-      dsp.arrowScale = 1.f;
+      dsp.arrowScale = st.viewportDimArrowScale;  // issue #1676: the plot matches the screen
       dsp.arrowType = st.drawing.activeDimensionStyle.arrowType;
       for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
         const CadAnnotation& ann = st.drawing.cadAnnotations[ai];
@@ -884,6 +884,10 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         dsp.style = &dimensionStyle;
         dsp.arrowType = dimensionStyle.arrowType;
         dsp.arrowSizeInches = dimensionStyle.arrowSizeInches;
+        // Issue #1676: this viewport's annotation scale sizes the arrows, lines AND label together.
+        dsp.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(
+            ann, &dimensionStyle, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+            st.currentAnnotationScaleIndex, &vp, false);
         CadDimWorldStrokes strokes;
         if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
           continue;
@@ -900,7 +904,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           lab.px = lpx;
           lab.py = lpy;
           lab.rot = strokes.labelRotRad;
-          lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.drawing.modelUnitsPerPlottedInch));
+          const float vpScale = vp.safeScale();  // model units per paper inch
+          const float dimTextWorld = CadDimTextHeightWorld(ann, &dimensionStyle, dsp.modelUnitsPerPlottedInch);
+          lab.Hin = (std::max)(0.01f, vpScale > 0.f ? dimTextWorld / vpScale : ann.plottedHeightInches);
           lab.text = ann.text;
           lab.fontFamily = ann.fontFamily;
           lab.rgb = curColor;
@@ -1156,7 +1162,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         std::vector<CadBlockWorldSeg> segs;
         CadBlockCollectWorldLines(st.drawing.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
         for (const CadBlockWorldSeg& s : segs)
-          addChain({{s.x0, s.y0}, {s.x1, s.y1}}, false, noClip);
+          addChain({{static_cast<float>(s.x0), static_cast<float>(s.y0)},
+                    {static_cast<float>(s.x1), static_cast<float>(s.y1)}},
+                   false, noClip);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {

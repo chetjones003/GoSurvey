@@ -316,9 +316,9 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, dou
 
 namespace {
 
-void RotateSurveyCoords(double bx, double by, float rad, double* x, double* y) {
-  const double c = std::cos(static_cast<double>(rad));
-  const double s = std::sin(static_cast<double>(rad));
+void RotateSurveyCoords(double bx, double by, double rad, double* x, double* y) {
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
   double dx = *x - bx;
   double dy = *y - by;
   *x = bx + c * dx - s * dy;
@@ -343,7 +343,7 @@ void ReflectSurveyCoords(double x0, double y0, double x1, double y1, double* x, 
 
 } // namespace
 
-void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
+void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, double rad,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
   auto& pts = st.drawing.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;

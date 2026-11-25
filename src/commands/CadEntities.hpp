@@ -433,14 +433,24 @@ struct CadAnnotation {
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
-  float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
+  /// Stored in double (issue #1668): a float near 5,000 ft is spaced ~0.0005 ft apart, which turns an
+  /// exact 62° angle into 62°01'.
+  double dimExt1X = 0.0, dimExt1Y = 0.0, dimExt2X = 0.0, dimExt2Y = 0.0;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
-  float dimAngVertexX = 0.f;
-  float dimAngVertexY = 0.f;
+  double dimAngVertexX = 0.0;
+  double dimAngVertexY = 0.0;
   /// Signed distance from chord midpoint to dimension line: aligned uses N=(-T.y,T.x) with T=normalize(e2-e1); linear uses N=(0,1) for horizontal span or N=(1,0) for vertical span; angular uses arc radius (world units).
-  float dimSignedOffset = 0.f;
+  double dimSignedOffset = 0.0;
   /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.
   bool dimLinearVertical = false;
+  /// Issue #1676: one-off sizes for this dimension, in MODEL units — the same size in the drawing at
+  /// every annotation scale. 0 = follow the style (scaled by the annotation scale / Overall scale).
+  double dimTextHeightModel = 0.0;
+  double dimArrowSizeModel = 0.0;
+  /// Issue #1676: true once the label has a position of its own (dragged, or read from a file). While
+  /// false, the label is placed from the current text height, so it clears the dimension line at
+  /// every annotation scale instead of growing over it.
+  bool dimTextUserPlaced = false;
   /// If >= 0, this MTEXT is the viewport label for the survey point whose \c SurveyPoint::id is this
   /// value (bidirectional link; the other half is \c SurveyPoint::labelMtextAnnId).
   ///
@@ -637,6 +647,98 @@ inline void CadTextAnnotationQuad(const CadAnnotation& a, float heightUnits, flo
     xs[i] = x + lx[i] * c - ly[i] * s;
     ys[i] = y + lx[i] * s + ly[i] * c;
   }
+}
+
+/// MTEXT frame (issue #1667). An MTEXT is its insertion point — the attachment point named by
+/// \c mtextAttach (DXF 71) — plus \c rotationRad and a frame width/height measured along the text's own
+/// axes. The stored box is DERIVED from those, not a world AABB: (boxMinX, boxMaxY) is the frame's
+/// top-left corner in world coordinates and the box spans are the frame width and height. The renderer,
+/// the picker and \ref CadTextAnnotationQuad already read it that way; every edit goes through these
+/// helpers so insertion, box and rotation cannot drift apart again.
+[[nodiscard]] inline float CadMtextFrameWidth(const CadAnnotation& a) { return std::fabs(a.boxMaxX - a.boxMinX); }
+[[nodiscard]] inline float CadMtextFrameHeight(const CadAnnotation& a) { return std::fabs(a.boxMaxY - a.boxMinY); }
+
+/// Offset from the frame's top-left corner to attachment point \p attach, in the text frame (x along
+/// the text, y up), for a \p w × \p h frame.
+inline void CadMtextAttachmentOffset(int attach, float w, float h, float* lx, float* ly) {
+  const int k = std::clamp(attach, 1, 9) - 1, column = k % 3, row = k / 3;
+  *lx = column == 0 ? 0.f : column == 1 ? 0.5f * w : w;
+  *ly = row == 0 ? 0.f : row == 1 ? -0.5f * h : -h;
+}
+
+/// The attachment point the box implies — the insertion point as it should be stored.
+inline void CadMtextInsertionFromBox(const CadAnnotation& a, float* x, float* y) {
+  float lx = 0.f, ly = 0.f;
+  CadMtextAttachmentOffset(a.mtextAttach, CadMtextFrameWidth(a), CadMtextFrameHeight(a), &lx, &ly);
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float left = std::min(a.boxMinX, a.boxMaxX), top = std::max(a.boxMinY, a.boxMaxY);
+  *x = left + lx * c - ly * s;
+  *y = top + lx * s + ly * c;
+}
+
+/// Rewrites insX/insY from the box. Call before transforming an MTEXT whose insertion may be stale
+/// (older edits stored the bottom-left corner regardless of the attachment).
+inline void CadMtextSyncInsertion(CadAnnotation& a) {
+  if (a.kind == CadAnnotation::Kind::Mtext) CadMtextInsertionFromBox(a, &a.insX, &a.insY);
+}
+
+/// Rebuilds the box from the insertion point, attachment and rotation for a \p w × \p h frame.
+inline void CadMtextPlaceFrame(CadAnnotation& a, float w, float h) {
+  w = std::max(0.f, w);
+  h = std::max(0.f, h);
+  float lx = 0.f, ly = 0.f;
+  CadMtextAttachmentOffset(a.mtextAttach, w, h, &lx, &ly);
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float left = a.insX - (lx * c - ly * s), top = a.insY - (lx * s + ly * c);
+  a.boxMinX = left;
+  a.boxMaxX = left + w;
+  a.boxMaxY = top;
+  a.boxMinY = top - h;
+}
+
+/// Applies a similarity transform to an MTEXT: \p mapPoint moves its insertion point, the frame turns by
+/// \p addRotationRad and its width/height scale by \p sizeScale (> 0). Attachment is preserved.
+template <class MapPoint>
+inline void CadMtextTransform(CadAnnotation& a, MapPoint&& mapPoint, float addRotationRad, float sizeScale) {
+  const float w = CadMtextFrameWidth(a) * sizeScale, h = CadMtextFrameHeight(a) * sizeScale;
+  CadMtextSyncInsertion(a);
+  mapPoint(&a.insX, &a.insY);
+  a.rotationRad += addRotationRad;
+  CadMtextPlaceFrame(a, w, h);
+}
+
+/// Sizes and places an imported MTEXT's frame around its insertion (issue #1667). \p attachment is DXF 71;
+/// \p definedWidth is the wrap width (DXF 41, 0 = no wrapping); \p extentsWidth / \p extentsHeight are the
+/// cached content size (DXF 42/43), trusted only near an estimate from \p textHeight — DWG extents can
+/// carry context or viewport bounds. Without a defined width the frame is wide enough not to wrap.
+inline void CadMtextPlaceImportedFrame(CadAnnotation& a, double textHeight, int attachment, double definedWidth,
+                                       double extentsWidth, double extentsHeight) {
+  std::size_t longest = 0, run = 0, lines = 1;
+  for (const char c : a.text) {
+    if (c == '\n') { ++lines; longest = std::max(longest, run); run = 0; }
+    else if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++run;
+  }
+  longest = std::max(longest, run);
+  const double estimatedWidth = 0.62 * textHeight * static_cast<double>(std::max<std::size_t>(longest, 1));
+  const double estimatedHeight = 1.2 * textHeight * static_cast<double>(lines);
+  const auto plausible = [](double extent, double estimate) {
+    return extent > 1e-9 && std::isfinite(extent) && extent <= 3.0 * estimate;
+  };
+  const double width = definedWidth > 1e-9 ? definedWidth
+      : plausible(extentsWidth, estimatedWidth) ? std::max(extentsWidth, estimatedWidth) : estimatedWidth;
+  const double height = plausible(extentsHeight, estimatedHeight) ? extentsHeight : estimatedHeight;
+  a.mtextAttach = std::clamp(attachment, 1, 9);
+  CadMtextPlaceFrame(a, static_cast<float>(width), static_cast<float>(height));
+}
+
+/// A copy of MTEXT \p a with its frame scaled by \p factor about the insertion point — how an annotative
+/// MTEXT occupies the drawing at an annotation scale other than the drawing scale. Identity for
+/// anything but MTEXT, or a factor of 1.
+[[nodiscard]] inline CadAnnotation CadMtextScaledFrame(const CadAnnotation& a, float factor) {
+  if (a.kind != CadAnnotation::Kind::Mtext || !(factor > 0.f) || std::fabs(factor - 1.f) < 1.e-6f) return a;
+  CadAnnotation out = a;
+  CadMtextTransform(out, [](float*, float*) {}, 0.f, factor);
+  return out;
 }
 
 inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, float* mnX, float* mnY,
@@ -1579,7 +1681,7 @@ static_assert(std::is_same_v<decltype(CadFilledRegion::vertsXyz)::value_type, do
               "CadFilledRegion::vertsXyz must stay double (ADR-054 (a), REQ-101)");
 
 /// The pattern linework of every patterned hatch (REQ-043), derived from the filled regions and kept
-/// outside every undo snapshot, like the solid display cache. ef RefreshHatchDisplayGeometry keeps it
+/// outside every undo snapshot, like the solid display cache. \ref RefreshHatchDisplayGeometry keeps it
 /// current; the renderer draws it as depth-tested lines.
 struct CadHatchDisplayGeometry {
   /// Parallel to the drawing's filled regions: x0,y0,x1,y1 per segment in local coordinates, in double

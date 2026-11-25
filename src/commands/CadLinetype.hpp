@@ -31,6 +31,10 @@ void CadTessellateLinetypePolylineVc(const float* xy, int nPts, float z, const s
 ///                  z drew a sloped chain as if it were level; dash endpoints interpolate between
 ///                  the two vertex elevations so a dashed sloped line rises with its segment
 ///                  (REQ-058). Null reproduces the flat behaviour exactly.
+/// \param clipHalfExtent when > 0, clips non-solid (dashed) chords against the view-relative square
+///                  [-clipHalfExtent, +clipHalfExtent]^2 before emitting dashes, advancing the dash
+///                  phase analytically across off-screen spans so zooming in on a large dashed curve
+///                  never tessellates off-screen dashes.
 void CadTessellateLinetypeChainVc(const float* xyPairs, int nPts, float z, bool closed, const std::string& linetypeName,
                                  float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7,
-                                 const float* zPerPt = nullptr);
+                                 const float* zPerPt = nullptr, float clipHalfExtent = 0.f);

@@ -313,6 +313,10 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 /// After vertex / ray / radius edits, re-place label along the angle bisector.
 void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);
+/// Issue #1676: where a dimension's label is drawn in model space at the current annotation scale —
+/// the stored insertion point once the user has placed it, otherwise just beyond the dimension line
+/// at the current text height. Grips and label drags start from here.
+void CadDimModelSpaceLabelPosition(const AppCommandState& st, const CadAnnotation& a, double* x, double* y);
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
@@ -540,6 +544,11 @@ inline bool CadRightClickHoldIsMenu(double heldMs, int thresholdMs) {
 
 
 inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPerPlottedInch) {
+  // Issue #1676: a dimension's model-unit text override is the same size at every scale.
+  if (std::isfinite(a.dimTextHeightModel) && a.dimTextHeightModel > 0.0 &&
+      (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
+       a.kind == CadAnnotation::Kind::DimAngular))
+    return static_cast<float>(a.dimTextHeightModel);
   return a.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
 }
 
@@ -548,6 +557,31 @@ inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPe
 /// far-away text before paying for a Qt layout (hover picks run this for every annotation).
 void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
                                bool measure = true);
+/// Frame scale an MTEXT is drawn at in model space (issue #1667): the annotation-scale factor for an
+/// annotative MTEXT, else 1. See CadMtextDisplayFactor.
+float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation& a);
+/// The four corners of MTEXT \p a as drawn in model space — top-left, top-right, bottom-right,
+/// bottom-left — rotated with the text and scaled for an annotative MTEXT. Grips and outlines use these.
+void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]);
+/// MTEXT auto-height (issue #1667): the height of \p a's laid-out content at its frame width, in the stored
+/// frame's units (the drawing scale). Uses AppCommandState::measureMtextHeight when \p useFrontend and it is
+/// installed, else a word-wrap estimate. -1 when it cannot be measured.
+float CadMtextContentHeight(const AppCommandState& st, const CadAnnotation& a, bool useFrontend = true);
+/// Sets \p a's frame height to its content height, keeping the insertion point and width, as AutoCAD
+/// sizes an MTEXT. Survey-point labels and non-MTEXT are untouched.
+void CadMtextFitHeight(const AppCommandState& st, CadAnnotation& a, bool useFrontend = true);
+/// True for an MTEXT edited through its frame grips. A survey-point label keeps its own box grips.
+[[nodiscard]] inline bool CadMtextHasFrameGrips(const CadAnnotation& a) {
+  return a.kind == CadAnnotation::Kind::Mtext && a.surveyPointLabelForId < 0;
+}
+/// The grips of a frame-gripped MTEXT: the four drawn corners (as \ref CadMtextDrawnCorners), then the
+/// insertion point at index 4. Viewport grips, grip hit-testing and grip snapping all use these.
+void CadMtextGripPoints(const AppCommandState& st, const CadAnnotation& a, float xs[5], float ys[5]);
+/// Grip resize (issue #1667): the drawn corner opposite the dragged one stays at (\p fixedX, \p fixedY)
+/// and the dragged one follows (\p cursorX, \p cursorY), measured along the text's own axes, so a
+/// rotated MTEXT keeps its rotation and attachment. \p displayFactor comes from CadMtextModelDisplayFactor.
+void CadMtextResizeFromGrip(CadAnnotation& a, float displayFactor, float fixedX, float fixedY, float cursorX,
+                            float cursorY);
 /// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY);
@@ -1033,6 +1067,8 @@ struct AppCommandState {
   // Frontend-provided natural text measurement. Session-only; no UI toolkit types
   // cross into Commands. A null hook retains the legacy/headless measurement path.
   void (*measureAnnotationText)(float, const std::string&, const std::string&, float*, float*) = nullptr;
+  /// MTEXT content height (pixels) for (text px, wire, font family, wrap width px); see CadMtextFitHeight.
+  float (*measureMtextHeight)(float, const std::string&, const std::string&, float) = nullptr;
   SurveyLabelStyleTemplates surveyLabelTemplates;
   /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
   /// world). The box grows east from this edge, so longer text never grows back toward the point.

@@ -1441,25 +1441,20 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   } else if (verb == "EXPECT") {
     std::string arg;
     const std::string what = UpperAscii(FirstWord(rest, &arg));
-    if (what == "ANNKIND") {
-      // EXPECT ANNKIND <index> <tag> — issue #125: DIMANGULAR must still be DimAngular after OPEN.
+    if (what == "ANNKIND" || what == "ANNTEXT") {
+      std::istringstream is(arg);
       int ix = -1;
       std::string want;
-      std::istringstream is(arg);
-      if (!(is >> ix >> want) || ix < 0) {
-        Fail(run, "parse", "EXPECT ANNKIND needs index and kind tag, got: " + arg, sourceLine);
-        return false;
-      }
+      const bool ok = (is >> ix) && ix >= 0 && (what == "ANNKIND" ? static_cast<bool>(is >> want)
+                                                                  : static_cast<bool>(std::getline(is >> std::ws, want)));
+      if (!ok) { Fail(run, "parse", "EXPECT " + what + " needs index and value, got: " + arg, sourceLine); return false; }
       if (static_cast<size_t>(ix) >= run.st.drawing.cadAnnotations.size()) {
-        Fail(run, "state", "EXPECT ANNKIND: annotation index out of range", sourceLine);
+        Fail(run, "state", "EXPECT " + what + ": annotation index out of range", sourceLine);
         return false;
       }
-      const char* got = AnnotationKindTag(run.st.drawing.cadAnnotations[static_cast<size_t>(ix)].kind);
-      if (want != got) {
-        Fail(run, "expect",
-             "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
-        return false;
-      }
+      const CadAnnotation& ann = run.st.drawing.cadAnnotations[static_cast<size_t>(ix)];
+      const std::string got = what == "ANNKIND" ? std::string(AnnotationKindTag(ann.kind)) : ann.text;
+      if (want != got) { Fail(run, "expect", what + ": annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine); return false; }
     } else if (what == "DYNLABELS") {
       // EXPECT DYNLABELS <labels> — the boxes the point prompt's dynamic input shows right now,
       // e.g. `X Y`, `@ ΔX ΔY ΔZ`, `Distance < Angle` (REQ-354). Nothing typed yet: the prompt's own

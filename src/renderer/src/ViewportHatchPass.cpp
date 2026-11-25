@@ -60,6 +60,194 @@ void ViewportRenderer::ReleaseHatchGpu() {
   hatchUpload_.shrink_to_fit();
 }
 
+void ViewportRenderer::DrawSolidFilledRegions(const SolidFillPassInput& in) {
+  const CadExtendedGeometryInput* extended = in.extended;
+  const std::vector<CadFilledRegion>* filledRegions = in.filledRegions;
+  const std::vector<EntityAttributes>* filledRegionAttrs = in.filledRegionAttrs;
+  const std::vector<CadLayerRow>* drawingLayers = in.drawingLayers;
+  if (!filledRegions || filledRegions->empty())
+    return;
+
+  glUseProgram(lineProgram_);
+  glUniformMatrix4fv(in.locMvp, 1, GL_FALSE, in.mvp);
+  glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+  glBindVertexArray(vaoLines_);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+  glDisable(GL_BLEND);
+  glEnable(GL_STENCIL_TEST);
+  std::vector<float> fan;
+  // Draw order: every opaque fill first, then translucent fills back to front. A blend only mixes with
+  // what is already in the frame, so a translucent fill drawn before an opaque one behind it would be
+  // painted over; sorting makes the result independent of entity order.
+  struct FillOrder { size_t index; bool translucent; double depth; };
+  std::vector<FillOrder> fillOrder;
+  fillOrder.reserve(filledRegions->size());
+  {
+    for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+      const CadFilledRegion& fr = (*filledRegions)[fi];
+      float alphaRgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+      if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
+        const EntityAttributes& attr = (*filledRegionAttrs)[fi];
+        const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+        ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, alphaRgba);
+      }
+      double cx = 0., cy = 0., cz = 0.;
+      const size_t vertexCount = fr.vertsXyz.size() / 3;
+      for (size_t v = 0; v < vertexCount; ++v) {
+        cx += fr.vertsXyz[v * 3 + 0];
+        cy += fr.vertsXyz[v * 3 + 1];
+        cz += fr.vertsXyz[v * 3 + 2];
+      }
+      if (vertexCount > 0) {
+        cx /= static_cast<double>(vertexCount);
+        cy /= static_cast<double>(vertexCount);
+        cz /= static_cast<double>(vertexCount);
+      }
+      // Distance along the view direction; larger is farther from the eye.
+      const double depth =
+          (cx - in.viewAnchorX) * in.camFwdX + (cy - in.viewAnchorY) * in.camFwdY + cz * in.camFwdZ;
+      fillOrder.push_back({fi, alphaRgba[3] < 0.999f, depth});
+    }
+    std::stable_sort(fillOrder.begin(), fillOrder.end(), [](const FillOrder& a, const FillOrder& b) {
+      if (a.translucent != b.translucent) return !a.translucent;
+      return a.translucent && a.depth > b.depth;
+    });
+  }
+  for (const FillOrder& order : fillOrder) {
+    const size_t fi = order.index;
+    const CadFilledRegion& fr = (*filledRegions)[fi];
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
+      continue;
+    if (!fr.isSolid())
+      continue;  // line-pattern hatches are drawn as clipped lines in the viewport overlay (REQ-043)
+    // REQ-084 (d): a fill isolated out is not drawn.
+    if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
+        CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
+      continue;
+    if (!CadAnnotativeVisibleAtActiveScale(
+            fr.annotative, fr.annotativeVisibleScaleNames,
+            extended ? extended->annotationScales : nullptr,
+            extended ? extended->currentAnnotationScaleIndex : -1,
+            extended ? extended->annotativeViewport : nullptr,
+            extended ? extended->drawingModelUnitsPerPlottedInch : 0.f))
+      continue;
+    fan.clear();
+    double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
+    // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
+    // region is planar in practice, so the mean vertex Z is that plane and is exact whenever the
+    // loops share an elevation (REQ-058).
+    double zSum = 0.;
+    int zCount = 0;
+    auto vx = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 0]; };
+    auto vy = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 1]; };
+    auto vz = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 2]; };
+    for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+      const int begin = fr.loopStart[li];
+      const int cnt = fr.loopCount(li);
+      if (cnt < 3)
+        continue;
+      for (int v = 1; v + 1 < cnt; ++v) {
+        fan.push_back(vx(begin) - static_cast<float>(in.viewAnchorX));
+        fan.push_back(vy(begin) - static_cast<float>(in.viewAnchorY));
+        fan.push_back(vz(begin));
+        fan.push_back(vx(begin + v) - static_cast<float>(in.viewAnchorX));
+        fan.push_back(vy(begin + v) - static_cast<float>(in.viewAnchorY));
+        fan.push_back(vz(begin + v));
+        fan.push_back(vx(begin + v + 1) - static_cast<float>(in.viewAnchorX));
+        fan.push_back(vy(begin + v + 1) - static_cast<float>(in.viewAnchorY));
+        fan.push_back(vz(begin + v + 1));
+      }
+      for (int v = 0; v < cnt; ++v) {
+        mnx = std::min(mnx, static_cast<double>(vx(begin + v)));
+        mxx = std::max(mxx, static_cast<double>(vx(begin + v)));
+        mny = std::min(mny, static_cast<double>(vy(begin + v)));
+        mxy = std::max(mxy, static_cast<double>(vy(begin + v)));
+        zSum += static_cast<double>(vz(begin + v));
+        ++zCount;
+      }
+    }
+    if (fan.empty())
+      continue;
+    // Pass 1: parity into stencil (no color write).
+    //
+    // Depth WRITES are off for this pass even when depth testing is on (REQ-064). The fan covers
+    // the whole loop including area that even-odd parity will subtract — the holes in a hatch with
+    // islands — so letting it write depth would occlude geometry seen through those holes. Only
+    // pass 2, which the stencil confines to the region's true area, writes depth.
+    const GLboolean wantDepthWrite = in.depthOn ? GL_TRUE : GL_FALSE;
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(fan.size() * sizeof(float)), fan.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fan.size() / 3));
+    glDepthMask(wantDepthWrite);
+    // Pass 2: fill the odd-parity region, resetting stencil to 0 as the covering quad draws.
+    float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+    if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
+      const EntityAttributes& attr = (*filledRegionAttrs)[fi];
+      const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+      ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, rgba);
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+    // Entity / layer transparency: the stencil confines the cover quad to each pixel once, so a plain
+    // alpha blend is exact. A see-through fill must not write depth, or it hides what lies behind it.
+    const bool translucent = rgba[3] < 0.999f;
+    if (translucent) {
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glDepthMask(GL_FALSE);
+    }
+    const float qx0 = static_cast<float>(mnx - in.viewAnchorX), qy0 = static_cast<float>(mny - in.viewAnchorY);
+    const float qx1 = static_cast<float>(mxx - in.viewAnchorX), qy1 = static_cast<float>(mxy - in.viewAnchorY);
+    const float qz = (zCount > 0) ? static_cast<float>(zSum / static_cast<double>(zCount)) : 0.f;
+
+    if (in.shadeSurfaces) {
+      // Shaded: the same stencil-confined quad, through the lit program. A filled region is
+      // planar and parallel to XY (ADR-025), so its normal is +Z — which is why this dims as the
+      // view orbits toward edge-on, and is the visible proof that lighting is live before REQ-063
+      // brings surfaces with varied normals.
+      const float sq[36] = {qx0, qy0, qz, 0.f, 0.f, 1.f, qx1, qy0, qz, 0.f, 0.f, 1.f,
+                            qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy0, qz, 0.f, 0.f, 1.f,
+                            qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy1, qz, 0.f, 0.f, 1.f};
+      glUseProgram(shadedProgram_);
+      glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, in.mvp);
+      glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), rgba[0], rgba[1], rgba[2], rgba[3]);
+      glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(in.camFwdX),
+                  static_cast<float>(in.camFwdY), static_cast<float>(in.camFwdZ));
+      glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), in.shadedAmbient);
+      glBindVertexArray(vaoShaded_);
+      glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(sq), sq, GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      // Back to the flat program and its buffer for the next region's parity pass.
+      glUseProgram(lineProgram_);
+      glUniformMatrix4fv(in.locMvp, 1, GL_FALSE, in.mvp);
+      glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+      glBindVertexArray(vaoLines_);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+    } else {
+      glUniform4f(in.locCol, rgba[0], rgba[1], rgba[2], rgba[3]);
+      const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
+                              qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
+      glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    if (translucent) {
+      glDisable(GL_BLEND);
+      glDepthMask(wantDepthWrite);
+    }
+  }
+  glDisable(GL_STENCIL_TEST);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glBindVertexArray(0);
+}
+
 void ViewportRenderer::DrawHatchPatterns(const HatchPassInput& in) {
   const CadExtendedGeometryInput* extended = in.extended;
   const std::vector<CadFilledRegion>* filledRegions = in.filledRegions;

@@ -113,11 +113,19 @@ static void AppendDashedPreviewSegment(std::vector<float>& lines, double ax, dou
                                        double bx, double by, double bz, double orthoHalfH, int heightPx) {
   const double dx = bx - ax, dy = by - ay, dz = bz - az;
   const double length = std::sqrt(dx * dx + dy * dy + dz * dz);
-  if (!(length > 1e-12) || heightPx <= 0)
+  if (!(length > 1e-12) || !std::isfinite(length) || heightPx <= 0 || !(orthoHalfH > 0.0) || !std::isfinite(orthoHalfH))
     return;
   const double worldPerPixel = 2.0 * orthoHalfH / heightPx;
   const double dash = 8.0 * worldPerPixel;
   const double period = 14.0 * worldPerPixel;
+  if (!(period > 0.0) || !std::isfinite(period))
+    return;
+  constexpr int kMaxPreviewDashes = 4096;
+  if (length / period > kMaxPreviewDashes) {
+    lines.insert(lines.end(), {static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(az),
+                               static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)});
+    return;
+  }
   for (double start = 0.0; start < length; start += period) {
     const double end = std::min(length, start + dash);
     const double t0 = start / length, t1 = end / length;
@@ -232,6 +240,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
 EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
     : QOpenGLWidget(parent), m_State(state), m_Log(log), m_Renderer(std::make_unique<ViewportRenderer>()) {
   setObjectName("modelViewport");
+  m_State.measureMtextHeight = MeasureQtMtextHeight;  // MTEXT auto-height uses the layout drawn here (#1667)
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
   setMinimumSize(240, 180);
@@ -557,6 +566,7 @@ bool EditorViewport::CancelGripEdit() {
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
+      ann.dimTextUserPlaced = m_State.dimGripOrigTextUserPlaced;  // issue #1676
       CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
     }
     ClearDimGripInteraction(m_State);
@@ -1477,7 +1487,12 @@ void EditorViewport::paintGL() {
         case SelectedEntity::Type::Annotation: {
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadAnnotations.size()) {
             const CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(selected.index)];
-            if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
+            if (CadMtextHasFrameGrips(ann)) {
+              // Issue #1667: the frame's corners as drawn (rotated, annotative-scaled), then the insertion.
+              float xs[5], ys[5];
+              CadMtextGripPoints(m_State, ann, xs, ys);
+              for (int g = 0; g < 5; ++g) grips.push_back({xs[g], ys[g], ann.insZ});
+            } else if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
               grips = {{ann.boxMinX, ann.boxMinY, 0}, {ann.boxMaxX, ann.boxMinY, 0},
                        {ann.boxMaxX, ann.boxMaxY, 0}, {ann.boxMinX, ann.boxMaxY, 0}};
               if (ann.surveyPointLabelForId >= 0) grips.push_back({ann.insX, ann.insY, 0});
@@ -1485,9 +1500,11 @@ void EditorViewport::paintGL() {
               float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
               if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) {
                 const float offset = ann.dimSignedOffset;
+                double labelX = 0.0, labelY = 0.0;  // the label as drawn (issue #1676)
+                CadDimModelSpaceLabelPosition(m_State, ann, &labelX, &labelY);
                 grips = {{ann.dimExt1X, ann.dimExt1Y, 0}, {ann.dimExt2X, ann.dimExt2Y, 0},
                          {sx1 + nx * offset, sy1 + ny * offset, 0}, {sx2 + nx * offset, sy2 + ny * offset, 0},
-                         {ann.insX, ann.insY, 0}};
+                         {labelX, labelY, 0}};
               }
             }
           }
@@ -1903,17 +1920,22 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           return std::pow(sx - m_Last.x(), 2) + std::pow(sy - m_Last.y(), 2);
         };
         if (annotation.kind == CadAnnotation::Kind::Mtext || annotation.kind == CadAnnotation::Kind::Table) {
-          const float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX};
-          const float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY};
+          // Issue #1667: a plain MTEXT's grips are its drawn (rotated, annotative-scaled) frame corners plus
+          // the insertion; a table and a survey-point label keep their axis-aligned box.
+          const bool frame = CadMtextHasFrameGrips(annotation);
+          float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX, annotation.insX};
+          float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY, annotation.insY};
+          if (frame) CadMtextGripPoints(m_State, annotation, xs, ys);
+          const float moveX = xs[4], moveY = ys[4];
           int grip = -1;
           double nearest = 100.0;
           for (int i = 0; i < 4; ++i) {
             const double distance = screenDistanceSq(xs[i], ys[i]);
             if (distance < nearest) { nearest = distance; grip = i; }
           }
-          if (annotation.surveyPointLabelForId >= 0) {
-            const double distance = screenDistanceSq(annotation.insX, annotation.insY);
-            if (distance < nearest) { nearest = distance; grip = 4; }
+          if (frame || annotation.surveyPointLabelForId >= 0) {
+            const double distance = screenDistanceSq(moveX, moveY);
+            if (distance <= nearest) { nearest = distance; grip = 4; }
           }
           if (grip >= 0 && nearest <= 100.0) {
             PushUndoSnapshot(m_State, "Grip edit");
@@ -1933,8 +1955,10 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, measure = 0.f;
           if (CadDimAnyGeometry(annotation, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measure)) {
             const float offset = annotation.dimSignedOffset;
-            const float gx[] = {annotation.dimExt1X, annotation.dimExt2X, sx1 + nx * offset, sx2 + nx * offset, annotation.insX};
-            const float gy[] = {annotation.dimExt1Y, annotation.dimExt2Y, sy1 + ny * offset, sy2 + ny * offset, annotation.insY};
+            double labelX = 0.0, labelY = 0.0;  // the label as drawn (issue #1676)
+            CadDimModelSpaceLabelPosition(m_State, annotation, &labelX, &labelY);
+            const double gx[] = {annotation.dimExt1X, annotation.dimExt2X, sx1 + nx * offset, sx2 + nx * offset, labelX};
+            const double gy[] = {annotation.dimExt1Y, annotation.dimExt2Y, sy1 + ny * offset, sy2 + ny * offset, labelY};
             int grip = -1; double nearest = 100.0;
             for (int i = 0; i < 5; ++i) { const double d = screenDistanceSq(gx[i], gy[i]); if (d < nearest) { nearest = d; grip = i; } }
             if (grip >= 0 && nearest <= 100.0) {
@@ -1943,12 +1967,13 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
               m_State.dimGripOrigSignedOffset = annotation.dimSignedOffset;
               m_State.dimGripOrigExt1X = annotation.dimExt1X; m_State.dimGripOrigExt1Y = annotation.dimExt1Y;
               m_State.dimGripOrigExt2X = annotation.dimExt2X; m_State.dimGripOrigExt2Y = annotation.dimExt2Y;
-              m_State.dimGripOrigInsX = annotation.insX; m_State.dimGripOrigInsY = annotation.insY;
+              m_State.dimGripOrigInsX = static_cast<float>(labelX); m_State.dimGripOrigInsY = static_cast<float>(labelY);
+              m_State.dimGripOrigTextUserPlaced = annotation.dimTextUserPlaced;
               m_State.dimGripDragNx = nx; m_State.dimGripDragNy = ny;
               const float dmx = .5f * (sx1 + sx2), dmy = .5f * (sy1 + sy2);
               m_State.dimGripTextAlongN = (annotation.insX - dmx) * nx + (annotation.insY - dmy) * ny;
               m_State.dimGripTextAlongT = (annotation.insX - dmx) * tx + (annotation.insY - dmy) * ty;
-              m_State.dimGripDownWorldX = static_cast<float>(m_Cursor.x); m_State.dimGripDownWorldY = static_cast<float>(m_Cursor.y);
+              m_State.dimGripDownWorldX = m_Cursor.x; m_State.dimGripDownWorldY = m_Cursor.y;
               m_State.dimGripMoveActive = true;
               m_GripMovedWithButton = false;
               if (changed) changed(); update(); return;
@@ -2528,7 +2553,22 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
-      if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
+      if (ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0) {
+        // Issue #1667: move by the insertion grip, resize in the text's own frame by a corner.
+        if (m_State.mtextGripCorner == 4) {
+          const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
+          const float dy = static_cast<float>(m_Cursor.y) - m_State.mtextGripDownWorldY;
+          ann.boxMinX = m_State.mtextGripOrigBoxMinX + dx; ann.boxMaxX = m_State.mtextGripOrigBoxMaxX + dx;
+          ann.boxMinY = m_State.mtextGripOrigBoxMinY + dy; ann.boxMaxY = m_State.mtextGripOrigBoxMaxY + dy;
+          CadMtextSyncInsertion(ann);
+        } else {
+          CadMtextResizeFromGrip(ann, CadMtextModelDisplayFactor(m_State, ann), m_State.mtextGripFixedCornerX,
+                                 m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.x),
+                                 static_cast<float>(m_Cursor.y));
+          CadMtextFitHeight(m_State, ann);  // the corner sets the wrap width; the height follows the text
+        }
+        BumpCadGpuCache(m_State);
+      } else if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
         const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
         const float dy = static_cast<float>(m_Cursor.y) - m_State.mtextGripDownWorldY;
         ann.boxMinX = m_State.mtextGripOrigBoxMinX + dx; ann.boxMaxX = m_State.mtextGripOrigBoxMaxX + dx;
@@ -2539,20 +2579,25 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         ann.boxMinY = std::min(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
         ann.boxMaxY = std::max(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
       }
-      ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
+      if (!(ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0)) {
+        ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
+      }
     }
     if (m_State.dimGripMoveActive && m_State.dimGripAnnotationIndex >= 0 &&
         static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
-      const float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y);
+      const double x = m_Cursor.x, y = m_Cursor.y;
       switch (m_State.dimGripWhich) {
-        case 0: ann.dimExt1X = x; ann.dimExt1Y = y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
-        case 1: ann.dimExt2X = x; ann.dimExt2Y = y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
+        case 0: ann.dimExt1X = m_Cursor.x; ann.dimExt1Y = m_Cursor.y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
+        case 1: ann.dimExt2X = m_Cursor.x; ann.dimExt2Y = m_Cursor.y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
         case 2: case 3:
           ann.dimSignedOffset = m_State.dimGripOrigSignedOffset + (x - m_State.dimGripDownWorldX) * m_State.dimGripDragNx + (y - m_State.dimGripDownWorldY) * m_State.dimGripDragNy;
           CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
-        case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
+        case 4:
+          ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY);
+          ann.dimTextUserPlaced = true;  // issue #1676: a dragged label keeps its spot at every scale
+          break;
         default: break;
       }
       CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));

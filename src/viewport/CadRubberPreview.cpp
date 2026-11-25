@@ -170,10 +170,14 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   }
   if (hasDimensionDraft) {
     CadDimStrokeParams params;
-    params.modelUnitsPerPlottedInch = cmd.drawing.modelUnitsPerPlottedInch;
+    params.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(  // issue #1676: as it will draw
+        dimensionDraft, &cmd.drawing.activeDimensionStyle, cmd.drawing.modelUnitsPerPlottedInch,
+        &cmd.drawing.annotationScales, cmd.currentAnnotationScaleIndex, nullptr,
+        cmd.activeSpaceIndex == kModelSpaceIndex);
     params.arrowSizeInches = cmd.drawing.activeDimensionStyle.arrowSizeInches;
     params.arrowScale = cmd.viewportDimArrowScale;
     params.arrowType = cmd.drawing.activeDimensionStyle.arrowType;
+    params.style = &cmd.drawing.activeDimensionStyle;
     CadDimWorldStrokes strokes;
     if (CadDimBuildWorldStrokes(dimensionDraft, params, &strokes)) {
       for (const auto& s : strokes.segs)

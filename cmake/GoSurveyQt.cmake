@@ -25,6 +25,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorProjectAttach.cpp
   src/qt/EditorPointClouds.cpp
   src/qt/EditorUpdate.cpp
+  src/qt/EditorAutosave.cpp
   src/qt/EditorDialogs.cpp
   src/qt/StyleEditors.cpp
   src/qt/EditorPoints.cpp
@@ -56,6 +57,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/FailureReport.cpp
   src/renderer/src/ViewportRenderer.cpp
   src/renderer/src/ViewportHatchPass.cpp
+  src/renderer/src/ViewportThumbnailCapture.cpp
   src/pdf/src/PdfAttach.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp

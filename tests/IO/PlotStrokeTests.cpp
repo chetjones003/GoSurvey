@@ -9,6 +9,7 @@
 #include "commands/CadLinetype.hpp"
 #include "io/src/PlotStroke.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -92,4 +93,58 @@ TEST_CASE("A dashed chain keeps its pattern across joints (REQ-446)", "[plotstro
   CadTessellateLinetypeChainVc(oneChord, 2, 0.f, false, "DASHED", 1.f, kBlack, &a);
   CadTessellateLinetypeChainVc(twoChords, 3, 0.f, false, "DASHED", 1.f, kBlack, &b);
   REQUIRE_THAT(DrawnLength(b), WithinAbs(DrawnLength(a), 1e-3));
+}
+
+TEST_CASE("Clipped dashed chain bounds memory and preserves phase at extreme zoom", "[plotstroke][linetype]") {
+  // Simulate zooming in deeply on one bolt hole beside a large CENTER bolt circle (radius 1000,
+  // view half-extent 0.001, dashPatScale = 4.5e-5). Without clipping, tessellating the full
+  // circumference would emit >100 million dash vertices (>5 GB RAM) and freeze the UI thread.
+  constexpr int kSegs = 256;
+  constexpr double kR = 1000.0;
+  constexpr double kTwoPi = 6.283185307179586;
+  std::vector<float> xy((kSegs + 1) * 2);
+  for (int i = 0; i <= kSegs; ++i) {
+    const double t = kTwoPi * static_cast<double>(i) / static_cast<double>(kSegs);
+    // Anchor on the circle's right rim so a tiny slice passes through the origin clip square.
+    xy[static_cast<size_t>(i * 2)] = static_cast<float>(kR * std::cos(t) - kR);
+    xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(kR * std::sin(t));
+  }
+  std::vector<float> verts;
+  CadTessellateLinetypeChainVc(xy.data(), kSegs + 1, 0.f, true, "CENTER", 4.5e-5f, kBlack, &verts, nullptr, 0.002f);
+  const size_t segments = verts.size() / kStride;
+  REQUIRE(segments > 0);
+  REQUIRE(segments < 500);
+
+  // Dash phase across an off-screen lead-in must match the unclipped phase inside the window.
+  const float longLine[] = {-50.f, 0.f, 50.f, 0.f};
+  std::vector<float> clipped, unclipped;
+  CadTessellateLinetypeChainVc(longLine, 2, 0.f, false, "DASHED", 1.f, kBlack, &clipped, nullptr, 2.f);
+  CadTessellateLinetypeChainVc(longLine, 2, 0.f, false, "DASHED", 1.f, kBlack, &unclipped);
+  REQUIRE(!clipped.empty());
+  float unclippedInsideLen = 0.f;
+  for (size_t i = 0; i + kStride <= unclipped.size(); i += kStride) {
+    const float x0 = std::clamp(unclipped[i], -2.f, 2.f);
+    const float x1 = std::clamp(unclipped[i + 7], -2.f, 2.f);
+    unclippedInsideLen += std::fabs(x1 - x0);
+  }
+  REQUIRE_THAT(DrawnLength(clipped), Catch::Matchers::WithinAbs(unclippedInsideLen, 1e-3));
+}
+
+TEST_CASE("Linetype tessellator handles extreme ratios, cycle boundaries, and BORDER dots safely",
+          "[plotstroke][linetype]") {
+  // Unclipped pathological ratio must fall back instead of allocating unbounded memory.
+  std::vector<float> segOut;
+  CadTessellateLinetypeSegmentVc(0.f, 0.f, 0.f, 1e6f, 0.f, 0.f, "HIDDEN", 1e-5f, kBlack, &segOut);
+  REQUIRE(segOut.size() == kStride);
+
+  const float hugeChain[] = {0.f, 0.f, 1e6f, 0.f};
+  std::vector<float> chainOut;
+  CadTessellateLinetypeChainVc(hugeChain, 2, 0.f, false, "HIDDEN", 1e-5f, kBlack, &chainOut);
+  REQUIRE(chainOut.size() == kStride);
+
+  // BORDER includes a zero-length dot element; exact cycle multiples must not read out of bounds.
+  std::vector<float> borderOut;
+  const float borderLine[] = {0.f, 0.f, 5.25f, 0.f};
+  CadTessellateLinetypeChainVc(borderLine, 2, 0.f, false, "BORDER", 1.f, kBlack, &borderOut);
+  REQUIRE(borderOut.size() / kStride >= 4);
 }

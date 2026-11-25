@@ -1,14 +1,14 @@
 {
   "src/geometry/src/brep.cpp": 19848,
   "src/io/src/AcisSatParser.cpp": 3189,
-  "src/io/src/DxfIo.cpp": 6683,
+  "src/io/src/DxfIo.cpp": 6678,
   "src/io/src/GsIo.cpp": 5999,
-  "src/io/src/LibreDwgCad.cpp": 9327,
+  "src/io/src/LibreDwgCad.cpp": 9322,
   "src/qt/EditorWindow.cpp": 3671,
   "src/qt/PdfWindow.cpp": 3295,
-  "src/renderer/src/ViewportRenderer.cpp": 4226,
+  "src/renderer/src/ViewportRenderer.cpp": 4099,
   "tests/BrepTests.cpp": 9427,
   "tests/IO/LibreDwgCadTests.cpp": 9308,
   "tests/Survey/TraverseTests.cpp": 3120,
-  "tests/headless/HeadlessDriver.cpp": 3220
+  "tests/headless/HeadlessDriver.cpp": 3215
 }
