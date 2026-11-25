@@ -234,6 +234,26 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   return stepengine::RegistryFuzzyCommandSuggestions(query, maxResults);
 }
 
+std::string CommandPrimaryForName(const std::string& name) {
+  const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(name));
+  const stepengine::CommandDef* def = stepengine::CommandRegistry::Instance().FindAny(low);
+  return def ? StringUtil::toLowerAsciiCopy(def->primary) : std::string();
+}
+
+std::string CommandPrimaryForKind(CadCommandKind kind) {
+  if (kind == CadCommandKind::None)
+    return {};
+  const stepengine::CommandDef* only = nullptr;
+  for (const stepengine::CommandDef& def : stepengine::CommandRegistry::Instance().All()) {
+    if (def.kind != kind)
+      continue;
+    if (only)
+      return {};
+    only = &def;
+  }
+  return only ? StringUtil::toLowerAsciiCopy(only->primary) : std::string();
+}
+
 std::string ResolveCommandLineSubmission(const std::string& typedText) {
   const std::string trimmed = StringUtil::trimCopy(typedText);
   if (trimmed.empty() || trimmed.find_first_of(" \t") != std::string::npos)

@@ -2,14 +2,20 @@
 
 #include "CadCommands.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
 std::unordered_map<std::string, std::string> g_commandPageSlug;
+/// Command (lowercase) -> first non-command page with an all-caps heading naming it, e.g. "## REVCLOUD".
+std::unordered_map<std::string, std::string> g_commandHeadingSlug;
+bool                                         g_indexBuilt = false;  ///< WikiHelpBuildIndex ran on a loaded bundle
 std::string                                  g_uiHoverTooltip;
 bool                                         g_uiHoverValid = false;
 
@@ -60,11 +66,14 @@ WikiHelpTarget TargetFromPrimary(const std::string& primaryLower) {
     return out;
   }
 
-  const auto it = g_commandPageSlug.find(primaryLower);
-  if (it != g_commandPageSlug.end())
+  if (const auto it = g_commandPageSlug.find(primaryLower); it != g_commandPageSlug.end())
     out.pageSlug = it->second;
+  else if (const auto heading = g_commandHeadingSlug.find(primaryLower); heading != g_commandHeadingSlug.end())
+    out.pageSlug = heading->second;
+  else if (!g_indexBuilt)
+    out.pageSlug = CommandPageSlug(primaryLower);  // no index built: keep the conventional page name
   else
-    out.pageSlug = CommandPageSlug(primaryLower);
+    out.pageSlug = "Command-Reference";  // every command is listed there
   return out;
 }
 
@@ -77,6 +86,9 @@ WikiHelpTarget TargetFromUiTooltip(std::string_view tooltip) {
     const char* page;
   } kUiTopics[] = {
       {"Object snap", "Object-Snaps"},
+      {"OSNAP (", "Object-Snaps"},
+      {"ORTHO (", "Drafting-Aids"},
+      {"POLAR (", "Drafting-Aids"},
       {"3D Object snap", "Object-Snaps"},
       {"Ortho mode", "Drafting-Aids"},
       {"Polar tracking", "Drafting-Aids"},
@@ -110,16 +122,57 @@ WikiHelpTarget TargetFromUiTooltip(std::string_view tooltip) {
 
 void WikiHelpBuildIndex(const WikiBundle& bundle) {
   g_commandPageSlug.clear();
+  g_commandHeadingSlug.clear();
+  g_indexBuilt = bundle.ok;
   if (!bundle.ok)
     return;
 
+  std::vector<std::string> topicSlugs;
   for (const auto& [slug, page] : bundle.pagesBySlug) {
     (void)page;
-    if (slug.rfind("Commands/", 0) != 0)
+    if (slug.rfind("Commands/", 0) != 0) {
+      topicSlugs.push_back(slug);
       continue;
+    }
     const std::string primary = slug.substr(std::string("Commands/").size());
     if (!primary.empty())
       g_commandPageSlug.emplace(primary, slug);
+  }
+
+  // Commands without their own page are documented under a heading on a topic page. Sorted so the
+  // choice does not depend on hash order.
+  std::sort(topicSlugs.begin(), topicSlugs.end());
+  for (const std::string& slug : topicSlugs) {
+    std::istringstream lines(bundle.pagesBySlug.at(slug).markdown);
+    std::string line;
+    bool inFence = false;  // "# comment" lines inside ``` examples are not headings
+    while (std::getline(lines, line)) {
+      const size_t indent = line.find_first_not_of(" \t");
+      if (indent != std::string::npos && line.compare(indent, 3, "```") == 0) {
+        inFence = !inFence;
+        continue;
+      }
+      size_t i = 0;
+      while (i < line.size() && line[i] == '#')
+        ++i;
+      if (inFence || i == 0 || i >= line.size() || line[i] != ' ')
+        continue;  // a heading is "#... " followed by text
+      while (i < line.size() && (line[i] == ' ' || line[i] == '`'))
+        ++i;
+      size_t end = i;
+      bool hasLetter = false, allCaps = true;
+      while (end < line.size() && std::isalnum(static_cast<unsigned char>(line[end]))) {
+        const unsigned char c = static_cast<unsigned char>(line[end]);
+        if (std::isalpha(c)) {
+          hasLetter = true;
+          allCaps = allCaps && std::isupper(c);
+        }
+        ++end;
+      }
+      if (!hasLetter || !allCaps || end - i < 2)
+        continue;
+      g_commandHeadingSlug.emplace(ToLowerAscii(line.substr(i, end - i)), slug);
+    }
   }
 }
 

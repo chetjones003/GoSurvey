@@ -1958,6 +1958,14 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
 /// unrecognized single token are both returned unchanged.
 std::string ResolveCommandLineSubmission(const std::string& typedText);
 
+/// Lowercase registry primary for a command name or alias, listed or not ("l" -> "line",
+/// "ts" -> "toolspace"); empty when nothing is registered under \p name. Used by contextual help.
+std::string CommandPrimaryForName(const std::string& name);
+
+/// Lowercase registry primary of the one command that runs as \p kind; empty when no command or
+/// more than one does (several primitives share CadCommandKind::Solid, for example).
+std::string CommandPrimaryForKind(CadCommandKind kind);
+
 /// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
 /// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
 /// to mean the same thing, which is what produced "click two corners to window-select objects" in

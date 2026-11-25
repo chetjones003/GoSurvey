@@ -35,8 +35,34 @@
 #include <QColor>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QCursor>
 #include <algorithm>
 #include <cmath>
+
+namespace {
+
+/// What F1 should document for the widget under the cursor: a ribbon/menu action's command route
+/// and tooltip, or a plain widget's tooltip (status-bar toggles).
+struct HelpHoverTopic {
+  QString command;
+  QString tooltip;
+};
+
+HelpHoverTopic HelpTopicForAction(const QAction* action) {
+  if (!action) return {};
+  return {action->property("ribbonCommand").toString(), action->toolTip()};
+}
+
+HelpHoverTopic HelpTopicForWidget(QWidget* widget) {
+  for (QWidget* w = widget; w; w = w->isWindow() ? nullptr : w->parentWidget()) {
+    if (auto* button = qobject_cast<QToolButton*>(w); button && button->defaultAction())
+      return HelpTopicForAction(button->defaultAction());
+    if (!w->toolTip().isEmpty()) return {{}, w->toolTip()};
+  }
+  return {};
+}
+
+}  // namespace
 
 void EditorWindow::BuildDraftingInput() {
   const auto mode = [this](const char* name, const char* label, int key, bool AppCommandState::*member) {
@@ -309,6 +335,22 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   const bool suggestionPopupWidget = widget && m_CommandSuggestions &&
       (widget == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(widget));
   const bool ownSuggestionsPopup = QApplication::activePopupWidget() == m_CommandSuggestions;
+  if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_F1 &&
+      !QApplication::activeModalWidget()) {
+    // F1 over a ribbon flyout entry documents that entry; the menus must close before the modal opens.
+    auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+    const QAction* action = menu ? menu->activeAction() : nullptr;
+    // Only menus opened from this window: walk submenus up to the widget that owns the menu.
+    QWidget* owner = menu ? menu->parentWidget() : nullptr;
+    while (qobject_cast<QMenu*>(owner)) owner = owner->parentWidget();
+    const bool ownMenu = owner && (owner == this || isAncestorOf(owner));
+    if (ownMenu && action && action->property("ribbonCommand").isValid()) {
+      const HelpHoverTopic topic = HelpTopicForAction(action);
+      while (auto* open = qobject_cast<QMenu*>(QApplication::activePopupWidget())) open->close();
+      ShowContextualHelp(topic.command, topic.tooltip);
+      return true;
+    }
+  }
   if (!widget || !(widget == this || isAncestorOf(widget) || suggestionPopupWidget) ||
       QApplication::activeModalWidget() ||
       (QApplication::activePopupWidget() && !ownSuggestionsPopup)) return false;
@@ -417,7 +459,21 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     CancelDraftingInput(); key->accept(); return true;
   }
   if (event->type() != QEvent::KeyPress) return false;
-  if (key->key() == Qt::Key_F1) { ShowContextualHelp(); return true; }
+  if (key->key() == Qt::Key_F1) {
+    // The highlighted (or hovered) fuzzy match wins while the command line is offering suggestions;
+    // otherwise document whatever is under the cursor, then the running or last command.
+    if (m_CommandSuggestions && m_CommandSuggestions->isVisible() && m_CommandSuggestionModel &&
+        m_CommandSuggestionModel->rowCount() > 0) {
+      QModelIndex row = m_CommandSuggestions->indexAt(m_CommandSuggestions->viewport()->mapFromGlobal(QCursor::pos()));
+      if (!row.isValid()) row = m_CommandSuggestions->currentIndex();
+      if (!row.isValid()) row = m_CommandSuggestionModel->index(0, 0);
+      ShowContextualHelp(row.data(Qt::DisplayRole).toString());
+      return true;
+    }
+    const HelpHoverTopic topic = HelpTopicForWidget(QApplication::widgetAt(QCursor::pos()));
+    ShowContextualHelp(topic.command, topic.tooltip);
+    return true;
+  }
   if (!editing && key->key() == Qt::Key_Delete) {
     StartDeleteCommand(m_State, m_Log); Refresh(); return true;
   }
@@ -539,72 +595,4 @@ void EditorWindow::ShowPolarSettings() {
     dialog.accept();
   });
   dialog.exec(); Refresh();
-}
-
-void EditorWindow::ShowContextualHelp(const QString& topicCommand) {
-  if (!m_WikiLoaded) {
-    m_WikiBundle = LoadWikiBundle();
-    WikiHelpBuildIndex(m_WikiBundle);
-    m_WikiLoaded = true;
-  }
-  QDialog dialog(this); dialog.setObjectName("contextualHelpDialog");
-  dialog.setWindowTitle("GoSurvey User Manual"); dialog.resize(1080, 720);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* title = new QLabel("User Manual", &dialog); title->setObjectName("manualTitle");
-  const bool darkHelp = palette().color(QPalette::Window).lightness() < 128;
-  title->setStyleSheet(QString("font-size:20px; font-weight:600; padding:10px; background:%1; color:#f1f6fa; border-radius:4px;")
-                           .arg(darkHelp ? "#30373c" : "#263e53"));
-  layout->addWidget(title);
-  auto* splitter = new QSplitter(&dialog); splitter->setObjectName("manualSplitter"); layout->addWidget(splitter, 1);
-  auto* pages = new QListWidget(splitter); pages->setObjectName("manualPages");
-  auto* browser = new QTextBrowser(splitter); browser->setObjectName("manualContent");
-  browser->setOpenLinks(false); browser->setOpenExternalLinks(false);
-  splitter->addWidget(pages); splitter->addWidget(browser); splitter->setStretchFactor(1, 1);
-  auto showPage = [this, browser, title](const QString& slug) {
-    const auto found = m_WikiBundle.pagesBySlug.find(slug.toUtf8().toStdString());
-    if (found == m_WikiBundle.pagesBySlug.end()) return;
-    title->setText(QString::fromUtf8(found->second.title.c_str()));
-    QString markdown = QString::fromUtf8(found->second.markdown.c_str());
-    QRegularExpression image("wiki-img:([A-Za-z0-9._-]+)");
-    auto match = image.globalMatch(markdown);
-    while (match.hasNext()) {
-      const auto item = match.next();
-      const auto path = std::filesystem::path(m_WikiBundle.rootPath) / "images" / item.captured(1).toStdWString();
-      markdown.replace(item.capturedStart(), item.capturedLength(), QUrl::fromLocalFile(QString::fromStdWString(path.wstring())).toString());
-    }
-    browser->setMarkdown(markdown);
-  };
-  for (const auto& entry : m_WikiBundle.nav) {
-    if (entry.isSection) {
-      auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      item->setFlags(Qt::NoItemFlags); item->setForeground(QColor(QtAccentFor(true).quiet));
-    } else {
-      auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      item->setData(Qt::UserRole, QString::fromUtf8(entry.slug.c_str()));
-    }
-  }
-  connect(pages, &QListWidget::currentItemChanged, &dialog,
-      [showPage](QListWidgetItem* current) { if (current) showPage(current->data(Qt::UserRole).toString()); });
-  connect(browser, &QTextBrowser::anchorClicked, &dialog, [this, pages, showPage](const QUrl& url) {
-    if (url.scheme() != "wiki") { QDesktopServices::openUrl(url); return; }
-    const QString slug = url.path().isEmpty() ? url.host() : url.path();
-    for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == slug) {
-      pages->setCurrentRow(i); showPage(slug); return;
-    }
-    showPage(slug);
-  });
-  QString command = topicCommand;
-  if (command.isEmpty() && m_State.active != AppCommandState::Kind::None)
-    command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
-  else if (command.isEmpty() && m_State.lastCommand != AppCommandState::Kind::None)
-    command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
-  const auto target = WikiHelpLookupCommand(command.toLower().toUtf8().toStdString());
-  const QString initial = target.pageSlug.empty() ? QStringLiteral("Home") : QString::fromUtf8(target.pageSlug.c_str());
-  bool selected = false;
-  for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == initial) {
-    pages->setCurrentRow(i); selected = true; break;
-  }
-  if (!selected) showPage(initial);
-  if (!m_WikiBundle.ok) browser->setPlainText(QString::fromUtf8(m_WikiBundle.fallbackMessage.c_str()));
-  dialog.exec();
 }
