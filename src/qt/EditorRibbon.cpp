@@ -61,6 +61,7 @@
 #include "CadColor.hpp"
 #include <GoSurvey/Core/ShxFont.hpp>
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <vector>
 #include <functional>
@@ -624,6 +625,66 @@ static QPixmap HatchPatternThumbnail(const std::vector<hatchpat::Def>& library, 
   for (std::size_t i = 0; i + 3 < segments.size(); i += 4)
     painter.drawLine(map(segments[i], segments[i + 1]), map(segments[i + 2], segments[i + 3]));
   return pixmap;
+}
+
+// Hatch ribbon slider mappings. The slider is a quick coarse control; the numeric box beside it keeps exact
+// entry and the full range. Scale is logarithmic (0.01 .. 100) because pattern scales span orders of magnitude.
+static int HatchTransparencyToSlider(double percent) { return qRound(std::clamp(percent, 0.0, 100.0)); }
+static double HatchTransparencyFromSlider(int value) { return value; }
+static int HatchAngleToSlider(double degrees) {
+  double wrapped = std::fmod(degrees, 360.0);
+  if (wrapped < 0) wrapped += 360.0;
+  return qRound(wrapped) % 360;
+}
+static double HatchAngleFromSlider(int value) { return value; }
+static int HatchScaleToSlider(double scale) {
+  return qRound(std::clamp(std::log10(std::max(scale, 1e-9)), -2.0, 2.0) * 100.0) + 200;
+}
+static double HatchScaleFromSlider(int value) {
+  return QString::number(std::pow(10.0, (value - 200) / 100.0), 'g', 3).toDouble();
+}
+
+// One "Label [slider] [value]" ribbon row. The slider commits once when released (one undo step per drag) and
+// previews the number while dragging; keyboard and click steps commit immediately. The value box is named
+// objectName and the slider objectName + "Slider" so Refresh can sync both.
+static QWidget* CreateRibbonHatchSliderRow(QWidget* panel, const QString& objectName, const QString& label,
+                                           double minimum, double maximum, int decimals, const QString& suffix,
+                                           int (*toSlider)(double), double (*fromSlider)(int),
+                                           std::function<void(double)> commit) {
+  auto* row = new QWidget(panel); row->setObjectName(objectName + "Row"); row->setFixedHeight(24);
+  auto* layout = new QHBoxLayout(row); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(6);
+  auto* caption = new QLabel(label, row);
+  caption->setFixedWidth(caption->fontMetrics().horizontalAdvance(label) + 2);
+  auto* slider = new QSlider(Qt::Horizontal, row); slider->setObjectName(objectName + "Slider");
+  slider->setAccessibleName(label); slider->setToolTip(label); slider->setTracking(false); slider->setFixedWidth(110);
+  if (objectName.endsWith("Transparency")) { slider->setRange(0, 100); slider->setPageStep(10); }
+  else if (objectName.endsWith("Angle")) { slider->setRange(0, 359); slider->setPageStep(15); }
+  else { slider->setRange(0, 400); slider->setPageStep(30); }
+  auto* value = new QDoubleSpinBox(row); value->setObjectName(objectName); value->setAccessibleName(label);
+  value->setRange(minimum, maximum); value->setDecimals(decimals); value->setSuffix(suffix);
+  value->setButtonSymbols(QAbstractSpinBox::NoButtons); value->setKeyboardTracking(false); value->setFixedSize(68, 22);
+  value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  layout->addWidget(caption); layout->addWidget(slider); layout->addWidget(value);
+  QObject::connect(slider, &QSlider::sliderMoved, value, [value, fromSlider](int position) {
+    const QSignalBlocker block(value); value->setValue(fromSlider(position));
+  });
+  QObject::connect(slider, &QSlider::valueChanged, value, [value, fromSlider](int position) {
+    value->setValue(fromSlider(position));
+  });
+  QObject::connect(value, &QDoubleSpinBox::valueChanged, slider, [slider, toSlider, commit](double number) {
+    { const QSignalBlocker block(slider); slider->setValue(toSlider(number)); }
+    commit(number);
+  });
+  return row;
+}
+
+static void SyncRibbonHatchSliderRow(QWidget* ribbon, const QString& objectName, double number, int (*toSlider)(double)) {
+  if (auto* value = ribbon->findChild<QDoubleSpinBox*>(objectName); value && !value->hasFocus()) {
+    const QSignalBlocker block(value); value->setValue(number);
+  }
+  if (auto* slider = ribbon->findChild<QSlider*>(objectName + "Slider"); slider && !slider->isSliderDown()) {
+    const QSignalBlocker block(slider); slider->setValue(toSlider(number));
+  }
 }
 
 // The HATCH ribbon's pattern chooser: a large button showing the current pattern's swatch and name, opening a
@@ -1456,44 +1517,39 @@ void EditorWindow::BuildRibbonPages() {
         panel->setMinimumWidth(220);
       }
       if (name == "HatchCtx") {
-        // Two stacked columns beside the pattern gallery, each sized by its own controls rather than forced onto
-        // a shared three-row grid: the layer combo (with its state icons) is taller than a spin box, and a
-        // shared row height is what pushed it over the Colour button.
+        // Two columns of fixed 24 px rows beside the pattern gallery. Three rows with no gap fill the panel's
+        // 73 px content height exactly; any row spacing or a taller control pushes the third row into the caption.
         EnsureQtHatchPatternLibrary(m_State);
         auto* pattern = CreateRibbonHatchPatternGallery(panel, m_State,
             [this](const QString& value) { EditRibbonHatch("pattern", value); });
         grid->addWidget(pattern, 0, col++, 3, 1);
-        auto* appearance = new QVBoxLayout; appearance->setContentsMargins(0, 0, 0, 0); appearance->setSpacing(3);
-        auto* placement = new QVBoxLayout; placement->setContentsMargins(0, 0, 0, 0); placement->setSpacing(3);
         auto* layer = new QComboBox(panel); layer->setObjectName("ribbonHatchLayer"); layer->setAccessibleName("Hatch layer");
-        layer->setToolTip("Hatch layer"); layer->setMinimumWidth(150); layer->setMaximumWidth(190); layer->setMaxVisibleItems(14);
+        layer->setToolTip("Hatch layer"); layer->setFixedSize(200, 24); layer->setMaxVisibleItems(14);
         layer->setStyleSheet(PopupComboStyleSheet());
         connect(layer, &QComboBox::textActivated, this, [this](const QString& value) { EditRibbonHatch("layer", value); });
-        appearance->addWidget(layer);
-        auto* transparency = new QSpinBox(panel); transparency->setObjectName("ribbonHatchTransparency"); transparency->setRange(0, 100);
-        transparency->setPrefix("Transparency "); transparency->setSuffix(" %"); transparency->setFixedHeight(24);
-        transparency->setKeyboardTracking(false); appearance->addWidget(transparency);
-        connect(transparency, &QSpinBox::valueChanged, this, [this](int value) { EditRibbonHatch("transparency", QString::number(value / 100.0)); });
-        appearance->addStretch();
-        auto* angle = new QDoubleSpinBox(panel); angle->setObjectName("ribbonHatchAngle"); angle->setRange(-360, 360);
-        angle->setPrefix("Angle "); angle->setSuffix(" deg"); angle->setKeyboardTracking(false); angle->setFixedHeight(24);
-        angle->setMinimumWidth(135); placement->addWidget(angle);
-        connect(angle, &QDoubleSpinBox::valueChanged, this, [this](double value) { EditRibbonHatch("angle", QString::number(value, 'g', 15)); });
-        auto* scale = new QDoubleSpinBox(panel); scale->setObjectName("ribbonHatchScale"); scale->setDecimals(4); scale->setRange(0.0001, 1e9);
-        scale->setPrefix("Scale "); scale->setKeyboardTracking(false); scale->setFixedHeight(24); scale->setMinimumWidth(135);
-        placement->addWidget(scale);
-        connect(scale, &QDoubleSpinBox::valueChanged, this, [this](double value) { EditRibbonHatch("scale", QString::number(value, 'g', 15)); });
-        auto* color = new QToolButton(panel); color->setObjectName("ribbonHatchColor"); color->setText("Color...");
-        color->setIcon(CadCommandIcon("Color_Faces.png")); color->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        color->setAutoRaise(true); color->setFixedHeight(24); placement->addWidget(color);
-        connect(color, &QToolButton::clicked, this, [this] {
-          const auto selected = QColorDialog::getColor(QColor::fromRgbF(m_State.hatchColorRgb[0], m_State.hatchColorRgb[1], m_State.hatchColorRgb[2]), this, "Hatch color");
+        auto* color = new QToolButton(panel); color->setObjectName("ribbonHatchColor"); color->setText("Color");
+        color->setAccessibleName("Hatch color"); color->setToolTip("Hatch color");
+        color->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); color->setIconSize(QSize(14, 14));
+        color->setAutoRaise(true); color->setFixedSize(200, 24);
+        connect(color, &QToolButton::clicked, this, [this, color] {
+          const auto selected = QColorDialog::getColor(color->property("hatchColor").value<QColor>(), this, "Hatch color");
           if (selected.isValid()) EditRibbonHatch("color", selected.name());
         });
-        placement->addStretch();
-        grid->addLayout(appearance, 0, col++, 3, 1);
-        grid->addLayout(placement, 0, col++, 3, 1);
-        grid->setHorizontalSpacing(8);
+        auto* transparency = CreateRibbonHatchSliderRow(panel, "ribbonHatchTransparency", "Transparency", 0, 100, 0, " %",
+            HatchTransparencyToSlider, HatchTransparencyFromSlider,
+            [this](double value) { EditRibbonHatch("transparency", QString::number(value / 100.0, 'g', 6)); });
+        auto* angle = CreateRibbonHatchSliderRow(panel, "ribbonHatchAngle", "Angle", -360, 360, 2, QString(QChar(0x00B0)),
+            HatchAngleToSlider, HatchAngleFromSlider,
+            [this](double value) { EditRibbonHatch("angle", QString::number(value, 'g', 15)); });
+        auto* scale = CreateRibbonHatchSliderRow(panel, "ribbonHatchScale", "Scale", 0.01, 1e6, 4, QString(),
+            HatchScaleToSlider, HatchScaleFromSlider,
+            [this](double value) { EditRibbonHatch("scale", QString::number(value, 'g', 15)); });
+        grid->addWidget(layer, 0, col); grid->addWidget(color, 1, col); grid->addWidget(transparency, 2, col++);
+        grid->addWidget(angle, 0, col); grid->addWidget(scale, 1, col++);
+        for (int r = 0; r < 3; ++r) grid->setRowMinimumHeight(r, 24);
+        grid->setHorizontalSpacing(10);
+        // The app theme pads inputs to ~33 px; compact them so each fits its 24 px ribbon row unclipped.
+        panel->setStyleSheet("QComboBox, QAbstractSpinBox { padding:1px 6px; min-height:0px; }");
       }
       if (name == "PointCloudCtx" && panelName == "Point Cloud Display") {
         auto* size = new QDoubleSpinBox(panel); size->setObjectName("ribbonPointSize"); size->setRange(1, 10); size->setSingleStep(0.5); size->setPrefix("Size "); grid->addWidget(size, 0, col);
@@ -1715,9 +1771,24 @@ void EditorWindow::RefreshRibbon() {
     RibbonFillLayerCombo(combo, m_State.drawing.drawingLayerTable, Text((attrs ? attrs->layer : m_State.hatchLayer.empty() ? m_State.drawing.currentLayer : m_State.hatchLayer).c_str()));
   if (auto* button = ribbon->findChild<QToolButton*>("ribbonHatchPattern"))
     SyncRibbonHatchPatternButton(button, m_State.hatchPatternLibrary, region ? region->patternName : m_State.hatchPatternName);
-  if (auto* angle = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchAngle")) { const QSignalBlocker block(angle); angle->setValue(region ? region->patternAngleDeg : m_State.hatchAngleDeg); }
-  if (auto* scale = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchScale")) { const QSignalBlocker block(scale); scale->setValue(region ? region->patternScale : m_State.hatchScale); }
-  if (auto* transparency = ribbon->findChild<QSpinBox*>("ribbonHatchTransparency")) { const QSignalBlocker block(transparency); transparency->setValue(qRound((attrs ? std::max(0.f, attrs->transparency) : m_State.hatchTransparency01) * 100)); }
+  SyncRibbonHatchSliderRow(ribbon, "ribbonHatchAngle", region ? region->patternAngleDeg : m_State.hatchAngleDeg, HatchAngleToSlider);
+  SyncRibbonHatchSliderRow(ribbon, "ribbonHatchScale", region ? region->patternScale : m_State.hatchScale, HatchScaleToSlider);
+  SyncRibbonHatchSliderRow(ribbon, "ribbonHatchTransparency",
+      std::round((attrs ? std::max(0.f, attrs->transparency) : m_State.hatchTransparency01) * 100.0), HatchTransparencyToSlider);
+  if (auto* color = ribbon->findChild<QToolButton*>("ribbonHatchColor")) {
+    float rgba[4] = {m_State.hatchColorRgb[0], m_State.hatchColorRgb[1], m_State.hatchColorRgb[2], 1.f};
+    if (attrs) ResolveEntityRgbaForViewport(*attrs, FindDrawingLayerRowCi(m_State, attrs->layer), .85f, .85f, .85f, rgba);
+    const QColor swatch = QColor::fromRgbF(rgba[0], rgba[1], rgba[2]);
+    if (color->property("hatchColor").value<QColor>() != swatch || color->icon().isNull()) {
+      color->setProperty("hatchColor", swatch);
+      const qreal ratio = color->devicePixelRatioF();
+      QPixmap chip(QSize(14, 14) * ratio); chip.setDevicePixelRatio(ratio); chip.fill(Qt::transparent);
+      QPainter painter(&chip); painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(QPen(color->palette().color(QPalette::Mid), 1)); painter.setBrush(swatch);
+      painter.drawRoundedRect(QRectF(0.5, 0.5, 13, 13), 3, 3); painter.end();
+      color->setIcon(QIcon(chip)); color->setText(swatch.name());
+    }
+  }
   if (auto* combo = findChild<QComboBox*>("ribbonColor")) { const QSignalBlocker block(combo); const auto selected = CadSelectionColor(m_State); combo->setCurrentText(Text((selected.empty() ? m_State.drawing.currentColor : selected).c_str())); }
   if (auto* textGallery = findChild<QToolButton*>(QStringLiteral("ribbonTextStyleGallery"))) {
     SyncRibbonStyleGalleryButton(textGallery, Text(m_State.drawing.activeTextStyleName.c_str()));
