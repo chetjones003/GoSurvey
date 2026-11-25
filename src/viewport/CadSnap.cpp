@@ -2604,10 +2604,13 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
           if (a.surveyPointLabelForId >= 0) {
             gripCandidate(0.5 * (a.boxMinX + a.boxMaxX), 0.5 * (a.boxMinY + a.boxMaxY), a.insZ);
           } else {
-            gripCandidate(a.boxMinX, a.boxMinY, a.insZ);
-            gripCandidate(a.boxMaxX, a.boxMinY, a.insZ);
-            gripCandidate(a.boxMaxX, a.boxMaxY, a.insZ);
-            gripCandidate(a.boxMinX, a.boxMaxY, a.insZ);
+            // Issue #1667: the grips the viewport draws — drawn frame corners plus the insertion.
+            float xs[4], ys[4];
+            CadMtextDrawnCorners(cmd, a, xs, ys);
+            for (int corner = 0; corner < 4; ++corner) gripCandidate(xs[corner], ys[corner], a.insZ);
+            float ix = 0.f, iy = 0.f;
+            CadMtextInsertionFromBox(a, &ix, &iy);
+            gripCandidate(ix, iy, a.insZ);
           }
         }
       }

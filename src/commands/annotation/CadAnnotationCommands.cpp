@@ -363,7 +363,9 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
 
 void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
                                bool measure) {
-  CadAnnotation effective = a;
+  // Annotative MTEXT occupies its frame at the current annotation scale, as drawn (issue #1667).
+  CadAnnotation effective = CadAnnotationAsDrawn(a, nullptr, st.drawing.modelUnitsPerPlottedInch,
+      &st.drawing.annotationScales, st.currentAnnotationScaleIndex);
   const auto* style = TextStyles::IsStyleableText(a) ? TextStyles::Find(st.drawing.textStyles, a.styleName) : nullptr;
   if (style) TextStyles::RebakeAnnotation(effective, *style);
   const float mup = AnnotativeModelUnitsPerPlottedInch(effective, nullptr, st.drawing.modelUnitsPerPlottedInch,
@@ -378,6 +380,36 @@ void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a
     if (!std::isfinite(w) || !std::isfinite(measuredHeight)) w = measuredHeight = -1.f;
   }
   CadTextAnnotationQuad(effective, h, xs, ys, w, measuredHeight);
+}
+
+float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation& a) {
+  return CadMtextDisplayFactor(a, nullptr, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+                               st.currentAnnotationScaleIndex);
+}
+
+void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]) {
+  const CadAnnotation drawn = CadMtextScaledFrame(a, CadMtextModelDisplayFactor(st, a));
+  CadTextAnnotationQuad(drawn, 0.f, xs, ys);
+}
+
+void CadMtextResizeFromGrip(CadAnnotation& a, float displayFactor, float fixedX, float fixedY, float cursorX,
+                            float cursorY) {
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float dx = cursorX - fixedX, dy = cursorY - fixedY;
+  const float du = dx * c + dy * s;   // along the text
+  const float dv = -dx * s + dy * c;  // text "up"
+  const float w = std::fabs(du), h = std::fabs(dv);
+  if (!(w > 1.e-6f) || !(h > 1.e-6f) || !std::isfinite(w) || !std::isfinite(h)) return;
+  // Top-left of the new drawn frame: the leftmost, topmost of the two corners in the text's frame.
+  const float leftU = std::min(0.f, du), topV = std::max(0.f, dv);
+  const float left = fixedX + leftU * c - topV * s, top = fixedY + leftU * s + topV * c;
+  a.boxMinX = left; a.boxMaxX = left + w;
+  a.boxMaxY = top; a.boxMinY = top - h;
+  // The insertion is the fixed point of the annotative scaling, so it reads the same off the drawn
+  // frame; the stored frame is the drawn one at the drawing scale.
+  CadMtextSyncInsertion(a);
+  const float f = displayFactor > 0.f && std::isfinite(displayFactor) ? displayFactor : 1.f;
+  CadMtextPlaceFrame(a, w / f, h / f);
 }
 
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
@@ -600,12 +632,15 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       ann.boxMinY = std::min(ms->y1, ms->y2);
       ann.boxMaxX = std::max(ms->x1, ms->x2);
       ann.boxMaxY = std::max(ms->y1, ms->y2);
-      ann.insX = ann.boxMinX;
-      ann.insY = ann.boxMinY;
       ann.plottedHeightInches = st.drawing.defaultPlottedTextHeightInches;
       ann.text = normalized;
       ann.insZ = CadCommitElevation(st);
       StampActiveTextStyleOnNewText(st, ann);
+      // Issue #1667: the insertion is the attachment point (top-left), and an annotative MTEXT stores
+      // the box the user dragged at the drawing scale, so it draws exactly there at the current scale.
+      CadMtextSyncInsertion(ann);
+      const float factor = CadMtextModelDisplayFactor(st, ann);
+      if (std::fabs(factor - 1.f) > 1.e-6f) CadMtextTransform(ann, [](float*, float*) {}, 0.f, 1.f / factor);
       st.drawing.cadAnnotations.push_back(std::move(ann));
       st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);

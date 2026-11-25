@@ -557,6 +557,17 @@ inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPe
 /// far-away text before paying for a Qt layout (hover picks run this for every annotation).
 void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
                                bool measure = true);
+/// Frame scale an MTEXT is drawn at in model space (issue #1667): the annotation-scale factor for an
+/// annotative MTEXT, else 1. See CadMtextDisplayFactor.
+float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation& a);
+/// The four corners of MTEXT \p a as drawn in model space — top-left, top-right, bottom-right,
+/// bottom-left — rotated with the text and scaled for an annotative MTEXT. Grips and outlines use these.
+void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]);
+/// Grip resize (issue #1667): the drawn corner opposite the dragged one stays at (\p fixedX, \p fixedY)
+/// and the dragged one follows (\p cursorX, \p cursorY), measured along the text's own axes, so a
+/// rotated MTEXT keeps its rotation and attachment. \p displayFactor comes from CadMtextModelDisplayFactor.
+void CadMtextResizeFromGrip(CadAnnotation& a, float displayFactor, float fixedX, float fixedY, float cursorX,
+                            float cursorY);
 /// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY);

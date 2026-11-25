@@ -1486,7 +1486,15 @@ void EditorViewport::paintGL() {
         case SelectedEntity::Type::Annotation: {
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadAnnotations.size()) {
             const CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(selected.index)];
-            if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
+            if (ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0) {
+              // Issue #1667: the frame's corners as drawn (rotated, annotative-scaled), then the insertion.
+              float xs[4], ys[4];
+              CadMtextDrawnCorners(m_State, ann, xs, ys);
+              for (int corner = 0; corner < 4; ++corner) grips.push_back({xs[corner], ys[corner], ann.insZ});
+              float ix = 0.f, iy = 0.f;
+              CadMtextInsertionFromBox(ann, &ix, &iy);
+              grips.push_back({ix, iy, ann.insZ});
+            } else if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
               grips = {{ann.boxMinX, ann.boxMinY, 0}, {ann.boxMaxX, ann.boxMinY, 0},
                        {ann.boxMaxX, ann.boxMaxY, 0}, {ann.boxMinX, ann.boxMaxY, 0}};
               if (ann.surveyPointLabelForId >= 0) grips.push_back({ann.insX, ann.insY, 0});
@@ -1914,16 +1922,24 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           return std::pow(sx - m_Last.x(), 2) + std::pow(sy - m_Last.y(), 2);
         };
         if (annotation.kind == CadAnnotation::Kind::Mtext || annotation.kind == CadAnnotation::Kind::Table) {
-          const float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX};
-          const float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY};
+          // Issue #1667: a plain MTEXT's grips are its drawn (rotated, annotative-scaled) frame corners plus
+          // the insertion; a table and a survey-point label keep their axis-aligned box.
+          const bool frame = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId < 0;
+          float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX};
+          float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY};
+          float moveX = annotation.insX, moveY = annotation.insY;
+          if (frame) {
+            CadMtextDrawnCorners(m_State, annotation, xs, ys);
+            CadMtextInsertionFromBox(annotation, &moveX, &moveY);
+          }
           int grip = -1;
           double nearest = 100.0;
           for (int i = 0; i < 4; ++i) {
             const double distance = screenDistanceSq(xs[i], ys[i]);
             if (distance < nearest) { nearest = distance; grip = i; }
           }
-          if (annotation.surveyPointLabelForId >= 0) {
-            const double distance = screenDistanceSq(annotation.insX, annotation.insY);
+          if (frame || annotation.surveyPointLabelForId >= 0) {
+            const double distance = screenDistanceSq(moveX, moveY);
             if (distance < nearest) { nearest = distance; grip = 4; }
           }
           if (grip >= 0 && nearest <= 100.0) {
@@ -2542,7 +2558,21 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
       if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
-      if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
+      if (ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0) {
+        // Issue #1667: move by the insertion grip, resize in the text's own frame by a corner.
+        if (m_State.mtextGripCorner == 4) {
+          const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
+          const float dy = static_cast<float>(m_Cursor.y) - m_State.mtextGripDownWorldY;
+          ann.boxMinX = m_State.mtextGripOrigBoxMinX + dx; ann.boxMaxX = m_State.mtextGripOrigBoxMaxX + dx;
+          ann.boxMinY = m_State.mtextGripOrigBoxMinY + dy; ann.boxMaxY = m_State.mtextGripOrigBoxMaxY + dy;
+          CadMtextSyncInsertion(ann);
+        } else {
+          CadMtextResizeFromGrip(ann, CadMtextModelDisplayFactor(m_State, ann), m_State.mtextGripFixedCornerX,
+                                 m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.x),
+                                 static_cast<float>(m_Cursor.y));
+        }
+        BumpCadGpuCache(m_State);
+      } else if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
         const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
         const float dy = static_cast<float>(m_Cursor.y) - m_State.mtextGripDownWorldY;
         ann.boxMinX = m_State.mtextGripOrigBoxMinX + dx; ann.boxMaxX = m_State.mtextGripOrigBoxMaxX + dx;
@@ -2553,7 +2583,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         ann.boxMinY = std::min(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
         ann.boxMaxY = std::max(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
       }
-      ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
+      if (!(ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0)) {
+        ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
+      }
     }
     if (m_State.dimGripMoveActive && m_State.dimGripAnnotationIndex >= 0 &&
         static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.drawing.cadAnnotations.size()) {

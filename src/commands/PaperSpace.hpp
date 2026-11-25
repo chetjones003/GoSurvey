@@ -288,6 +288,23 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return activeMup / drawingModelUnitsPerPlottedInch;
 }
 
+/// Frame scale of an MTEXT as drawn (issue #1667): an annotative MTEXT's box is stored at the drawing
+/// scale and follows the active annotation scale like its text height; anything else is 1.
+[[nodiscard]] inline float CadMtextDisplayFactor(
+    const CadAnnotation& a, const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
+  if (!a.annotative || a.kind != CadAnnotation::Kind::Mtext) return 1.f;
+  const float f = AnnotativeDisplayScaleFactor(vp, drawingModelUnitsPerPlottedInch, scales, currentScaleIndex);
+  return f > 0.f && std::isfinite(f) ? f : 1.f;
+}
+
+/// \p a as it occupies the drawing: an annotative MTEXT's frame scaled by \ref CadMtextDisplayFactor.
+[[nodiscard]] inline CadAnnotation CadAnnotationAsDrawn(
+    const CadAnnotation& a, const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
+  return CadMtextScaledFrame(a, CadMtextDisplayFactor(a, vp, drawingModelUnitsPerPlottedInch, scales, currentScaleIndex));
+}
+
 /// Copy of \p fr with patternScale adjusted for annotative display (issue #622).
 [[nodiscard]] inline CadFilledRegion FilledRegionForAnnotativeDraw(
     const CadFilledRegion& fr, const Viewport* vp, float drawingModelUnitsPerPlottedInch,

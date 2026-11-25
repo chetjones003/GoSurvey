@@ -208,12 +208,8 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       ann.rotationRad += rad;
       break;
     case CadAnnotation::Kind::Mtext:
-      HelmertPt(a, b, tx, ty, &ann.boxMinX, &ann.boxMinY);
-      HelmertPt(a, b, tx, ty, &ann.boxMaxX, &ann.boxMaxY);
-      if (ann.boxMinX > ann.boxMaxX) std::swap(ann.boxMinX, ann.boxMaxX);
-      if (ann.boxMinY > ann.boxMaxY) std::swap(ann.boxMinY, ann.boxMaxY);
-      ann.insX = ann.boxMinX;
-      ann.insY = ann.boxMinY;
+      // Issue #1667: the frame turns and scales with the fit; the insertion is re-read from the box.
+      CadMtextTransform(ann, [&](float* x, float* y) { HelmertPt(a, b, tx, ty, x, y); }, rad, sc);
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
       break;
     case CadAnnotation::Kind::Table:

@@ -649,6 +649,74 @@ inline void CadTextAnnotationQuad(const CadAnnotation& a, float heightUnits, flo
   }
 }
 
+/// MTEXT frame (issue #1667). An MTEXT is its insertion point — the attachment point named by
+/// \c mtextAttach (DXF 71) — plus \c rotationRad and a frame width/height measured along the text's own
+/// axes. The stored box is DERIVED from those, not a world AABB: (boxMinX, boxMaxY) is the frame's
+/// top-left corner in world coordinates and the box spans are the frame width and height. The renderer,
+/// the picker and \ref CadTextAnnotationQuad already read it that way; every edit goes through these
+/// helpers so insertion, box and rotation cannot drift apart again.
+[[nodiscard]] inline float CadMtextFrameWidth(const CadAnnotation& a) { return std::fabs(a.boxMaxX - a.boxMinX); }
+[[nodiscard]] inline float CadMtextFrameHeight(const CadAnnotation& a) { return std::fabs(a.boxMaxY - a.boxMinY); }
+
+/// Offset from the frame's top-left corner to attachment point \p attach, in the text frame (x along
+/// the text, y up), for a \p w × \p h frame.
+inline void CadMtextAttachmentOffset(int attach, float w, float h, float* lx, float* ly) {
+  const int k = std::clamp(attach, 1, 9) - 1, column = k % 3, row = k / 3;
+  *lx = column == 0 ? 0.f : column == 1 ? 0.5f * w : w;
+  *ly = row == 0 ? 0.f : row == 1 ? -0.5f * h : -h;
+}
+
+/// The attachment point the box implies — the insertion point as it should be stored.
+inline void CadMtextInsertionFromBox(const CadAnnotation& a, float* x, float* y) {
+  float lx = 0.f, ly = 0.f;
+  CadMtextAttachmentOffset(a.mtextAttach, CadMtextFrameWidth(a), CadMtextFrameHeight(a), &lx, &ly);
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float left = std::min(a.boxMinX, a.boxMaxX), top = std::max(a.boxMinY, a.boxMaxY);
+  *x = left + lx * c - ly * s;
+  *y = top + lx * s + ly * c;
+}
+
+/// Rewrites insX/insY from the box. Call before transforming an MTEXT whose insertion may be stale
+/// (older edits stored the bottom-left corner regardless of the attachment).
+inline void CadMtextSyncInsertion(CadAnnotation& a) {
+  if (a.kind == CadAnnotation::Kind::Mtext) CadMtextInsertionFromBox(a, &a.insX, &a.insY);
+}
+
+/// Rebuilds the box from the insertion point, attachment and rotation for a \p w × \p h frame.
+inline void CadMtextPlaceFrame(CadAnnotation& a, float w, float h) {
+  w = std::max(0.f, w);
+  h = std::max(0.f, h);
+  float lx = 0.f, ly = 0.f;
+  CadMtextAttachmentOffset(a.mtextAttach, w, h, &lx, &ly);
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float left = a.insX - (lx * c - ly * s), top = a.insY - (lx * s + ly * c);
+  a.boxMinX = left;
+  a.boxMaxX = left + w;
+  a.boxMaxY = top;
+  a.boxMinY = top - h;
+}
+
+/// Applies a similarity transform to an MTEXT: \p mapPoint moves its insertion point, the frame turns by
+/// \p addRotationRad and its width/height scale by \p sizeScale (> 0). Attachment is preserved.
+template <class MapPoint>
+inline void CadMtextTransform(CadAnnotation& a, MapPoint&& mapPoint, float addRotationRad, float sizeScale) {
+  const float w = CadMtextFrameWidth(a) * sizeScale, h = CadMtextFrameHeight(a) * sizeScale;
+  CadMtextSyncInsertion(a);
+  mapPoint(&a.insX, &a.insY);
+  a.rotationRad += addRotationRad;
+  CadMtextPlaceFrame(a, w, h);
+}
+
+/// A copy of MTEXT \p a with its frame scaled by \p factor about the insertion point — how an annotative
+/// MTEXT occupies the drawing at an annotation scale other than the drawing scale. Identity for
+/// anything but MTEXT, or a factor of 1.
+[[nodiscard]] inline CadAnnotation CadMtextScaledFrame(const CadAnnotation& a, float factor) {
+  if (a.kind != CadAnnotation::Kind::Mtext || !(factor > 0.f) || std::fabs(factor - 1.f) < 1.e-6f) return a;
+  CadAnnotation out = a;
+  CadMtextTransform(out, [](float*, float*) {}, 0.f, factor);
+  return out;
+}
+
 inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, float* mnX, float* mnY,
                                     float* mxX, float* mxY, bool textBaseline = true) {
   float xs[4], ys[4];

@@ -22,15 +22,11 @@ void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
   *y = static_cast<T>(by + s * dx + c * dy);
 }
 
-/// MTEXT turns like TEXT: its box's top-left (the anchor the renderer draws from) rotates about the
-/// base, the box keeps its local width/height (so wrapping is unchanged) and rotationRad grows.
+/// MTEXT turns like TEXT: its insertion (attachment) point rotates about the base, the frame keeps its
+/// width/height (so wrapping is unchanged) and rotationRad grows (issue #1667). The insertion is re-read
+/// from the box first, so a caller that already rotated insX/insY is harmless.
 inline void RotateMtextAroundBase(double bx, double by, double rad, CadAnnotation* a) {
-  const float w = a->boxMaxX - a->boxMinX, h = a->boxMaxY - a->boxMinY;
-  float x = a->boxMinX, y = a->boxMaxY;
-  RotateAroundBase(bx, by, rad, &x, &y);
-  a->boxMinX = x; a->boxMaxX = x + w;
-  a->boxMaxY = y; a->boxMinY = y - h;
-  a->rotationRad += static_cast<float>(rad);
+  CadMtextTransform(*a, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); }, static_cast<float>(rad), 1.f);
 }
 
 /// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate

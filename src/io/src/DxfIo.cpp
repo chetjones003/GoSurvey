@@ -1973,10 +1973,6 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double boxW = (refW > 1e-9 ? refW * a.scaleX : textW);
       if (boxW < hWorld) boxW = std::max(textW, hWorld);
       const double boxH = std::max(hWorld * 1.3, lineCount * hWorld * 1.3);
-      const int col = (attach - 1) % 3;  // 0 left, 1 center, 2 right
-      const int row = (attach - 1) / 3;  // 0 top, 1 middle, 2 bottom
-      const double left = a.insX - (col == 0 ? 0.0 : col == 1 ? boxW * 0.5 : boxW);
-      const double top  = a.insY + (row == 0 ? 0.0 : row == 1 ? boxH * 0.5 : boxH);
       CadAnnotation an;
       an.kind = CadAnnotation::Kind::Mtext;
       an.mtextAttach = std::clamp(attach, 1, 9);
@@ -1989,12 +1985,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       // per-text override so the imported box height is preserved.
       an.styleName = styleRef;
       an.ovHeight = true;
-      an.boxMinX = static_cast<float>(left);
-      an.boxMaxX = static_cast<float>(left + boxW);
-      an.boxMinY = static_cast<float>(top - boxH);
-      an.boxMaxY = static_cast<float>(top);
-      an.insX = an.boxMinX;  // GoSurvey stores the box bottom-left as the insertion point
-      an.insY = an.boxMinY;
+      // Issue #1667: the insertion is the group-71 attachment point; the frame turns with the text.
+      an.insX = static_cast<float>(a.insX);
+      an.insY = static_cast<float>(a.insY);
+      CadMtextPlaceFrame(an, static_cast<float>(boxW), static_cast<float>(boxH));
       st.drawing.cadAnnotations.push_back(an);
       st.drawing.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb, plotStyleNamesByHandle));
       i = j;
@@ -6110,15 +6104,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(100, "AcDbMText");
       // Insertion point is the box corner/edge selected by the attachment (group 71):
       // col 0/1/2 = left/center/right (min/mid/max X), row 0/1/2 = top/middle/bottom (max/mid/min Y).
+      // Issue #1667: the attachment point on the rotated frame.
       const int attach = std::clamp(an.mtextAttach, 1, 9);
-      const int acol = (attach - 1) % 3;
-      const int arow = (attach - 1) / 3;
-      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
-      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
-      const double insXw = acol == 0 ? bMnX : acol == 1 ? 0.5 * (bMnX + bMxX) : bMxX;
-      const double insYw = arow == 0 ? bMxY : arow == 1 ? 0.5 * (bMnY + bMxY) : bMnY;
-      emitPair(10, std::to_string(insXw));
-      emitPair(20, std::to_string(insYw));
+      float insXf = 0.f, insYf = 0.f;
+      CadMtextInsertionFromBox(an, &insXf, &insYf);
+      emitPair(10, std::to_string(static_cast<double>(insXf)));
+      emitPair(20, std::to_string(static_cast<double>(insYf)));
       emitPair(30, std::to_string(static_cast<double>(an.insZ)));  // elevation (REQ-057)
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));
