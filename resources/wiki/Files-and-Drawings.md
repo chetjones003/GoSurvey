@@ -44,7 +44,7 @@ Tabs can be hidden with **Settings → Display → Display File Tabs**.
 | **Save As** | File → Save As… | New name and location; the tab is renamed to the file stem and later saves go to the new path |
 | **Save as Template** | File → Save as Template… | Saves reusable styles/settings, point-group rules, supported model/paper linework, and layout border blocks as a `.gst`; omits survey-point instances and non-linework objects, and does not change the drawing's path or saved state |
 
-There is **no autosave, no backup file, and no drawing recovery**. Save deliberately, and save often.
+GoSurvey includes **automatic recovery saves (autosave)** enabled by default (every 5 minutes). Recovery copies are stored separately under `%APPDATA%\GoSurvey\autosave` so your `.dwg` files are never overwritten automatically. After an unexpected exit, GoSurvey offers to restore any unsaved drawings on the next launch (also accessible anytime via **File → Drawing Recovery…** or `DRAWINGRECOVERY`). Configure or disable autosave under **Settings → Files → Autosave**.
 
 There is no recent-files list.
 
@@ -112,7 +112,7 @@ the saved `.gst` if you want it used for the startup workspace.
 | Path | Contents |
 |---|---|
 | `%LOCALAPPDATA%\Programs\GoSurvey` | The installed program (since 0.7.5) |
-| `%APPDATA%\GoSurvey` | `gosurvey-user.json` and `history.log` — user preferences and the undo history log |
+| `%APPDATA%\GoSurvey` | `gosurvey-user.json`, `history.log`, and `autosave/` — user preferences, undo history log, and crash-recovery autosave files |
 | Beside the executable — `resources/` | `default-template.gst`, `fonts/`, `hatches/`, `icons/`, `layouts/`, `linetypes/` |
 
 Resources are resolved **relative to the executable**.
@@ -177,7 +177,7 @@ arrangement.
 | Problem | Cause | Solution |
 |---|---|---|
 | Opening a drawing did not replace the current one | Open always uses a new tab, by design | Close the tab you no longer want |
-| Work was lost after a crash | There is no autosave or recovery | Save often; `Ctrl+S` is cheap |
+| Work was lost after a crash | GoSurvey closed before you manually saved | Relaunch GoSurvey to open the **Drawing Recovery** dialog (or choose **File → Drawing Recovery…**) to restore the latest autosaved copy. Check **Settings → Files → Autosave** to verify autosave is enabled |
 | A DWG will not open | The file may be damaged or use unsupported DWG content | Check the message and log; try opening a copy or importing through DXF |
 | New drawings do not have my layers | No startup template is configured | Settings → Files → **Startup template (.gst)** |
 | Preferences do not stick | `gosurvey-user.json` could not be written | *"Error: failed to write gosurvey-user.json (check directory permissions)"* — `%APPDATA%\GoSurvey` needs to be writable |

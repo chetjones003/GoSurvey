@@ -176,6 +176,7 @@ gosurvey_library(gosurvey_io GoSurvey::IO INCLUDE src/io/include
     src/io/src/RasterImage.cpp
     src/io/src/UserPrefs.cpp
     src/io/src/RecentDrawings.cpp
+    src/io/src/Autosave.cpp
     src/io/src/Project.cpp
     src/io/src/ProjectPointDb.cpp
     src/io/src/ProjectPointRules.cpp

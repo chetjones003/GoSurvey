@@ -163,7 +163,7 @@ No. Aliases and shortcuts are fixed. The **right-click** behaviour *is* configur
 
 ### Is there an autosave?
 
-**No.** There is no autosave, no backup file, and no drawing recovery. `Ctrl+S` often.
+**Yes.** Autosave is enabled by default (every 5 minutes) and writes lossless recovery copies of modified drawings under `%APPDATA%\GoSurvey\autosave` without touching your `.dwg` files. After an unexpected exit, GoSurvey offers to restore them on the next launch (or anytime via **File → Drawing Recovery…**). Configure or disable it in **Settings → Files → Autosave**.
 
 ### Can I open several drawings at once?
 

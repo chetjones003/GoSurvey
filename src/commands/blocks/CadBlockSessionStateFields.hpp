@@ -17,6 +17,9 @@
     uint64_t     pointsRevision = 0;
     /// The rules (REQ-377) the tab last built its point view with; a different live set means "rebuild".
     projpts::Rules pointsRulesApplied;
+    /// When this tab was restored from crash recovery, pre-fills Save As with the original .dwg path
+    /// without silently overwriting it on Ctrl+S. Cleared once saved.
+    std::string recoverySuggestedPath;
   };
   /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
   /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).

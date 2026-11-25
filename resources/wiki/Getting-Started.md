@@ -116,7 +116,7 @@ To bring another drawing's contents into the current drawing instead, use **File
 | **Save** | `Ctrl+S` or **File → Save** | Writes to the current file path. If the drawing has never been saved, the Save-As dialog opens first. |
 | **Save As** | **File → Save As…** | Choose a new name and location. The drawing tab is renamed to the file stem, and later saves go to the new path. |
 
-There is no autosave and no automatic backup file. Save deliberately.
+GoSurvey automatically saves crash-recovery copies of modified drawings every 5 minutes under `%APPDATA%\GoSurvey\autosave` (configurable in **Settings → Files → Autosave**) without overwriting your `.dwg` files. Still, save deliberately with `Ctrl+S` when you reach milestones.
 
 ## Closing
 
