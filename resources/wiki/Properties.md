@@ -97,11 +97,12 @@ code. Values are read-only; use the relevant contextual tools or manager to edit
 
 | Field | Notes |
 |---|---|
-| **Insertion X / Y / Z** | The insertion point |
+| **Insertion X / Y / Z** | The insertion point. For MTEXT this is the **Attachment** point of its frame, as in AutoCAD |
 | **Content** | The text itself |
-| **Rotation** | Degrees clockwise from north |
-| **Height** | Text height in model units |
-| **Box min X/Y**, **Box max X/Y**, **Box width**, **Box height** | The MTEXT frame. Width and height are *Derived* |
+| **Rotation** | Degrees clockwise from north. MTEXT turns about its insertion point |
+| **Height** | Plotted text height. *Derived* shows the height it draws at, following the annotation scale when the text is annotative |
+| **Attachment** | MTEXT only, read-only: which point of the frame the insertion is (top left … bottom right) |
+| **Box width**, **Box height** | MTEXT only: the frame, measured along the text, in model units as drawn. Editing one keeps the insertion point fixed |
 | **Edit text X / Y / Z** | Position of the editing box |
 
 ### Dimensions
@@ -203,4 +204,9 @@ unchanged. Both TEXT and MTEXT expose rotation in Properties. MTEXT rotation ret
 width and height so its wrapping stays stable.
 
 Properties input fields select their contents when focused. Layer and annotative-scale dropdowns
-use scrolling lists; the open list stays alive while it handles a selection.
+use scrolling lists; the open list stays alive while it handles a selection. The closed
+**Visible scales** list shows which scales are ticked: *All scales*, a single scale's name, or a count.
+
+An annotative MTEXT's frame follows the annotation scale with its text, so its wrapping, grips and
+selection outline match what is drawn at every scale. Turning **Annotative** on or off keeps the frame
+where it is on screen.

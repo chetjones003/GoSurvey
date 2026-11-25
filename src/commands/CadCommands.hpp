@@ -563,6 +563,13 @@ float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation&
 /// The four corners of MTEXT \p a as drawn in model space — top-left, top-right, bottom-right,
 /// bottom-left — rotated with the text and scaled for an annotative MTEXT. Grips and outlines use these.
 void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]);
+/// True for an MTEXT edited through its frame grips. A survey-point label keeps its own box grips.
+[[nodiscard]] inline bool CadMtextHasFrameGrips(const CadAnnotation& a) {
+  return a.kind == CadAnnotation::Kind::Mtext && a.surveyPointLabelForId < 0;
+}
+/// The grips of a frame-gripped MTEXT: the four drawn corners (as \ref CadMtextDrawnCorners), then the
+/// insertion point at index 4. Viewport grips, grip hit-testing and grip snapping all use these.
+void CadMtextGripPoints(const AppCommandState& st, const CadAnnotation& a, float xs[5], float ys[5]);
 /// Grip resize (issue #1667): the drawn corner opposite the dragged one stays at (\p fixedX, \p fixedY)
 /// and the dragged one follows (\p cursorX, \p cursorY), measured along the text's own axes, so a
 /// rotated MTEXT keeps its rotation and attachment. \p displayFactor comes from CadMtextModelDisplayFactor.

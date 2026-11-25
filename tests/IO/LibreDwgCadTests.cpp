@@ -5950,8 +5950,7 @@ TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issu
   }
   CHECK(nMtext == 1);
   CHECK(attachment == 5);
-  // Middle-center of the 10x4 frame turned 90 degrees about its top-left (0, 4) (issue #1667): the
-  // frame offset (5, -2) maps to (+2, +5), so (2, 9) — not the unrotated box's centre.
+  // Middle-center of the 10x4 frame turned 90 deg about its top-left (0, 4): (2, 9) (issue #1667).
   CHECK(insX == Catch::Approx(2.0).margin(1e-5));
   CHECK(insY == Catch::Approx(9.0).margin(1e-5));
   CHECK(textHeight > 0.0);

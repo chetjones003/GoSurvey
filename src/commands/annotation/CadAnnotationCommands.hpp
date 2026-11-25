@@ -11,8 +11,12 @@ inline void RestoreMtextGripOriginal(AppCommandState& st) {
   ann.boxMaxX = st.mtextGripOrigBoxMaxX;
   ann.boxMinY = st.mtextGripOrigBoxMinY;
   ann.boxMaxY = st.mtextGripOrigBoxMaxY;
-  ann.insX = ann.boxMinX;
-  ann.insY = ann.boxMinY;
+  if (ann.surveyPointLabelForId < 0) {
+    CadMtextSyncInsertion(ann);  // issue #1667: the attachment point of the restored frame
+  } else {
+    ann.insX = ann.boxMinX;
+    ann.insY = ann.boxMinY;
+  }
 }
 
 inline void ClearMtextGripInteraction(AppCommandState& st) {

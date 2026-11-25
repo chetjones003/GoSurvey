@@ -707,6 +707,30 @@ inline void CadMtextTransform(CadAnnotation& a, MapPoint&& mapPoint, float addRo
   CadMtextPlaceFrame(a, w, h);
 }
 
+/// Sizes and places an imported MTEXT's frame around its insertion (issue #1667). \p attachment is DXF 71;
+/// \p definedWidth is the wrap width (DXF 41, 0 = no wrapping); \p extentsWidth / \p extentsHeight are the
+/// cached content size (DXF 42/43), trusted only near an estimate from \p textHeight — DWG extents can
+/// carry context or viewport bounds. Without a defined width the frame is wide enough not to wrap.
+inline void CadMtextPlaceImportedFrame(CadAnnotation& a, double textHeight, int attachment, double definedWidth,
+                                       double extentsWidth, double extentsHeight) {
+  std::size_t longest = 0, run = 0, lines = 1;
+  for (const char c : a.text) {
+    if (c == '\n') { ++lines; longest = std::max(longest, run); run = 0; }
+    else if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++run;
+  }
+  longest = std::max(longest, run);
+  const double estimatedWidth = 0.62 * textHeight * static_cast<double>(std::max<std::size_t>(longest, 1));
+  const double estimatedHeight = 1.2 * textHeight * static_cast<double>(lines);
+  const auto plausible = [](double extent, double estimate) {
+    return extent > 1e-9 && std::isfinite(extent) && extent <= 3.0 * estimate;
+  };
+  const double width = definedWidth > 1e-9 ? definedWidth
+      : plausible(extentsWidth, estimatedWidth) ? std::max(extentsWidth, estimatedWidth) : estimatedWidth;
+  const double height = plausible(extentsHeight, estimatedHeight) ? extentsHeight : estimatedHeight;
+  a.mtextAttach = std::clamp(attachment, 1, 9);
+  CadMtextPlaceFrame(a, static_cast<float>(width), static_cast<float>(height));
+}
+
 /// A copy of MTEXT \p a with its frame scaled by \p factor about the insertion point — how an annotative
 /// MTEXT occupies the drawing at an annotation scale other than the drawing scale. Identity for
 /// anything but MTEXT, or a factor of 1.

@@ -392,6 +392,11 @@ void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, flo
   CadTextAnnotationQuad(drawn, 0.f, xs, ys);
 }
 
+void CadMtextGripPoints(const AppCommandState& st, const CadAnnotation& a, float xs[5], float ys[5]) {
+  CadMtextDrawnCorners(st, a, xs, ys);
+  CadMtextInsertionFromBox(a, &xs[4], &ys[4]);
+}
+
 void CadMtextResizeFromGrip(CadAnnotation& a, float displayFactor, float fixedX, float fixedY, float cursorX,
                             float cursorY) {
   const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);

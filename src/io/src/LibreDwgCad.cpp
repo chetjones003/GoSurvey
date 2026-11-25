@@ -545,10 +545,8 @@ static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dw
   double wx = 0.0;
   double wy = 0.0;
   xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
-  // Issue #1667: the context supplies where the text sits at its default scale — insertion, direction
-  // and attachment. Its rect/extents are the BOX (DXF 40 here is the rectangle height, not the text
-  // height), so the plotted text height and frame size from the entity are kept; the frame is re-placed
-  // around the context's insertion with its attachment and rotation.
+  // Issue #1667: the context gives insertion, direction and attachment. Its DXF 40 is the BOX height, not
+  // the text height, so the entity's text height and frame size are kept and re-placed around it.
   const float w = CadMtextFrameWidth(*a), h = CadMtextFrameHeight(*a);
   a->insX = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
   a->insY = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
@@ -582,15 +580,8 @@ static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg
   DwgImportNoteDefaultContextMerged();
 }
 
-/// An imported MTEXT's frame (issue #1667): DXF 71 attachment, the defined wrap width (DXF 41, 0 = no
-/// wrapping) and the measured content size (DXF 42/43), all in drawing units along the text's own axes.
-struct ImportedMtextFrame {
-  int attachment = 1;
-  double definedWidth = 0.0;
-  double extentsWidth = 0.0;
-  double extentsHeight = 0.0;
-};
-
+// An imported MTEXT's frame (issue #1667): see CadMtextPlaceImportedFrame.
+struct ImportedMtextFrame { int attachment = 1; double definedWidth = 0, extentsWidth = 0, extentsHeight = 0; };
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
                bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr,
@@ -607,26 +598,8 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   a.text = text;
   a.annotative = annotative;
   if (kind == CadAnnotation::Kind::Mtext) {
-    // Issue #1667: the insertion point is the DXF 71 attachment point of the frame, turned with the text.
-    // Width is the defined wrap width when there is one; otherwise wide enough that nothing wraps.
-    std::size_t longest = 0, run = 0, lines = 1;
-    for (const char c : text) {
-      if (c == '\n') { ++lines; longest = std::max(longest, run); run = 0; }
-      else if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++run;
-    }
-    longest = std::max(longest, run);
-    const double estimatedWidth = 0.62 * height * static_cast<double>(std::max<std::size_t>(longest, 1));
-    const double estimatedHeight = 1.2 * height * static_cast<double>(lines);
-    // DWG extents are a cache that can carry context/viewport bounds (see the multileader import), so
-    // one far beyond the estimate is ignored rather than trusted.
-    const auto plausible = [](double extent, double estimate) {
-      return extent > 1e-9 && std::isfinite(extent) && extent <= 3.0 * estimate;
-    };
-    const double width = frame.definedWidth > 1e-9 ? frame.definedWidth
-        : plausible(frame.extentsWidth, estimatedWidth) ? std::max(frame.extentsWidth, estimatedWidth) : estimatedWidth;
-    const double boxHeight = plausible(frame.extentsHeight, estimatedHeight) ? frame.extentsHeight : estimatedHeight;
-    a.mtextAttach = std::clamp(frame.attachment, 1, 9);
-    CadMtextPlaceFrame(a, static_cast<float>(width), static_cast<float>(boxHeight));
+    // Issue #1667: the insertion is the DXF 71 attachment point of the frame, turned with the text.
+    CadMtextPlaceImportedFrame(a, height, frame.attachment, frame.definedWidth, frame.extentsWidth, frame.extentsHeight);
   }
   if (ownerEnt != nullptr)
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
@@ -3104,14 +3077,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const bool annotative =
         ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
-    // The frame scales with the block transform along the text's own axes, like the text height.
-    const double axisScale = std::hypot(xf.sx * e->x_axis_dir.x, xf.sy * e->x_axis_dir.y);
-    const double frameScale = std::isfinite(axisScale) && axisScale > 1e-12 ? axisScale : 1.0;
-    ImportedMtextFrame frame;
-    frame.attachment = static_cast<int>(e->attachment);
-    frame.definedWidth = e->rect_width * frameScale;
-    frame.extentsWidth = e->extents_width * frameScale;
-    frame.extentsHeight = e->extents_height * frameScale;
+    // The frame scales with the block transform along the text's own axes (as the multileader label does).
+    const auto axisScale = [](double s) { return std::isfinite(s) && s > 1e-12 ? s : 1.0; };
+    const double ws = axisScale(std::hypot(xf.sx * e->x_axis_dir.x, xf.sy * e->x_axis_dir.y));
+    const double hs = axisScale(std::hypot(xf.sx * -e->x_axis_dir.y, xf.sy * e->x_axis_dir.x));
+    const ImportedMtextFrame frame{static_cast<int>(e->attachment), e->rect_width * ws, e->extents_width * ws,
+                                   e->extents_height * hs};
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
               CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf, frame);
     return;
@@ -4960,15 +4931,11 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       }
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
       float insX = an.insX, insY = an.insY;  // issue #1667: the attachment point of the rotated frame
-      CadMtextInsertionFromBox(an, &insX, &insY);
-      p.x = insX;
-      p.y = insY;
+      CadMtextInsertionFromBox(an, &insX, &insY); p.x = insX; p.y = insY;
       if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(blkhdr, &p, bw, wire.c_str())) {
         e->text_height = std::max(static_cast<double>(an.plottedHeightInches), 1e-3);
         e->attachment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
-        e->x_axis_dir.x = std::cos(static_cast<double>(an.rotationRad));
-        e->x_axis_dir.y = std::sin(static_cast<double>(an.rotationRad));
-        e->x_axis_dir.z = 0.0;
+        e->x_axis_dir = {std::cos(static_cast<double>(an.rotationRad)), std::sin(static_cast<double>(an.rotationRad)), 0.0};
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018) {
           if (an.annotative)
             e->is_not_annotative = 0;

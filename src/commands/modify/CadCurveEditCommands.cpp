@@ -1981,6 +1981,7 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
     if (k >= st.drawing.cadAnnotations.size())
       continue;
     CadAnnotation& a = st.drawing.cadAnnotations[k];
+    CadMtextSyncInsertion(a);  // issue #1667: an MTEXT stretches with its attachment point
     if (!inBox(a.insX, a.insY, a.insZ))
       continue;
     a.insX += dx;

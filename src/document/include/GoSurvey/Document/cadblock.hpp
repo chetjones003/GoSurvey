@@ -1486,7 +1486,17 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
       const float sc = std::max(std::fabs(fr.xf.sx), std::fabs(fr.xf.sy));
       a.plottedHeightInches *= sc;
       const bool hasBox = t.boxMaxX > t.boxMinX && t.boxMaxY > t.boxMinY;
-      if (hasBox) {
+      if (hasBox && t.kind == CadAnnotation::Kind::Mtext) {
+        // Issue #1667: an MTEXT frame turns and scales with the instance about its attachment point; its
+        // box stays a frame (top-left + spans), not the world AABB of the turned corners.
+        a.rotationRad = t.rotationRad;
+        a.insX = t.insX;
+        a.insY = t.insY;
+        CadMtextTransform(a, [&](float* x, float* y) {
+          float z = 0.f;
+          xformLabel(*x, *y, t.insZ, group, x, y, &z);
+        }, fr.xf.rotZ, sc);
+      } else if (hasBox) {
         float xs[4] = {}, ys[4] = {}, zz = 0.f;
         xformLabel(t.boxMinX, t.boxMinY, t.insZ, group, &xs[0], &ys[0], &zz);
         xformLabel(t.boxMaxX, t.boxMinY, t.insZ, group, &xs[1], &ys[1], &zz);
@@ -1686,6 +1696,15 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
     *mxX = std::max(*mxX, a.insX);
     *mnY = std::min(*mnY, a.insY);
     *mxY = std::max(*mxY, a.insY);
+    if (a.kind == CadAnnotation::Kind::Mtext && a.boxMaxX > a.boxMinX && a.boxMaxY > a.boxMinY) {
+      float xs[4], ys[4];  // issue #1667: the box is a turned frame, so bound its corners
+      CadTextAnnotationQuad(a, 0.f, xs, ys);
+      for (int k = 0; k < 4; ++k) {
+        *mnX = std::min(*mnX, xs[k]); *mxX = std::max(*mxX, xs[k]);
+        *mnY = std::min(*mnY, ys[k]); *mxY = std::max(*mxY, ys[k]);
+      }
+      continue;
+    }
     if (a.boxMaxX > a.boxMinX) {
       *mnX = std::min(*mnX, a.boxMinX);
       *mxX = std::max(*mxX, a.boxMaxX);

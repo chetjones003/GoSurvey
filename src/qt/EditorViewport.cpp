@@ -1486,14 +1486,11 @@ void EditorViewport::paintGL() {
         case SelectedEntity::Type::Annotation: {
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.drawing.cadAnnotations.size()) {
             const CadAnnotation& ann = m_State.drawing.cadAnnotations[static_cast<std::size_t>(selected.index)];
-            if (ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0) {
+            if (CadMtextHasFrameGrips(ann)) {
               // Issue #1667: the frame's corners as drawn (rotated, annotative-scaled), then the insertion.
-              float xs[4], ys[4];
-              CadMtextDrawnCorners(m_State, ann, xs, ys);
-              for (int corner = 0; corner < 4; ++corner) grips.push_back({xs[corner], ys[corner], ann.insZ});
-              float ix = 0.f, iy = 0.f;
-              CadMtextInsertionFromBox(ann, &ix, &iy);
-              grips.push_back({ix, iy, ann.insZ});
+              float xs[5], ys[5];
+              CadMtextGripPoints(m_State, ann, xs, ys);
+              for (int g = 0; g < 5; ++g) grips.push_back({xs[g], ys[g], ann.insZ});
             } else if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
               grips = {{ann.boxMinX, ann.boxMinY, 0}, {ann.boxMaxX, ann.boxMinY, 0},
                        {ann.boxMaxX, ann.boxMaxY, 0}, {ann.boxMinX, ann.boxMaxY, 0}};
@@ -1924,14 +1921,11 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         if (annotation.kind == CadAnnotation::Kind::Mtext || annotation.kind == CadAnnotation::Kind::Table) {
           // Issue #1667: a plain MTEXT's grips are its drawn (rotated, annotative-scaled) frame corners plus
           // the insertion; a table and a survey-point label keep their axis-aligned box.
-          const bool frame = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId < 0;
-          float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX};
-          float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY};
-          float moveX = annotation.insX, moveY = annotation.insY;
-          if (frame) {
-            CadMtextDrawnCorners(m_State, annotation, xs, ys);
-            CadMtextInsertionFromBox(annotation, &moveX, &moveY);
-          }
+          const bool frame = CadMtextHasFrameGrips(annotation);
+          float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX, annotation.insX};
+          float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY, annotation.insY};
+          if (frame) CadMtextGripPoints(m_State, annotation, xs, ys);
+          const float moveX = xs[4], moveY = ys[4];
           int grip = -1;
           double nearest = 100.0;
           for (int i = 0; i < 4; ++i) {
