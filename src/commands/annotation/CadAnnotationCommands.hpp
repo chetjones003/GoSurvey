@@ -5,13 +5,13 @@ inline void RestoreMtextGripOriginal(AppCommandState& st) {
   if (aix < 0 || static_cast<size_t>(aix) >= st.drawing.cadAnnotations.size())
     return;
   CadAnnotation& ann = st.drawing.cadAnnotations[static_cast<size_t>(aix)];
-  if (ann.kind != CadAnnotation::Kind::Mtext)
+  if (ann.kind != CadAnnotation::Kind::Mtext && ann.kind != CadAnnotation::Kind::Table)
     return;
   ann.boxMinX = st.mtextGripOrigBoxMinX;
   ann.boxMaxX = st.mtextGripOrigBoxMaxX;
   ann.boxMinY = st.mtextGripOrigBoxMinY;
   ann.boxMaxY = st.mtextGripOrigBoxMaxY;
-  if (ann.surveyPointLabelForId < 0) {
+  if (ann.kind == CadAnnotation::Kind::Mtext && ann.surveyPointLabelForId < 0) {
     CadMtextSyncInsertion(ann);  // issue #1667: the attachment point of the restored frame
   } else {
     ann.insX = ann.boxMinX;

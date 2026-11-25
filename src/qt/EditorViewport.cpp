@@ -1935,7 +1935,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           }
           if (frame || annotation.surveyPointLabelForId >= 0) {
             const double distance = screenDistanceSq(moveX, moveY);
-            if (distance < nearest) { nearest = distance; grip = 4; }
+            if (distance <= nearest) { nearest = distance; grip = 4; }
           }
           if (grip >= 0 && nearest <= 100.0) {
             PushUndoSnapshot(m_State, "Grip edit");

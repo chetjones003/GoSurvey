@@ -1487,15 +1487,22 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
       a.plottedHeightInches *= sc;
       const bool hasBox = t.boxMaxX > t.boxMinX && t.boxMaxY > t.boxMinY;
       if (hasBox && t.kind == CadAnnotation::Kind::Mtext) {
-        // Issue #1667: an MTEXT frame turns and scales with the instance about its attachment point; its
-        // box stays a frame (top-left + spans), not the world AABB of the turned corners.
-        a.rotationRad = t.rotationRad;
-        a.insX = t.insX;
-        a.insY = t.insY;
-        CadMtextTransform(a, [&](float* x, float* y) {
-          float z = 0.f;
-          xformLabel(*x, *y, t.insZ, group, x, y, &z);
-        }, fr.xf.rotZ, sc);
+        // Transform each text-frame axis independently so nonuniform block scales do not
+        // inflate the short axis to match the long one.
+        float ix = t.insX, iy = t.insY, iz = t.insZ;
+        xformLabel(t.insX, t.insY, t.insZ, group, &ix, &iy, &iz);
+        const float c = std::cos(t.rotationRad), s = std::sin(t.rotationRad);
+        float wx = t.insX + c, wy = t.insY + s, wz = t.insZ;
+        float hx = t.insX - s, hy = t.insY + c, hz = t.insZ;
+        xformLabel(wx, wy, wz, group, &wx, &wy, &wz);
+        xformLabel(hx, hy, hz, group, &hx, &hy, &hz);
+        const float wdx = wx - ix, wdy = wy - iy;
+        const float hdx = hx - ix, hdy = hy - iy;
+        a.insX = ix;
+        a.insY = iy;
+        a.rotationRad = std::atan2(wdy, wdx);
+        CadMtextPlaceFrame(a, CadMtextFrameWidth(t) * std::hypot(wdx, wdy),
+                           CadMtextFrameHeight(t) * std::hypot(hdx, hdy));
       } else if (hasBox) {
         float xs[4] = {}, ys[4] = {}, zz = 0.f;
         xformLabel(t.boxMinX, t.boxMinY, t.insZ, group, &xs[0], &ys[0], &zz);
