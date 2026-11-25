@@ -1162,7 +1162,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         std::vector<CadBlockWorldSeg> segs;
         CadBlockCollectWorldLines(st.drawing.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
         for (const CadBlockWorldSeg& s : segs)
-          addChain({{s.x0, s.y0}, {s.x1, s.y1}}, false, noClip);
+          addChain({{static_cast<float>(s.x0), static_cast<float>(s.y0)},
+                    {static_cast<float>(s.x1), static_cast<float>(s.y1)}},
+                   false, noClip);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {

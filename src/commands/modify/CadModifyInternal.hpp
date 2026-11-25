@@ -59,14 +59,14 @@ void ReflectPtAcrossLine(double x0, double y0, double x1, double y1, T* x, T* y)
 
 /// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
 
-static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnotation* ann) {
+static void RotateCadDimLinearAroundBase(double bx, double by, double rad, CadAnnotation* ann) {
   if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
     return;
-  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  float dmx = cmx;
-  float dmy = cmy;
+  const double x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const double cmx = 0.5 * (x1 + x2);
+  const double cmy = 0.5 * (y1 + y2);
+  double dmx = cmx;
+  double dmy = cmy;
   if (!ann->dimLinearVertical)
     dmy = cmy + ann->dimSignedOffset;
   else
@@ -74,8 +74,8 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
   RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
   RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
   RotateAroundBase(bx, by, rad, &dmx, &dmy);
-  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
-  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
+  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
     ann->dimSignedOffset = dmy - ncmy;
   else
@@ -92,11 +92,11 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
 static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1, CadAnnotation* ann) {
   if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
     return;
-  const float ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
-  const float cmx = 0.5f * (ex1 + ex2);
-  const float cmy = 0.5f * (ey1 + ey2);
-  float dmx = cmx;
-  float dmy = cmy;
+  const double ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
+  const double cmx = 0.5 * (ex1 + ex2);
+  const double cmy = 0.5 * (ey1 + ey2);
+  double dmx = cmx;
+  double dmy = cmy;
   if (!ann->dimLinearVertical)
     dmy = cmy + ann->dimSignedOffset;
   else
@@ -104,8 +104,8 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
   ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt1X, &ann->dimExt1Y);
   ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt2X, &ann->dimExt2Y);
   ReflectPtAcrossLine(x0, y0, x1, y1, &dmx, &dmy);
-  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
-  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
+  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
     ann->dimSignedOffset = dmy - ncmy;
   else
@@ -115,9 +115,9 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
     ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
-static float NormalizeAngleRadMinusPiToPi(float a) {
-  constexpr float kPi = 3.14159265358979323846f;
-  constexpr float kTwoPi = 2.f * kPi;
+static double NormalizeAngleRadMinusPiToPi(double a) {
+  constexpr double kPi = 3.14159265358979323846;
+  constexpr double kTwoPi = 2.0 * kPi;
   while (a > kPi)
     a -= kTwoPi;
   while (a < -kPi)
@@ -141,7 +141,7 @@ static void ApplyTranslationToSelectedSurveyPoints(AppCommandState& st, float dx
   }
 }
 
-static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, float by, float rad) {
+static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, double bx, double by, double rad) {
   std::vector<int> ix = st.selectedSurveyPointIndices;
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
@@ -410,12 +410,12 @@ static void TransformSelectedSolids(AppCommandState& st, const char* commandName
 /// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE. \p duplicate adds the
 /// turned solid as a copy instead (ROTATE Copy, polar ARRAY — REQ-351).
 static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                 const ray3d::Vec3& axisUnit, float angleRad,
+                                 const ray3d::Vec3& axisUnit, double angleRad,
                                  std::vector<std::string>& log, bool duplicate = false,
                                  const char* commandName = "ROTATE") {
-  if (angleRad == 0.f && !duplicate)
+  if (angleRad == 0.0 && !duplicate)
     return;
-  const double rad = static_cast<double>(angleRad);
+  const double rad = angleRad;
   TransformSelectedSolids(
       st, commandName,
       [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
@@ -540,8 +540,8 @@ static void RotateSelectedAlignments(AppCommandState& st, const ray3d::Vec3& axi
 }
 
 static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                   const ray3d::Vec3& axisUnit, float angleRad, bool duplicate) {
-  const double rad = static_cast<double>(angleRad);
+                                   const ray3d::Vec3& axisUnit, double angleRad, bool duplicate) {
+  const double rad = angleRad;
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
       duplicate);
@@ -816,16 +816,16 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
 
 // Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
 
-static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad,
+static void DuplicateCadSelectionRotated(AppCommandState& st, double bx, double by, double rad,
                                          std::vector<std::string>& log) {
   // Solids and pipe runs are copied too (REQ-351), turned about the same vertical axis.
-  const ray3d::Vec3 axisPoint{static_cast<double>(bx), static_cast<double>(by), 0.0};
+  const ray3d::Vec3 axisPoint{bx, by, 0.0};
   RotateSelectedSolids(st, axisPoint, {0.0, 0.0, 1.0}, rad, log, /*duplicate=*/true);
   RotateSelectedPipeRuns(st, axisPoint, {0.0, 0.0, 1.0}, rad, /*duplicate=*/true);
   const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
   const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<float> newLines;
-  std::vector<float> newCircles;
+  std::vector<double> newLines;
+  std::vector<double> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
   std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
@@ -844,21 +844,15 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t li = static_cast<size_t>(e.index);
       if (li < st.drawing.lineCount()) {
-        const CadLineRecord ln = st.drawing.line(li);
-        float x0 = static_cast<float>(ln.x0);
-        float y0 = static_cast<float>(ln.y0);
-        float z0 = static_cast<float>(ln.z0);
-        float x1 = static_cast<float>(ln.x1);
-        float y1 = static_cast<float>(ln.y1);
-        float z1 = static_cast<float>(ln.z1);
-        RotateAroundBase(bx, by, rad, &x0, &y0);
-        RotateAroundBase(bx, by, rad, &x1, &y1);
-        newLines.push_back(x0);
-        newLines.push_back(y0);
-        newLines.push_back(z0);
-        newLines.push_back(x1);
-        newLines.push_back(y1);
-        newLines.push_back(z1);
+        CadLineRecord ln = st.drawing.line(li);
+        RotateAroundBase(bx, by, rad, &ln.x0, &ln.y0);
+        RotateAroundBase(bx, by, rad, &ln.x1, &ln.y1);
+        newLines.push_back(ln.x0);
+        newLines.push_back(ln.y0);
+        newLines.push_back(ln.z0);
+        newLines.push_back(ln.x1);
+        newLines.push_back(ln.y1);
+        newLines.push_back(ln.z1);
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
           a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
@@ -867,22 +861,19 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t ci = static_cast<size_t>(e.index);
       if (ci < st.drawing.circleCount()) {
-        const CadCircleRecord c = st.drawing.circle(ci);
-        float cx = static_cast<float>(c.cx);
-        float cy = static_cast<float>(c.cy);
-        float r = static_cast<float>(c.r);
-        RotateAroundBase(bx, by, rad, &cx, &cy);
-        newCircles.push_back(cx);
-        newCircles.push_back(cy);
-        newCircles.push_back(static_cast<float>(c.cz));  // z — rotation is about the Z axis
-        newCircles.push_back(r);
+        CadCircleRecord c = st.drawing.circle(ci);
+        RotateAroundBase(bx, by, rad, &c.cx, &c.cy);
+        newCircles.push_back(c.cx);
+        newCircles.push_back(c.cy);
+        newCircles.push_back(c.cz);  // z — rotation is about the Z axis
+        newCircles.push_back(c.r);
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
           a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
         float nnx = 0.f, nny = 0.f, nnz = 1.f;
         CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
-        RotateNormalAboutZ(rad, &nnx, &nny);   // REQ-312: the plane turns with the circle
+        RotateNormalAboutZ(static_cast<float>(rad), &nnx, &nny);   // REQ-312: the plane turns with the circle
         PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -892,7 +883,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         c.surveyPointLabelForId = -1;
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
-          c.rotationRad += rad;
+          c.rotationRad = static_cast<float>(static_cast<double>(c.rotationRad) + rad);
         } else if (c.kind == CadAnnotation::Kind::Mtext) {
           RotateMtextAroundBase(bx, by, rad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimLinear) {
@@ -934,7 +925,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t tk = static_cast<size_t>(e.index);
       if (tk < st.drawing.cadTables.size()) {
         CadTable c = st.drawing.cadTables[tk];
-        CadTableRotateAround(&c, bx, by, rad);
+        CadTableRotateAround(&c, static_cast<float>(bx), static_cast<float>(by), static_cast<float>(rad));
         newTables.push_back(std::move(c));
         EntityAttributes a{};
         if (tk < st.drawing.cadTableAttrs.size())
@@ -958,14 +949,10 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         CadArc a = st.drawing.userArcs[k];
         // The start point, through the arc's own plane, before the arc moves (REQ-312).
         ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-        float spx = static_cast<float>(startPt.x);
-        float spy = static_cast<float>(startPt.y);
-        RotateAroundBase(bx, by, rad, &spx, &spy);  // a rotation about Z leaves the point's Z alone
-        startPt.x = static_cast<double>(spx);
-        startPt.y = static_cast<double>(spy);
+        RotateAroundBase(bx, by, rad, &startPt.x, &startPt.y);  // a rotation about Z leaves the point's Z alone
         RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
-        a.startRad += rad;
-        RotateNormalAboutZ(rad, &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
+        a.startRad = static_cast<float>(static_cast<double>(a.startRad) + rad);
+        RotateNormalAboutZ(static_cast<float>(rad), &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
         CadReanchorArcStart(&a, startPt);  // REQ-312: a no-op on a flat arc, where += rad is exact
         newArcs.push_back(a);
         EntityAttributes at{};
@@ -977,8 +964,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.drawing.userEllipses.size()) {
         CadEllipse el = st.drawing.userEllipses[k];
-        float mx = static_cast<float>(el.cx + el.majVx);
-        float my = static_cast<float>(el.cy + el.majVy);
+        double mx = el.cx + static_cast<double>(el.majVx);
+        double my = el.cy + static_cast<double>(el.majVy);
         RotateAroundBase(bx, by, rad, &el.cx, &el.cy);
         RotateAroundBase(bx, by, rad, &mx, &my);
         el.majVx = static_cast<float>(mx - el.cx);
@@ -1002,11 +989,9 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         st.drawing.userPolylineOffsets.push_back(0);
       const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.drawing.vertex(vi).x);
-        float py = static_cast<float>(st.drawing.vertex(vi).y);
-        float pz = static_cast<float>(st.drawing.vertex(vi).z);
-        RotateAroundBase(bx, by, rad, &px, &py);
-        st.drawing.pushVertex(CadPolyVertex{px, py, pz});
+        CadPolyVertex v = st.drawing.vertex(vi);
+        RotateAroundBase(bx, by, rad, &v.x, &v.y);
+        st.drawing.pushVertex(v);
       }
       st.drawing.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
@@ -1083,16 +1068,16 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
 /// arcs/circles needed a normal and annotations did not get one. When the axis IS Z-parallel they
 /// rotate with the exact `RotateAroundBase`-equivalent math the 2D path always used.
 static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                     const ray3d::Vec3& axisUnit, float angleRad,
+                                     const ray3d::Vec3& axisUnit, double angleRad,
                                      std::vector<std::string>& log,
                                      const char* commandLabel = "ARRAY Polar") {
   const bool axisIsWorldZParallel = std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 &&
                                     std::fabs(axisUnit.z) > 1e-9;
-  const double rad = static_cast<double>(angleRad);
-  const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
+  const double rad = angleRad;
+  const auto rotPt = [&](double x, double y, double z) -> ray3d::Vec3 {
     return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
   };
-  const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
+  const auto rotDir = [&](double x, double y, double z) -> ray3d::Vec3 {
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
@@ -1108,7 +1093,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
 
   const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
   const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<float> newLines, newCircles, newCircleNormals;
+  std::vector<double> newLines, newCircles;
+  std::vector<float> newCircleNormals;
   std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
@@ -1129,14 +1115,14 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       const size_t li = static_cast<size_t>(e.index);
       if (li < st.drawing.lineCount()) {
         const CadLineRecord ln = st.drawing.line(li);
-        const ray3d::Vec3 p0 = rotPt(static_cast<float>(ln.x0), static_cast<float>(ln.y0), static_cast<float>(ln.z0));
-        const ray3d::Vec3 p1 = rotPt(static_cast<float>(ln.x1), static_cast<float>(ln.y1), static_cast<float>(ln.z1));
-        newLines.push_back(static_cast<float>(p0.x));
-        newLines.push_back(static_cast<float>(p0.y));
-        newLines.push_back(static_cast<float>(p0.z));
-        newLines.push_back(static_cast<float>(p1.x));
-        newLines.push_back(static_cast<float>(p1.y));
-        newLines.push_back(static_cast<float>(p1.z));
+        const ray3d::Vec3 p0 = rotPt(ln.x0, ln.y0, ln.z0);
+        const ray3d::Vec3 p1 = rotPt(ln.x1, ln.y1, ln.z1);
+        newLines.push_back(p0.x);
+        newLines.push_back(p0.y);
+        newLines.push_back(p0.z);
+        newLines.push_back(p1.x);
+        newLines.push_back(p1.y);
+        newLines.push_back(p1.z);
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
           a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
@@ -1146,11 +1132,11 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       const size_t ci = static_cast<size_t>(e.index);
       if (ci < st.drawing.circleCount()) {
         const CadCircleRecord cc = st.drawing.circle(ci);
-        const ray3d::Vec3 c = rotPt(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
-        newCircles.push_back(static_cast<float>(c.x));
-        newCircles.push_back(static_cast<float>(c.y));
-        newCircles.push_back(static_cast<float>(c.z));
-        newCircles.push_back(static_cast<float>(cc.r));  // r
+        const ray3d::Vec3 c = rotPt(cc.cx, cc.cy, cc.cz);
+        newCircles.push_back(c.x);
+        newCircles.push_back(c.y);
+        newCircles.push_back(c.z);
+        newCircles.push_back(cc.r);  // r
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
           a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -1165,13 +1151,12 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       if (k < st.drawing.userArcs.size()) {
         CadArc a = st.drawing.userArcs[k];
         const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-        const ray3d::Vec3 startRot = rotPt(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y),
-                                           static_cast<float>(startWorld.z));
-        const ray3d::Vec3 c = rotPt(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z));
+        const ray3d::Vec3 startRot = rotPt(startWorld.x, startWorld.y, startWorld.z);
+        const ray3d::Vec3 c = rotPt(a.cx, a.cy, a.z);
         const ray3d::Vec3 n = rotDir(a.nx, a.ny, a.nz);
-        a.cx = static_cast<float>(c.x);
-        a.cy = static_cast<float>(c.y);
-        a.z = static_cast<float>(c.z);
+        a.cx = c.x;
+        a.cy = c.y;
+        a.z = c.z;
         a.nx = static_cast<float>(n.x);
         a.ny = static_cast<float>(n.y);
         a.nz = static_cast<float>(n.z);
@@ -1190,11 +1175,11 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.drawing.userEllipses.size()) {
         CadEllipse el = st.drawing.userEllipses[k];
-        const ray3d::Vec3 c = rotPt(static_cast<float>(el.cx), static_cast<float>(el.cy), static_cast<float>(el.z));
-        const ray3d::Vec3 maj = rotDir(el.majVx, el.majVy, 0.f);
-        el.cx = static_cast<float>(c.x);
-        el.cy = static_cast<float>(c.y);
-        el.z = static_cast<float>(c.z);
+        const ray3d::Vec3 c = rotPt(el.cx, el.cy, el.z);
+        const ray3d::Vec3 maj = rotDir(el.majVx, el.majVy, 0.0);
+        el.cx = c.x;
+        el.cy = c.y;
+        el.z = c.z;
         el.majVx = static_cast<float>(maj.x);
         el.majVy = static_cast<float>(maj.y);
         newEll.push_back(el);
@@ -1216,10 +1201,9 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         st.drawing.userPolylineOffsets.push_back(0);
       const int baseVert = st.drawing.userPolylineOffsets.back();
       for (int vi = v0; vi < v1; ++vi) {
-        const ray3d::Vec3 p = rotPt(static_cast<float>(st.drawing.vertex(vi).x),
-                                    static_cast<float>(st.drawing.vertex(vi).y),
-                                    static_cast<float>(st.drawing.vertex(vi).z));
-        st.drawing.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+        const CadPolyVertex v = st.drawing.vertex(vi);
+        const ray3d::Vec3 p = rotPt(v.x, v.y, v.z);
+        st.drawing.pushVertex(CadPolyVertex{p.x, p.y, p.z});
       }
       st.drawing.userPolylineOffsets.push_back(baseVert + nv);
       SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
@@ -1237,10 +1221,10 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       if (fk < st.drawing.cadFilledRegions.size()) {
         CadFilledRegion fr = st.drawing.cadFilledRegions[fk];
         for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
-          const ray3d::Vec3 p = rotPt(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]), static_cast<float>(fr.vertsXyz[v + 2]));
-          fr.vertsXyz[v] = static_cast<float>(p.x);
-          fr.vertsXyz[v + 1] = static_cast<float>(p.y);
-          fr.vertsXyz[v + 2] = static_cast<float>(p.z);
+          const ray3d::Vec3 p = rotPt(fr.vertsXyz[v], fr.vertsXyz[v + 1], fr.vertsXyz[v + 2]);
+          fr.vertsXyz[v] = p.x;
+          fr.vertsXyz[v + 1] = p.y;
+          fr.vertsXyz[v + 2] = p.z;
         }
         newFills.push_back(std::move(fr));
         newFillAttrs.push_back(DuplicatedEntityAttrs(
@@ -1257,14 +1241,14 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         c.insY = static_cast<float>(ins.y);
         c.insZ = static_cast<float>(ins.z);
         if (c.kind == CadAnnotation::Kind::Text) {
-          c.rotationRad += angleRad;
+          c.rotationRad = static_cast<float>(static_cast<double>(c.rotationRad) + angleRad);
         } else if (c.kind == CadAnnotation::Kind::Mtext) {
           RotateMtextAroundBase(axisPoint.x, axisPoint.y, angleRad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimLinear) {
-          RotateCadDimLinearAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c);
+          RotateCadDimLinearAroundBase(axisPoint.x, axisPoint.y, angleRad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimAligned) {
-          RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt1X, &c.dimExt1Y);
-          RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt2X, &c.dimExt2Y);
+          RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &c.dimExt1X, &c.dimExt1Y);
+          RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
             c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
@@ -1273,7 +1257,7 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
           float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
           for (int i = 0; i < 4; ++i) {
-            RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &xs[i], &ys[i]);
+            RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &xs[i], &ys[i]);
             mnX = std::min(mnX, xs[i]); mxX = std::max(mxX, xs[i]);
             mnY = std::min(mnY, ys[i]); mxY = std::max(mxY, ys[i]);
           }
@@ -1291,7 +1275,8 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       const size_t tk = static_cast<size_t>(e.index);
       if (tk < st.drawing.cadTables.size()) {
         CadTable c = st.drawing.cadTables[tk];
-        CadTableRotateAround(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
+        CadTableRotateAround(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y),
+                             static_cast<float>(angleRad));
         newTables.push_back(std::move(c));
         EntityAttributes a{};
         if (tk < st.drawing.cadTableAttrs.size())
@@ -1303,7 +1288,7 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
       const size_t bk = static_cast<size_t>(e.index);
       if (bk < st.drawing.cadBlockRefs.size()) {
         CadBlockRef c = st.drawing.cadBlockRefs[bk];
-        CadBlockRotateZ(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
+        CadBlockRotateZ(&c, axisPoint.x, axisPoint.y, angleRad);
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
         if (bk < st.drawing.cadBlockRefAttrs.size())
@@ -1751,9 +1736,9 @@ static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
   arr->anchorX = arr->anchorY = 0.f;
 }
 
-static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float wx, float wy,
-                                           const ray3d::Ray* pickRay, float ax, float ay, float az,
-                                           float* outX, float* outY, float* outZ) {
+static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, double wx, double wy,
+                                           const ray3d::Ray* pickRay, double ax, double ay, double az,
+                                           double* outX, double* outY, double* outZ) {
   if (!pickRay || !pickRay->valid() || CadWorkPlaneIsWorldXy(st)) {
     *outX = wx;
     *outY = wy;
@@ -1770,10 +1755,23 @@ static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float w
       *outZ = CadCommitElevation(st);
     return;
   }
-  *outX = static_cast<float>(hit.x);
-  *outY = static_cast<float>(hit.y);
+  *outX = hit.x;
+  *outY = hit.y;
   if (outZ)
-    *outZ = static_cast<float>(hit.z);
+    *outZ = hit.z;
+}
+
+static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float wx, float wy,
+                                           const ray3d::Ray* pickRay, float ax, float ay, float az,
+                                           float* outX, float* outY, float* outZ) {
+  double ox = 0.0, oy = 0.0, oz = 0.0;
+  CadResolvePickOnWorkPlaneAnchored(st, static_cast<double>(wx), static_cast<double>(wy), pickRay,
+                                    static_cast<double>(ax), static_cast<double>(ay), static_cast<double>(az),
+                                    &ox, &oy, &oz);
+  *outX = static_cast<float>(ox);
+  *outY = static_cast<float>(oy);
+  if (outZ)
+    *outZ = static_cast<float>(oz);
 }
 
 static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& log, int instanceCount,

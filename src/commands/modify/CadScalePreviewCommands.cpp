@@ -359,13 +359,15 @@ void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float b
 }
 
 
-static void RotatePtForAnnotationPreview(float bx, float by, float rad, float* x, float* y) {
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  float dx = *x - bx;
-  float dy = *y - by;
-  *x = bx + c * dx - s * dy;
-  *y = by + s * dx + c * dy;
+// Templated: annotation insertion points are float, dimension definition points double (issue #1668).
+template <class T>
+static void RotatePtForAnnotationPreview(float bx, float by, float rad, T* x, T* y) {
+  const double c = std::cos(static_cast<double>(rad));
+  const double s = std::sin(static_cast<double>(rad));
+  const double dx = static_cast<double>(*x) - bx;
+  const double dy = static_cast<double>(*y) - by;
+  *x = static_cast<T>(bx + c * dx - s * dy);
+  *y = static_cast<T>(by + s * dx + c * dy);
 }
 
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad) {
@@ -374,15 +376,17 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
     return false;
   using RP = stepengine::RotatePhase;
   if (rs->phase == RP::NeedAngleOrReference) {
-    const float dx = curX - rs->baseX;
-    const float dy = curY - rs->baseY;
-    *outThetaRad = -std::atan2(dx, dy);
+    const double dx = static_cast<double>(curX) - rs->baseX;
+    const double dy = static_cast<double>(curY) - rs->baseY;
+    *outThetaRad = static_cast<float>(-std::atan2(dx, dy));
   } else if (rs->phase == RP::AfterReference_WaitAngleOrP) {
-    const float thetaRef = std::atan2(rs->refY2 - rs->refY1, rs->refX2 - rs->refX1);
-    *outThetaRad = std::atan2(curY - rs->baseY, curX - rs->baseX) - thetaRef;
+    const double thetaRef = std::atan2(rs->refY2 - rs->refY1, rs->refX2 - rs->refX1);
+    *outThetaRad = static_cast<float>(std::atan2(static_cast<double>(curY) - rs->baseY,
+                                                 static_cast<double>(curX) - rs->baseX) -
+                                      thetaRef);
   } else if (rs->phase == RP::AnglePoints_WaitP2) {
-    *outThetaRad = RotateDeltaFromReferenceAndNewSegment(rs->refX1, rs->refY1, rs->refX2, rs->refY2,
-                                                         rs->anglePt1X, rs->anglePt1Y, curX, curY);
+    *outThetaRad = static_cast<float>(RotateDeltaFromReferenceAndNewSegment(
+        rs->refX1, rs->refY1, rs->refX2, rs->refY2, rs->anglePt1X, rs->anglePt1Y, curX, curY));
   } else {
     return false;
   }

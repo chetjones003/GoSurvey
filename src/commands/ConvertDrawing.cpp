@@ -124,7 +124,7 @@ void MoveAnnotations(std::vector<CadAnnotation>& annotations, const Xf& f, doubl
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       f.Pt(&a.dimExt1X, &a.dimExt1Y);
       f.Pt(&a.dimExt2X, &a.dimExt2Y);
-      a.dimSignedOffset *= static_cast<float>(f.s);
+      a.dimSignedOffset *= f.s;
     }
     if (a.kind == CadAnnotation::Kind::DimAngular)
       f.Pt(&a.dimAngVertexX, &a.dimAngVertexY);

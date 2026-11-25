@@ -1960,13 +1960,13 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ref.defName = name;
   if (CadBlockNameIsDynamicAnonymous(name))
     ref.dynamicCanonicalName = DwgUniqueDynamicCanonicalBlockName(dwg);
-  ref.xf.x = static_cast<float>(ins->ins_pt.x - originSubtractX);
-  ref.xf.y = static_cast<float>(ins->ins_pt.y - originSubtractY);
-  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.x = ins->ins_pt.x - originSubtractX;
+  ref.xf.y = ins->ins_pt.y - originSubtractY;
+  ref.xf.z = ins->ins_pt.z;
   ref.xf.sx = ins->scale.x != 0.0 ? static_cast<float>(ins->scale.x) : 1.f;
   ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
   ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
-  ref.xf.rotZ = static_cast<float>(ins->rotation);
+  ref.xf.rotZ = ins->rotation;
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
@@ -2012,13 +2012,13 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   const double insSz = ins->scale.z != 0.0 ? ins->scale.z : 1.0;
   CadBlockRef ref;
   ref.defName = name;
-  ref.xf.x = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
-  ref.xf.y = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
-  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.x = wx - st.drawing.worldDocumentOriginX;
+  ref.xf.y = wy - st.drawing.worldDocumentOriginY;
+  ref.xf.z = ins->ins_pt.z;
   ref.xf.sx = static_cast<float>(insSx * xf.sx);
   ref.xf.sy = static_cast<float>(insSy * xf.sy);
   ref.xf.sz = static_cast<float>(insSz);
-  ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
+  ref.xf.rotZ = ins->rotation + xf.ang;
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
@@ -2119,10 +2119,10 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
+    a.dimExt1X = x1 - st.drawing.worldDocumentOriginX;
+    a.dimExt1Y = y1 - st.drawing.worldDocumentOriginY;
+    a.dimExt2X = x2 - st.drawing.worldDocumentOriginX;
+    a.dimExt2Y = y2 - st.drawing.worldDocumentOriginY;
     if (ty == DWG_TYPE_DIMENSION_ALIGNED) {
       a.kind = CadAnnotation::Kind::DimAligned;
       const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
@@ -2136,7 +2136,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
       dpx -= st.drawing.worldDocumentOriginX;
       dpy -= st.drawing.worldDocumentOriginY;
       const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
-      a.dimSignedOffset = static_cast<float>((dpx - cmx) * n0x + (dpy - cmy) * n0y);
+      a.dimSignedOffset = (dpx - cmx) * n0x + (dpy - cmy) * n0y;
     } else {
       a.kind = CadAnnotation::Kind::DimLinear;
       // AutoCAD rotated-linear convention: ~pi/2 (mod pi) = vertical dim line (matches the save
@@ -2149,7 +2149,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
       dpx -= st.drawing.worldDocumentOriginX;
       dpy -= st.drawing.worldDocumentOriginY;
       const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
-      a.dimSignedOffset = static_cast<float>(a.dimLinearVertical ? (dpx - cmx) : (dpy - cmy));
+      a.dimSignedOffset = a.dimLinearVertical ? (dpx - cmx) : (dpy - cmy);
     }
   } else if (ty == DWG_TYPE_DIMENSION_ANG3PT) {
     if (centerOrDefPt == nullptr || xline1 == nullptr || xline2 == nullptr)
@@ -2157,20 +2157,20 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     a.kind = CadAnnotation::Kind::DimAngular;
     double vx = 0, vy = 0;
     xf.apply(centerOrDefPt->x, centerOrDefPt->y, &vx, &vy);
-    a.dimAngVertexX = static_cast<float>(vx - st.drawing.worldDocumentOriginX);
-    a.dimAngVertexY = static_cast<float>(vy - st.drawing.worldDocumentOriginY);
+    a.dimAngVertexX = vx - st.drawing.worldDocumentOriginX;
+    a.dimAngVertexY = vy - st.drawing.worldDocumentOriginY;
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
+    a.dimExt1X = x1 - st.drawing.worldDocumentOriginX;
+    a.dimExt1Y = y1 - st.drawing.worldDocumentOriginY;
+    a.dimExt2X = x2 - st.drawing.worldDocumentOriginX;
+    a.dimExt2Y = y2 - st.drawing.worldDocumentOriginY;
     double dpx = 0, dpy = 0;
     xf.apply(common->def_pt.x, common->def_pt.y, &dpx, &dpy);
     dpx -= st.drawing.worldDocumentOriginX;
     dpy -= st.drawing.worldDocumentOriginY;
-    a.dimSignedOffset = static_cast<float>(std::hypot(dpx - a.dimAngVertexX, dpy - a.dimAngVertexY));
+    a.dimSignedOffset = std::hypot(dpx - a.dimAngVertexX, dpy - a.dimAngVertexY);
     if (a.dimSignedOffset < 1e-6f)
       return false;
   } else {
@@ -6846,9 +6846,9 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
                                      const AppCommandState& st, const CadAnnotation& an,
                                      const EntityAttributes* at, double ox, double oy, bool r2018Write,
                                      DwgExportAnnotContext& annotCtx, DimWriteState& ds) {
-  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
-    p->x = static_cast<double>(lx) + ox;
-    p->y = static_cast<double>(ly) + oy;
+  auto world = [&](double lx, double ly, double z, dwg_point_3d* p) {  // double: dimension points (issue #1668)
+    p->x = lx + ox;
+    p->y = ly + oy;
     p->z = z;
   };
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -6867,17 +6867,15 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
       st.drawing.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
   dwg_point_3d textMid{};
   world(strokes.ok ? strokes.labelX : an.insX, strokes.ok ? strokes.labelY : an.insY, an.insZ, &textMid);
-  Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
-  Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
-  Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
   Dwg_DIMENSION_common* common = nullptr;
   if (an.kind == CadAnnotation::Kind::DimAligned) {
-    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0;
+    double meas = 0.0;
     if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
       dwg_point_3d p1{}, p2{};
       world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
       world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
-      dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
+      auto* dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
       if (dimA != nullptr) {
         common = reinterpret_cast<Dwg_DIMENSION_common*>(dimA);
         dwg_point_3d dp{};
@@ -6885,11 +6883,12 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
         common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
         common->def_pt.y = dp.y;
         common->def_pt.z = dp.z;
-        common->act_measurement = static_cast<double>(meas);
+        common->act_measurement = meas;
       }
     }
   } else if (an.kind == CadAnnotation::Kind::DimLinear) {
-    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0;
+    double meas = 0.0;
     if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
       dwg_point_3d p1{}, p2{}, pd{};
       world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
@@ -6897,31 +6896,31 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
       world(sx1, sy1, an.insZ, &pd);
       // AutoCAD's rotated-linear convention: 0 = horizontal dim line, pi/2 = vertical — matches
       // CadDimLinearGeometry's own dimLinearVertical branch, so OPEN can recover it losslessly.
-      dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
+      auto* dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
       if (dimL != nullptr) {
         common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
         common->text_midpt.x = textMid.x;
         common->text_midpt.y = textMid.y;
-        common->act_measurement = static_cast<double>(meas);
+        common->act_measurement = meas;
       }
     }
   } else if (an.kind == CadAnnotation::Kind::DimAngular) {
-    float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
+    float a1 = 0, a2 = 0, sweep = 0, bisx = 0, bisy = 0;
+    double theta = 0.0;
     if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
-      const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
+      const double R = std::max(an.dimSignedOffset, 1e-6);
       dwg_point_3d center{}, x1{}, x2{};
       world(an.dimAngVertexX, an.dimAngVertexY, an.insZ, &center);
       world(an.dimExt1X, an.dimExt1Y, an.insZ, &x1);
       world(an.dimExt2X, an.dimExt2Y, an.insZ, &x2);
-      dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
+      auto* dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
       if (dimG != nullptr) {
         common = reinterpret_cast<Dwg_DIMENSION_common*>(dimG);
-        // Arc point (DXF 10): bisector direction from the vertex, at radius R — the wrapper
-        // leaves def_pt unset (see dwg_add_DIMENSION_ANG3PT in dwg_api.c).
+        // The wrapper leaves the arc point (DXF 10) unset.
         common->def_pt.x = center.x + static_cast<double>(bisx) * R;
         common->def_pt.y = center.y + static_cast<double>(bisy) * R;
         common->def_pt.z = center.z;
-        common->act_measurement = static_cast<double>(theta);
+        common->act_measurement = theta;
       }
     }
   }

@@ -592,7 +592,8 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
   for (const CadBlockRef& ref : st.drawing.cadBlockRefs) {
     blockSegs.clear();
     CadBlockCollectWorldLines(st.drawing.blockDefs, ref, EntityAttributes{}, &blockSegs);
-    for (const CadBlockWorldSeg& s : blockSegs) out->push_back({s.x0, s.y0, s.x1, s.y1});
+    for (const CadBlockWorldSeg& s : blockSegs)
+      out->push_back({static_cast<float>(s.x0), static_cast<float>(s.y0), static_cast<float>(s.x1), static_cast<float>(s.y1)});
   }
 
   auto tessellate = [&](auto pointAt, int n) {

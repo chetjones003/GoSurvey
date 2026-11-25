@@ -137,11 +137,11 @@ struct DxfArcAsWritten {
   if (cy > 1e-6) {
     out->rotX = static_cast<float>(std::atan2(-m[1][2], m[2][2]));
     out->rotY = static_cast<float>(std::atan2(m[0][2], cy));
-    out->rotZ = static_cast<float>(std::atan2(-m[0][1], m[0][0]));
+    out->rotZ = std::atan2(-m[0][1], m[0][0]);
   } else {
     out->rotX = 0.f;
     out->rotY = static_cast<float>(std::copysign(kPi / 2.0, m[0][2]));
-    out->rotZ = static_cast<float>(std::atan2(m[1][0], m[1][1]));
+    out->rotZ = std::atan2(m[1][0], m[1][1]);
   }
   return true;
 }
@@ -2169,9 +2169,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           i = j;
           continue;
         }
-        ref.xf.x = static_cast<float>(worldInsert.x - st.drawing.worldDocumentOriginX);
-        ref.xf.y = static_cast<float>(worldInsert.y - st.drawing.worldDocumentOriginY);
-        ref.xf.z = static_cast<float>(worldInsert.z);
+        ref.xf.x = worldInsert.x - st.drawing.worldDocumentOriginX;
+        ref.xf.y = worldInsert.y - st.drawing.worldDocumentOriginY;
+        ref.xf.z = worldInsert.z;
         ref.xf.sx = static_cast<float>(sx);
         ref.xf.sy = static_cast<float>(sy);
         ref.xf.sz = static_cast<float>(sz);
