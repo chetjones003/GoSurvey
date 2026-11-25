@@ -363,8 +363,10 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
 
 void CadAnnotationTextPickQuad(const AppCommandState& st, const CadAnnotation& a, float* xs, float* ys,
                                bool measure) {
-  // Annotative MTEXT occupies its frame at the current annotation scale, as drawn (issue #1667).
-  CadAnnotation effective = CadAnnotationAsDrawn(a, nullptr, st.drawing.modelUnitsPerPlottedInch,
+  // MTEXT occupies its content-fitted frame, at the current annotation scale when annotative (issue #1667).
+  CadAnnotation fitted = a;
+  CadMtextFitHeight(st, fitted, measure);
+  CadAnnotation effective = CadAnnotationAsDrawn(fitted, nullptr, st.drawing.modelUnitsPerPlottedInch,
       &st.drawing.annotationScales, st.currentAnnotationScaleIndex);
   const auto* style = TextStyles::IsStyleableText(a) ? TextStyles::Find(st.drawing.textStyles, a.styleName) : nullptr;
   if (style) TextStyles::RebakeAnnotation(effective, *style);
@@ -387,8 +389,56 @@ float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation&
                                st.currentAnnotationScaleIndex);
 }
 
+float CadMtextContentHeight(const AppCommandState& st, const CadAnnotation& a, bool useFrontend) {
+  if (a.kind != CadAnnotation::Kind::Mtext) return -1.f;
+  CadAnnotation effective = a;  // the style-resolved font and height the renderer draws with
+  if (const auto* style = TextStyles::Find(st.drawing.textStyles, a.styleName)) {
+    TextStyles::RebakeAnnotation(effective, *style);
+    if (style->heightInches == 0) effective.plottedHeightInches = a.plottedHeightInches;
+  }
+  // The stored frame is at the drawing scale (annotative frames scale with their text), so measure there.
+  const float textWorld = CadAnnotationHeightWorld(effective, st.drawing.modelUnitsPerPlottedInch);
+  const float width = CadMtextFrameWidth(a);
+  if (!(textWorld > 0.f) || !std::isfinite(textWorld)) return -1.f;
+  std::string wire = CadAnnotationResolvedText(st, effective);
+  if (effective.bold) wire = "[[b]]" + wire + "[[/b]]";
+  if (effective.italic) wire = "[[i]]" + wire + "[[/i]]";
+  if (effective.underline) wire = "[[u]]" + wire + "[[/u]]";
+  float height = -1.f;
+  if (useFrontend && st.measureMtextHeight) {
+    constexpr float kPx = 100.f;
+    height = st.measureMtextHeight(kPx, wire, effective.fontFamily, width / textWorld * kPx) * textWorld / kPx;
+  } else {  // headless: greedy word wrap on the estimated advance, SHX line pitch
+    std::size_t lines = 0;
+    std::istringstream paragraphs(MtextRichFlattenToPlain(wire));
+    for (std::string paragraph; std::getline(paragraphs, paragraph);) {
+      std::istringstream words(paragraph);
+      std::string line;
+      ++lines;
+      for (std::string word; words >> word;) {
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        if (!line.empty() && CadTextEstimatedWidth(candidate, textWorld) > width) { ++lines; line = word; }
+        else line = candidate;
+      }
+    }
+    height = textWorld * (1.3f + 1.4f * static_cast<float>(std::max<std::size_t>(lines, 1) - 1));
+  }
+  return std::isfinite(height) && height > 0.f ? height : -1.f;
+}
+
+void CadMtextFitHeight(const AppCommandState& st, CadAnnotation& a, bool useFrontend) {
+  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelForId >= 0) return;
+  const float height = CadMtextContentHeight(st, a, useFrontend);
+  if (!(height > 0.f)) return;
+  const float width = CadMtextFrameWidth(a);
+  CadMtextSyncInsertion(a);
+  CadMtextPlaceFrame(a, width, height);
+}
+
 void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]) {
-  const CadAnnotation drawn = CadMtextScaledFrame(a, CadMtextModelDisplayFactor(st, a));
+  CadAnnotation fitted = a;  // grips enclose the text even when a stored height predates auto-height
+  CadMtextFitHeight(st, fitted);
+  const CadAnnotation drawn = CadMtextScaledFrame(fitted, CadMtextModelDisplayFactor(st, fitted));
   CadTextAnnotationQuad(drawn, 0.f, xs, ys);
 }
 
@@ -646,6 +696,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       CadMtextSyncInsertion(ann);
       const float factor = CadMtextModelDisplayFactor(st, ann);
       if (std::fabs(factor - 1.f) > 1.e-6f) CadMtextTransform(ann, [](float*, float*) {}, 0.f, 1.f / factor);
+      CadMtextFitHeight(st, ann);  // the dragged width wraps; the height follows the text, as in AutoCAD
       st.drawing.cadAnnotations.push_back(std::move(ann));
       st.drawing.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);
@@ -685,6 +736,8 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
         const int linkedPi = paper ? -1 : SurveyPointIndexForId(st, ann->surveyPointLabelForId);
         if (linkedPi >= 0)
           RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(linkedPi));
+        else if (!paper && !marker && !multileader)
+          CadMtextFitHeight(st, *ann);  // issue #1667: the frame grows or shrinks with the new contents
       }
       BumpCadGpuCache(st);
       if (multileader && st.mtextRichEditorMultileaderJustPlaced && st.active == K::Mleader) {

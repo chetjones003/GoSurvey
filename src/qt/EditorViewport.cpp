@@ -240,6 +240,7 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
 EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
     : QOpenGLWidget(parent), m_State(state), m_Log(log), m_Renderer(std::make_unique<ViewportRenderer>()) {
   setObjectName("modelViewport");
+  m_State.measureMtextHeight = MeasureQtMtextHeight;  // MTEXT auto-height uses the layout drawn here (#1667)
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
   setMinimumSize(240, 180);
@@ -2564,6 +2565,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
           CadMtextResizeFromGrip(ann, CadMtextModelDisplayFactor(m_State, ann), m_State.mtextGripFixedCornerX,
                                  m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.x),
                                  static_cast<float>(m_Cursor.y));
+          CadMtextFitHeight(m_State, ann);  // the corner sets the wrap width; the height follows the text
         }
         BumpCadGpuCache(m_State);
       } else if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {

@@ -36,9 +36,9 @@ enum class CircleField : std::uint8_t { CenterX, CenterY, CenterZ, Radius };
 enum class TextField : std::uint8_t {
   InsertionX, InsertionY, InsertionZ, PlottedHeightInches,
   RotationBearingDeg,  ///< TEXT and MTEXT; MTEXT turns about its insertion point.
-  /// MTEXT only: the frame width / height along the text's own axes, in model units as drawn (an
-  /// annotative MTEXT at the current annotation scale). The insertion (attachment) point stays put.
-  FrameWidth, FrameHeight,
+  /// MTEXT only: the frame (wrap) width along the text, in model units as drawn (an annotative MTEXT at
+  /// the current annotation scale). The insertion point stays put; the height follows the content.
+  FrameWidth,
   Content,
   /// Dimensions only (issue #1676): one-off sizes in MODEL units; 0 or less clears back to the style.
   DimTextHeightModel, DimArrowSizeModel,

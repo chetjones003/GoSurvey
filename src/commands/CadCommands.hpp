@@ -563,6 +563,13 @@ float CadMtextModelDisplayFactor(const AppCommandState& st, const CadAnnotation&
 /// The four corners of MTEXT \p a as drawn in model space — top-left, top-right, bottom-right,
 /// bottom-left — rotated with the text and scaled for an annotative MTEXT. Grips and outlines use these.
 void CadMtextDrawnCorners(const AppCommandState& st, const CadAnnotation& a, float xs[4], float ys[4]);
+/// MTEXT auto-height (issue #1667): the height of \p a's laid-out content at its frame width, in the stored
+/// frame's units (the drawing scale). Uses AppCommandState::measureMtextHeight when \p useFrontend and it is
+/// installed, else a word-wrap estimate. -1 when it cannot be measured.
+float CadMtextContentHeight(const AppCommandState& st, const CadAnnotation& a, bool useFrontend = true);
+/// Sets \p a's frame height to its content height, keeping the insertion point and width, as AutoCAD
+/// sizes an MTEXT. Survey-point labels and non-MTEXT are untouched.
+void CadMtextFitHeight(const AppCommandState& st, CadAnnotation& a, bool useFrontend = true);
 /// True for an MTEXT edited through its frame grips. A survey-point label keeps its own box grips.
 [[nodiscard]] inline bool CadMtextHasFrameGrips(const CadAnnotation& a) {
   return a.kind == CadAnnotation::Kind::Mtext && a.surveyPointLabelForId < 0;
@@ -1060,6 +1067,8 @@ struct AppCommandState {
   // Frontend-provided natural text measurement. Session-only; no UI toolkit types
   // cross into Commands. A null hook retains the legacy/headless measurement path.
   void (*measureAnnotationText)(float, const std::string&, const std::string&, float*, float*) = nullptr;
+  /// MTEXT content height (pixels) for (text px, wire, font family, wrap width px); see CadMtextFitHeight.
+  float (*measureMtextHeight)(float, const std::string&, const std::string&, float) = nullptr;
   SurveyLabelStyleTemplates surveyLabelTemplates;
   /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
   /// world). The box grows east from this edge, so longer text never grows back toward the point.
