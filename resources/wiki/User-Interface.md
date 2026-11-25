@@ -219,9 +219,17 @@ on context:
 
 | Context | Page opened |
 |---|---|
-| Typing a command name in the command bar | That command's page (fuzzy match) |
-| Hovering a ribbon button or status-bar control | The topic for that control's tooltip |
+| Command bar showing suggestions | The page for the suggestion under the mouse, else the highlighted one |
+| Hovering a ribbon button, flyout entry or status-bar control | That command's page, or the topic for the control |
+| A command is running (or ran last) | That command's page |
 | Otherwise | **Home** |
+
+Aliases resolve to their command (`L` opens **LINE**). A command without its own page opens the
+topic page that documents it, scrolled to its heading, or the [[Command Reference]].
+
+Type in **Search the manual** above the page list to search every page, including the individual
+command pages. All words must appear; pages with a word in the title come first. Press **Enter** to
+open the top result. The page scrolls to the first match. Clear the box to return to the contents.
 
 ![In-app user manual](wiki-img:20-in-app-wiki.png)
 

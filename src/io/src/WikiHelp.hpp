@@ -14,7 +14,8 @@ struct WikiHelpTarget {
 /// Build command → page map from `resources/wiki/Commands/*.md` (call after LoadWikiBundle).
 void WikiHelpBuildIndex(const WikiBundle& bundle);
 
-/// Lookup page for a registry primary name (already lowercased). Empty page when unknown.
+/// Lookup page for a registry primary name (already lowercased): its `Commands/<name>` page, else the
+/// topic page with an all-caps heading naming it, else `Command-Reference`. `Home` for an empty name.
 [[nodiscard]] WikiHelpTarget WikiHelpLookupCommand(std::string_view primaryLower);
 
 /// Call at the start of each frame before UI draws (clears stale hover context).

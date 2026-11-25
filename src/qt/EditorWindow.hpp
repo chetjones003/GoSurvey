@@ -103,8 +103,9 @@ private:
   void CancelDraftingInput();
   void ShowPolarSettings();
   void ShowSnapOverride(const QPoint& position);
-  /// The user manual, open at `topicCommand`'s page (empty: the running or last command's).
-  void ShowContextualHelp(const QString& topicCommand = {});
+  /// The user manual, open at `topicCommand`'s page, else the page for the hovered control's
+  /// `uiTooltip`, else (both empty) the running or last command's.
+  void ShowContextualHelp(const QString& topicCommand = {}, const QString& uiTooltip = {});
   void ShowTextEditor();
   void PropertiesInputEvent(QObject* watched, QEvent* event);
   void BuildPropertiesPanel();
