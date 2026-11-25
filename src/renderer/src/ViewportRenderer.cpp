@@ -2523,7 +2523,41 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDisable(GL_BLEND);
     glEnable(GL_STENCIL_TEST);
     std::vector<float> fan;
-    for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+    // Draw order: every opaque fill first, then translucent fills back to front. A blend only mixes with
+    // what is already in the frame, so a translucent fill drawn before an opaque one behind it would be
+    // painted over; sorting makes the result independent of entity order.
+    struct FillOrder { size_t index; bool translucent; double depth; };
+    std::vector<FillOrder> fillOrder;
+    fillOrder.reserve(filledRegions->size());
+    {
+      const ray3d::Vec3 fwd = cam.ForwardWorld();
+      for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+        const CadFilledRegion& fr = (*filledRegions)[fi];
+        float alphaRgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+        if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
+          const EntityAttributes& attr = (*filledRegionAttrs)[fi];
+          const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+          ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, alphaRgba);
+        }
+        double cx = 0., cy = 0., cz = 0.;
+        const size_t vertexCount = fr.vertsXyz.size() / 3;
+        for (size_t v = 0; v < vertexCount; ++v) {
+          cx += fr.vertsXyz[v * 3 + 0];
+          cy += fr.vertsXyz[v * 3 + 1];
+          cz += fr.vertsXyz[v * 3 + 2];
+        }
+        if (vertexCount > 0) { cx /= static_cast<double>(vertexCount); cy /= static_cast<double>(vertexCount); cz /= static_cast<double>(vertexCount); }
+        // Distance along the view direction; larger is farther from the eye.
+        const double depth = (cx - viewAnchorX) * fwd.x + (cy - viewAnchorY) * fwd.y + cz * fwd.z;
+        fillOrder.push_back({fi, alphaRgba[3] < 0.999f, depth});
+      }
+      std::stable_sort(fillOrder.begin(), fillOrder.end(), [](const FillOrder& a, const FillOrder& b) {
+        if (a.translucent != b.translucent) return !a.translucent;
+        return a.translucent && a.depth > b.depth;
+      });
+    }
+    for (const FillOrder& order : fillOrder) {
+      const size_t fi = order.index;
       const CadFilledRegion& fr = (*filledRegions)[fi];
       if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
@@ -2601,6 +2635,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
       glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
       glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+      // Entity / layer transparency: the stencil confines the cover quad to each pixel once, so a plain
+      // alpha blend is exact. A see-through fill must not write depth, or it hides what lies behind it.
+      const bool translucent = rgba[3] < 0.999f;
+      if (translucent) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+      }
       const float qx0 = static_cast<float>(mnx - viewAnchorX), qy0 = static_cast<float>(mny - viewAnchorY);
       const float qx1 = static_cast<float>(mxx - viewAnchorX), qy1 = static_cast<float>(mxy - viewAnchorY);
       const float qz = (zCount > 0) ? static_cast<float>(zSum / static_cast<double>(zCount)) : 0.f;
@@ -2615,7 +2657,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                               qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy1, qz, 0.f, 0.f, 1.f};
         glUseProgram(shadedProgram_);
         glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
-        glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), rgba[0], rgba[1], rgba[2], 1.f);
+        glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), rgba[0], rgba[1], rgba[2], rgba[3]);
         const ray3d::Vec3 fwd = cam.ForwardWorld();
         glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(fwd.x),
                     static_cast<float>(fwd.y), static_cast<float>(fwd.z));
@@ -2632,11 +2674,15 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
       } else {
-        glUniform4f(locCol, rgba[0], rgba[1], rgba[2], 1.f);
+        glUniform4f(locCol, rgba[0], rgba[1], rgba[2], rgba[3]);
         const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
                                 qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
         glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+      }
+      if (translucent) {
+        glDisable(GL_BLEND);
+        glDepthMask(wantDepthWrite);
       }
     }
     glDisable(GL_STENCIL_TEST);
