@@ -443,12 +443,7 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
   if (a.kind == CadAnnotation::Kind::Text) {
     a.rotationRad += rad;
   } else if (a.kind == CadAnnotation::Kind::Mtext) {
-    const float w = a.boxMaxX - a.boxMinX, h = a.boxMaxY - a.boxMinY;
-    float x = a.boxMinX, y = a.boxMaxY;
-    RotatePtForAnnotationPreview(bx, by, rad, &x, &y);
-    a.boxMinX = x; a.boxMaxX = x + w;
-    a.boxMaxY = y; a.boxMinY = y - h;
-    a.rotationRad += rad;
+    CadMtextTransform(a, [&](float* x, float* y) { RotatePtForAnnotationPreview(bx, by, rad, x, y); }, rad, 1.f);
   } else if (a.kind == CadAnnotation::Kind::DimLinear) {
     RotateCadDimLinearAroundBase(bx, by, rad, &a);
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
@@ -485,6 +480,11 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
     return;
   *out = src;
   CadAnnotation& a = *out;
+  if (a.kind == CadAnnotation::Kind::Mtext) {  // issue #1667: scale about the base, keep rotation/attachment
+    CadMtextTransform(a, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); }, 0.f, sc);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    return;
+  }
   ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
   if (a.kind == CadAnnotation::Kind::Text) {
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
@@ -530,22 +530,10 @@ static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, fl
     return;
   *out = src;
   CadAnnotation& a = *out;
-  if (a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) {
+  if (a.kind == CadAnnotation::Kind::Mtext) {
+    CadMtextTransform(a, [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); }, 0.f, 1.f);
+  } else if (a.kind == CadAnnotation::Kind::Text) {
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
-    if (a.kind == CadAnnotation::Kind::Mtext) {
-      float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
-      float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
-      float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
-      for (int i = 0; i < 4; ++i) {
-        ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
-        mnX = std::min(mnX, xs[i]);
-        mxX = std::max(mxX, xs[i]);
-        mnY = std::min(mnY, ys[i]);
-        mxY = std::max(mxY, ys[i]);
-      }
-      a.boxMinX = mnX; a.boxMaxX = mxX; a.boxMinY = mnY; a.boxMaxY = mxY;
-      a.insX = mnX; a.insY = mnY;
-    }
   } else if (a.kind == CadAnnotation::Kind::DimLinear) {
     ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &a);
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {

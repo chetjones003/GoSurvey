@@ -5950,9 +5950,9 @@ TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issu
   }
   CHECK(nMtext == 1);
   CHECK(attachment == 5);
-  // Middle-center of a 10x4 box: (5, 2).
-  CHECK(insX == Catch::Approx(5.0).margin(1e-6));
-  CHECK(insY == Catch::Approx(2.0).margin(1e-6));
+  // Middle-center of the 10x4 frame turned 90 deg about its top-left (0, 4): (2, 9) (issue #1667).
+  CHECK(insX == Catch::Approx(2.0).margin(1e-5));
+  CHECK(insY == Catch::Approx(9.0).margin(1e-5));
   CHECK(textHeight > 0.0);
   CHECK(axX == Catch::Approx(0.0).margin(1e-6));
   CHECK(axY == Catch::Approx(1.0).margin(1e-6));

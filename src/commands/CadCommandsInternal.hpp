@@ -600,14 +600,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
   } else if (a.kind == CadAnnotation::Kind::Mtext) {
-    ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
-    ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
-    if (a.boxMinX > a.boxMaxX)
-      std::swap(a.boxMinX, a.boxMaxX);
-    if (a.boxMinY > a.boxMaxY)
-      std::swap(a.boxMinY, a.boxMaxY);
-    a.insX = a.boxMinX;
-    a.insY = a.boxMinY;
+    // Issue #1667: the insertion scales about the base; the frame keeps its rotation and attachment.
+    CadMtextTransform(a, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); }, 0.f, sc);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
   } else if (a.kind == CadAnnotation::Kind::DimLinear) {
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);

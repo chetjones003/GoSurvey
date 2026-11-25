@@ -262,3 +262,26 @@ TEST_CASE("Dimension size overrides edit, clear, undo, and track drawn label pla
   CHECK(propedit::SetTextNumber(st, 1, propedit::TextField::DimTextHeightModel, 2.0).result ==
         propedit::Result::Rejected);
 }
+
+TEST_CASE("MTEXT frame: the height follows the wrapped content, so grips enclose the text", "[editor][issue1667]") {
+  // The reported case: "TEST MTEXT" in a 0.458-wide frame dragged at 1" = 5', drawn at 1" = 50'.
+  AppCommandState st;
+  st.drawing.modelUnitsPerPlottedInch = 50;  // 0.125 in -> 6.25 model units
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::Mtext;
+  a.text = "TEST MTEXT";
+  a.plottedHeightInches = 0.125f;
+  a.insX = 6; a.insY = 28;
+  CadMtextPlaceFrame(a, 0.458f, 1.5f);
+  const float h = 6.25f;
+  CHECK(CadMtextContentHeight(st, a, false) == Catch::Approx(h * (1.3f + 1.4f)));  // two lines
+  CadMtextFitHeight(st, a, false);
+  CHECK(CadMtextFrameHeight(a) == Catch::Approx(h * 2.7f));
+  CHECK(CadMtextFrameWidth(a) == Catch::Approx(0.458f));
+  CHECK(a.insX == Catch::Approx(6));  // top-left attachment stays where it was placed
+  CHECK(a.insY == Catch::Approx(28));
+  // Wide enough for one line: the frame shrinks back to one line.
+  CadMtextPlaceFrame(a, 100.f, CadMtextFrameHeight(a));
+  CadMtextFitHeight(st, a, false);
+  CHECK(CadMtextFrameHeight(a) == Catch::Approx(h * 1.3f));
+}

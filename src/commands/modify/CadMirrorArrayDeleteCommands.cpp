@@ -167,25 +167,11 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         if (c.kind == CadAnnotation::Kind::Text || c.kind == CadAnnotation::Kind::Mtext) {
           // MIRRTEXT-off (design decision, D-2026-08-23-j): insertion point reflects, glyphs stay
           // upright — rotationRad is deliberately left untouched.
-          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
-          if (c.kind == CadAnnotation::Kind::Mtext) {
-            float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
-            float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
-            float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
-            for (int i = 0; i < 4; ++i) {
-              ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
-              mnX = std::min(mnX, xs[i]);
-              mxX = std::max(mxX, xs[i]);
-              mnY = std::min(mnY, ys[i]);
-              mxY = std::max(mxY, ys[i]);
-            }
-            c.boxMinX = mnX;
-            c.boxMaxX = mxX;
-            c.boxMinY = mnY;
-            c.boxMaxY = mxY;
-            c.insX = mnX;
-            c.insY = mnY;
-          }
+          // MTEXT (issue #1667): its insertion is the attachment point; the frame is rebuilt around it.
+          if (c.kind == CadAnnotation::Kind::Mtext)
+            CadMtextTransform(c, [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); }, 0.f, 1.f);
+          else
+            ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
         } else if (c.kind == CadAnnotation::Kind::DimLinear) {
           ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &c);
         } else if (c.kind == CadAnnotation::Kind::DimAligned) {

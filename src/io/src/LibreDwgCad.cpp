@@ -545,22 +545,17 @@ static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dw
   double wx = 0.0;
   double wy = 0.0;
   xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  // Issue #1667: the context gives insertion, direction and attachment. Its DXF 40 is the BOX height, not
+  // the text height, so the entity's text height and frame size are kept and re-placed around it.
+  const float w = CadMtextFrameWidth(*a), h = CadMtextFrameHeight(*a);
   a->insX = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
   a->insY = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
   a->insZ = static_cast<float>(ctx->ins_pt.z);
-  const double th = ctx->rect_height > 1e-9 ? ctx->rect_height : ctx->extents_height;
-  const double mup = std::max(static_cast<double>(st.drawing.modelUnitsPerPlottedInch), 1e-6);
-  if (th > 1e-9)
-    a->plottedHeightInches = static_cast<float>(th / mup);
-  const double rot = std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x);
-  a->rotationRad = static_cast<float>(rot + xf.ang);
-  const double bw = std::max(ctx->rect_width, ctx->extents_width);
-  if (bw > 1e-6) {
-    a->boxMinX = a->insX;
-    a->boxMaxX = a->insX + static_cast<float>(bw);
-    a->boxMinY = a->insY - static_cast<float>(th > 1e-9 ? th : 0.18);
-    a->boxMaxY = a->insY + static_cast<float>(th > 1e-9 ? th * 0.2 : 0.18);
-  }
+  if (std::hypot(ctx->x_axis_dir.x, ctx->x_axis_dir.y) > 1e-12)
+    a->rotationRad = static_cast<float>(std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x) + xf.ang);
+  if (ctx->attachment >= 1 && ctx->attachment <= 9)
+    a->mtextAttach = static_cast<int>(ctx->attachment);
+  CadMtextPlaceFrame(*a, w, h);
   DwgImportNoteDefaultContextMerged();
 }
 
@@ -585,10 +580,13 @@ static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg
   DwgImportNoteDefaultContextMerged();
 }
 
+// An imported MTEXT's frame (issue #1667): see CadMtextPlaceImportedFrame.
+struct ImportedMtextFrame { int attachment = 1; double definedWidth = 0, extentsWidth = 0, extentsHeight = 0; };
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
                bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr,
-               const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr) {
+               const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr,
+               const ImportedMtextFrame& frame = {}) {
   CadAnnotation a{};
   a.kind = kind;
   a.insX = x - st.drawing.worldDocumentOriginX;
@@ -600,13 +598,8 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   a.text = text;
   a.annotative = annotative;
   if (kind == CadAnnotation::Kind::Mtext) {
-    // The renderer draws MTEXT from the top-left of its box. Without an annotation context to supply
-    // one, anchor a box at the insertion point (attachment top-left) sized to the text.
-    const double lines = 1.0 + static_cast<double>(std::count(text.begin(), text.end(), '\n'));
-    a.boxMinX = a.insX;
-    a.boxMaxY = a.insY;
-    a.boxMaxX = a.insX + static_cast<float>(0.62 * height * static_cast<double>(text.size()));
-    a.boxMinY = a.insY - static_cast<float>(1.2 * height * lines);
+    // Issue #1667: the insertion is the DXF 71 attachment point of the frame, turned with the text.
+    CadMtextPlaceImportedFrame(a, height, frame.attachment, frame.definedWidth, frame.extentsWidth, frame.extentsHeight);
   }
   if (ownerEnt != nullptr)
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
@@ -3084,8 +3077,14 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const bool annotative =
         ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
+    // The frame scales with the block transform along the text's own axes (as the multileader label does).
+    const auto axisScale = [](double s) { return std::isfinite(s) && s > 1e-12 ? s : 1.0; };
+    const double ws = axisScale(std::hypot(xf.sx * e->x_axis_dir.x, xf.sy * e->x_axis_dir.y));
+    const double hs = axisScale(std::hypot(xf.sx * -e->x_axis_dir.y, xf.sy * e->x_axis_dir.x));
+    const ImportedMtextFrame frame{static_cast<int>(e->attachment), e->rect_width * ws, e->extents_width * ws,
+                                   e->extents_height * hs};
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
-              CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf);
+              CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf, frame);
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
@@ -4931,8 +4930,12 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
           wire += ch;
       }
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      float insX = an.insX, insY = an.insY;  // issue #1667: the attachment point of the rotated frame
+      CadMtextInsertionFromBox(an, &insX, &insY); p.x = insX; p.y = insY;
       if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(blkhdr, &p, bw, wire.c_str())) {
         e->text_height = std::max(static_cast<double>(an.plottedHeightInches), 1e-3);
+        e->attachment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
+        e->x_axis_dir = {std::cos(static_cast<double>(an.rotationRad)), std::sin(static_cast<double>(an.rotationRad)), 0.0};
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018) {
           if (an.annotative)
             e->is_not_annotative = 0;
@@ -8095,13 +8098,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       // REQ-044 / REQ-170, issue #604: insertion point is the box corner/edge the attachment
       // selects — same convention DxfIo.cpp's MTEXT writer uses (group 71: col = (attach-1)%3,
       // row = (attach-1)/3), so a GoSurvey DWG and its DXF sibling place the box identically.
+      // Issue #1667: on the rotated frame, not its unrotated box.
       const int attach = std::clamp(an.mtextAttach, 1, 9);
-      const int acol = (attach - 1) % 3;
-      const int arow = (attach - 1) / 3;
-      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
-      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
-      const float insXl = acol == 0 ? bMnX : acol == 1 ? 0.5f * (bMnX + bMxX) : bMxX;
-      const float insYl = arow == 0 ? bMxY : arow == 1 ? 0.5f * (bMnY + bMxY) : bMnY;
+      float insXl = 0.f, insYl = 0.f;
+      CadMtextInsertionFromBox(an, &insXl, &insYl);
       dwg_point_3d p{};
       world(insXl, insYl, an.insZ, &p);
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));

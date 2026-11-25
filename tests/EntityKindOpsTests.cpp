@@ -116,43 +116,22 @@ EntityProbe MapPts(const EntityProbe& src, const std::function<ray3d::Vec3(const
   return out;
 }
 
-// Normalizes an axis-aligned 2D rectangle stored at pts[boxIdx] (min) and pts[boxIdx+1] (max)
-// after a point map, mirroring Mtext ROTATE/MIRROR's existing bug where mn/mx are seeded from the
-// UN-TRANSFORMED boxMin corner before transforming the 4 corners, and ins is set to the new boxMin.
-EntityProbe MapMtextAabbWithExistingBug(const EntityProbe& src,
-                                        const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
+// MTEXT under a similarity transform (issue #1667). The fixture's insertion is its bottom-left attachment
+// point (mtextAttach 7). The insertion maps through \p fn, rotationRad grows by \p addRotation, the frame
+// width/height scale by \p sizeScale, and the box is rebuilt around the insertion in the text's own frame:
+// (boxMinX, boxMaxY) is the frame's top-left corner, the spans are the frame width and height.
+EntityProbe MapMtextFrame(const EntityProbe& src, const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn,
+                          double addRotation, double sizeScale) {
   EntityProbe out = src;
-  // pts[0] = ins, pts[1] = boxMin, pts[2] = boxMax
-  const double x0 = src.pts[1].x, y0 = src.pts[1].y, z0 = src.pts[1].z;
-  const double x1 = src.pts[2].x, y1 = src.pts[2].y;
-  const ray3d::Vec3 c[4] = {
-      fn({x0, y0, z0}), fn({x1, y0, z0}), fn({x1, y1, z0}), fn({x0, y1, z0}),
-  };
-  double mnX = x0, mxX = x0, mnY = y0, mxY = y0;
-  for (int i = 0; i < 4; ++i) {
-    mnX = std::min(mnX, c[i].x);
-    mxX = std::max(mxX, c[i].x);
-    mnY = std::min(mnY, c[i].y);
-    mxY = std::max(mxY, c[i].y);
-  }
-  out.pts[0] = {mnX, mnY, c[0].z};
-  out.pts[1] = {mnX, mnY, c[0].z};
-  out.pts[2] = {mxX, mxY, c[0].z};
-  return out;
-}
-
-// Mtext ROTATE / ROTATE-copy (issue #1624 item 12): MTEXT turns like TEXT. The insertion and the box's
-// top-left corner (the anchor it is drawn from) rotate about the base, the box keeps its own width and
-// height so the wrapping is unchanged, and rotationRad grows by the angle (-90 deg for ROTATE "90").
-EntityProbe MapMtextRotated(const EntityProbe& src, const std::function<ray3d::Vec3(const ray3d::Vec3&)>& fn) {
-  EntityProbe out = src;
-  // pts[0] = ins, pts[1] = boxMin, pts[2] = boxMax
-  const double w = src.pts[2].x - src.pts[1].x, h = src.pts[2].y - src.pts[1].y;
-  const ray3d::Vec3 topLeft = fn({src.pts[1].x, src.pts[2].y, src.pts[1].z});
-  out.pts[0] = fn(src.pts[0]);
-  out.pts[1] = {topLeft.x, topLeft.y - h, topLeft.z};
-  out.pts[2] = {topLeft.x + w, topLeft.y, topLeft.z};
-  out.scalars[0] = src.scalars[0] - kHalfPi;
+  // pts[0] = ins, pts[1] = boxMin, pts[2] = boxMax; scalars[0] = rotationRad
+  const double w = (src.pts[2].x - src.pts[1].x) * sizeScale, h = (src.pts[2].y - src.pts[1].y) * sizeScale;
+  const ray3d::Vec3 ins = fn(src.pts[0]);
+  const double rotation = src.scalars[0] + addRotation;
+  const double left = ins.x - h * std::sin(rotation), top = ins.y + h * std::cos(rotation);
+  out.pts[0] = ins;
+  out.pts[1] = {left, top - h, ins.z};
+  out.pts[2] = {left + w, top, ins.z};
+  out.scalars[0] = rotation;
   return out;
 }
 
@@ -632,6 +611,7 @@ std::vector<KindRow> BuildTable() {
         a.boxMaxX = 20.f;
         a.boxMaxY = 15.f;
         a.rotationRad = 0.f;
+        a.mtextAttach = 7;  // bottom-left: the insertion (16,12) is the box's bottom-left corner
         a.plottedHeightInches = 0.1f;
         a.text = "NOTE";
         st.drawing.cadAnnotations.push_back(a);
@@ -646,17 +626,17 @@ std::vector<KindRow> BuildTable() {
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      // ROTATE / ROTATE-copy turn the box like TEXT (#1624 item 12). MIRROR below still records the phase 0
-      // bug: mn/mx seeded from the UN-TRANSFORMED boxMin corner, ins set to the new boxMin.
-      Applied([](const EntityProbe& p) { return MapMtextRotated(p, MapRotPlan); }),
-      Duplicated([](const EntityProbe& p) { return MapMtextRotated(p, MapRotPlan); }),
+      // Issue #1667: every transform moves the insertion (attachment point) and rebuilds the frame around it.
+      // ROTATE "90" turns it -90 deg; MIRROR keeps it upright (MIRRTEXT off, D-2026-08-23-j).
+      Applied([](const EntityProbe& p) { return MapMtextFrame(p, MapRotPlan, -kHalfPi, 1.0); }),
+      Duplicated([](const EntityProbe& p) { return MapMtextFrame(p, MapRotPlan, -kHalfPi, 1.0); }),
       Refused(),
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+        EntityProbe out = MapMtextFrame(p, MapScaleXy, 0.0, kScaleFactor);
         out.scalars[1] = p.scalars[1] * kScaleFactor;
         return out;
       }),
-      Duplicated([](const EntityProbe& p) { return MapMtextAabbWithExistingBug(p, MapMirrorX); }),
+      Duplicated([](const EntityProbe& p) { return MapMtextFrame(p, MapMirrorX, 0.0, 1.0); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 3.0),

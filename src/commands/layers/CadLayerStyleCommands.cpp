@@ -205,7 +205,7 @@ void SetActiveTextStyle(AppCommandState& st, const std::string& name) {
 // prompt is preserved. Per-property overrides land in a later phase.
 void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
   const TextStyle* s = ActiveTextStyle(st);
-  if (!s) return;
+  if (!s) { a.annotative = true; return; }  // no style says otherwise: annotative (issue #1667)
   a.styleName = s->name;
   a.ovFont = a.ovHeight = a.ovOblique = a.ovBold = a.ovItalic = false;
   a.fontFamily = s->fontFamily;
@@ -213,8 +213,10 @@ void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
   a.bold = s->bold;
   a.italic = s->italic;
   // The style's Annotative setting (D-2026-11-06-a): new text made with an annotative style is annotative.
-  // An object already annotative (survey and position marker labels) stays so.
-  a.annotative = a.annotative || StyleFlag(s->props, "annotative");
+  // A style that does not say is annotative (issue #1667): new text then sizes to the annotation scale on
+  // the status bar. Only a style explicitly set non-annotative makes plot-scale text. An object already
+  // annotative (survey and position marker labels) stays so.
+  a.annotative = a.annotative || StyleFlag(s->props, "annotative", true);
 }
 
 

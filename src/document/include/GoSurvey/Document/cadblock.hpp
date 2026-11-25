@@ -1486,7 +1486,24 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
       const float sc = std::max(std::fabs(fr.xf.sx), std::fabs(fr.xf.sy));
       a.plottedHeightInches *= sc;
       const bool hasBox = t.boxMaxX > t.boxMinX && t.boxMaxY > t.boxMinY;
-      if (hasBox) {
+      if (hasBox && t.kind == CadAnnotation::Kind::Mtext) {
+        // Transform each text-frame axis independently so nonuniform block scales do not
+        // inflate the short axis to match the long one.
+        float ix = t.insX, iy = t.insY, iz = t.insZ;
+        xformLabel(t.insX, t.insY, t.insZ, group, &ix, &iy, &iz);
+        const float c = std::cos(t.rotationRad), s = std::sin(t.rotationRad);
+        float wx = t.insX + c, wy = t.insY + s, wz = t.insZ;
+        float hx = t.insX - s, hy = t.insY + c, hz = t.insZ;
+        xformLabel(wx, wy, wz, group, &wx, &wy, &wz);
+        xformLabel(hx, hy, hz, group, &hx, &hy, &hz);
+        const float wdx = wx - ix, wdy = wy - iy;
+        const float hdx = hx - ix, hdy = hy - iy;
+        a.insX = ix;
+        a.insY = iy;
+        a.rotationRad = std::atan2(wdy, wdx);
+        CadMtextPlaceFrame(a, CadMtextFrameWidth(t) * std::hypot(wdx, wdy),
+                           CadMtextFrameHeight(t) * std::hypot(hdx, hdy));
+      } else if (hasBox) {
         float xs[4] = {}, ys[4] = {}, zz = 0.f;
         xformLabel(t.boxMinX, t.boxMinY, t.insZ, group, &xs[0], &ys[0], &zz);
         xformLabel(t.boxMaxX, t.boxMinY, t.insZ, group, &xs[1], &ys[1], &zz);
@@ -1686,6 +1703,15 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
     *mxX = std::max(*mxX, a.insX);
     *mnY = std::min(*mnY, a.insY);
     *mxY = std::max(*mxY, a.insY);
+    if (a.kind == CadAnnotation::Kind::Mtext && a.boxMaxX > a.boxMinX && a.boxMaxY > a.boxMinY) {
+      float xs[4], ys[4];  // issue #1667: the box is a turned frame, so bound its corners
+      CadTextAnnotationQuad(a, 0.f, xs, ys);
+      for (int k = 0; k < 4; ++k) {
+        *mnX = std::min(*mnX, xs[k]); *mxX = std::max(*mxX, xs[k]);
+        *mnY = std::min(*mnY, ys[k]); *mxY = std::max(*mxY, ys[k]);
+      }
+      continue;
+    }
     if (a.boxMaxX > a.boxMinX) {
       *mnX = std::min(*mnX, a.boxMinX);
       *mxX = std::max(*mxX, a.boxMaxX);

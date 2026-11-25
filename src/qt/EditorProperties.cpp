@@ -702,10 +702,7 @@ void EditorWindow::RefreshProperties() {
       number("Rotation (CW from N)", "propTextRotation", F::RotationBearingDeg,
              QString::asprintf("%.2f", static_cast<double>(BearingCwNorthDegFromMathAngleRad(ann.rotationRad))));
     if (ann.kind == CadAnnotation::Kind::Mtext) {
-      number("Box min X", "propTextBoxMinX", F::BoxMinX, fmt(ann.boxMinX));
-      number("Box min Y", "propTextBoxMinY", F::BoxMinY, fmt(ann.boxMinY));
-      number("Box max X", "propTextBoxMaxX", F::BoxMaxX, fmt(ann.boxMaxX));
-      number("Box max Y", "propTextBoxMaxY", F::BoxMaxY, fmt(ann.boxMaxY));
+      number("Box width", "propTextFrameWidth", F::FrameWidth, fmt(CadMtextFrameWidth(ann)));
     }
     if (ann.kind != CadAnnotation::Kind::Table) {
       auto* content = new ContentEdit(body);
@@ -729,6 +726,7 @@ void EditorWindow::RefreshProperties() {
       readOnly(derived, "Model text height", fmt(CadAnnotationHeightWorld(ann, m_State.drawing.modelUnitsPerPlottedInch)) + " model units", "propDerivedTextHeight");
     }
     if (ann.kind == CadAnnotation::Kind::Mtext) {
+      readOnly(derived, "Box height", fmt(CadMtextFrameHeight(ann)), "propDerivedBoxHeight");
       readOnly(derived, "Box width", fmt(std::fabs(ann.boxMaxX - ann.boxMinX)), "propDerivedBoxWidth");
       readOnly(derived, "Box height", fmt(std::fabs(ann.boxMaxY - ann.boxMinY)), "propDerivedBoxHeight");
     }

@@ -680,7 +680,7 @@ bool EditTextStyleDialog(QWidget* parent, TextStyle* style, bool create) {
   b.EnableWhen(face, "font", [](const QString& v) { return !v.endsWith(".shx", Qt::CaseInsensitive); });
   Group("Font", root, font);
   auto* size = Form();
-  size->addRow(b.Check(&dialog, "annotative", "Annotative", false));
+  size->addRow(b.Check(&dialog, "annotative", "Annotative", true));  // unset = annotative (issue #1667)
   auto* orientation = b.Check(&dialog, "matchOrientation", "Match text orientation to layout", false);
   size->addRow(orientation);
   b.EnableWhen(orientation, "annotative", [](const QString& v) { return v == "1"; });
