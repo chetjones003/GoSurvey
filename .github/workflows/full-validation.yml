@@ -15,8 +15,13 @@ on:
     branches: [master, beta]
     types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
+# Label and edit events only matter when they change what CI checks: the docs-only and
+# refactor proof labels, or a new base branch. Other label/edit events (status labels,
+# title/body edits) get their own concurrency group so they never cancel a real run, and
+# the `ci-event` job below skips every check. Keep this list in sync with `ci-event`.
 concurrency:
-  group: full-validation-${{ github.event.pull_request.number }}
+  group: >-
+    full-validation-${{ github.event.pull_request.number }}${{ ((github.event.action == 'edited' && !github.event.changes.base) || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'), github.event.label.name))) && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -28,14 +33,45 @@ env:
   NINJA_STATUS: '[%f/%t; %r running; %e s] '
 
 jobs:
+  # Decides whether this PR event can change a check result (see the concurrency comment).
+  # When it cannot, every job below is skipped under a name that is never a required check,
+  # so a skipped run never stands in for the required check of the same name.
+  ci-event:
+    name: policy / CI-relevant event
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.decide.outputs.relevant }}
+      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
+      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
+    steps:
+      - name: Decide whether this event changes CI results
+        id: decide
+        shell: bash
+        env:
+          IGNORED: >-
+            ${{ (github.event.action == 'edited' && !github.event.changes.base) ||
+              ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+               !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'),
+                         github.event.label.name)) }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          relevant=true
+          if [ "$IGNORED" = "true" ]; then relevant=false; fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Event '$ACTION' (label '$LABEL'): CI relevant = $relevant"
+
   # ---------------------------------------------------------------------------
   # docs-only classification — fail closed: an API/classification error leaves the output empty,
   # causing every validation job below to run. Shared with CodeQL via a repository script. Only
   # the `docs-only` label plus documentation-only paths can skip CI.
   # ---------------------------------------------------------------------------
   classify-docs-only:
-    name: full / docs-only policy
-    runs-on: [self-hosted, Windows, X64]
+    name: full / docs-only policy${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event]
+    if: >-
+      !cancelled() && needs.ci-event.outputs.relevant != 'false'
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
@@ -81,19 +117,19 @@ jobs:
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'C/C++ change detection failed.' }
 
-  # Keep the complete target build blocking while other checks are paused.
+  # Run the full build after a failed classifier, and let a newer commit cancel it.
   build-all-targets:
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-    name: full / build all targets
-    needs: classify-docs-only
+    name: full / build all targets${{ needs.ci-event.outputs.name_suffix }}
+    needs: [ci-event, classify-docs-only]
     if: >-
-      always() &&
+      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    # Self-hosted Victus build runner; fork PRs wait for maintainer approval before running here.
-    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    # Fork PRs wait for maintainer approval before using the self-hosted PR pool.
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     env:
       SCCACHE_GHA_ENABLED: "false"
     steps:
@@ -113,14 +149,19 @@ jobs:
           run-tests: 'false'
 
       - name: Summarize CI performance
-        if: always()
+        if: ${{ !cancelled() }}
         run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
 
       - name: Store build performance evidence on the runner
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP 'ci-evidence-build-all'
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           if (Test-Path build/artifacts/ci) { Copy-Item -Recurse -Force build/artifacts/ci (Join-Path $evidence 'ci') }
           if (Test-Path build/.cmake/release/.ninja_log) { Copy-Item -Force build/.cmake/release/.ninja_log $evidence }
-          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence
+          $storage = Join-Path (Split-Path -Parent $env:RUNNER_TEMP) 'ci-artifacts'
+          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence -StorageRoot $storage
+
+      - name: Stop the build's compiler cache
+        if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        run: ./tools/ci-compiler-cache.ps1 -Action stop

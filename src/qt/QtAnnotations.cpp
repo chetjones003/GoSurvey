@@ -108,7 +108,7 @@ void DrawPointMarkerBlock(QPainter& painter, const AppCommandState& state, const
   CadBlockRef reference;
   reference.defName = style.markerBlockName;
   float minX = 0, minY = 0, maxX = 0, maxY = 0;
-  CadBlockWorldAabb(state.blockDefs, reference, &minX, &minY, &maxX, &maxY);
+  CadBlockWorldAabb(state.drawing.blockDefs, reference, &minX, &minY, &maxX, &maxY);
   const double extent = std::max(maxX - minX, maxY - minY);
   const double scale = style.markerSizeType == 3 ? 1.0 : extent > 1.e-12 ? span / extent : 1.0;
   reference.xf.x = static_cast<float>(point.easting);
@@ -123,19 +123,19 @@ void DrawPointMarkerBlock(QPainter& painter, const AppCommandState& state, const
   insert.color = component.color;
   auto color = [&](const EntityAttributes& attributes) {
     if (highlight.isValid()) return highlight;
-    const auto layer = std::find_if(state.drawingLayerTable.begin(), state.drawingLayerTable.end(),
+    const auto layer = std::find_if(state.drawing.drawingLayerTable.begin(), state.drawing.drawingLayerTable.end(),
         [&](const CadLayerRow& value) { return value.name == attributes.layer; });
     float rgb[3] = {1, 1, 1};
     CadColorResolveRgb(CadColorEffectiveStorage(attributes.color,
-        layer == state.drawingLayerTable.end() ? "White" : layer->color), 1, 1, 1, rgb);
+        layer == state.drawing.drawingLayerTable.end() ? "White" : layer->color), 1, 1, 1, rgb);
     return QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
   };
   std::vector<CadBlockWorldSeg> segments;
-  CadBlockCollectWorldLines(state.blockDefs, reference, insert, &segments);
+  CadBlockCollectWorldLines(state.drawing.blockDefs, reference, insert, &segments);
   for (const auto& segment : segments) {
-    const auto layer = std::find_if(state.drawingLayerTable.begin(), state.drawingLayerTable.end(),
+    const auto layer = std::find_if(state.drawing.drawingLayerTable.begin(), state.drawing.drawingLayerTable.end(),
         [&](const CadLayerRow& value) { return value.name == segment.attr.layer; });
-    if (layer != state.drawingLayerTable.end() && (!layer->on || layer->frozen)) continue;
+    if (layer != state.drawing.drawingLayerTable.end() && (!layer->on || layer->frozen)) continue;
     float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     camera.WorldToScreen(segment.x0, segment.y0, segment.z0, width, height, &x0, &y0);
     camera.WorldToScreen(segment.x1, segment.y1, segment.z1, width, height, &x1, &y1);
@@ -143,10 +143,10 @@ void DrawPointMarkerBlock(QPainter& painter, const AppCommandState& state, const
     painter.drawLine(QPointF(x0, y0), QPointF(x1, y1));
   }
   std::vector<CadAnnotation> labels;
-  CadBlockCollectWorldAnnotations(state.blockDefs, reference, &labels);
+  CadBlockCollectWorldAnnotations(state.drawing.blockDefs, reference, &labels);
   for (const auto& label : labels) {
     float x = 0, y = 0, ex = 0, ey = 0;
-    const double size = label.plottedHeightInches * state.modelUnitsPerPlottedInch;
+    const double size = label.plottedHeightInches * state.drawing.modelUnitsPerPlottedInch;
     camera.WorldToScreen(label.insX, label.insY, label.insZ, width, height, &x, &y);
     camera.WorldToScreen(label.insX + camera.RightWorld().x * size,
                         label.insY + camera.RightWorld().y * size,
@@ -173,30 +173,30 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
   const auto right = camera.RightWorld();
   painter.save();
   painter.setRenderHint(QPainter::Antialiasing);
-  for (std::size_t i = 0; i < state.surveyPoints.size(); ++i) {
-    const auto& point = state.surveyPoints[i];
-    const auto layer = std::find_if(state.drawingLayerTable.begin(), state.drawingLayerTable.end(),
+  for (std::size_t i = 0; i < state.drawing.surveyPoints.size(); ++i) {
+    const auto& point = state.drawing.surveyPoints[i];
+    const auto layer = std::find_if(state.drawing.drawingLayerTable.begin(), state.drawing.drawingLayerTable.end(),
         [&point](const auto& row) { return row.name == point.layer; });
-    if (layer != state.drawingLayerTable.end() && (!layer->on || layer->frozen)) continue;
-    const SurveyPointStyleDefinition* pointStyle = FindSurveyPointStyle(state.surveyPointStyles, point.styleName);
+    if (layer != state.drawing.drawingLayerTable.end() && (!layer->on || layer->frozen)) continue;
+    const SurveyPointStyleDefinition* pointStyle = FindSurveyPointStyle(state.drawing.surveyPointStyles, point.styleName);
     const float pointMup = ModelObjectUnitsPerPlottedInch(pointStyle == nullptr || pointStyle->annotative,
-        state.activeSpaceIndex == kModelSpaceIndex, state.modelUnitsPerPlottedInch, state.annotationScales,
+        state.activeSpaceIndex == kModelSpaceIndex, state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales,
         state.currentAnnotationScaleIndex);
     const bool explicitGeometry = pointStyle != nullptr && pointStyle->hasExplicitMarkerGeometry;
     const std::size_t componentIndex = std::fabs(camera.ForwardWorld().z) > .999 ? 0 : 2;
     const auto* component = explicitGeometry ? &pointStyle->displayComponents[componentIndex] : nullptr;
     const std::string markerLayer = component != nullptr && !component->layer.empty() && component->layer != "0"
         ? component->layer : point.layer;
-    const auto markerLayerRow = std::find_if(state.drawingLayerTable.begin(), state.drawingLayerTable.end(),
+    const auto markerLayerRow = std::find_if(state.drawing.drawingLayerTable.begin(), state.drawing.drawingLayerTable.end(),
         [&](const CadLayerRow& value) { return value.name == markerLayer; });
-    const bool markerLayerVisible = markerLayerRow == state.drawingLayerTable.end() ||
+    const bool markerLayerVisible = markerLayerRow == state.drawing.drawingLayerTable.end() ||
                                     (markerLayerRow->on && !markerLayerRow->frozen);
     const bool markerVisible = markerLayerVisible && (component != nullptr && componentIndex != 0
-        ? component->visible : SurveyPointMarkerVisible(point, state.surveyPointStyles));
+        ? component->visible : SurveyPointMarkerVisible(point, state.drawing.surveyPointStyles));
     // The viewport ID is independent of the MTEXT label (labelStyle None only means no MTEXT label).
-    const bool labelVisible = SurveyPointNamedLabelVisible(point, state.surveyPointLabelStyles) &&
+    const bool labelVisible = SurveyPointNamedLabelVisible(point, state.drawing.surveyPointLabelStyles) &&
         (explicitGeometry && componentIndex != 0 ? pointStyle->displayComponents[componentIndex + 1].visible :
-                                                 SurveyPointLabelVisible(point, state.surveyPointStyles));
+                                                 SurveyPointLabelVisible(point, state.drawing.surveyPointStyles));
     if (!markerVisible && !(labelVisible && state.surveyPointShowIdInViewport)) continue;
     double arm = explicitGeometry && pointStyle->markerSizeType == 2 ? pointStyle->markerSize * .5 :
         SurveyPointCrossHalfWorldFromPaper(explicitGeometry ? pointStyle->crossSpanPlottedInches :
@@ -222,7 +222,7 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
         float rgb[3] = {1.f, 0.45f, 0.08f};
         const std::string effective = CadColorEffectiveStorage(
               component != nullptr && componentIndex != 0 ? component->color : pointStyle->color,
-              markerLayerRow == state.drawingLayerTable.end() ? "White" : markerLayerRow->color);
+              markerLayerRow == state.drawing.drawingLayerTable.end() ? "White" : markerLayerRow->color);
         CadColorResolveRgb(effective, rgb[0], rgb[1], rgb[2], rgb);
         markerColor = QColor::fromRgbF(std::clamp(rgb[0], 0.f, 1.f), std::clamp(rgb[1], 0.f, 1.f),
                                        std::clamp(rgb[2], 0.f, 1.f));
@@ -256,7 +256,7 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
     }
     if (labelVisible && state.surveyPointShowIdInViewport) {
       const double textPixels = std::clamp(half / arm * state.surveyPointLabelPlottedHeightInches *
-          std::max(state.modelUnitsPerPlottedInch, 1.e-6f),
+          std::max(state.drawing.modelUnitsPerPlottedInch, 1.e-6f),
           static_cast<double>(state.viewportTextMinPx), static_cast<double>(state.viewportTextMaxPx));
       QFont font = painter.font(); font.setPixelSize(std::max(1, qRound(textPixels)));
       painter.setFont(font); painter.setPen(QColor(255, 248, 200));
@@ -380,16 +380,16 @@ LabelFace MakeLabelFace(const AppCommandState& state, const std::string& styleNa
                         const std::string& layerColor) {
   assert(std::isfinite(pixelsPerUnit));
   assert(pixelsPerUnit >= 0.0);
-  const AlignmentLabelStyle& style = AlignmentLabelStyles::Resolve(state.alignmentLabelStyles, styleName);
+  const AlignmentLabelStyle& style = AlignmentLabelStyles::Resolve(state.drawing.alignmentLabelStyles, styleName);
   LabelFace face;
   face.prefix = style.prefix;
   face.suffix = style.suffix;
   face.viewOriented = style.viewOriented;
   face.linear = AlignmentLabelStyles::Precision(style, state.displayLinearPrecision);
-  face.station = AlignmentLabelStyles::StationFormatFor(style, state.alignmentStationFormat);
+  face.station = AlignmentLabelStyles::StationFormatFor(style, state.drawing.alignmentStationFormat);
   face.color = ResolvedColor(style.color, layerColor);
-  face.px = AlignmentLabelStyles::TextHeight(style, state.modelUnitsPerPlottedInch) * pixelsPerUnit;
-  const TextStyle* textStyle = TextStyles::Find(state.textStyles, style.textStyle);
+  face.px = AlignmentLabelStyles::TextHeight(style, state.drawing.modelUnitsPerPlottedInch) * pixelsPerUnit;
+  const TextStyle* textStyle = TextStyles::Find(state.drawing.textStyles, style.textStyle);
   const std::string family = TextStyles::EffectiveFontFamily(textStyle != nullptr ? textStyle->fontFamily : std::string{});
   if (cadfont::IsShxFontName(family)) {
     Shx::Font* font = Shx::Resolve(family);
@@ -616,7 +616,7 @@ void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const 
   }
   if (ls.designSpeedsOn) {
     const LabelFace face = MakeLabelFace(state, ls.speedStyle, ppu, layerColor);
-    const bool metric = state.drawingInsUnits == 4 || state.drawingInsUnits == 6;
+    const bool metric = state.drawing.drawingInsUnits == 4 || state.drawing.drawingInsUnits == 6;
     for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric, face.station))
       DrawLeaderLabel(painter, face, FrameAt(view, al, d.internalStation), -1.0, d.text, &boxes);
   }
@@ -730,7 +730,7 @@ std::vector<QPointF> DesignWarningPoints(const AppCommandState& state, const Ali
   assert(view.width > 0.f && view.height > 0.f);
   std::vector<QPointF> points;
   const alignment::AlignmentCheckSet* checkSet =
-      alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, al));
+      alignment::FindCheckSet(state.drawing.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.drawing.alignmentStyles, al));
   if (checkSet == nullptr) return points;
   for (const alignment::DesignFinding& fd : alignment::CheckDesign(al, *checkSet, state.displayLinearPrecision)) {
     const int idx = fd.entity - 1;
@@ -773,17 +773,17 @@ void DrawQtAlignmentOverlay(QPainter& painter, const AppCommandState& state, Ali
   assert(view.width > 0.f && view.height > 0.f);
   assert(std::isfinite(view.width) && std::isfinite(view.height));
   if (al.Empty() || CadEntityIdHidden(&state.hiddenEntityIds, al.id)) return;
-  view.textPx = AlignmentLabelStyles::TextHeight(AlignmentLabelStyles::Resolve(state.alignmentLabelStyles,
+  view.textPx = AlignmentLabelStyles::TextHeight(AlignmentLabelStyles::Resolve(state.drawing.alignmentLabelStyles,
                                                                                AlignmentLabelStyles::kStandardName),
-                                                 state.modelUnitsPerPlottedInch) *
+                                                 state.drawing.modelUnitsPerPlottedInch) *
                 FrameAt(view, al, al.StartStation()).pixelsPerUnit;
   const CadLayerRow* layer = FindDrawingLayerRowCi(state, al.layer.empty() ? std::string("0") : al.layer);
   if (layer != nullptr && (!layer->on || layer->frozen)) return;  // REQ-495.4
   const std::string layerColor = layer != nullptr ? layer->color : "White";
   // The label set decides the station TEXT and where ticks sit; the style decides what is drawn (REQ-491). A missing
   // style or label set (already logged at load) reads as Standard.
-  const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
-  const AlignmentStyle* sty = AlignmentStyles::Resolve(state.alignmentStyles, al.style);
+  const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.drawing.alignmentLabelSets, al.labelSet);
+  const AlignmentStyle* sty = AlignmentStyles::Resolve(state.drawing.alignmentStyles, al.style);
   const std::vector<alignment::StationTickLabel> ticks =
       ls != nullptr ? alignment::CollectMajorMinorStationTicks(al, ls->majorInterval, ls->minorInterval,
                                                                ls->majorStationsOn, ls->minorStationsOn)
@@ -805,8 +805,8 @@ void DrawQtAlignmentOverlay(QPainter& painter, const AppCommandState& state, Ali
 
 void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, float width, float height) {
   const auto camera = CadViewCamera(state);
-  const auto activeScaleName = CadActiveAnnotationScaleName(&state.annotationScales,
-      state.currentAnnotationScaleIndex, nullptr, state.modelUnitsPerPlottedInch);
+  const auto activeScaleName = CadActiveAnnotationScaleName(&state.drawing.annotationScales,
+      state.currentAnnotationScaleIndex, nullptr, state.drawing.modelUnitsPerPlottedInch);
   auto project = [&](double x, double y, double z) {
     float sx = 0, sy = 0;
     camera.WorldToScreen(x, y, z, width, height, &sx, &sy);
@@ -814,31 +814,31 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   };
   painter.save();
   painter.setRenderHint(QPainter::Antialiasing);
-  for (std::size_t i = 0; i < state.cadAnnotations.size(); ++i) {
-    CadAnnotation annotation = state.cadAnnotations[i];
+  for (std::size_t i = 0; i < state.drawing.cadAnnotations.size(); ++i) {
+    CadAnnotation annotation = state.drawing.cadAnnotations[i];
     if (CadAnnotationIsDimension(annotation)) {
       const auto& style = CadDimensionStyleForAnnotation(state, annotation);
       if (!annotation.ovHeight) annotation.plottedHeightInches = style.textSizeInches;
       if (!StyleFlag(style.props, "annotative"))
         annotation.plottedHeightInches *= static_cast<float>(StyleNumber(style.props, "overallScale", 1));
       if (!annotation.ovFont) {
-        const auto* textStyle = TextStyles::Find(state.textStyles, style.textFont);
+        const auto* textStyle = TextStyles::Find(state.drawing.textStyles, style.textFont);
         annotation.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
       }
-    } else if (const auto* style = TextStyles::Find(state.textStyles, annotation.styleName)) {
+    } else if (const auto* style = TextStyles::Find(state.drawing.textStyles, annotation.styleName)) {
       // Native zero-height styles leave each entity's chosen height intact.
       const float height = annotation.plottedHeightInches;
       TextStyles::RebakeAnnotation(annotation, *style);
       if (style->heightInches == 0) annotation.plottedHeightInches = height;
     }
-    const auto* attrs = i < state.cadAnnotationAttrs.size() ? &state.cadAnnotationAttrs[i] : nullptr;
+    const auto* attrs = i < state.drawing.cadAnnotationAttrs.size() ? &state.drawing.cadAnnotationAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
     if (annotation.annotative && !annotation.annotativeVisibleScaleNames.empty() && !activeScaleName.empty() &&
         std::find(annotation.annotativeVisibleScaleNames.begin(), annotation.annotativeVisibleScaleNames.end(), activeScaleName) ==
             annotation.annotativeVisibleScaleNames.end()) continue;
     const CadLayerRow* layer = nullptr;
     if (attrs) {
-      for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+      for (const auto& row : state.drawing.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
       if (layer && (!layer->on || layer->frozen)) continue;
     }
     float rgb[3]{1, 1, 1};
@@ -866,7 +866,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       CadDimStrokeParams parameters;
       parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
           annotation.annotative || StyleFlag(dimStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
+          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
       parameters.arrowSizeInches = dimStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = dimStyle.arrowType;
@@ -891,7 +891,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       x = strokes.labelX; y = strokes.labelY; rotation = strokes.labelRotRad;
     } else if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext) continue;
     const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
-        state.modelUnitsPerPlottedInch, &state.annotationScales, state.currentAnnotationScaleIndex);
+        state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales, state.currentAnnotationScaleIndex);
     const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
     if (!(textWorld > 0) || !std::isfinite(textWorld)) continue;
     std::string text = CadAnnotationResolvedText(state, annotation);
@@ -904,7 +904,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     if (annotation.surveyLabelHasUserOffset) {
       const int pointIndex = SurveyPointIndexForId(state, annotation.surveyPointLabelForId);
       if (pointIndex >= 0) {
-        const auto& point = state.surveyPoints[static_cast<std::size_t>(pointIndex)];
+        const auto& point = state.drawing.surveyPoints[static_cast<std::size_t>(pointIndex)];
         const double cx = .5 * (annotation.boxMinX + annotation.boxMaxX);
         const double cy = .5 * (annotation.boxMinY + annotation.boxMaxY);
         const double halfDiagonal = .5 * std::hypot(annotation.boxMaxX - annotation.boxMinX,
@@ -964,7 +964,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     if (std::hypot(right.x(), right.y()) * fontPixels < 1) continue;
     painter.save();
     painter.setWorldTransform(QTransform(right.x(), right.y(), down.x(), down.y(), origin.x(), origin.y()));
-    if (const auto* style = TextStyles::Find(state.textStyles, annotation.styleName))
+    if (const auto* style = TextStyles::Find(state.drawing.textStyles, annotation.styleName))
       painter.scale(style->widthFactor * (StyleFlag(style->props, "backwards") ? -1 : 1),
                     StyleFlag(style->props, "upsideDown") ? -1 : 1);
     const auto drawDimensionTextBox = [&](const QRectF& rect) {
@@ -1013,12 +1013,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     document.drawContents(&painter);
     painter.restore();
   }
-  if ((state.active == AppCommandState::Kind::DimAligned &&
-       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
-      (state.active == AppCommandState::Kind::DimLinear &&
-       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
-      (state.active == AppCommandState::Kind::DimAngular &&
-       state.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)) {
+  const auto* dimSess = state.sessionAs<stepengine::DimSession>();
+  const auto* angSess = state.sessionAs<stepengine::DimAngularSession>();
+  if ((dimSess && dimSess->phase == stepengine::DimPhase::WaitDimLinePt) ||
+      (angSess && angSess->phase == stepengine::DimAngularPhase::WaitArc)) {
     CadAnnotation draft{};
     bool hasDraft = false;
     float cursorLocalX = 0.f;
@@ -1033,7 +1031,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     else
       hasDraft = CadDimAngularBuildDraft(state, cursorLocalX, cursorLocalY, &draft);
     if (hasDraft) {
-      const DimensionStyle& dimStyle = state.activeDimensionStyle;
+      const DimensionStyle& dimStyle = state.drawing.activeDimensionStyle;
       std::string strokeColor = dimStyle.dimLineColor;
       if (strokeColor.empty() || strokeColor == "ByLayer" || strokeColor == "ByBlock") {
         if (!dimStyle.textColor.empty() && dimStyle.textColor != "ByLayer" && dimStyle.textColor != "ByBlock")
@@ -1052,12 +1050,12 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       }
       CadDimStrokeParams parameters;
       parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
-          StyleFlag(state.activeDimensionStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
-      parameters.arrowSizeInches = state.activeDimensionStyle.arrowSizeInches;
+          StyleFlag(state.drawing.activeDimensionStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
+          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
+      parameters.arrowSizeInches = state.drawing.activeDimensionStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
-      parameters.arrowType = state.activeDimensionStyle.arrowType;
-      parameters.style = &state.activeDimensionStyle;
+      parameters.arrowType = state.drawing.activeDimensionStyle.arrowType;
+      parameters.style = &state.drawing.activeDimensionStyle;
       CadDimWorldStrokes strokes;
       if (CadDimBuildWorldStrokes(draft, parameters, &strokes)) {
         painter.save();
@@ -1070,7 +1068,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           painter.drawPolygon(QPolygonF{project(arrow.x0, arrow.y0, draft.insZ),
                                         project(arrow.x1, arrow.y1, draft.insZ),
                                         project(arrow.x2, arrow.y2, draft.insZ)});
-        const double textWorld = CadAnnotationHeightWorld(draft, state.modelUnitsPerPlottedInch);
+        const double textWorld = CadAnnotationHeightWorld(draft, state.drawing.modelUnitsPerPlottedInch);
         const QPointF base = project(strokes.labelX, strokes.labelY, draft.insZ);
         const QPointF top = project(strokes.labelX, strokes.labelY + textWorld, draft.insZ);
         QFont font = painter.font();
@@ -1082,22 +1080,22 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       }
     }
   }
-  for (std::size_t i = 0; i < state.cadMultileaders.size(); ++i) {
-    CadMultileader ml = state.cadMultileaders[i];
-    const auto* namedStyle = MultileaderStyles::Find(state.multileaderStyles, ml.styleName);
-    const MultileaderStyle& style = namedStyle ? *namedStyle : state.activeMultileaderStyle;
+  for (std::size_t i = 0; i < state.drawing.cadMultileaders.size(); ++i) {
+    CadMultileader ml = state.drawing.cadMultileaders[i];
+    const auto* namedStyle = MultileaderStyles::Find(state.drawing.multileaderStyles, ml.styleName);
+    const MultileaderStyle& style = namedStyle ? *namedStyle : state.drawing.activeMultileaderStyle;
     // Annotative multileaders take their arrow and text size from the annotation scale (D-2026-11-06-a).
     const float mlMup = ModelObjectUnitsPerPlottedInch(ml.annotative, state.activeSpaceIndex == kModelSpaceIndex,
-        state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
+        state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
     const bool mlFollowsAnnotationScale = ml.annotative && state.activeSpaceIndex == kModelSpaceIndex;
     const float leaderArrow = ml.arrowSizeWorld > 0.f && !mlFollowsAnnotationScale ? ml.arrowSizeWorld :
         std::max(style.arrowSizeInches, .001f) * std::max(mlMup, 1.e-6f);
     if (style.props.count("leaderType")) ml.splinePath = StyleProperty(style.props, "leaderType") == "Spline";
     if (StyleProperty(style.props, "arrowSymbol") == "None") ml.showArrow = false;
-    const EntityAttributes* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
+    const EntityAttributes* attrs = i < state.drawing.cadMultileaderAttrs.size() ? &state.drawing.cadMultileaderAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
     const CadLayerRow* layer = nullptr;
-    if (attrs) for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+    if (attrs) for (const auto& row : state.drawing.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
     if (layer && (!layer->on || layer->frozen)) continue;
     float rgb[3]{1.f, 1.f, 1.f};
     if (attrs) CadColorResolveRgb(CadColorEffectiveStorage(attrs->color, layer ? layer->color : "White"), 1, 1, 1, rgb);
@@ -1119,7 +1117,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       CadAnnotation label = ml.label;
       if (!label.ovHeight) label.plottedHeightInches = style.textSizeInches;
       if (!label.ovFont) {
-        const auto* textStyle = TextStyles::Find(state.textStyles, style.textFont);
+        const auto* textStyle = TextStyles::Find(state.drawing.textStyles, style.textFont);
         label.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
       }
       const double textWorld = std::max(label.plottedHeightInches * mlMup, 1.e-6f);
@@ -1146,12 +1144,12 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     }
   }
   const float markerRadius = PositionMarkerRadiusWorld(state);
-  for (std::size_t i = 0; i < state.cadPositionMarkers.size(); ++i) {
-    const auto& marker = state.cadPositionMarkers[i];
-    const EntityAttributes* attrs = i < state.cadPositionMarkerAttrs.size() ? &state.cadPositionMarkerAttrs[i] : nullptr;
+  for (std::size_t i = 0; i < state.drawing.cadPositionMarkers.size(); ++i) {
+    const auto& marker = state.drawing.cadPositionMarkers[i];
+    const EntityAttributes* attrs = i < state.drawing.cadPositionMarkerAttrs.size() ? &state.drawing.cadPositionMarkerAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
     const CadLayerRow* layer = nullptr;
-    if (attrs) for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+    if (attrs) for (const auto& row : state.drawing.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
     if (layer && (!layer->on || layer->frozen)) continue;
     float rgb[3]{0.9f, 0.9f, 0.9f};
     if (attrs) CadColorResolveRgb(CadColorEffectiveStorage(attrs->color, layer ? layer->color : "White"),
@@ -1178,18 +1176,18 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   // TABLE lives in the dedicated cadTables store, so the annotation loop above never paints it.
   // Keep model-space tables in the same overlay pass as selectable annotations; otherwise picking
   // succeeds on geometry that the user cannot see.
-  for (std::size_t ti = 0; ti < state.cadTables.size(); ++ti) {
-    const CadTable& table = state.cadTables[ti];
-    const EntityAttributes* attrs = ti < state.cadTableAttrs.size() ? &state.cadTableAttrs[ti] : nullptr;
+  for (std::size_t ti = 0; ti < state.drawing.cadTables.size(); ++ti) {
+    const CadTable& table = state.drawing.cadTables[ti];
+    const EntityAttributes* attrs = ti < state.drawing.cadTableAttrs.size() ? &state.drawing.cadTableAttrs[ti] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id))
       continue;
     const CadLayerRow* layer = nullptr;
-    if (attrs) for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+    if (attrs) for (const auto& row : state.drawing.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
     if (layer && (!layer->on || layer->frozen)) continue;
     const bool selected = std::any_of(state.selection.begin(), state.selection.end(), [ti](const SelectedEntity& e) {
       return e.type == SelectedEntity::Type::Table && e.index == static_cast<int>(ti);
     });
-    const CadTableStyle* tableStyle = CadTableFindStyle(state.tableStyles, table.styleName);
+    const CadTableStyle* tableStyle = CadTableFindStyle(state.drawing.tableStyles, table.styleName);
     const std::map<std::string, std::string> noProperties;
     const auto& properties = tableStyle ? tableStyle->props : noProperties;
     const auto cellKind = [&](std::size_t ci) -> std::string {
@@ -1249,8 +1247,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       const float textHeight = static_cast<float>(StyleNumber(properties, kind + ".textHeight", priorHeight));
       std::string family = table.fontFamily;
       const std::string styleName = StyleProperty(properties, kind + ".textStyle");
-      if (const auto* style = TextStyles::Find(state.textStyles, styleName)) family = style->fontFamily;
-      const float textWorld = std::max(textHeight * state.modelUnitsPerPlottedInch, 1.e-5f);
+      if (const auto* style = TextStyles::Find(state.drawing.textStyles, styleName)) family = style->fontFamily;
+      const float textWorld = std::max(textHeight * state.drawing.modelUnitsPerPlottedInch, 1.e-5f);
       const auto cap = cellProject(cell.x0, cell.y0 + textWorld);
       const float fontPx = static_cast<float>(std::hypot(cap.x() - tl.x(), cap.y() - tl.y()));
       if (fontPx < .5f) continue;
@@ -1304,14 +1302,14 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   // TABLE remains in its own command state until insertion. Show the same layout
   // the user is about to place, anchored at the current cursor, so placement is
   // visible before the click instead of leaving a stale prompt as the only cue.
-  if (state.active == AppCommandState::Kind::Table && state.tableStage == 3) {
-    if (const CadTableStyle* style = CadTableFindStyle(state.tableStyles, state.tablePendingStyle)) {
+  if (const auto* ts = state.sessionAs<stepengine::TableSession>(); ts && ts->stage == 3) {
+    if (const CadTableStyle* style = CadTableFindStyle(state.drawing.tableStyles, state.tablePendingStyle)) {
       CadTable preview;
       CadTableStyle sizing = *style;
       sizing.columnWidthInches = state.tablePendingColumnWidthInches;
       sizing.rowHeightInches = state.tablePendingRowHeightInches;
       CadTableApplyStyleSize(&preview, sizing, state.tablePendingRows, state.tablePendingCols,
-                             state.modelUnitsPerPlottedInch);
+                             state.drawing.modelUnitsPerPlottedInch);
       preview.insX = state.uiCursorWorldX;
       preview.insY = state.uiCursorWorldY;
       preview.insZ = state.uiCursorWorldZ;
@@ -1323,7 +1321,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.setBrush(Qt::NoBrush);
       std::vector<CadTableCellRect> cells;
       CadTableLayoutWorldCells(preview, &cells);
-      const float textWorld = std::max(preview.plottedHeightInches * state.modelUnitsPerPlottedInch, 1.e-5f);
+      const float textWorld = std::max(preview.plottedHeightInches * state.drawing.modelUnitsPerPlottedInch, 1.e-5f);
       const QPointF textBase = project(preview.insX, preview.insY, preview.insZ);
       const QPointF textTop = project(preview.insX, preview.insY - textWorld, preview.insZ);
       QFont previewFont(QString::fromUtf8(preview.fontFamily.c_str()));
@@ -1338,10 +1336,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.restore();
     }
   }
-  if (state.drawingSettings.Geolocated()) {
-    const double x = state.drawingSettings.markerX - state.worldDocumentOriginX;
-    const double y = state.drawingSettings.markerY - state.worldDocumentOriginY;
-    const double angle = state.drawingSettings.markerNorthDeg * 3.14159265358979323846 / 180.0;
+  if (state.drawing.drawingSettings.Geolocated()) {
+    const double x = state.drawing.drawingSettings.markerX - state.drawing.worldDocumentOriginX;
+    const double y = state.drawing.drawingSettings.markerY - state.drawing.worldDocumentOriginY;
+    const double angle = state.drawing.drawingSettings.markerNorthDeg * 3.14159265358979323846 / 180.0;
     const QPointF center = project(x, y, 0.0);
     const QPointF north = project(x + std::cos(angle), y + std::sin(angle), 0.0);
     QPointF direction = north - center;
@@ -1363,25 +1361,25 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     }
   }
 
-  for (const alignment::Alignment& al : state.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
+  for (const alignment::Alignment& al : state.drawing.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
   // REQ-517: each view frame carries its name at its centre, in plan. Its outline is drawn with the model geometry.
   const CadLayerRow* frameLayer = FindDrawingLayerRowCi(state, "0");  // frames follow layer 0 (REQ-495.4)
   const bool frameLayerHidden = frameLayer != nullptr && (!frameLayer->on || frameLayer->frozen);
-  if (!state.viewFrameGroups.empty() && !frameLayerHidden) {
+  if (!state.drawing.viewFrameGroups.empty() && !frameLayerHidden) {
     QFont frameFont;
     frameFont.setPointSizeF(9.0);
     painter.setFont(frameFont);
     painter.setPen(QColor(230, 230, 230));
-    for (const alignment::ViewFrameGroup& group : state.viewFrameGroups) {
+    for (const alignment::ViewFrameGroup& group : state.drawing.viewFrameGroups) {
       if (CadEntityIdHidden(&state.hiddenEntityIds, group.id)) continue;
       for (const alignment::ViewFrame& frame : group.frames)
         painter.drawText(project(frame.centre.x, frame.centre.y, 0.0) + QPointF(4.0, -4.0), QString::fromStdString(frame.name));
     }
   }
   // REQ-519.1: each sample line carries its station at its right-hand end, in plan, on layer 0 like the frames.
-  if (!state.sampleLines.empty() && !frameLayerHidden) {
+  if (!state.drawing.sampleLines.empty() && !frameLayerHidden) {
     painter.setPen(QColor(230, 230, 230));
-    for (const alignment::SampleLine& line : state.sampleLines) {
+    for (const alignment::SampleLine& line : state.drawing.sampleLines) {
       if (CadEntityIdHidden(&state.hiddenEntityIds, line.id)) continue;
       const double rx = line.origin.x + line.rightWidth * line.direction.x;
       const double ry = line.origin.y + line.rightWidth * line.direction.y;
@@ -1417,7 +1415,7 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
     painter.setBrush(Qt::NoBrush);
     double x = annotation.insX, y = annotation.insY, rotation = annotation.rotationRad;
     const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
-        state.modelUnitsPerPlottedInch, &state.annotationScales, state.currentAnnotationScaleIndex);
+        state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales, state.currentAnnotationScaleIndex);
     const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
     if (!(textWorld > 0) || !std::isfinite(textWorld))
       continue;

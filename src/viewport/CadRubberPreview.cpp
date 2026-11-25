@@ -82,13 +82,14 @@ namespace {
 /// from `CadBuildSolidFromCommand`: there is no solid to build yet. The base is still fully
 /// determined, so drawing it is honest — it is the part the cursor has decided.
 void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out) {
+  const auto* ss = cmd.sessionAs<stepengine::SolidPrimitiveSession>();
   const int picking = CadSolidCurrentPickParam(cmd);
-  if (picking < 0 || !cmd.solidPickValid)
+  if (!ss || picking < 0 || !ss->solidPickValid)
     return;
   int specCount = 0;
-  const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+  const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &specCount);
   const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
-  const ray3d::Vec3 b = cmd.solidBase;
+  const ray3d::Vec3 b = ss->solidBase;
 
   auto seg = [&](const ray3d::Vec3& p, const ray3d::Vec3& q) {
     PushRubberSegViewRel(out, p.x, p.y, q.x, q.y, 0., 0., static_cast<float>(p.z),
@@ -99,9 +100,8 @@ void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out)
   };
 
   if (specs[picking].pick == SolidPickKind::CornerXY) {
-    // BOX / WEDGE: the rectangle between the two corners.
-    const double dx = cmd.solidPickA;
-    const double dy = cmd.solidPickB;
+    const double dx = ss->solidPickA;
+    const double dy = ss->solidPickB;
     const ray3d::Vec3 p00 = inPlane(0.0, 0.0);
     const ray3d::Vec3 p10 = inPlane(dx, 0.0);
     const ray3d::Vec3 p11 = inPlane(dx, dy);
@@ -115,26 +115,24 @@ void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out)
   if (specs[picking].pick != SolidPickKind::Radius)
     return;
 
-  const double r = cmd.solidPickA;
+  const double r = ss->solidPickA;
   if (!(r > 1e-9))
     return;
-  // A pyramid's base is its polygon, turned to follow the cursor — the rotation is as much a part of
-  // what the pick decides as the size is. Everything else previews as a circle.
   int sides = 0;
   double startAngle = 0.0;
-  if (cmd.solidKind == brep::PrimitiveKind::Pyramid) {
-    sides = cmd.solidParamSet[0] ? static_cast<int>(cmd.solidParamValue[0]) : 4;
+  if (ss->solidKind == brep::PrimitiveKind::Pyramid) {
+    sides = ss->solidParamSet[0] ? static_cast<int>(ss->solidParamValue[0]) : 4;
     if (sides < 3 || sides > brep::kMaxPyramidSides)
       sides = 4;
-    startAngle = cmd.solidPickAngleRad;
+    startAngle = ss->solidPickAngleRad;
   } else {
-    sides = 64;  // smooth enough to read as a circle at any working zoom
+    sides = 64;
   }
   double drawR = r;
-  if (cmd.solidKind == brep::PrimitiveKind::Pyramid && !cmd.solidInscribed) {
+  if (ss->solidKind == brep::PrimitiveKind::Pyramid && !ss->solidInscribed) {
     const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
     if (k > 1e-9)
-      drawR = r / k;  // the pick is the apothem when circumscribed; the polygon reaches further
+      drawR = r / k;
   }
   ray3d::Vec3 prev = inPlane(drawR * std::cos(startAngle), drawR * std::sin(startAngle));
   for (int i = 1; i <= sides; ++i) {
@@ -172,10 +170,10 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   }
   if (hasDimensionDraft) {
     CadDimStrokeParams params;
-    params.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
-    params.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+    params.modelUnitsPerPlottedInch = cmd.drawing.modelUnitsPerPlottedInch;
+    params.arrowSizeInches = cmd.drawing.activeDimensionStyle.arrowSizeInches;
     params.arrowScale = cmd.viewportDimArrowScale;
-    params.arrowType = cmd.activeDimensionStyle.arrowType;
+    params.arrowType = cmd.drawing.activeDimensionStyle.arrowType;
     CadDimWorldStrokes strokes;
     if (CadDimBuildWorldStrokes(dimensionDraft, params, &strokes)) {
       for (const auto& s : strokes.segs)
@@ -231,11 +229,11 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
 
   // REQ-485.1: the next tangent of an alignment layout, from the last PI to the cursor (along the starting direction
   // when the dialog fixed one).
-  if (cmd.active == AppCommandState::Kind::AlignmentLayout && !cmd.alignmentLayout.pis.empty()) {
-    const alignment::Point2 last = cmd.alignmentLayout.pis.back();
+  if (const auto* al = cmd.sessionAs<stepengine::AlignmentLayoutSession>(); al && !al->pis.empty()) {
+    const alignment::Point2 last = al->pis.back();
     double tx = curX, ty = curY;
-    if (cmd.alignmentLayout.fixedDirection && cmd.alignmentLayout.pis.size() == 1) {
-      const double ux = std::sin(cmd.alignmentLayout.directionAzimuth), uy = std::cos(cmd.alignmentLayout.directionAzimuth);
+    if (al->fixedDirection && al->pis.size() == 1) {
+      const double ux = std::sin(al->directionAzimuth), uy = std::cos(al->directionAzimuth);
       const double t = std::max(0.0, (curX - last.x) * ux + (curY - last.y) * uy);
       tx = last.x + ux * t;
       ty = last.y + uy * t;
@@ -243,13 +241,14 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     PushRubberSegViewRel(rubberLines, last.x, last.y, tx, ty, 0., 0., zc, zc);
   }
 
-  if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.segmentAnglePickPhase == SAP::WaitP2)
-      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
+  if (const auto* ls = cmd.sessionAs<stepengine::LineSession>();
+      ls && ls->phase == stepengine::LinePhase::NeedNextPoint) {
+    using SAP = stepengine::SegmentAnglePickPhase;
+    if (ls->angle.pickPhase == SAP::WaitP2)
+      PushRubberSegViewRel(rubberLines, ls->angle.pickRefX1, ls->angle.pickRefY1, curXf, curYf, 0., 0.,
                            zc, zc);
-    else if (cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
-      const float th = MathAngleRadFromBearingCwNorthDeg(cmd.segmentPickDraftBearingDeg);
+    else if (ls->angle.pickPhase == SAP::WaitAdjustOrCommit) {
+      const float th = MathAngleRadFromBearingCwNorthDeg(ls->angle.pickDraftBearingDeg);
       const float ux = std::cos(th);
       const float uy = std::sin(th);
       float lx = curXf;
@@ -261,8 +260,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       float lx = curXf;
       float ly = curYf;
       float lz = zc;
-      if (cmd.segmentAngleLockActive)
-        ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
+      if (ls->angle.lockActive)
+        ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, ls->angle.lockUx, ls->angle.lockUy, &lx, &ly,
                                          false);
       else
         // lz picks up the ortho-locked Z (issue #371 follow-up) when squaring to a Front/Left/Right-
@@ -275,12 +274,12 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::Polyline &&
-      cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
+  if (const auto* pls = cmd.sessionAs<stepengine::PolylineSession>();
+      pls && pls->phase == stepengine::PolylinePhase::NeedNextPoint) {
     float lx = curXf;
     float ly = curYf;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    const auto& d = cmd.polylineDraftVerts;
+    using SAP = stepengine::SegmentAnglePickPhase;
+    const auto& d = pls->draftVerts;
     // REQ-316 / ADR-047: preview an arc-mode segment as a curve, not a chord — both the segments
     // already committed to the draft and the one being rubber-banded to the cursor.
     auto pushMaybeArc = [&](double x0, double y0, double x1, double y1, double z0, double z1, float bulge) {
@@ -302,15 +301,15 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       }
     };
     for (size_t i = 0, seg = 0; i + 5 < d.size(); i += 3, ++seg) {
-      const float b = seg < cmd.polylineDraftBulge.size() ? cmd.polylineDraftBulge[seg] : 0.f;
+      const float b = seg < pls->draftBulge.size() ? pls->draftBulge[seg] : 0.f;
       pushMaybeArc(d[i], d[i + 1], d[i + 3], d[i + 4], d[i + 2], d[i + 5], b);
     }
 
-    if (cmd.segmentAnglePickPhase == SAP::WaitP2)
-      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
+    if (pls->angle.pickPhase == SAP::WaitP2)
+      PushRubberSegViewRel(rubberLines, pls->angle.pickRefX1, pls->angle.pickRefY1, curXf, curYf, 0., 0.,
                            zc, zc);
-    else if (cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
-      const float th = MathAngleRadFromBearingCwNorthDeg(cmd.segmentPickDraftBearingDeg);
+    else if (pls->angle.pickPhase == SAP::WaitAdjustOrCommit) {
+      const float th = MathAngleRadFromBearingCwNorthDeg(pls->angle.pickDraftBearingDeg);
       const float ux = std::cos(th);
       const float uy = std::sin(th);
       lx = curXf;
@@ -320,8 +319,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
                            zc);
     } else {
       float lz = zc;
-      if (cmd.segmentAngleLockActive)
-        ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
+      if (pls->angle.lockActive)
+        ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, pls->angle.lockUx, pls->angle.lockUy, &lx, &ly,
                                          false);
       else
         // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
@@ -330,7 +329,7 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       // REQ-316 / ADR-047: in ARC mode the rubber-band to the cursor previews the pending arc,
       // computed by the SAME function the commit uses so what is drawn is what will be committed.
       const float pendBulge =
-          cmd.polylineArcMode ? CadPolylineDraftBulgeForNextPoint(cmd, lx, ly) : 0.f;
+          pls->arcMode ? CadPolylineDraftBulgeForNextPoint(cmd, lx, ly) : 0.f;
       pushMaybeArc(cmd.anchorX, cmd.anchorY, lx, ly, cmd.anchorZ, lz, pendBulge);
     }
   }
@@ -342,8 +341,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   //
   // Each segment is drawn at its vertices' own elevations, as the polyline draft above is, so a
   // feature line being drawn up a grade previews as the 3D chain it will become rather than flat.
-  if (cmd.active == AppCommandState::Kind::FeatureLine) {
-    const auto& d = cmd.featureLineDraftVerts;
+  if (const auto* fls = cmd.sessionAs<stepengine::FeatureLineSession>()) {
+    const auto& d = fls->draftVerts;
     for (size_t i = 0; i + 5 < d.size(); i += 3)
       PushRubberSegViewRel(rubberLines, d[i], d[i + 1], d[i + 3], d[i + 4], 0., 0., d[i + 2], d[i + 5]);
 
@@ -351,17 +350,13 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       const float ax = d[d.size() - 3];
       const float ay = d[d.size() - 2];
       const float az = d[d.size() - 1];
-      if (cmd.featureLinePendingPoint) {
-        // An elevation is owed, so the point is FIXED where it was clicked — rubber-banding to the
-        // cursor here would suggest it is still being placed, and moving the mouse while typing an
-        // elevation would appear to move the point.
-        PushRubberSegViewRel(rubberLines, ax, ay, cmd.featureLinePendingX, cmd.featureLinePendingY,
-                             0., 0., az, cmd.featureLinePendingDefaultZ);
+      if (fls->pendingPoint) {
+        PushRubberSegViewRel(rubberLines, ax, ay, fls->pendingX, fls->pendingY,
+                             0., 0., az, fls->pendingDefaultZ);
       } else {
         float lx = curXf;
         float ly = curYf;
         float lz = zc;
-        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
         ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled, az, cmd.uiCursorWorldZ, &lz);
         PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, lz);
       }
@@ -371,21 +366,21 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   // RECT (REQ-053): after the first corner, rubber-band the axis-aligned rectangle to the cursor. ORTHO is
   // deliberately NOT applied — it would collapse the rectangle to a line, and the shape is already
   // axis-aligned, which is what ORTHO is for.
-  if (cmd.active == AppCommandState::Kind::Rect &&
-      cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner)
-    AppendWorldRectRubberViewRel(rubberLines, cmd.rectX1, cmd.rectY1, curXf, curYf, 0., 0., zc);
+  if (const auto* rs = cmd.sessionAs<stepengine::RectSession>();
+      rs && rs->phase == stepengine::RectPhase::WaitSecondCorner)
+    AppendWorldRectRubberViewRel(rubberLines, rs->x1, rs->y1, curXf, curYf, 0., 0., zc);
 
-  if (cmd.active == AppCommandState::Kind::Arc) {
-    using AP = AppCommandState::ArcPhase;
-    if (cmd.arcPhase == AP::WaitMid)
+  if (const auto* as = cmd.sessionAs<stepengine::ArcSession>()) {
+    using AP = stepengine::ArcPhase;
+    if (as->phase == AP::WaitMid)
       // On a tilted work plane the first pick's own elevation is not the cursor's: two picks on a
       // wall differ only in height, and drawing both ends at zc would flatten the construction line
       // onto one contour of the wall.
-      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0.,
-                           planeIsFlat ? zc : cmd.arcAz, zc);
-    else if (cmd.arcPhase == AP::WaitEnd) {
+      PushRubberSegViewRel(rubberLines, as->ax, as->ay, curXf, curYf, 0., 0.,
+                           planeIsFlat ? zc : as->az, zc);
+    else if (as->phase == AP::WaitEnd) {
       CadArc a{};
-      if (CadSolveArcThreePoints(cmd, cmd.arcAx, cmd.arcAy, cmd.arcAz, cmd.arcBx, cmd.arcBy, cmd.arcBz, curXf,
+      if (CadSolveArcThreePoints(cmd, as->ax, as->ay, as->az, as->bx, as->by, as->bz, curXf,
                                  curYf, zc, &a))
         AppendCurveRubber(rubberLines, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
                           static_cast<double>(a.sweepRad), orthoHalfH, fbHeightPx,
@@ -393,89 +388,85 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
-    PushRubberSegViewRel(rubberLines, cmd.ellCx, cmd.ellCy, curXf, curYf, 0., 0., zc, zc);
+  if (const auto* es = cmd.sessionAs<stepengine::EllipseSession>();
+      es && es->phase == stepengine::EllipsePhase::WaitMajorEnd)
+    PushRubberSegViewRel(rubberLines, es->cx, es->cy, curXf, curYf, 0., 0., zc, zc);
 
-  if ((cmd.active == AppCommandState::Kind::DimAligned || cmd.active == AppCommandState::Kind::DimLinear) &&
-      cmd.dimPhase == AppCommandState::DimPhase::WaitExt2)
-    PushRubberSegViewRel(rubberLines, cmd.dimE1x, cmd.dimE1y, curXf, curYf, 0., 0., zc, zc);
+  if (const auto* ds = cmd.sessionAs<stepengine::DimSession>();
+      ds && ds->phase == stepengine::DimPhase::WaitExt2)
+    PushRubberSegViewRel(rubberLines, ds->e1x, ds->e1y, curXf, curYf, 0., 0., zc, zc);
 
-  if (cmd.active == AppCommandState::Kind::SurveyInverse &&
-      cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitTo)
-    PushRubberSegViewRel(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curXf, curYf, 0., 0., zc, zc);
+  if (const auto* is = cmd.sessionAs<stepengine::SurveyInverseSession>();
+      is && is->phase == stepengine::SurveyInversePhase::WaitTo)
+    PushRubberSegViewRel(rubberLines, is->fromX, is->fromY, curXf, curYf, 0., 0., zc, zc);
 
-  if (cmd.active == AppCommandState::Kind::Dist && cmd.distPhase == AppCommandState::DistPhase::WaitTo)
-    PushRubberSegViewRel(rubberLines, cmd.distFromX, cmd.distFromY, curXf, curYf, 0., 0., cmd.distFromZ, zc);
+  if (const auto* dists = cmd.sessionAs<stepengine::DistSession>();
+      dists && dists->phase == stepengine::DistPhase::WaitTo)
+    PushRubberSegViewRel(rubberLines, dists->fromX, dists->fromY, curXf, curYf, 0., 0., dists->fromZ, zc);
 
-  if (cmd.active == AppCommandState::Kind::DimAngular) {
-    using DAP = AppCommandState::DimAngularPhase;
-    if (cmd.dimAngularPhase == DAP::WaitRay1)
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0., zc, zc);
-    else if (cmd.dimAngularPhase == DAP::WaitRay2) {
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0., zc, zc);
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0., zc, zc);
-    } else if (cmd.dimAngularPhase == DAP::WaitArc) {
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0., zc, zc);
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE2x, cmd.dimE2y, 0., 0., zc, zc);
+  if (const auto* das = cmd.sessionAs<stepengine::DimAngularSession>()) {
+    using DAP = stepengine::DimAngularPhase;
+    if (das->phase == DAP::WaitRay1)
+      PushRubberSegViewRel(rubberLines, das->vx, das->vy, curXf, curYf, 0., 0., zc, zc);
+    else if (das->phase == DAP::WaitRay2) {
+      PushRubberSegViewRel(rubberLines, das->vx, das->vy, das->e1x, das->e1y, 0., 0., zc, zc);
+      PushRubberSegViewRel(rubberLines, das->vx, das->vy, curXf, curYf, 0., 0., zc, zc);
+    } else if (das->phase == DAP::WaitArc) {
+      PushRubberSegViewRel(rubberLines, das->vx, das->vy, das->e1x, das->e1y, 0., 0., zc, zc);
+      PushRubberSegViewRel(rubberLines, das->vx, das->vy, das->e2x, das->e2y, 0., 0., zc, zc);
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::Circle) {
-    using CP = AppCommandState::CirclePhase;
-    if (cmd.circlePhase == CP::WaitRadius) {
+  if (const auto* cs = cmd.sessionAs<stepengine::CircleSession>()) {
+    using CP = stepengine::CirclePhase;
+    if (cs->phase == CP::WaitRadius) {
       // Solved by the function CIRCLE itself commits with, so the ring under the cursor is the ring
       // that lands -- including the radius, which on a tilted plane is the 3D distance to the rim
       // pick and not its XY projection (REQ-312).
       AppendCircleSolutionRubber(
           rubberLines,
-          CadSolveCircleFromRimPick(cmd, cmd.circleCx, cmd.circleCy, cmd.circleCz, curXf, curYf, zc), orthoHalfH,
+          CadSolveCircleFromRimPick(cmd, cs->cx, cs->cy, cs->cz, curXf, curYf, zc), orthoHalfH,
           fbHeightPx, cmd.displayArcCircleSmoothness);
-    } else if (cmd.circlePhase == CP::ThreeP_WaitP2) {
+    } else if (cs->phase == CP::ThreeP_WaitP2) {
       // Two picks so far, so the preview is the circle on the diameter between them: centre at their
       // midpoint IN SPACE, radius the distance from there to the cursor. Routed through the rim-pick
       // solver, which is where the work-plane normal and the 3D radius come from.
-      const float mx = (cmd.c3p1x + curXf) * 0.5f;
-      const float my = (cmd.c3p1y + curYf) * 0.5f;
-      const float mz = (cmd.c3p1z + zc) * 0.5f;
+      const float mx = (cs->c3p1x + curXf) * 0.5f;
+      const float my = (cs->c3p1y + curYf) * 0.5f;
+      const float mz = (cs->c3p1z + zc) * 0.5f;
       const CadCircleSolution s = CadSolveCircleFromRimPick(cmd, mx, my, mz, curXf, curYf, zc);
       if (s.r > 1e-6f)
         AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
-    } else if (cmd.circlePhase == CP::ThreeP_WaitP3) {
+    } else if (cs->phase == CP::ThreeP_WaitP3) {
       CadCircleSolution s;
-      if (CadSolveCircleThreePoints(cmd, cmd.c3p1x, cmd.c3p1y, cmd.c3p1z, cmd.c3p2x, cmd.c3p2y, cmd.c3p2z, curXf,
+      if (CadSolveCircleThreePoints(cmd, cs->c3p1x, cs->c3p1y, cs->c3p1z, cs->c3p2x, cs->c3p2y, cs->c3p2z, curXf,
                                     curYf, zc, &s))
         AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::Mleader) {
-    using MLp = AppCommandState::MleaderPhase;
-    if (cmd.mleaderPhase == MLp::WaitLanding)
-      PushRubberSegViewRel(rubberLines, cmd.mleaderTipX, cmd.mleaderTipY, curXf, curYf, 0., 0., cmd.mleaderTipZ,
+  if (const auto* mls = cmd.sessionAs<stepengine::MleaderSession>()) {
+    using MLp = stepengine::MleaderPhase;
+    if (mls->phase == MLp::WaitLanding)
+      PushRubberSegViewRel(rubberLines, mls->tipX, mls->tipY, curXf, curYf, 0., 0., mls->tipZ,
                            zc);
-    else if (cmd.mleaderPhase == MLp::WaitLabel && cmd.cadMultileaders.size() > 0) {
-      const CadMultileader& ml = cmd.cadMultileaders.back();
+    else if (mls->phase == MLp::WaitLabel && cmd.drawing.cadMultileaders.size() > 0) {
+      const CadMultileader& ml = cmd.drawing.cadMultileaders.back();
       if (ml.pathXyz.size() >= 6)
         PushRubberSegViewRel(rubberLines, ml.pathXyz[0], ml.pathXyz[1], ml.pathXyz[3], ml.pathXyz[4], 0., 0.,
                              ml.pathXyz[2], ml.pathXyz[5]);
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::Mtext) {
-    using MPtxt = AppCommandState::MtextPhase;
-    if (cmd.mtextPhase == MPtxt::WaitCorner2) {
+  if (const auto* mts = cmd.sessionAs<stepengine::MtextSession>()) {
+    using MPtxt = stepengine::MtextPhase;
+    if (mts->phase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      // MTEXT is a single-elevation planar entity — both corners land at zc (REQ-058), so that is the
-      // real Z for BOTH ends, not the "no Z available" NaN default. Passing NaN here (as before) sent
-      // ApplyOrthoConstrainFromAnchor's UCS branch into the broken plane-equation fallback under a
-      // Front/Left/Right-style UCS (issue #371's edge-on-plane defect), which can derive the WRONG
-      // world Z for each end and therefore pick the WRONG axis to lock — not just render wrong, the
-      // rectangle itself could come out square to the wrong side.
-      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled, zc, zc);
-      AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
-    } else if (cmd.mtextPhase == MPtxt::WaitString)
-      AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
+      // A box needs both coordinates; ORTHO constrains segments, not opposite corners.
+      AppendWorldRectRubberViewRel(rubberLines, mts->x1, mts->y1, lx, ly, 0., 0., zc);
+    } else if (mts->phase == MPtxt::WaitString)
+      AppendWorldRectRubberViewRel(rubberLines, mts->x1, mts->y1, mts->x2, mts->y2, 0., 0.,
                                    zc);
   }
 
@@ -485,15 +476,15 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   //
   // The stores are LOCAL, the UCS is WORLD (see CadActiveUcsStorage), so the pending picks are
   // converted down here rather than the rubber being built in world and converted wholesale.
-  if (cmd.active == AppCommandState::Kind::Ucs) {
-    using UPh = AppCommandState::UcsPhase;
+  if (const auto* us = cmd.sessionAs<stepengine::UcsSession>()) {
+    using UPh = stepengine::UcsPhase;
     auto localOf = [&](const ray3d::Vec3& world, float* lx, float* ly) {
       CadCoord::LocalFromWorld(cmd, world.x, world.y, lx, ly);
     };
-    if (cmd.ucsPhase == UPh::WaitXAxisPoint || cmd.ucsPhase == UPh::WaitXyPoint) {
+    if (us->phase == UPh::WaitXAxisPoint || us->phase == UPh::WaitXyPoint) {
       float ox = 0.f, oy = 0.f;
-      localOf(cmd.ucsPendingOrigin, &ox, &oy);
-      if (cmd.ucsPhase == UPh::WaitXAxisPoint) {
+      localOf(us->pendingOrigin, &ox, &oy);
+      if (us->phase == UPh::WaitXAxisPoint) {
         // One rubber: origin to cursor, which IS the X axis being defined.
         PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
       } else {
@@ -507,7 +498,7 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
         // all, and would give no hint that crossing the axis flips the frame over. Projecting out
         // the perpendicular makes the preview flip exactly when the result flips.
         float xx = 0.f, xy = 0.f;
-        localOf(cmd.ucsPendingXAxisPoint, &xx, &xy);
+        localOf(us->pendingXAxisPoint, &xx, &xy);
         const float axx = xx - ox, axy = xy - oy;
         const float alen = std::hypot(axx, axy);
         PushRubberSegViewRel(rubberLines, ox, oy, xx, xy, 0., 0., zc, zc);
@@ -529,23 +520,23 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
           }
         }
       }
-    } else if (cmd.ucsPhase == UPh::WaitRotationAngleP1 || cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+    } else if (us->phase == UPh::WaitRotationAngleP1 || us->phase == UPh::WaitRotationAngleP2) {
       // `2P`: nothing to draw until the first point is down, then the rubber IS the direction whose
       // angle is being measured.
-      if (cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+      if (us->phase == UPh::WaitRotationAngleP2) {
         float bx = 0.f, by = 0.f;
-        localOf(cmd.ucsAngleBasePoint, &bx, &by);
+        localOf(us->angleBasePoint, &bx, &by);
         PushRubberSegViewRel(rubberLines, bx, by, curXf, curYf, 0., 0., zc, zc);
       }
-    } else if (cmd.ucsPhase == UPh::WaitZAxisPoint) {
+    } else if (us->phase == UPh::WaitZAxisPoint) {
       float ox = 0.f, oy = 0.f;
-      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      localOf(us->pendingOrigin, &ox, &oy);
       PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::PdfAttach &&
-      cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+  if (const auto* pdfSess = cmd.sessionAs<stepengine::PdfAttachSession>();
+      pdfSess && pdfSess->phase == stepengine::PdfAttachPhase::WaitInsertPoint &&
       cmd.pdfAttachPreviewReady && cmd.pdfAttachPreview.pageWidthPts > 0.f &&
       cmd.pdfAttachPreview.pageHeightPts > 0.f) {
     const float cosR = std::cos(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
@@ -567,18 +558,18 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  if (cmd.active == AppCommandState::Kind::InsertBlock) {
-    using IPh = AppCommandState::InsertBlockPhase;
-    if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-        cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitAlignFace) {
+  if (const auto* is = cmd.sessionAs<stepengine::InsertBlockSession>()) {
+    using IPh = stepengine::InsertBlockPhase;
+    if (is->phase == IPh::WaitInsertPoint || is->phase == IPh::WaitScale ||
+        is->phase == IPh::WaitRotation || is->phase == IPh::WaitAlignFace) {
       float pickZ = zc;
-      if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale) {
+      if (is->phase == IPh::WaitInsertPoint || is->phase == IPh::WaitScale) {
         pickZ = cmd.uiCursorWorldZ;
         if (cmd.viewportSnapPickValid)
           pickZ = cmd.viewportSnapPickLocalZ;
       }
       // Drag indicator from the fixed insertion point to the cursor during scale/rotation/align picks.
-      if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
+      if (is->phase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
         float lz = pickZ;
@@ -605,54 +596,46 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   //
   // A solid that does not build yet — a radius still zero before the cursor has moved — draws
   // nothing, which is the honest answer while a value is still being chosen.
-  if (cmd.active == AppCommandState::Kind::Solid &&
-      cmd.solidPhase == AppCommandState::SolidPhase::WaitParameters) {
+  if (const auto* ss = cmd.sessionAs<stepengine::SolidPrimitiveSession>();
+      ss && ss->phase == stepengine::SolidPhase::WaitParameters) {
     brep::Solid ghost;
     brep::Problem why = brep::Problem::Ok;
     if (!CadBuildSolidFromCommand(cmd, /*applyPick=*/true, &ghost, &why)) {
-      // Not enough dimensions yet for a solid - preview the BASE, which the cursor has decided.
       AppendSolidBaseProfile(cmd, rubberLines);
     } else {
       std::vector<double> segs;
-      // A coarser chord tolerance than the committed solid's: this is rebuilt on every mouse move,
-      // and a preview is read for its shape rather than measured.
       if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
         for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
           PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
                                static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
       }
     }
-    // The measuring line from the base point out to the cursor, which is what makes a radius or a
-    // height readable as a DISTANCE rather than just a shape that happens to be that big.
     const int picking = CadSolidCurrentPickParam(cmd);
-    if (cmd.solidPickValid && picking >= 0) {
+    if (ss->solidPickValid && picking >= 0) {
       int specCount = 0;
-      const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+      const SolidParamSpec* specs = CadSolidParamSpecs(ss->solidKind, &specCount);
       const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
-      const ray3d::Vec3 b = cmd.solidBase;
+      const ray3d::Vec3 b = ss->solidBase;
       ray3d::Vec3 tip = b;
       if (specs[picking].pick == SolidPickKind::Radius) {
-        tip = ray3d::Add(b, ray3d::Scale(ray3d::Add(ray3d::Scale(f.xAxis, std::cos(cmd.solidPickAngleRad)),
-                                                    ray3d::Scale(f.yAxis, std::sin(cmd.solidPickAngleRad))),
-                                         cmd.solidPickA));
+        tip = ray3d::Add(b, ray3d::Scale(ray3d::Add(ray3d::Scale(f.xAxis, std::cos(ss->solidPickAngleRad)),
+                                                    ray3d::Scale(f.yAxis, std::sin(ss->solidPickAngleRad))),
+                                         ss->solidPickA));
       } else if (specs[picking].pick == SolidPickKind::Height) {
-        tip = ray3d::Add(b, ray3d::Scale(f.zAxis, cmd.solidPickA));
+        tip = ray3d::Add(b, ray3d::Scale(f.zAxis, ss->solidPickA));
       } else {
-        tip = ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, cmd.solidPickA),
-                                       ray3d::Scale(f.yAxis, cmd.solidPickB)));
+        tip = ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, ss->solidPickA),
+                                       ray3d::Scale(f.yAxis, ss->solidPickB)));
       }
       PushRubberSegViewRel(rubberLines, b.x, b.y, tip.x, tip.y, 0., 0., static_cast<float>(b.z),
                            static_cast<float>(tip.z));
     }
   }
 
-  // --- EXTRUDE: the candidate solid(s) as a wireframe ghost, rebuilt from the cursor height every
-  //     frame (REQ-314 / ADR-046). Same builder the click commits through, so the ghost cannot show
-  //     a shape the commit would not build.
-  if (cmd.active == AppCommandState::Kind::Extrude &&
-      cmd.extrudePhase == AppCommandState::ExtrudePhase::WaitHeight && cmd.extrudeHeightPickValid) {
+  if (const auto* es = cmd.sessionAs<stepengine::ExtrudeSession>();
+      es && es->phase == stepengine::ExtrudePhase::WaitHeight && es->heightPickValid) {
     std::vector<brep::Solid> ghosts;
-    if (CadBuildExtrudeSolids(cmd, cmd.extrudeHeightPick, &ghosts)) {
+    if (CadBuildExtrudeSolids(cmd, es->heightPick, &ghosts)) {
       for (const brep::Solid& g : ghosts) {
         std::vector<double> segs;
         brep::Problem why = brep::Problem::Ok;
@@ -663,22 +646,18 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
         }
       }
     }
-    // The measuring line along the extrusion axis, so the height reads as a distance.
-    if (!cmd.extrudeProfiles.empty()) {
-      const ucs::Ucs& pl = cmd.extrudeProfiles.front().plane;
-      const ray3d::Vec3 tip = ray3d::Add(pl.origin, ray3d::Scale(pl.zAxis, cmd.extrudeHeightPick));
+    if (!es->profiles.empty()) {
+      const ucs::Ucs& pl = es->profiles.front().plane;
+      const ray3d::Vec3 tip = ray3d::Add(pl.origin, ray3d::Scale(pl.zAxis, es->heightPick));
       PushRubberSegViewRel(rubberLines, pl.origin.x, pl.origin.y, tip.x, tip.y, 0., 0.,
                            static_cast<float>(pl.origin.z), static_cast<float>(tip.z));
     }
   }
 
-  // --- PRESSPULL: the candidate solid as a wireframe ghost, rebuilt from the cursor distance every
-  //     frame (GitHub issue #396). Same builder the click commits through, so the ghost cannot show
-  //     a shape the commit would not build — EXTRUDE's own rule, applied here too.
-  if (cmd.active == AppCommandState::Kind::PressPull &&
-      cmd.pressPullPhase == AppCommandState::PressPullPhase::WaitDistance && cmd.pressPullDistPickValid) {
+  if (const auto* pps = cmd.sessionAs<stepengine::PressPullSession>();
+      pps && pps->phase == stepengine::PressPullPhase::WaitDistance && pps->distPickValid) {
     brep::Solid ghost;
-    if (CadBuildPressPullSolid(cmd, cmd.pressPullDistPick, &ghost)) {
+    if (CadBuildPressPullSolid(cmd, pps->distPick, &ghost)) {
       std::vector<double> segs;
       brep::Problem why = brep::Problem::Ok;
       if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
@@ -687,37 +666,33 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
                                static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
       }
     }
-    // The measuring line along the push/pull axis, so the distance reads as a distance.
     ray3d::Vec3 anchor{};
     ray3d::Vec3 axis{};
     bool haveAxis = false;
-    if (cmd.pressPullOnFace) {
-      haveAxis = CadSubObjectFaceGrip(cmd, cmd.pressPullFace, &anchor, &axis);
+    if (pps->onFace) {
+      haveAxis = CadSubObjectFaceGrip(cmd, pps->face, &anchor, &axis);
     } else {
-      anchor = cmd.pressPullProfile.plane.origin;
-      axis = cmd.pressPullProfile.plane.zAxis;
+      anchor = pps->profile.plane.origin;
+      axis = pps->profile.plane.zAxis;
       haveAxis = true;
     }
     if (haveAxis) {
-      const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(axis, cmd.pressPullDistPick));
+      const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(axis, pps->distPick));
       PushRubberSegViewRel(rubberLines, anchor.x, anchor.y, tip.x, tip.y, 0., 0.,
                            static_cast<float>(anchor.z), static_cast<float>(tip.z));
     }
   }
 
-  // --- REVOLVE: the axis line, and once both ends and a profile are set, a ghost of the solid at
-  //     the current angle (REQ-314 / ADR-046).
-  if (cmd.active == AppCommandState::Kind::Revolve) {
-    if (cmd.revolveAxisStartSet &&
-        cmd.revolvePhase != AppCommandState::RevolvePhase::WaitAxisStart) {
-      const ray3d::Vec3& a = cmd.revolveAxisStart;
-      const ray3d::Vec3& b = cmd.revolveAxisEnd;
+  if (const auto* rvs = cmd.sessionAs<stepengine::RevolveSession>()) {
+    if (rvs->axisStartSet && rvs->phase != stepengine::RevolvePhase::WaitAxisStart) {
+      const ray3d::Vec3& a = rvs->axisStart;
+      const ray3d::Vec3& b = rvs->axisEnd;
       PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
                            static_cast<float>(b.z));
     }
-    if (cmd.revolvePhase == AppCommandState::RevolvePhase::WaitAngle) {
+    if (rvs->phase == stepengine::RevolvePhase::WaitAngle) {
       std::vector<brep::Solid> ghosts;
-      if (CadBuildRevolveSolids(cmd, cmd.revolveAngleDeg, &ghosts)) {
+      if (CadBuildRevolveSolids(cmd, rvs->angleDeg, &ghosts)) {
         for (const brep::Solid& g : ghosts) {
           std::vector<double> segs;
           brep::Problem why = brep::Problem::Ok;
@@ -731,11 +706,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  // --- LOFT: a wireframe ghost of the skinned solid, rebuilt from the current selection every frame
-  //     (REQ-315 / ADR-048). Same builder the Enter commits through, so the ghost cannot show a
-  //     shape the commit would not build.
-  if (cmd.active == AppCommandState::Kind::Loft &&
-      cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) {
+  if (const auto* ls = cmd.sessionAs<stepengine::LoftSession>();
+      ls && ls->phase == stepengine::LoftPhase::SelectProfiles) {
     brep::Solid g;
     if (CadBuildLoftSolid(cmd, &g)) {
       std::vector<double> segs;
@@ -748,9 +720,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  // --- SWEEP: the same live wireframe ghost, from the selected profile + path (REQ-315).
-  if (cmd.active == AppCommandState::Kind::Sweep &&
-      cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) {
+  if (const auto* sws = cmd.sessionAs<stepengine::SweepSession>();
+      sws && sws->phase == stepengine::SweepPhase::SelectInputs) {
     brep::Solid g;
     if (CadBuildSweepSolid(cmd, &g)) {
       std::vector<double> segs;
@@ -763,29 +734,22 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
     }
   }
 
-  // --- SLICE: the triangle the three picked points span, as a hint of the cutting plane.
-  if (cmd.active == AppCommandState::Kind::Slice) {
-    using SP = AppCommandState::SlicePhase;
+  if (const auto* sls = cmd.sessionAs<stepengine::SliceSession>()) {
+    using SP = stepengine::SlicePhase;
     auto seg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
       PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
                            static_cast<float>(b.z));
     };
-    if (cmd.slicePhase == SP::WaitP3 || cmd.slicePhase == SP::WaitKeepSide)
-      seg(cmd.sliceP1, cmd.sliceP2);
-    if (cmd.slicePhase == SP::WaitKeepSide) {
-      seg(cmd.sliceP2, cmd.sliceP3);
-      seg(cmd.sliceP3, cmd.sliceP1);
+    if (sls->phase == SP::WaitP3 || sls->phase == SP::WaitKeepSide)
+      seg(sls->p1, sls->p2);
+    if (sls->phase == SP::WaitKeepSide) {
+      seg(sls->p2, sls->p3);
+      seg(sls->p3, sls->p1);
     }
   }
-  // REQ-317 POLYSOLID. The wall the cursor is currently proposing, drawn from the SAME
-  // `CadBuildPolysolidFromCommand` the next click commits and Enter finishes — so what is on screen
-  // is the wall that will be created, not a separately-drawn approximation of it.
-  //
-  // Nothing is drawn while a corner is impossible: a bend too sharp for the width, or a curve too
-  // tight, makes the builder refuse, and an empty preview is the honest picture of "there is no wall
-  // there" — the message on the command line says which.
-  if (cmd.active == AppCommandState::Kind::Polysolid &&
-      cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitNextPoint) {
+
+  if (const auto* ps = cmd.sessionAs<stepengine::PolysolidSession>();
+      ps && ps->phase == stepengine::PolysolidPhase::WaitNextPoint) {
     const ucs::Point2D cursor = ucs::WorldToPlane(
         CadPolysolidFrameFor(cmd), ray3d::Vec3{curX, curY, CadCommitElevation(cmd)});
     brep::Solid ghost;
@@ -799,18 +763,14 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       }
     }
   }
-  // REQ-444 REVCLOUD. The cloud the cursor currently proposes - the corners picked so far plus the
-  // cursor, closed - built by the SAME `BuildRevisionCloud` the next click or Enter commits, so what
-  // is on screen is the cloud that will be created. With too few corners for a cloud the corners
-  // picked so far are shown as plain rubber lines instead, so the first two clicks still show where
-  // the path is going.
-  if (cmd.active == AppCommandState::Kind::Revcloud &&
-      cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitNextPoint) {
-    const float rz = static_cast<float>(cmd.revcloudZ);
+
+  if (const auto* rcs = cmd.sessionAs<stepengine::RevcloudSession>();
+      rcs && rcs->phase == stepengine::RevcloudPhase::WaitNextPoint) {
+    const float rz = static_cast<float>(rcs->z);
     std::vector<float> bulge;
     const std::vector<double> xy = CadRevcloudPreviewPolyline(cmd, curX, curY, &bulge);
     if (xy.empty()) {
-      const auto& dr = cmd.revcloudDraft;
+      const auto& dr = rcs->draft;
       for (std::size_t i = 0; i + 3 < dr.size(); i += 2)
         PushRubberSegViewRel(rubberLines, dr[i], dr[i + 1], dr[i + 2], dr[i + 3], 0., 0., rz, rz);
       if (dr.size() >= 2)
@@ -839,54 +799,39 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
       }
     }
   }
-  // PIPERUN (issue #486 increment B2 / REQ-345). The pipe the cursor is currently proposing, drawn
-  // from the SAME `CadBuildPipeRunSolids` the next click commits and Enter finishes — POLYSOLID's
-  // own reasoning above, applied to a pipe run: what is on screen is the run that will be created.
-  //
-  // Nothing is drawn while the cursor point is degenerate (coincides with the last committed
-  // vertex) — an empty preview is the honest picture of "there is no new segment there".
-  if (cmd.active == AppCommandState::Kind::PipeRun &&
-      cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNextPoint) {
-    // Compass (REQ-346): the ghost segment snaps exactly the way the click that would commit it
-    // does (ApplyPipeRunCompassFromAnchor in SubmitPipeRunViewportPick) — same function, same
-    // anchor, so the preview never shows a direction the pick would then land somewhere else on.
+
+  if (const auto* prs = cmd.sessionAs<stepengine::PipeRunSession>();
+      prs && prs->phase == stepengine::PipeRunPhase::WaitNextPoint) {
     double gx = curX;
     double gy = curY;
     double gz = static_cast<double>(CadCommitElevation(cmd));
-    const std::size_t n = cmd.pipeRunDraftVerts.size();
+    const std::size_t n = prs->draftVerts.size();
     if (n >= 3) {
-      const float lastX = static_cast<float>(cmd.pipeRunDraftVerts[n - 3]);
-      const float lastY = static_cast<float>(cmd.pipeRunDraftVerts[n - 2]);
-      const float lastZ = static_cast<float>(cmd.pipeRunDraftVerts[n - 1]);
+      const float lastX = static_cast<float>(prs->draftVerts[n - 3]);
+      const float lastY = static_cast<float>(prs->draftVerts[n - 2]);
+      const float lastZ = static_cast<float>(prs->draftVerts[n - 1]);
       float wx = static_cast<float>(curX);
       float wy = static_cast<float>(curY);
       float wz = static_cast<float>(gz);
       const float targetZ = static_cast<float>(gz);
-      ApplyPipeRunCompassFromAnchor(cmd, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      if (!cmd.viewportSnapPickValid)
+        ApplyPipeRunCompassFromAnchor(cmd, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
       gx = static_cast<double>(wx);
       gy = static_cast<double>(wy);
       gz = static_cast<double>(wz);
     }
-    // ONLY the pending segment — the part of the route already clicked is REAL geometry in the
-    // drawing now (D-2026-09-24-d), so a ghost of the whole route would draw it twice and, far worse,
-    // re-sweep the entire tube EVERY FRAME. Measured: a pipe run's swept solid costs ~5.6 ms at two
-    // points and rises ~11 ms per extra point (124 ms at twelve), so the old whole-route ghost put an
-    // O(route) tube sweep plus its edge tessellation inside the frame loop. That is what made clicking
-    // to add segments progressively slower and eventually freeze the application.
-    //
-    // A two-point ghost is O(1) in the route's length and shows exactly what the next click commits.
     CadPipeRun ghostRun;
-    const std::size_t draftN = cmd.pipeRunDraftVerts.size();
+    const std::size_t draftN = prs->draftVerts.size();
     if (draftN >= 3) {
-      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 3]);
-      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 2]);
-      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 1]);
+      ghostRun.vertsXyz.push_back(prs->draftVerts[draftN - 3]);
+      ghostRun.vertsXyz.push_back(prs->draftVerts[draftN - 2]);
+      ghostRun.vertsXyz.push_back(prs->draftVerts[draftN - 1]);
     }
     ghostRun.vertsXyz.push_back(gx);
     ghostRun.vertsXyz.push_back(gy);
     ghostRun.vertsXyz.push_back(gz);
     ghostRun.nominalSize = cmd.pipeRunNominalSize;
-    ghostRun.wallThicknessIn = cmd.pipeRunWallThicknessIn;  // the ghost is the run being drafted
+    ghostRun.wallThicknessIn = cmd.pipeRunWallThicknessIn;
     const auto ghostT0 = std::chrono::steady_clock::now();
     std::vector<CadSolidPtr> ghostSolids;
     if (CadBuildPipeRunSolids(ghostRun, &ghostSolids)) {
@@ -902,7 +847,6 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
         }
       }
     }
-    // Per FRAME, which is what makes this the one that can freeze the application (PIPEPERF).
     const std::chrono::duration<double, std::milli> ghostMs = std::chrono::steady_clock::now() - ghostT0;
     cmd.pipeRunPerf.ghost.Add(ghostMs.count());
   }
@@ -910,10 +854,8 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   // EXTRACTCENTERLINE (REQ-347): the preview is exactly the hover's already-computed fit — no
   // cursor-driven construction, unlike every command above it, so this is the one branch that reads
   // no local pick state at all.
-  if (cmd.active == AppCommandState::Kind::ExtractCenterline && cmd.extractCenterlineHoverValid) {
-    PushRubberSegViewRel(rubberLines, cmd.extractCenterlineP0X, cmd.extractCenterlineP0Y,
-                         cmd.extractCenterlineP1X, cmd.extractCenterlineP1Y, 0., 0.,
-                         static_cast<float>(cmd.extractCenterlineP0Z),
-                         static_cast<float>(cmd.extractCenterlineP1Z));
+  if (const auto* ec = cmd.sessionAs<stepengine::ExtractCenterlineSession>(); ec && ec->hoverValid) {
+    PushRubberSegViewRel(rubberLines, ec->p0X, ec->p0Y, ec->p1X, ec->p1Y, 0., 0.,
+                         static_cast<float>(ec->p0Z), static_cast<float>(ec->p1Z));
   }
 }

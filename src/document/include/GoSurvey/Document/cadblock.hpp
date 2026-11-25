@@ -4,6 +4,10 @@
 /// Header-only so Catch2 can cover transforms, nesting, and cycle detection without GL.
 
 #include "CadEntities.hpp"
+#include <GoSurvey/Document/CadLayerRow.hpp>
+#include <GoSurvey/Document/DimensionStyle.hpp>
+#include <GoSurvey/Document/MultileaderStyle.hpp>
+#include <GoSurvey/Document/cadtablestyle.hpp>
 #include <GoSurvey/Document/CadSolidPtr.hpp>
 #include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
@@ -311,38 +315,209 @@ struct CadBlockWorldConnection {
   CadPipePartType ownerPartType = CadPipePartType::None;
 };
 
-struct CadBlockContent {
-  std::vector<double> lines;
-  std::vector<EntityAttributes> lineAttrs;
+/// One circle of \ref CadEntityStore::userCirclesCxCyZR: centre X, Y and Z, and radius (world units).
+struct CadCircleRecord {
+  double cx = 0.0;
+  double cy = 0.0;
+  double cz = 0.0;
+  double r = 0.0;
+};
+
+/// One line segment of \ref CadEntityStore::userLinesFlat: start (x0, y0, z0) and end (x1, y1, z1).
+struct CadLineRecord {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// Position of a component inside one line segment (the order of \ref CadLineRecord).
+enum class CadLineComponent : uint8_t { X0 = 0, Y0 = 1, Z0 = 2, X1 = 3, Y1 = 4, Z1 = 5 };
+
+/// Position of a component inside one circle record (the order of \ref CadCircleRecord).
+enum class CadCircleComponent : uint8_t { X = 0, Y = 1, Z = 2, Radius = 3 };
+
+/// One vertex of \ref CadEntityStore::userPolylineVerts: X, Y and Z (world units, storage coordinates).
+struct CadPolyVertex {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// Position of a component inside one polyline vertex (the order of \ref CadPolyVertex).
+enum class CadVertexComponent : uint8_t { X = 0, Y = 1, Z = 2 };
+
+struct CadEntityStore {
+  /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
+  std::vector<double> userLinesFlat;
+  std::vector<EntityAttributes> userLineAttrs;
+  /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
+  /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
+  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
+  /// says otherwise (REQ-312), matching CadArc.
+  std::vector<double> userCirclesCxCyZR;
+  std::vector<EntityAttributes> userCircleAttrs;
+  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
+  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
+  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
+  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
+  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
+  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
+  std::vector<float> userCircleNormals;
+  std::vector<CadArc> userArcs;
+  std::vector<EntityAttributes> userArcAttrs;
+  std::vector<CadEllipse> userEllipses;
+  std::vector<EntityAttributes> userEllAttrs;
+  /// Each polyline: vertex indices [\ref userPolylineOffsets[i], \ref userPolylineOffsets[i+1]); XYZ triplets in
+  /// \ref userPolylineVerts.
+  std::vector<int> userPolylineOffsets;
+  std::vector<double> userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float> userPolylineVertsBulge;
+  std::vector<uint8_t> userPolylineClosed;
+  std::vector<EntityAttributes> userPolylineAttrs;
+
+  std::vector<CadAnnotation> cadAnnotations;
+  std::vector<EntityAttributes> cadAnnotationAttrs;
+  /// Imported triangle meshes (REQ-063 / ADR-026). `shared_ptr<const>` so undo snapshots share the
+  /// payload rather than copying it (architecture §11.5 as amended). "Editing" a mesh means
+  /// replacing the pointer; never write through it.
+  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
+  std::vector<EntityAttributes> cadMeshAttrs;
+  /// B-rep solids (REQ-313 / ADR-045, REQ-320 / ADR-051). `shared_ptr<const>` for the same reason
+  /// meshes are: an undo snapshot shares the payload instead of copying it. A solid is REPLACED,
+  /// never written through.
+  std::vector<CadSolidPtr> cadSolids;
+  std::vector<EntityAttributes> cadSolidAttrs;
+
+  // --- Circle records (ADR-0010 phase 5) ---------------------------------------------------------
+  // Migrated callers use these instead of computing `i * 4` into \ref userCirclesCxCyZR. Layout
+  // readers (the GsIo file format, DocumentInvariants, the headless driver) still index it directly. The side-cars
+  // (\ref userCircleAttrs, \ref userCircleNormals) stay the caller's to keep in step.
+
+  /// Number of circle records in \ref userCirclesCxCyZR.
+  [[nodiscard]] size_t circleCount() const { return userCirclesCxCyZR.size() / kCircleStride; }
+  /// False when the flat store is not a whole number of records; readers that must skip a corrupt
+  /// store check this first, as they did with `size() % 4`.
+  [[nodiscard]] bool circleStoreWellFormed() const { return userCirclesCxCyZR.size() % kCircleStride == 0; }
+  /// Circle \p i (requires `i < circleCount()`).
+  [[nodiscard]] CadCircleRecord circle(size_t i) const {
+    const size_t k = i * kCircleStride;
+    return CadCircleRecord{userCirclesCxCyZR[k], userCirclesCxCyZR[k + 1], userCirclesCxCyZR[k + 2],
+                           userCirclesCxCyZR[k + 3]};
+  }
+  /// Overwrites circle \p i in place (requires `i < circleCount()`).
+  void setCircle(size_t i, const CadCircleRecord& c) {
+    const size_t k = i * kCircleStride;
+    userCirclesCxCyZR[k] = c.cx;
+    userCirclesCxCyZR[k + 1] = c.cy;
+    userCirclesCxCyZR[k + 2] = c.cz;
+    userCirclesCxCyZR[k + 3] = c.r;
+  }
+  /// Appends one circle record.
+  void pushCircle(const CadCircleRecord& c) {
+    userCirclesCxCyZR.push_back(c.cx);
+    userCirclesCxCyZR.push_back(c.cy);
+    userCirclesCxCyZR.push_back(c.cz);
+    userCirclesCxCyZR.push_back(c.r);
+  }
+  /// Removes circle \p i and shifts later records down (requires `i < circleCount()`).
+  void eraseCircle(size_t i) {
+    const auto first = userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(i * kCircleStride);
+    userCirclesCxCyZR.erase(first, first + static_cast<std::ptrdiff_t>(kCircleStride));
+  }
+  /// One component of circle \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& circleComponent(size_t i, CadCircleComponent which) {
+    return userCirclesCxCyZR[i * kCircleStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kCircleStride = 4;
+
+  // --- Line records (ADR-0010 phase 5) -----------------------------------------------------------
+  // Same rule as the circle records: migrated callers go through these, layout readers index
+  // \ref userLinesFlat directly. \ref userLineAttrs stays the caller's to keep in step.
+
+  /// Number of line segments in \ref userLinesFlat.
+  [[nodiscard]] size_t lineCount() const { return userLinesFlat.size() / kLineStride; }
+  /// False when the flat store is not a whole number of segments.
+  [[nodiscard]] bool lineStoreWellFormed() const { return userLinesFlat.size() % kLineStride == 0; }
+  /// Segment \p i (requires `i < lineCount()`).
+  [[nodiscard]] CadLineRecord line(size_t i) const {
+    const size_t k = i * kLineStride;
+    return CadLineRecord{userLinesFlat[k], userLinesFlat[k + 1], userLinesFlat[k + 2],
+                         userLinesFlat[k + 3], userLinesFlat[k + 4], userLinesFlat[k + 5]};
+  }
+  /// Overwrites segment \p i in place (requires `i < lineCount()`).
+  void setLine(size_t i, const CadLineRecord& l) {
+    const size_t k = i * kLineStride;
+    userLinesFlat[k] = l.x0;
+    userLinesFlat[k + 1] = l.y0;
+    userLinesFlat[k + 2] = l.z0;
+    userLinesFlat[k + 3] = l.x1;
+    userLinesFlat[k + 4] = l.y1;
+    userLinesFlat[k + 5] = l.z1;
+  }
+  /// Appends one segment.
+  void pushLine(const CadLineRecord& l) {
+    userLinesFlat.insert(userLinesFlat.end(), {l.x0, l.y0, l.z0, l.x1, l.y1, l.z1});
+  }
+  /// One component of segment \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& lineComponent(size_t i, CadLineComponent which) {
+    return userLinesFlat[i * kLineStride + static_cast<size_t>(which)];
+  }
+  /// Removes segment \p i and shifts later segments down (requires `i < lineCount()`).
+  void eraseLine(size_t i) {
+    const auto first = userLinesFlat.begin() + static_cast<std::ptrdiff_t>(i * kLineStride);
+    userLinesFlat.erase(first, first + static_cast<std::ptrdiff_t>(kLineStride));
+  }
+
+  static constexpr size_t kLineStride = 6;
+
+  // --- Polyline vertices (ADR-0010 phase 5) ------------------------------------------------------
+  // Polyline offsets index vertices, not floats. Same rule as the line and circle records: migrated
+  // callers go through these; the per-vertex side-cars (bulge, normal) stay the caller's to keep in step.
+
+  /// Number of vertices in \ref userPolylineVerts.
+  [[nodiscard]] size_t vertexCount() const { return userPolylineVerts.size() / kVertexStride; }
+  /// False when the flat store is not a whole number of vertices.
+  /// Vertex \p i (requires `i < vertexCount()`).
+  [[nodiscard]] CadPolyVertex vertex(size_t i) const {
+    const size_t k = i * kVertexStride;
+    return CadPolyVertex{userPolylineVerts[k], userPolylineVerts[k + 1], userPolylineVerts[k + 2]};
+  }
+  /// Overwrites vertex \p i in place (requires `i < vertexCount()`).
+  void setVertex(size_t i, const CadPolyVertex& v) {
+    const size_t k = i * kVertexStride;
+    userPolylineVerts[k] = v.x;
+    userPolylineVerts[k + 1] = v.y;
+    userPolylineVerts[k + 2] = v.z;
+  }
+  /// Appends one vertex.
+  void pushVertex(const CadPolyVertex& v) { userPolylineVerts.insert(userPolylineVerts.end(), {v.x, v.y, v.z}); }
+  /// Removes vertices [\p first, \p last) and shifts later vertices down.
+  void eraseVertexRange(size_t first, size_t last) {
+    userPolylineVerts.erase(userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(first * kVertexStride),
+                            userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(last * kVertexStride));
+  }
+  /// One component of vertex \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& vertexComponent(size_t i, CadVertexComponent which) {
+    return userPolylineVerts[i * kVertexStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kVertexStride = 3;
+};
+
+/// A block definition's own geometry (ADR-0010 / #1557 phase 3). The entity collections are the
+/// shared \ref CadEntityStore, in block-local coordinates; the block adds only what a drawing does
+/// not hold: the per-entity visibility-state tags and the nested INSERTs.
+struct CadBlockContent : CadEntityStore {
+  /// Per-line and per-circle visibility-state tags, parallel to their entity arrays.
   std::vector<std::string> lineVis;
-  std::vector<double> circles;
-  std::vector<EntityAttributes> circleAttrs;
   std::vector<std::string> circleVis;
-  /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
-  /// AppCommandState::userCircleNormals, and a third parallel array beside circleAttrs/circleVis
-  /// exactly as those two already are. Stored so that BLOCK and BEDIT cannot silently flatten a
-  /// tilted circle on the way in or out (REQ-201).
-  std::vector<float> circleNormals;
-  std::vector<CadArc> arcs;
-  std::vector<EntityAttributes> arcAttrs;
-  std::vector<CadEllipse> ellipses;
-  std::vector<EntityAttributes> ellAttrs;
-  std::vector<int> polyOffsets;
-  std::vector<double> polyVerts;
-  /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
-  /// block definition, which reads as an all-straight polyline.
-  std::vector<float> polyVertsBulge;
-  std::vector<std::uint8_t> polyClosed;
-  std::vector<EntityAttributes> polyAttrs;
-  std::vector<CadAnnotation> texts;
-  std::vector<EntityAttributes> textAttrs;
   std::vector<CadBlockNested> nested;
-  std::vector<std::shared_ptr<const CadMesh>> meshes;
-  std::vector<EntityAttributes> meshAttrs;
-  /// REQ-320 / ADR-051: B-rep solids (native or ACIS-imported), so INSERT/WBLOCK/BLOCKIMPORT round-
-  /// trip a 3D-solid block the same way \ref meshes already round-trips a mesh block.
-  std::vector<CadSolidPtr> solids;
-  std::vector<EntityAttributes> solidAttrs;
 };
 
 /// Pressure class tag (issue #486, D-2026-09-12 decision 1). Fixed enum, not free text, so
@@ -422,6 +597,47 @@ struct CadBlockRef {
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
+};
+
+/// Drawing-only CAD entity collections, layered on the block-capable entity store. These values
+/// travel with drawing content, undo frames, and tabs; keeping them out of CadEntityStore prevents
+/// BEDIT from capturing drawing-only kinds into block definitions.
+struct CadDrawingEntityStore : CadEntityStore {
+  /// Plane normal per polyline vertex, parallel to `userPolylineVerts` (stride 3). Consulted only
+  /// for the segment leaving a vertex with a nonzero bulge; world +Z is the legacy default.
+  std::vector<float> userPolylineVertsNormal;
+  /// HATCH fills represented by closed boundary loops; SOLID or a named pattern controls display.
+  std::vector<CadFilledRegion> cadFilledRegions;
+  std::vector<EntityAttributes> cadFilledRegionAttrs;
+  /// Drawing TABLE entities and their named styles.
+  std::vector<CadTable> cadTables;
+  std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
+  /// Geolocation labels, multileaders and 3D NURBS spline entities.
+  std::vector<CadPositionMarker> cadPositionMarkers;
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;
+  std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;
+  std::vector<EntityAttributes> cadSplineAttrs;
+  /// CAD POINT entities and their drawing-wide AutoCAD display settings.
+  std::vector<CadPoint> cadPoints;
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
+  /// Pipe-run paths and network membership metadata; derived swept solids remain transient.
+  std::vector<CadPipeRun> cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadPipingSystem> cadPipingSystems;
+  /// Definitions and placed references share the Document-owned block tables.
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef> cadBlockRefs;
+  std::vector<EntityAttributes> cadBlockRefAttrs;
+  /// Layer and named style tables owned by the drawing. Current selections stay with DrawingContent.
+  std::vector<CadLayerRow> drawingLayerTable;
+  std::vector<TextStyle> textStyles;
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
 };
 
 /// Scales an insert uniformly about its insertion point for annotative display through \p vp.
@@ -943,35 +1159,41 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
 
 inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float dz) {
   assert(c != nullptr);
-  for (size_t i = 0; i + 5 < c->lines.size(); i += 6) {
-    c->lines[i] += dx;
-    c->lines[i + 1] += dy;
-    c->lines[i + 2] += dz;
-    c->lines[i + 3] += dx;
-    c->lines[i + 4] += dy;
-    c->lines[i + 5] += dz;
+  for (size_t i = 0; i < c->lineCount(); ++i) {
+    CadLineRecord l = c->line(i);
+    l.x0 += dx;
+    l.y0 += dy;
+    l.z0 += dz;
+    l.x1 += dx;
+    l.y1 += dy;
+    l.z1 += dz;
+    c->setLine(i, l);
   }
-  for (size_t i = 0; i + 3 < c->circles.size(); i += 4) {
-    c->circles[i] += dx;
-    c->circles[i + 1] += dy;
-    c->circles[i + 2] += dz;
+  for (size_t i = 0; i < c->circleCount(); ++i) {
+    CadCircleRecord cr = c->circle(i);
+    cr.cx += dx;
+    cr.cy += dy;
+    cr.cz += dz;
+    c->setCircle(i, cr);
   }
-  for (CadArc& a : c->arcs) {
+  for (CadArc& a : c->userArcs) {
     a.cx += dx;
     a.cy += dy;
     a.z += dz;
   }
-  for (CadEllipse& e : c->ellipses) {
+  for (CadEllipse& e : c->userEllipses) {
     e.cx += dx;
     e.cy += dy;
     e.z += dz;
   }
-  for (size_t i = 0; i + 2 < c->polyVerts.size(); i += 3) {
-    c->polyVerts[i] += dx;
-    c->polyVerts[i + 1] += dy;
-    c->polyVerts[i + 2] += dz;
+  for (size_t vi = 0; vi < c->vertexCount(); ++vi) {
+    CadPolyVertex v = c->vertex(vi);
+    v.x += dx;
+    v.y += dy;
+    v.z += dz;
+    c->setVertex(vi, v);
   }
-  for (CadAnnotation& t : c->texts) {
+  for (CadAnnotation& t : c->cadAnnotations) {
     t.insX += dx;
     t.insY += dy;
     t.insZ += dz;
@@ -986,12 +1208,12 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     n.xf.z += dz;
   }
   const brep::Vec3 dvec{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
-  for (CadSolidPtr& sp : c->solids) {
+  for (CadSolidPtr& sp : c->cadSolids) {
     if (!sp)
       continue;
     sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, dvec));
   }
-  for (std::shared_ptr<const CadMesh>& mp : c->meshes) {
+  for (std::shared_ptr<const CadMesh>& mp : c->cadMeshes) {
     if (!mp)
       continue;
     auto m = std::make_shared<CadMesh>(*mp);
@@ -1056,37 +1278,39 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
       CadBlockXformPoint(fr.xf, ax, ay, lz, wx, wy, wz);
     };
-    const size_t nSeg = c.lines.size() / 6;
+    const size_t nSeg = c.lineCount();
     for (size_t i = 0; i < nSeg; ++i) {
       if (i < c.lineVis.size() && CadBlockVisHidden(c.lineVis[i], fr.vis))
         continue;
       CadBlockWorldSeg s;
-      xformPt(c.lines[i * 6 + 0], c.lines[i * 6 + 1], c.lines[i * 6 + 2], &s.x0, &s.y0, &s.z0);
-      xformPt(c.lines[i * 6 + 3], c.lines[i * 6 + 4], c.lines[i * 6 + 5], &s.x1, &s.y1, &s.z1);
+      const CadLineRecord l = c.line(i);
+      xformPt(static_cast<float>(l.x0), static_cast<float>(l.y0), static_cast<float>(l.z0), &s.x0, &s.y0, &s.z0);
+      xformPt(static_cast<float>(l.x1), static_cast<float>(l.y1), static_cast<float>(l.z1), &s.x1, &s.y1, &s.z1);
       EntityAttributes pa{};
-      if (i < c.lineAttrs.size())
-        pa = c.lineAttrs[i];
+      if (i < c.userLineAttrs.size())
+        pa = c.userLineAttrs[i];
       s.attr = CadBlockResolveAttr(pa, insertAttr);
       out->push_back(s);
     }
-    const size_t nC = c.circles.size() / 4;
+    const size_t nC = c.circleCount();
     for (size_t i = 0; i < nC; ++i) {
       if (i < c.circleVis.size() && CadBlockVisHidden(c.circleVis[i], fr.vis))
         continue;
-      const float cx = c.circles[i * 4 + 0];
-      const float cy = c.circles[i * 4 + 1];
-      const float cz = c.circles[i * 4 + 2];
-      const float r = c.circles[i * 4 + 3];
+      const CadCircleRecord cr = c.circle(i);
+      const float cx = static_cast<float>(cr.cx);
+      const float cy = static_cast<float>(cr.cy);
+      const float cz = static_cast<float>(cr.cz);
+      const float r = static_cast<float>(cr.r);
       EntityAttributes pa{};
-      if (i < c.circleAttrs.size())
-        pa = c.circleAttrs[i];
+      if (i < c.userCircleAttrs.size())
+        pa = c.userCircleAttrs[i];
       const EntityAttributes ra = CadBlockResolveAttr(pa, insertAttr);
       constexpr int kSteps = 24;
       // The circle's own plane, walked BEFORE the block transform (REQ-312). Generating the ring
       // flat and then transforming it draws a tilted block circle in the wrong plane entirely --
       // the store has carried the normal since step 2, and until now nothing here read it.
       float cnx = kFlatNormalX, cny = kFlatNormalY, cnz = kFlatNormalZ;
-      CircleNormalAt(c.circleNormals, i, &cnx, &cny, &cnz);
+      CircleNormalAt(c.userCircleNormals, i, &cnx, &cny, &cnz);
       const bool circFlat = IsFlatNormal(cnx, cny, cnz);
       const ucs::Ucs cPlane =
           circFlat ? ucs::Ucs{}
@@ -1122,33 +1346,33 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
         pz = qz;
       }
     }
-    if (c.polyOffsets.size() >= 2) {
-      const int nPoly = static_cast<int>(c.polyOffsets.size()) - 1;
+    if (c.userPolylineOffsets.size() >= 2) {
+      const int nPoly = static_cast<int>(c.userPolylineOffsets.size()) - 1;
       for (int p = 0; p < nPoly; ++p) {
-        const int a = c.polyOffsets[static_cast<size_t>(p)];
-        const int b = c.polyOffsets[static_cast<size_t>(p + 1)];
+        const int a = c.userPolylineOffsets[static_cast<size_t>(p)];
+        const int b = c.userPolylineOffsets[static_cast<size_t>(p + 1)];
         EntityAttributes pa{};
-        if (static_cast<size_t>(p) < c.polyAttrs.size())
-          pa = c.polyAttrs[static_cast<size_t>(p)];
+        if (static_cast<size_t>(p) < c.userPolylineAttrs.size())
+          pa = c.userPolylineAttrs[static_cast<size_t>(p)];
         const EntityAttributes ra = CadBlockResolveAttr(pa, insertAttr);
         for (int v = a; v + 1 < b; ++v) {
-          const size_t i0 = static_cast<size_t>(v) * 3;
-          const size_t i1 = static_cast<size_t>(v + 1) * 3;
-          if (i1 + 2 >= c.polyVerts.size())
+          const size_t i0 = static_cast<size_t>(v);
+          const size_t i1 = static_cast<size_t>(v + 1);
+          if (i1 >= c.vertexCount())
             break;
           CadBlockWorldSeg s;
-          xformPt(c.polyVerts[i0], c.polyVerts[i0 + 1], c.polyVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.polyVerts[i1], c.polyVerts[i1 + 1], c.polyVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }
-        const bool closed = static_cast<size_t>(p) < c.polyClosed.size() && c.polyClosed[static_cast<size_t>(p)] != 0;
+        const bool closed = static_cast<size_t>(p) < c.userPolylineClosed.size() && c.userPolylineClosed[static_cast<size_t>(p)] != 0;
         if (closed && b - a >= 2) {
-          const size_t i0 = static_cast<size_t>(b - 1) * 3;
-          const size_t i1 = static_cast<size_t>(a) * 3;
+          const size_t i0 = static_cast<size_t>(b - 1);
+          const size_t i1 = static_cast<size_t>(a);
           CadBlockWorldSeg s;
-          xformPt(c.polyVerts[i0], c.polyVerts[i0 + 1], c.polyVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.polyVerts[i1], c.polyVerts[i1 + 1], c.polyVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }
@@ -1198,11 +1422,13 @@ inline void CadBlockCollectWorldCenters(const std::vector<CadBlockDefinition>& d
       CadBlockXformPoint(fr.xf, ax, ay, lz, &p.x, &p.y, &p.z);
       out->push_back(p);
     };
-    for (size_t i = 0; i + 3 < c.circles.size(); i += 4)
-      emit(c.circles[i], c.circles[i + 1], c.circles[i + 2]);
-    for (const CadArc& a : c.arcs)
+    for (size_t i = 0; i < c.circleCount(); ++i) {
+      const CadCircleRecord cr = c.circle(i);
+      emit(cr.cx, cr.cy, cr.cz);
+    }
+    for (const CadArc& a : c.userArcs)
       emit(a.cx, a.cy, a.z);
-    for (const CadEllipse& e : c.ellipses)
+    for (const CadEllipse& e : c.userEllipses)
       emit(e.cx, e.cy, e.z);
     for (const CadBlockNested& child : c.nested) {
       if (n >= kCadBlockMaxNest)
@@ -1243,7 +1469,7 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "labels", group);
       CadBlockXformPoint(fr.xf, ax, ay, lz, wx, wy, wz);
     };
-    for (const CadAnnotation& t : def.content.texts) {
+    for (const CadAnnotation& t : def.content.cadAnnotations) {
       CadAnnotation a = t;
       const std::string group = CadBlockLabelGroupOf(t.text);
       xformLabel(t.insX, t.insY, t.insZ, group, &a.insX, &a.insY, &a.insZ);
@@ -1385,16 +1611,16 @@ inline void CadBlockCollectWorldSolids(const std::vector<CadBlockDefinition>& de
       continue;
     const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
     const CadBlockContent& c = def.content;
-    for (size_t si = 0; si < c.solids.size(); ++si) {
-      const CadSolidPtr& src = c.solids[si];
+    for (size_t si = 0; si < c.cadSolids.size(); ++si) {
+      const CadSolidPtr& src = c.cadSolids[si];
       if (!src)
         continue;
       brep::Solid world;
       if (!CadBlockTransformSolid(*src, fr.xf, &world))
         continue;
       EntityAttributes pa{};
-      if (si < c.solidAttrs.size())
-        pa = c.solidAttrs[si];
+      if (si < c.cadSolidAttrs.size())
+        pa = c.cadSolidAttrs[si];
       CadBlockWorldSolid ws;
       ws.solid = std::make_shared<const brep::Solid>(std::move(world));
       ws.attr = CadBlockResolveAttr(pa, insertAttr);
@@ -1789,10 +2015,11 @@ inline void CadBlockLineYExtent(const CadBlockDefinition& def, float* yMin, floa
   *yMin = 0.f;
   *yMax = 0.f;
   bool any = false;
-  const std::vector<double>& L = def.content.lines;
-  for (size_t i = 0; i + 4 < L.size(); i += 6) {
-    const float y0 = L[i + 1];
-    const float y1 = L[i + 4];
+  const CadEntityStore& L = def.content;
+  for (size_t i = 0; i < L.lineCount(); ++i) {
+    const CadLineRecord l = L.line(i);
+    const float y0 = static_cast<float>(l.y0);
+    const float y1 = static_cast<float>(l.y1);
     if (!any) {
       *yMin = std::min(y0, y1);
       *yMax = std::max(y0, y1);
@@ -1813,7 +2040,7 @@ inline float CadBlockLabelRestY(const CadBlockDefinition& def, std::string_view 
     if (CadBlockEqCi(CadBlockLabelGroupOf(ad.tag), group))
       return ad.localY;
   }
-  for (const CadAnnotation& t : def.content.texts) {
+  for (const CadAnnotation& t : def.content.cadAnnotations) {
     if (CadBlockEqCi(CadBlockLabelGroupOf(t.text), group))
       return t.insY;
   }

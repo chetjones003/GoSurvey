@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "engine/StepEngine.hpp"
 
 #include <GoSurvey/Core/NumFormat.hpp>
 #include <GoSurvey/Core/StringUtil.hpp>
@@ -37,15 +38,10 @@ constexpr double kJoinTol = 1.0e-3;
   return s;
 }
 
-[[nodiscard]] bool IsCadDrawInquiryKind(AppCommandState::Kind k) {
-  using K = AppCommandState::Kind;
-  return k == K::Point || k == K::Leader || k == K::Pedit || k == K::Measure || k == K::Divide ||
-         k == K::Area || k == K::List || k == K::Table || k == K::PointTable;
-}
-
-void BeginInteractive(AppCommandState& st, AppCommandState::Kind kind) {
+template <typename SessionT>
+SessionT* BeginDrawInquirySession(AppCommandState& st, std::unique_ptr<SessionT> session,
+                                  AppCommandState::Kind /*kind*/) {
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
   // Ribbon commands can replace an in-progress MLEADER without passing through Escape. Clear its
   // cursor/label draft as part of the command transition or stale MLEADER dynamic input remains
   // painted while TABLE (and other draw/inquiry commands) owns the active prompt.
@@ -53,9 +49,9 @@ void BeginInteractive(AppCommandState& st, AppCommandState::Kind kind) {
   if (st.mtextRichEditorMultileaderIndex >= 0)
     CancelMtextRichEditor(st, nullptr);
   st.selectedSurveyPointIndices.clear();
-  st.selBoxWaitingSecond = false;
-  st.active = kind;
-  st.lastCommand = kind;
+  SessionT* raw = session.get();
+  stepengine::BeginSession(st, std::move(session));
+  return raw;
 }
 
 [[nodiscard]] int LinearPrecision(const AppCommandState& st) {
@@ -69,8 +65,8 @@ void CommitCadPointToActiveSpace(AppCommandState& st, const CadPoint& p) {
     L->paperPointAttrs.push_back(MakeNewEntityAttrs(st));
     return;
   }
-  st.cadPoints.push_back(p);
-  st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+  st.drawing.cadPoints.push_back(p);
+  st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
 }
 
 struct PathSample {
@@ -206,33 +202,30 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
   out->closed = false;
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= st.drawing.lineCount())
       return false;
-    FillLinePath({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]},
-                 {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]}, pickX, pickY, out);
+    const CadLineRecord ln = st.drawing.line(li);
+    FillLinePath({ln.x0, ln.y0, ln.z0}, {ln.x1, ln.y1, ln.z1}, pickX, pickY, out);
     return true;
   }
   if (e.type == T::Polyline) {
-    if (e.index < 0 || static_cast<size_t>(e.index) + 1 >= st.userPolylineOffsets.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) + 1 >= st.drawing.userPolylineOffsets.size())
       return false;
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(e.index) + 1];
-    const bool closed = static_cast<size_t>(e.index) < st.userPolylineClosed.size() &&
-                        st.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
-    FillPolyPath(st.userPolylineVerts, st.userPolylineVertsBulge, v0, v1, closed, out);
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(e.index) + 1];
+    const bool closed = static_cast<size_t>(e.index) < st.drawing.userPolylineClosed.size() &&
+                        st.drawing.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
+    FillPolyPath(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, v0, v1, closed, out);
     ReverseOpenPathIfPickNearerEnd(out, pickX, pickY);
     return out->pts.size() >= 2;
   }
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.drawing.circleCount())
       return false;
-    const double cx = st.userCirclesCxCyZR[k];
-    const double cy = st.userCirclesCxCyZR[k + 1];
-    const double cz = st.userCirclesCxCyZR[k + 2];
-    const double r = st.userCirclesCxCyZR[k + 3];
-    FillCirclePath(cx, cy, cz, r, pickX, pickY, out);
+    const CadCircleRecord c = st.drawing.circle(ci);
+    FillCirclePath(c.cx, c.cy, c.cz, c.r, pickX, pickY, out);
     return !out->pts.empty();
   }
   return false;
@@ -319,13 +312,14 @@ void PlacePointsAlong(AppCommandState& st, const PathSample& path, const std::ve
 }
 
 void ReportArea(AppCommandState& st, double area, double peri, std::vector<std::string>& log) {
+  const auto* as = st.sessionAs<stepengine::AreaSession>();
   const int prec = LinearPrecision(st);
   char buf[192];
   std::snprintf(buf, sizeof(buf), "AREA — area %s  perimeter %s", FormatLinear(area, prec).c_str(),
                 FormatLinear(peri, prec).c_str());
   log.push_back(buf);
-  if (st.areaAccumulate) {
-    std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(st.areaRunning, prec).c_str());
+  if (as && as->accumulate) {
+    std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(as->running, prec).c_str());
     log.push_back(buf);
   }
 }
@@ -383,39 +377,41 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
   const std::string layer = (at && !at->layer.empty()) ? at->layer : "0";
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= st.drawing.lineCount())
       return;
+    const CadLineRecord ln = st.drawing.line(li);
     char buf[256];
     std::snprintf(buf, sizeof(buf), "LINE  layer %s  model  (%s,%s) to (%s,%s)", layer.c_str(),
-                  FormatLinear(st.userLinesFlat[k], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 1], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 3], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 4], prec).c_str());
+                  FormatLinear(ln.x0, prec).c_str(),
+                  FormatLinear(ln.y0, prec).c_str(),
+                  FormatLinear(ln.x1, prec).c_str(),
+                  FormatLinear(ln.y1, prec).c_str());
     log.push_back(buf);
     return;
   }
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.drawing.circleCount())
       return;
+    const CadCircleRecord c = st.drawing.circle(ci);
     char buf[192];
     std::snprintf(buf, sizeof(buf), "CIRCLE  layer %s  model  center (%s,%s)  radius %s", layer.c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k], prec).c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k + 1], prec).c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k + 3], prec).c_str());
+                  FormatLinear(c.cx, prec).c_str(),
+                  FormatLinear(c.cy, prec).c_str(),
+                  FormatLinear(c.r, prec).c_str());
     log.push_back(buf);
     return;
   }
   if (e.type == T::Polyline) {
-    ListPolylineCsr(layer, "model", st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed, e.index, prec,
+    ListPolylineCsr(layer, "model", st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed, e.index, prec,
                     log);
     return;
   }
   if (e.type == T::Alignment) {  // REQ-480
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.alignments.size())
       return;
-    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    const alignment::Alignment& al = st.drawing.alignments[static_cast<size_t>(e.index)];
     char buf[256];
     std::snprintf(buf, sizeof(buf), "ALIGNMENT  Name: %s  Layer: %s  Entities: %zu  Length: %s", al.name.c_str(),
                   layer.c_str(), al.Entities().size(), FormatLinear(al.Length(), prec).c_str());
@@ -423,15 +419,15 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Spline) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSplines.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadSplines.size())
       return;
-    ListSplineEntity(layer, "model", st.cadSplines[static_cast<size_t>(e.index)], log);
+    ListSplineEntity(layer, "model", st.drawing.cadSplines[static_cast<size_t>(e.index)], log);
     return;
   }
   if (e.type == T::Point) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPoints.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadPoints.size())
       return;
-    const CadPoint& p = st.cadPoints[static_cast<size_t>(e.index)];
+    const CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
     char buf[192];
     std::snprintf(buf, sizeof(buf), "POINT  layer %s  model  (%s,%s,%s)", layer.c_str(),
                   FormatLinear(p.x, prec).c_str(), FormatLinear(p.y, prec).c_str(),
@@ -440,9 +436,9 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Multileader) {
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMultileaders.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadMultileaders.size())
       return;
-    ListLeaderEntity(layer, "model", st.cadMultileaders[static_cast<size_t>(e.index)], prec, log);
+    ListLeaderEntity(layer, "model", st.drawing.cadMultileaders[static_cast<size_t>(e.index)], prec, log);
     return;
   }
   log.push_back("LIST — " + layer + "  model  type " + std::to_string(static_cast<int>(e.type)));
@@ -508,20 +504,21 @@ void ListPaperEntity(const AppCommandState& st, const PaperLayout& L, const Pape
 }
 
 void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.leaderDraftPoints.size() < 2) {
+  auto* ls = st.sessionAs<stepengine::LeaderSession>();
+  if (!ls || ls->draftPoints.size() < 2) {
     log.push_back("LEADER — need at least two points.");
     return;
   }
   PushUndoSnapshot(st, "LEADER");
   CadMultileader ml;
-  ml.annotative = st.activeMultileaderStyle.annotativeDefault;
-  ml.splinePath = st.leaderPathStyle == AppCommandState::LeaderPathStyle::Spline;
-  ml.showArrow = st.leaderShowArrow;
-  std::vector<spline::Vec3> pathPts = st.leaderDraftPoints;
-  if (ml.splinePath && st.leaderDraftPoints.size() >= 3) {
+  ml.annotative = st.drawing.activeMultileaderStyle.annotativeDefault;
+  ml.splinePath = ls->pathStyle == stepengine::LeaderPathStyle::Spline;
+  ml.showArrow = ls->showArrow;
+  std::vector<spline::Vec3> pathPts = ls->draftPoints;
+  if (ml.splinePath && ls->draftPoints.size() >= 3) {
     spline::Spline fit;
     std::string why;
-    if (spline::MakeFit(st.leaderDraftPoints, false, &fit, &why)) {
+    if (spline::MakeFit(ls->draftPoints, false, &fit, &why)) {
       std::vector<spline::Vec3> tess;
       spline::Tessellate(fit, kSplineSampleTolerance, &tess);
       if (tess.size() >= 2)
@@ -533,12 +530,12 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
     ml.pathXyz.push_back(static_cast<float>(p.y));
     ml.pathXyz.push_back(static_cast<float>(p.z));
   }
-  const spline::Vec3& land = st.leaderDraftPoints.back();
-  if (st.leaderAnnotation == AppCommandState::LeaderAnnotation::Mtext) {
-    const float plotH = std::max(st.activeMultileaderStyle.textSizeInches, 0.01f);
+  const spline::Vec3& land = ls->draftPoints.back();
+  if (ls->annotation == stepengine::LeaderAnnotation::Mtext) {
+    const float plotH = std::max(st.drawing.activeMultileaderStyle.textSizeInches, 0.01f);
     const float unit = ActivePaperGeometryTarget(st) != nullptr
                            ? 1.f
-                           : std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+                           : std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
     CadAnnotation& a = ml.label;
     a.kind = CadAnnotation::Kind::Mtext;
     a.plottedHeightInches = plotH;
@@ -556,12 +553,11 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
     L->paperMultileaders.push_back(std::move(ml));
     L->paperMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    st.cadMultileaders.push_back(std::move(ml));
-    st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
+    st.drawing.cadMultileaders.push_back(std::move(ml));
+    st.drawing.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
-  st.leaderDraftPoints.clear();
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("LEADER complete.");
 }
 
@@ -592,40 +588,40 @@ int ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std:
   if (hit.type == T::Polyline)
     return hit.index;
   if (hit.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(hit.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(hit.index);
+    if (li >= st.drawing.lineCount())
       return -1;
     PushUndoSnapshot(st, "PEDIT convert");
-    const int idx = AppendOpenPolyline2(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed,
-                                        st.userPolylineAttrs, st.userPolylineVertsBulge, st.userLinesFlat[k],
-                                        st.userLinesFlat[k + 1], st.userLinesFlat[k + 2], st.userLinesFlat[k + 3],
-                                        st.userLinesFlat[k + 4], st.userLinesFlat[k + 5], 0.f, MakeNewEntityAttrs(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k) + 6);
-    if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + hit.index);
+    const CadLineRecord ln = st.drawing.line(li);
+    const int idx = AppendOpenPolyline2(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed,
+                                        st.drawing.userPolylineAttrs, st.drawing.userPolylineVertsBulge, ln.x0,
+                                        ln.y0, ln.z0, ln.x1,
+                                        ln.y1, ln.z1, 0.f, MakeNewEntityAttrs(st));
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+    st.drawing.eraseLine(li);
+    if (static_cast<size_t>(hit.index) < st.drawing.userLineAttrs.size())
+      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + hit.index);
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted line to polyline.");
     return idx;
   }
   if (hit.type == T::Arc) {
-    if (static_cast<size_t>(hit.index) >= st.userArcs.size())
+    if (static_cast<size_t>(hit.index) >= st.drawing.userArcs.size())
       return -1;
-    const CadArc a = st.userArcs[static_cast<size_t>(hit.index)];
+    const CadArc a = st.drawing.userArcs[static_cast<size_t>(hit.index)];
     PushUndoSnapshot(st, "PEDIT convert");
     const double x0 = a.cx + a.r * std::cos(a.startRad);
     const double y0 = a.cy + a.r * std::sin(a.startRad);
     const double x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
     const double y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
     const float bg = static_cast<float>(std::tan(static_cast<double>(a.sweepRad) / 4.0));
-    const int idx = AppendOpenPolyline2(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed,
-                                        st.userPolylineAttrs, st.userPolylineVertsBulge, x0, y0, a.z, x1, y1, a.z, bg,
+    const int idx = AppendOpenPolyline2(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineClosed,
+                                        st.drawing.userPolylineAttrs, st.drawing.userPolylineVertsBulge, x0, y0, a.z, x1, y1, a.z, bg,
                                         MakeNewEntityAttrs(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    st.userArcs.erase(st.userArcs.begin() + hit.index);
-    if (static_cast<size_t>(hit.index) < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + hit.index);
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + hit.index);
+    if (static_cast<size_t>(hit.index) < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + hit.index);
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted arc to polyline.");
     return idx;
@@ -678,24 +674,28 @@ int ConvertPaperPickedToPolyline(AppCommandState& st, PaperLayout& L, const Pape
 }
 
 bool PeditHasPoly(const AppCommandState& st) {
-  if (st.peditPaper) {
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return false;
+  if (ps->paper) {
     const PaperLayout* L = ActivePaperGeometryTarget(st);
-    return L && st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < L->paperPolyOffsets.size();
+    return L && ps->index >= 0 && static_cast<size_t>(ps->index) + 1 < L->paperPolyOffsets.size();
   }
-  return st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < st.userPolylineOffsets.size();
+  return ps->index >= 0 && static_cast<size_t>(ps->index) + 1 < st.drawing.userPolylineOffsets.size();
 }
 
 void PeditCloseOpen(AppCommandState& st, bool close, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, close ? "PEDIT Close" : "PEDIT Open");
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    L->paperPolyClosed[static_cast<size_t>(st.peditIndex)] = close ? 1u : 0u;
+    L->paperPolyClosed[static_cast<size_t>(ps->index)] = close ? 1u : 0u;
   } else {
-    st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] = close ? 1u : 0u;
+    st.drawing.userPolylineClosed[static_cast<size_t>(ps->index)] = close ? 1u : 0u;
   }
   BumpCadGpuCache(st);
   log.push_back(close ? "PEDIT — closed." : "PEDIT — opened.");
@@ -712,7 +712,8 @@ void ReverseBulgeRange(std::vector<float>& bulge, int v0, int v1) {
 }
 
 void PeditReverse(AppCommandState& st, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, "PEDIT Reverse");
   auto reverseRange = [](auto& verts, int v0, int v1) {
@@ -725,49 +726,50 @@ void PeditReverse(AppCommandState& st, std::vector<std::string>& log) {
       std::swap(verts[a + 2], verts[b + 2]);
     }
   };
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    const int v0 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1];
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(ps->index)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(ps->index) + 1];
     reverseRange(L->paperPolyVerts, v0, v1);
     ReverseBulgeRange(L->paperPolyVertsBulge, v0, v1);
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-    reverseRange(st.userPolylineVerts, v0, v1);
-    ReverseBulgeRange(st.userPolylineVertsBulge, v0, v1);
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index) + 1];
+    reverseRange(st.drawing.userPolylineVerts, v0, v1);
+    ReverseBulgeRange(st.drawing.userPolylineVertsBulge, v0, v1);
   }
   BumpCadGpuCache(st);
   log.push_back("PEDIT — reversed.");
 }
 
 void PeditSetBulges(AppCommandState& st, float value, const char* undo, const char* done, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, undo);
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
     SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
-    const int v0 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1];
-    const bool closed = static_cast<size_t>(st.peditIndex) < L->paperPolyClosed.size() &&
-                        L->paperPolyClosed[static_cast<size_t>(st.peditIndex)] != 0;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(ps->index)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(ps->index) + 1];
+    const bool closed = static_cast<size_t>(ps->index) < L->paperPolyClosed.size() &&
+                        L->paperPolyClosed[static_cast<size_t>(ps->index)] != 0;
     const int last = closed ? v1 : v1 - 1;
     for (int i = v0; i < last; ++i)
       L->paperPolyVertsBulge[static_cast<size_t>(i)] = value;
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-    const bool closed = static_cast<size_t>(st.peditIndex) < st.userPolylineClosed.size() &&
-                        st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] != 0;
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index)];
+    const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index) + 1];
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+    const bool closed = static_cast<size_t>(ps->index) < st.drawing.userPolylineClosed.size() &&
+                        st.drawing.userPolylineClosed[static_cast<size_t>(ps->index)] != 0;
     const int last = closed ? v1 : v1 - 1;
     for (int i = v0; i < last; ++i)
-      st.userPolylineVertsBulge[static_cast<size_t>(i)] = value;
+      st.drawing.userPolylineVertsBulge[static_cast<size_t>(i)] = value;
   }
   BumpCadGpuCache(st);
   log.push_back(done);
@@ -782,7 +784,8 @@ void PeditFit(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, "PEDIT Spline");
   auto densify = [](auto& verts, auto& offsets, auto& bulge, int pi) {
@@ -811,116 +814,119 @@ void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
       offsets[i] += delta;
     SyncPolylineBulge(bulge, verts.size());
   };
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    densify(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, st.peditIndex);
+    densify(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, ps->index);
   } else {
-    densify(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, st.peditIndex);
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    densify(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineVertsBulge, ps->index);
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
   log.push_back("PEDIT — spline densified.");
 }
 
 int PeditVertexCount(const AppCommandState& st) {
-  if (st.peditPaper) {
-    const PaperLayout* L = ActivePaperGeometryTarget(st);
-    if (!L || !PeditHasPoly(st))
-      return 0;
-    return L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1] -
-           L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
-  }
-  if (!PeditHasPoly(st))
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return 0;
-  return st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1] -
-         st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+  if (ps->paper) {
+    const PaperLayout* L = ActivePaperGeometryTarget(st);
+    if (!L)
+      return 0;
+    return L->paperPolyOffsets[static_cast<size_t>(ps->index) + 1] -
+           L->paperPolyOffsets[static_cast<size_t>(ps->index)];
+  }
+  return st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index) + 1] -
+         st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index)];
 }
 
 void PeditMoveVertex(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, "PEDIT vertex");
   const int n = PeditVertexCount(st);
-  const int vi = std::clamp(st.peditVertex, 0, std::max(0, n - 1));
-  if (st.peditPaper) {
+  const int vi = std::clamp(ps->vertex, 0, std::max(0, n - 1));
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    const int v0 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(ps->index)];
     const size_t b = static_cast<size_t>(v0 + vi) * 3;
     if (b + 1 < L->paperPolyVerts.size()) {
       L->paperPolyVerts[b] = static_cast<float>(x);
       L->paperPolyVerts[b + 1] = static_cast<float>(y);
     }
   } else {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-    const size_t b = static_cast<size_t>(v0 + vi) * 3;
-    if (b + 1 < st.userPolylineVerts.size()) {
-      st.userPolylineVerts[b] = x;
-      st.userPolylineVerts[b + 1] = y;
+    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index)];
+    const size_t b = static_cast<size_t>(v0 + vi);
+    if (b < st.drawing.vertexCount()) {
+      st.drawing.vertexComponent(b, CadVertexComponent::X) = x;
+      st.drawing.vertexComponent(b, CadVertexComponent::Y) = y;
     }
   }
   BumpCadGpuCache(st);
-  st.peditPhase = AppCommandState::PeditPhase::WaitVertex;
+  ps->phase = stepengine::PeditPhase::WaitVertex;
   log.push_back("PEDIT — vertex moved. Next / Previous / Insert / Move / eXit:");
 }
 
 void PeditInsertVertex(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st))
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, "PEDIT insert");
   const int n = PeditVertexCount(st);
-  const int vi = std::clamp(st.peditVertex, 0, std::max(0, n - 1));
+  const int vi = std::clamp(ps->vertex, 0, std::max(0, n - 1));
   auto insertAt = [&](auto& verts, auto& offsets, auto& bulge, double z) {
-    const int v0 = offsets[static_cast<size_t>(st.peditIndex)];
+    const int v0 = offsets[static_cast<size_t>(ps->index)];
     const size_t at = static_cast<size_t>(v0 + vi + 1) * 3;
     verts.insert(verts.begin() + static_cast<std::ptrdiff_t>(at),
                  {static_cast<typename std::decay<decltype(verts[0])>::type>(x),
                   static_cast<typename std::decay<decltype(verts[0])>::type>(y),
                   static_cast<typename std::decay<decltype(verts[0])>::type>(z)});
-    for (size_t i = static_cast<size_t>(st.peditIndex) + 1; i < offsets.size(); ++i)
+    for (size_t i = static_cast<size_t>(ps->index) + 1; i < offsets.size(); ++i)
       offsets[i] += 1;
     SyncPolylineBulge(bulge, verts.size());
   };
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
     insertAt(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, 0.0);
   } else {
-    insertAt(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, CadCommitElevation(st));
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    insertAt(st.drawing.userPolylineVerts, st.drawing.userPolylineOffsets, st.drawing.userPolylineVertsBulge, CadCommitElevation(st));
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
-  st.peditVertex = vi + 1;
-  st.peditPhase = AppCommandState::PeditPhase::WaitVertex;
+  ps->vertex = vi + 1;
+  ps->phase = stepengine::PeditPhase::WaitVertex;
   log.push_back("PEDIT — vertex inserted. Next / Previous / Insert / Move / eXit:");
 }
 
 void EraseModelPolyline(AppCommandState& st, int pi) {
-  if (pi < 0 || static_cast<size_t>(pi) + 1 >= st.userPolylineOffsets.size())
+  if (pi < 0 || static_cast<size_t>(pi) + 1 >= st.drawing.userPolylineOffsets.size())
     return;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
-  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
-  if (st.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
-    st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + v0, st.userPolylineVertsBulge.begin() + v1);
-  if (st.userPolylineVertsNormal.size() >= static_cast<size_t>(v1) * 3)
-    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
-                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+  st.drawing.userPolylineVerts.erase(st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.drawing.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (st.drawing.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
+    st.drawing.userPolylineVertsBulge.erase(st.drawing.userPolylineVertsBulge.begin() + v0, st.drawing.userPolylineVertsBulge.begin() + v1);
+  if (st.drawing.userPolylineVertsNormal.size() >= static_cast<size_t>(v1) * 3)
+    st.drawing.userPolylineVertsNormal.erase(st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                                     st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
   const int nv = v1 - v0;
-  st.userPolylineOffsets.erase(st.userPolylineOffsets.begin() + (pi + 1));
-  for (size_t k = static_cast<size_t>(pi) + 1; k < st.userPolylineOffsets.size(); ++k)
-    st.userPolylineOffsets[k] -= nv;
-  if (st.userPolylineOffsets.size() == 1)
-    st.userPolylineOffsets.clear();
-  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
-    st.userPolylineClosed.erase(st.userPolylineClosed.begin() + pi);
-  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-    st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + pi);
+  st.drawing.userPolylineOffsets.erase(st.drawing.userPolylineOffsets.begin() + (pi + 1));
+  for (size_t k = static_cast<size_t>(pi) + 1; k < st.drawing.userPolylineOffsets.size(); ++k)
+    st.drawing.userPolylineOffsets[k] -= nv;
+  if (st.drawing.userPolylineOffsets.size() == 1)
+    st.drawing.userPolylineOffsets.clear();
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
+    st.drawing.userPolylineClosed.erase(st.drawing.userPolylineClosed.begin() + pi);
+  if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
+    st.drawing.userPolylineAttrs.erase(st.drawing.userPolylineAttrs.begin() + pi);
 }
 
 void ErasePaperPoly(PaperLayout& L, int pi) {
@@ -1020,7 +1026,8 @@ void ReplacePolyRange(std::vector<VT>& verts, std::vector<float>& bulge, std::ve
 }
 
 void PeditJoinIndex(AppCommandState& st, int other, std::vector<std::string>& log) {
-  if (!PeditHasPoly(st) || other == st.peditIndex) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps || !PeditHasPoly(st) || other == ps->index) {
     log.push_back("PEDIT — pick a different touching polyline.");
     return;
   }
@@ -1038,16 +1045,16 @@ void PeditJoinIndex(AppCommandState& st, int other, std::vector<std::string>& lo
       bg->push_back(static_cast<size_t>(vi) < bulge.size() ? static_cast<float>(bulge[static_cast<size_t>(vi)]) : 0.f);
     }
   };
-  if (st.peditPaper) {
+  if (ps->paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L || other < 0 || static_cast<size_t>(other) + 1 >= L->paperPolyOffsets.size())
       return;
-    if (L->paperPolyClosed[static_cast<size_t>(st.peditIndex)] || L->paperPolyClosed[static_cast<size_t>(other)]) {
+    if (L->paperPolyClosed[static_cast<size_t>(ps->index)] || L->paperPolyClosed[static_cast<size_t>(other)]) {
       log.push_back("PEDIT — cannot join a closed polyline.");
       return;
     }
-    load(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)],
-         L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
+    load(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets[static_cast<size_t>(ps->index)],
+         L->paperPolyOffsets[static_cast<size_t>(ps->index) + 1], &keepPts, &keepBg);
     load(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets[static_cast<size_t>(other)],
          L->paperPolyOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
     if (!JoinVertexLists(&keepPts, &keepBg, otherPts, otherBg)) {
@@ -1055,44 +1062,47 @@ void PeditJoinIndex(AppCommandState& st, int other, std::vector<std::string>& lo
       return;
     }
     PushUndoSnapshot(st, "PEDIT Join");
-    const int keep = st.peditIndex;
+    const int keep = ps->index;
     ReplacePolyRange(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets, keep, keepPts, keepBg);
     int keepAfter = keep;
     ErasePaperPoly(*L, other);
     if (other < keepAfter)
       --keepAfter;
-    st.peditIndex = keepAfter;
+    ps->index = keepAfter;
   } else {
-    if (other < 0 || static_cast<size_t>(other) + 1 >= st.userPolylineOffsets.size())
+    if (other < 0 || static_cast<size_t>(other) + 1 >= st.drawing.userPolylineOffsets.size())
       return;
-    if (st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] || st.userPolylineClosed[static_cast<size_t>(other)]) {
+    if (st.drawing.userPolylineClosed[static_cast<size_t>(ps->index)] || st.drawing.userPolylineClosed[static_cast<size_t>(other)]) {
       log.push_back("PEDIT — cannot join a closed polyline.");
       return;
     }
-    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)],
-         st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
-    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(other)],
-         st.userPolylineOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
+    load(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index)],
+         st.drawing.userPolylineOffsets[static_cast<size_t>(ps->index) + 1], &keepPts, &keepBg);
+    load(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets[static_cast<size_t>(other)],
+         st.drawing.userPolylineOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
     if (!JoinVertexLists(&keepPts, &keepBg, otherPts, otherBg)) {
       log.push_back("PEDIT — objects do not touch.");
       return;
     }
     PushUndoSnapshot(st, "PEDIT Join");
-    const int keep = st.peditIndex;
-    ReplacePolyRange(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets, keep, keepPts, keepBg);
+    const int keep = ps->index;
+    ReplacePolyRange(st.drawing.userPolylineVerts, st.drawing.userPolylineVertsBulge, st.drawing.userPolylineOffsets, keep, keepPts, keepBg);
     int keepAfter = keep;
     EraseModelPolyline(st, other);
     if (other < keepAfter)
       --keepAfter;
-    st.peditIndex = keepAfter;
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    ps->index = keepAfter;
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
-  st.peditPhase = AppCommandState::PeditPhase::WaitOption;
+  ps->phase = stepengine::PeditPhase::WaitOption;
   log.push_back("PEDIT — joined. Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
 }
 
 bool HandlePeditOption(AppCommandState& st, const std::string& opt, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return false;
   if (opt == "C" || opt == "CLOSE") {
     PeditCloseOpen(st, true, log);
     return true;
@@ -1118,8 +1128,8 @@ bool HandlePeditOption(AppCommandState& st, const std::string& opt, std::vector<
     return true;
   }
   if (opt == "E" || opt == "EDIT") {
-    st.peditPhase = AppCommandState::PeditPhase::WaitVertex;
-    st.peditVertex = 0;
+    ps->phase = stepengine::PeditPhase::WaitVertex;
+    ps->vertex = 0;
     log.push_back("PEDIT vertex — Next / Previous / Insert / Move / eXit:");
     return true;
   }
@@ -1129,11 +1139,11 @@ bool HandlePeditOption(AppCommandState& st, const std::string& opt, std::vector<
   }
   if (opt == "J" || opt == "JOIN") {
     log.push_back("PEDIT — Join: pick a touching polyline, or Enter to skip.");
-    st.peditPhase = AppCommandState::PeditPhase::WaitJoin;
+    ps->phase = stepengine::PeditPhase::WaitJoin;
     return true;
   }
   if (opt.empty() || opt == "X" || opt == "EXIT") {
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     log.push_back("PEDIT complete.");
     return true;
   }
@@ -1142,31 +1152,34 @@ bool HandlePeditOption(AppCommandState& st, const std::string& opt, std::vector<
 }
 
 bool HandlePeditVertex(AppCommandState& st, const std::string& opt, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return false;
   const int n = PeditVertexCount(st);
   if (opt == "N" || opt == "NEXT") {
     if (n > 0)
-      st.peditVertex = (st.peditVertex + 1) % n;
-    log.push_back("PEDIT — vertex " + std::to_string(st.peditVertex + 1) + " of " + std::to_string(n) + ".");
+      ps->vertex = (ps->vertex + 1) % n;
+    log.push_back("PEDIT — vertex " + std::to_string(ps->vertex + 1) + " of " + std::to_string(n) + ".");
     return true;
   }
   if (opt == "P" || opt == "PREVIOUS") {
     if (n > 0)
-      st.peditVertex = (st.peditVertex + n - 1) % n;
-    log.push_back("PEDIT — vertex " + std::to_string(st.peditVertex + 1) + " of " + std::to_string(n) + ".");
+      ps->vertex = (ps->vertex + n - 1) % n;
+    log.push_back("PEDIT — vertex " + std::to_string(ps->vertex + 1) + " of " + std::to_string(n) + ".");
     return true;
   }
   if (opt == "I" || opt == "INSERT") {
     log.push_back("PEDIT — specify insert point:");
-    st.peditPhase = AppCommandState::PeditPhase::WaitVertexInsert;
+    ps->phase = stepengine::PeditPhase::WaitVertexInsert;
     return true;
   }
   if (opt == "M" || opt == "MOVE") {
     log.push_back("PEDIT — specify new vertex location:");
-    st.peditPhase = AppCommandState::PeditPhase::WaitVertexMove;
+    ps->phase = stepengine::PeditPhase::WaitVertexMove;
     return true;
   }
   if (opt.empty() || opt == "X" || opt == "EXIT") {
-    st.peditPhase = AppCommandState::PeditPhase::WaitOption;
+    ps->phase = stepengine::PeditPhase::WaitOption;
     log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
     return true;
   }
@@ -1178,10 +1191,10 @@ bool AreaFromPicked(const AppCommandState& st, const SelectedEntity& e, double* 
   assert(area != nullptr && peri != nullptr);
   using T = SelectedEntity::Type;
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.drawing.circleCount())
       return false;
-    const double r = st.userCirclesCxCyZR[k + 3];
+    const double r = st.drawing.circle(ci).r;
     if (!(r > 0.0))
       return false;
     *area = kPi * r * r;
@@ -1224,73 +1237,82 @@ bool AreaFromPaper(const PaperLayout& L, const PaperEntityRef& r, double* area, 
 }
 
 void ApplyAreaValue(AppCommandState& st, double area, double peri, std::vector<std::string>& log) {
-  const double signedA = st.areaSubtract ? -area : area;
-  st.areaRunning += signedA;
+  auto* as = st.sessionAs<stepengine::AreaSession>();
+  if (!as)
+    return;
+  const double signedA = as->subtract ? -area : area;
+  as->running += signedA;
   ReportArea(st, signedA, peri, log);
-  st.areaDraftPoints.clear();
-  if (st.areaAccumulate) {
-    st.areaPhase = AppCommandState::AreaPhase::WaitFirst;
-    log.push_back(st.areaSubtract ? "AREA Subtract mode — specify points or Object:"
-                                  : "AREA Add mode — specify points or Object:");
+  as->draftPoints.clear();
+  if (as->accumulate) {
+    as->phase = stepengine::AreaPhase::WaitFirst;
+    log.push_back(as->subtract ? "AREA Subtract mode — specify points or Object:"
+                               : "AREA Add mode — specify points or Object:");
     return;
   }
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
 }
 
 void SampleMeasurePath(const AppCommandState& st, PathSample* path, bool* ok) {
   assert(path != nullptr && ok != nullptr);
   *ok = false;
-  if (st.measurePaper) {
+  const auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
+  if (!ms)
+    return;
+  if (ms->paper) {
     if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
-      const PaperEntityRef r = st.measurePaperTarget;
-      *ok = PaperPathFromRef(*L, r, st.measurePickX, st.measurePickY, path);
+      const PaperEntityRef r = ms->paperTarget;
+      *ok = PaperPathFromRef(*L, r, ms->pickX, ms->pickY, path);
     }
     return;
   }
-  *ok = ModelPathFromEntity(st, st.measureTarget, st.measurePickX, st.measurePickY, path);
+  *ok = ModelPathFromEntity(st, ms->target, ms->pickX, ms->pickY, path);
 }
 
 bool HandleLeaderText(const std::string& line, const std::string& opt, AppCommandState& st,
                       std::vector<std::string>& log) {
-  if (st.leaderPhase == AppCommandState::LeaderPhase::WaitFormat) {
+  auto* ls = st.sessionAs<stepengine::LeaderSession>();
+  if (!ls)
+    return false;
+  if (ls->phase == stepengine::LeaderPhase::WaitFormat) {
     if (opt == "S" || opt == "STRAIGHT") {
-      st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+      ls->pathStyle = stepengine::LeaderPathStyle::Straight;
+      ls->phase = stepengine::LeaderPhase::WaitNext;
       log.push_back("LEADER — straight. Specify next point:");
       return true;
     }
     if (opt == "SPLINE") {
-      st.leaderPathStyle = AppCommandState::LeaderPathStyle::Spline;
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+      ls->pathStyle = stepengine::LeaderPathStyle::Spline;
+      ls->phase = stepengine::LeaderPhase::WaitNext;
       log.push_back("LEADER — spline format. Specify next point:");
       return true;
     }
     if (opt == "A" || opt == "ARROW") {
-      st.leaderShowArrow = true;
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+      ls->showArrow = true;
+      ls->phase = stepengine::LeaderPhase::WaitNext;
       log.push_back("LEADER — arrow. Specify next point:");
       return true;
     }
     if (opt == "N" || opt == "NONE") {
-      st.leaderShowArrow = false;
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+      ls->showArrow = false;
+      ls->phase = stepengine::LeaderPhase::WaitNext;
       log.push_back("LEADER — no arrow. Specify next point:");
       return true;
     }
     if (line.empty()) {
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+      ls->phase = stepengine::LeaderPhase::WaitNext;
       log.push_back("LEADER — specify next point (Enter = annotation):");
       return true;
     }
     log.push_back("LEADER format — Straight / Spline / Arrow / None:");
     return true;
   }
-  if (st.leaderPhase == AppCommandState::LeaderPhase::WaitAnnotation) {
+  if (ls->phase == stepengine::LeaderPhase::WaitAnnotation) {
     if (opt == "N" || opt == "NONE")
-      st.leaderAnnotation = AppCommandState::LeaderAnnotation::None;
+      ls->annotation = stepengine::LeaderAnnotation::None;
     else if (opt == "M" || opt == "MTEXT" || line.empty()) {
       if (!line.empty())
-        st.leaderAnnotation = AppCommandState::LeaderAnnotation::Mtext;
+        ls->annotation = stepengine::LeaderAnnotation::Mtext;
     } else if (opt == "T" || opt == "TOLERANCE" || opt == "C" || opt == "COPY" || opt == "B" || opt == "BLOCK") {
       log.push_back("LEADER — Tolerance, Copy, and Block annotation are not supported.");
       return true;
@@ -1298,27 +1320,27 @@ bool HandleLeaderText(const std::string& line, const std::string& opt, AppComman
       log.push_back("LEADER annotation — Mtext / None (Tolerance/Copy/Block are not supported):");
       return true;
     }
-    if (st.leaderDraftPoints.size() >= 2 || st.leaderFinishAfterAnnotation) {
+    if (ls->draftPoints.size() >= 2 || ls->finishAfterAnnotation) {
       FinishLeader(st, log);
       return true;
     }
-    st.leaderPhase = AppCommandState::LeaderPhase::WaitFirst;
+    ls->phase = stepengine::LeaderPhase::WaitFirst;
     log.push_back("LEADER — specify first leader point (Annotation / Format):");
     return true;
   }
   if (opt == "A" || opt == "ANNOTATION") {
-    st.leaderPhase = AppCommandState::LeaderPhase::WaitAnnotation;
-    st.leaderFinishAfterAnnotation = st.leaderDraftPoints.size() >= 2;
+    ls->phase = stepengine::LeaderPhase::WaitAnnotation;
+    ls->finishAfterAnnotation = ls->draftPoints.size() >= 2;
     log.push_back("LEADER annotation — Mtext / None (Tolerance/Copy/Block are not supported):");
     return true;
   }
   if (opt == "M" || opt == "MTEXT") {
-    st.leaderAnnotation = AppCommandState::LeaderAnnotation::Mtext;
+    ls->annotation = stepengine::LeaderAnnotation::Mtext;
     log.push_back("LEADER — Mtext annotation. Specify next point:");
     return true;
   }
   if (opt == "N" || opt == "NONE") {
-    st.leaderAnnotation = AppCommandState::LeaderAnnotation::None;
+    ls->annotation = stepengine::LeaderAnnotation::None;
     log.push_back("LEADER — no annotation. Specify next point:");
     return true;
   }
@@ -1327,28 +1349,28 @@ bool HandleLeaderText(const std::string& line, const std::string& opt, AppComman
     return true;
   }
   if (opt == "F" || opt == "FORMAT") {
-    st.leaderPhase = AppCommandState::LeaderPhase::WaitFormat;
+    ls->phase = stepengine::LeaderPhase::WaitFormat;
     log.push_back("LEADER format — Straight / Spline / Arrow / None:");
     return true;
   }
   if (opt == "S" || opt == "STRAIGHT") {
-    st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
+    ls->pathStyle = stepengine::LeaderPathStyle::Straight;
     log.push_back("LEADER — straight. Specify next point:");
     return true;
   }
   if (opt == "SPLINE") {
-    st.leaderPathStyle = AppCommandState::LeaderPathStyle::Spline;
+    ls->pathStyle = stepengine::LeaderPathStyle::Spline;
     log.push_back("LEADER — spline format. Specify next point:");
     return true;
   }
   if (line.empty()) {
-    if (st.leaderDraftPoints.size() >= 2) {
-      if (st.leaderAnnotation == AppCommandState::LeaderAnnotation::None) {
+    if (ls->draftPoints.size() >= 2) {
+      if (ls->annotation == stepengine::LeaderAnnotation::None) {
         FinishLeader(st, log);
         return true;
       }
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitAnnotation;
-      st.leaderFinishAfterAnnotation = true;
+      ls->phase = stepengine::LeaderPhase::WaitAnnotation;
+      ls->finishAfterAnnotation = true;
       log.push_back("LEADER annotation — Mtext / None (Enter = Mtext):");
       return true;
     }
@@ -1360,46 +1382,49 @@ bool HandleLeaderText(const std::string& line, const std::string& opt, AppComman
     log.push_back("LEADER — enter a point, Annotation, Format, or Enter to finish.");
     return true;
   }
-  st.leaderDraftPoints.push_back({x, y, CadCommitElevation(st)});
-  st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+  ls->draftPoints.push_back({x, y, CadCommitElevation(st)});
+  ls->phase = stepengine::LeaderPhase::WaitNext;
   log.push_back("LEADER — specify next point (Enter = annotation):");
   return true;
 }
 
 bool HandleAreaText(const std::string& line, const std::string& opt, AppCommandState& st,
                     std::vector<std::string>& log) {
+  auto* as = st.sessionAs<stepengine::AreaSession>();
+  if (!as)
+    return false;
   if (opt == "O" || opt == "OBJECT") {
-    st.areaPhase = AppCommandState::AreaPhase::WaitObject;
+    as->phase = stepengine::AreaPhase::WaitObject;
     log.push_back("AREA — select a closed polyline or circle:");
     return true;
   }
   if (opt == "A" || opt == "ADD") {
-    st.areaSubtract = false;
-    st.areaAccumulate = true;
+    as->subtract = false;
+    as->accumulate = true;
     log.push_back("AREA Add mode — specify points or Object:");
     return true;
   }
   if (opt == "S" || opt == "SUBTRACT") {
-    st.areaSubtract = true;
-    st.areaAccumulate = true;
+    as->subtract = true;
+    as->accumulate = true;
     log.push_back("AREA Subtract mode — specify points or Object:");
     return true;
   }
   if (line.empty()) {
-    if (st.areaDraftPoints.size() < 3) {
-      if (st.areaAccumulate) {
+    if (as->draftPoints.size() < 3) {
+      if (as->accumulate) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(st.areaRunning, LinearPrecision(st)).c_str());
+        std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(as->running, LinearPrecision(st)).c_str());
         log.push_back(buf);
-        st.active = AppCommandState::Kind::None;
+        stepengine::EndSession(st);
         return true;
       }
-      st.active = AppCommandState::Kind::None;
+      stepengine::EndSession(st);
       log.push_back("AREA — canceled (need at least three points).");
       return true;
     }
-    const double area = ShoelaceArea(st.areaDraftPoints);
-    const double peri = Perimeter(st.areaDraftPoints, true);
+    const double area = ShoelaceArea(as->draftPoints);
+    const double peri = Perimeter(as->draftPoints, true);
     ApplyAreaValue(st, area, peri, log);
     return true;
   }
@@ -1408,15 +1433,18 @@ bool HandleAreaText(const std::string& line, const std::string& opt, AppCommandS
     log.push_back("AREA — enter a point, Object, Add, or Subtract.");
     return true;
   }
-  st.areaDraftPoints.push_back({x, y, CadCommitElevation(st)});
-  st.areaPhase = AppCommandState::AreaPhase::WaitNext;
+  as->draftPoints.push_back({x, y, CadCommitElevation(st)});
+  as->phase = stepengine::AreaPhase::WaitNext;
   log.push_back("AREA — specify next point (Enter to close):");
   return true;
 }
 
 bool HandleMeasureDivideText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  if (st.measurePhase != AppCommandState::MeasurePhase::WaitValue) {
+  auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
+  if (!ms)
+    return false;
+  if (ms->phase != stepengine::MeasurePhase::WaitValue) {
     log.push_back(st.active == K::Measure ? "MEASURE — pick an object first." : "DIVIDE — pick an object first.");
     return true;
   }
@@ -1425,7 +1453,7 @@ bool HandleMeasureDivideText(const std::string& line, AppCommandState& st, std::
   SampleMeasurePath(st, &path, &ok);
   if (!ok) {
     log.push_back("Cannot sample that object.");
-    st.active = K::None;
+    stepengine::EndSession(st);
     return true;
   }
   const double len = PathLength(path);
@@ -1459,17 +1487,20 @@ bool HandleMeasureDivideText(const std::string& line, AppCommandState& st, std::
     }
     PlacePointsAlong(st, path, stations, log, "DIVIDE");
   }
-  st.active = K::None;
+  stepengine::EndSession(st);
   return true;
 }
 
 bool TryPickPolylineForPedit(AppCommandState& st, double wx, double wy, int* idx, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
   assert(idx != nullptr);
   assert(std::isfinite(wx) && std::isfinite(wy));
   *idx = -1;
+  if (!ps)
+    return false;
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back("PEDIT — nothing at that point.");
       return false;
     }
@@ -1478,7 +1509,7 @@ bool TryPickPolylineForPedit(AppCommandState& st, double wx, double wy, int* idx
       log.push_back("PEDIT — select a polyline, line, or arc.");
       return false;
     }
-    st.peditPaper = true;
+    ps->paper = true;
     return true;
   }
   SelectedEntity hit{};
@@ -1492,7 +1523,7 @@ bool TryPickPolylineForPedit(AppCommandState& st, double wx, double wy, int* idx
     log.push_back("PEDIT — select a polyline, line, or arc.");
     return false;
   }
-  st.peditPaper = false;
+  ps->paper = false;
   return true;
 }
 
@@ -1505,28 +1536,34 @@ bool HandlePeditJoinPick(AppCommandState& st, double wx, double wy, std::vector<
 }
 
 bool HandlePeditObjectPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return false;
   int idx = -1;
   if (!TryPickPolylineForPedit(st, wx, wy, &idx, log))
     return true;
-  st.peditIndex = idx;
-  st.peditPhase = AppCommandState::PeditPhase::WaitOption;
+  ps->index = idx;
+  ps->phase = stepengine::PeditPhase::WaitOption;
   log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
   return true;
 }
 
 bool HandleMeasureObjectPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  st.measurePickX = wx;
-  st.measurePickY = wy;
+  auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
+  if (!ms)
+    return false;
+  ms->pickX = wx;
+  ms->pickY = wy;
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point." : "DIVIDE — nothing at that point.");
       return true;
     }
-    st.measurePaper = true;
-    st.measurePaperTarget = hit;
-    st.measurePhase = AppCommandState::MeasurePhase::WaitValue;
+    ms->paper = true;
+    ms->paperTarget = hit;
+    ms->phase = stepengine::MeasurePhase::WaitValue;
     log.push_back(st.active == K::Measure ? "MEASURE — specify length of segment:"
                                           : "DIVIDE — enter the number of segments:");
     return true;
@@ -1537,9 +1574,9 @@ bool HandleMeasureObjectPick(AppCommandState& st, double wx, double wy, std::vec
     log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point." : "DIVIDE — nothing at that point.");
     return true;
   }
-  st.measureTarget = hit;
-  st.measurePaper = false;
-  st.measurePhase = AppCommandState::MeasurePhase::WaitValue;
+  ms->target = hit;
+  ms->paper = false;
+  ms->phase = stepengine::MeasurePhase::WaitValue;
   log.push_back(st.active == K::Measure ? "MEASURE — specify length of segment:"
                                         : "DIVIDE — enter the number of segments:");
   return true;
@@ -1548,7 +1585,7 @@ bool HandleMeasureObjectPick(AppCommandState& st, double wx, double wy, std::vec
 bool HandleListPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs))
+    if (PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs))
       ListPaperEntity(st, *L, hit, log);
     else
       log.push_back("LIST — nothing at that point.");
@@ -1566,7 +1603,7 @@ bool HandleListPick(AppCommandState& st, double wx, double wy, std::vector<std::
 bool HandleAreaObjectPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
     PaperEntityRef hit;
-    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+    if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.drawing.blockDefs)) {
       log.push_back("AREA — nothing at that point.");
       return true;
     }
@@ -1595,30 +1632,6 @@ bool HandleAreaObjectPick(AppCommandState& st, double wx, double wy, std::vector
 
 }  // namespace
 
-void ResetCadDrawInquiryDrafts(AppCommandState& st) {
-  st.leaderDraftPoints.clear();
-  st.leaderPhase = AppCommandState::LeaderPhase::WaitFirst;
-  st.leaderAnnotation = AppCommandState::LeaderAnnotation::Mtext;
-  st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
-  st.leaderShowArrow = true;
-  st.leaderFinishAfterAnnotation = false;
-  st.peditPhase = AppCommandState::PeditPhase::WaitObject;
-  st.peditIndex = -1;
-  st.peditVertex = 0;
-  st.peditPaper = false;
-  st.measurePhase = AppCommandState::MeasurePhase::WaitObject;
-  st.measureTarget = SelectedEntity{};
-  st.measurePaper = false;
-  st.measurePaperTarget = PaperEntityRef{PaperEntityRef::Type::Line, -1};
-  st.measurePickX = 0.0;
-  st.measurePickY = 0.0;
-  st.areaDraftPoints.clear();
-  st.areaPhase = AppCommandState::AreaPhase::WaitFirst;
-  st.areaRunning = 0.0;
-  st.areaSubtract = false;
-  st.areaAccumulate = false;
-}
-
 void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log) {
   assert(std::isfinite(x) && std::isfinite(y) && std::isfinite(z));
   PushUndoSnapshot(st, "POINT");
@@ -1628,42 +1641,34 @@ void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::ve
 }
 
 void StartPointCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Point);
+  BeginDrawInquirySession(st, std::make_unique<stepengine::PointSession>(), AppCommandState::Kind::Point);
   log.push_back("POINT — specify a point (Enter to end):");
 }
 
 void StartLeaderCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Leader);
-  st.leaderPhase = AppCommandState::LeaderPhase::WaitFirst;
-  st.leaderDraftPoints.clear();
+  BeginDrawInquirySession(st, std::make_unique<stepengine::LeaderSession>(), AppCommandState::Kind::Leader);
   log.push_back("LEADER — specify first leader point (Annotation / Format):");
 }
 
 void StartPeditCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Pedit);
-  st.peditPhase = AppCommandState::PeditPhase::WaitObject;
+  BeginDrawInquirySession(st, std::make_unique<stepengine::PeditSession>(), AppCommandState::Kind::Pedit);
   log.push_back("PEDIT — select polyline (or line/arc to convert):");
 }
 
 void StartMeasureCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Measure);
-  st.measurePhase = AppCommandState::MeasurePhase::WaitObject;
+  BeginDrawInquirySession(st, std::make_unique<stepengine::MeasureDivideSession>(false),
+                          AppCommandState::Kind::Measure);
   log.push_back("MEASURE — select object to measure:");
 }
 
 void StartDivideCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Divide);
-  st.measurePhase = AppCommandState::MeasurePhase::WaitObject;
+  BeginDrawInquirySession(st, std::make_unique<stepengine::MeasureDivideSession>(true),
+                          AppCommandState::Kind::Divide);
   log.push_back("DIVIDE — select object to divide:");
 }
 
 void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Area);
-  st.areaPhase = AppCommandState::AreaPhase::WaitFirst;
-  st.areaDraftPoints.clear();
-  st.areaRunning = 0.0;
-  st.areaSubtract = false;
-  st.areaAccumulate = false;
+  BeginDrawInquirySession(st, std::make_unique<stepengine::AreaSession>(), AppCommandState::Kind::Area);
   log.push_back("AREA — specify first corner point (Object / Add / Subtract):");
 }
 
@@ -1680,14 +1685,14 @@ void StartListCommand(AppCommandState& st, std::vector<std::string>& log) {
       return;
     }
   }
-  BeginInteractive(st, AppCommandState::Kind::List);
+  BeginDrawInquirySession(st, std::make_unique<stepengine::ListSession>(), AppCommandState::Kind::List);
   log.push_back("LIST — select objects, then Enter:");
 }
 
 void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string t = StringUtil::trimCopy(args);
   if (t.empty()) {
-    log.push_back("PDMODE = " + std::to_string(st.pdMode) + " (0/1/2/3/4 + 32 circle / 64 square).");
+    log.push_back("PDMODE = " + std::to_string(st.drawing.pdMode) + " (0/1/2/3/4 + 32 circle / 64 square).");
     return;
   }
   int v = 0;
@@ -1696,16 +1701,16 @@ void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vec
     return;
   }
   PushUndoSnapshot(st, "PDMODE");
-  st.pdMode = v;
+  st.drawing.pdMode = v;
   BumpCadGpuCache(st);
-  log.push_back("PDMODE = " + std::to_string(st.pdMode) + ".");
+  log.push_back("PDMODE = " + std::to_string(st.drawing.pdMode) + ".");
 }
 
 void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::string t = StringUtil::trimCopy(args);
   if (t.empty()) {
     char buf[80];
-    std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g (0 = 5%% of view).", st.pdSize);
+    std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g (0 = 5%% of view).", st.drawing.pdSize);
     log.push_back(buf);
     return;
   }
@@ -1715,10 +1720,10 @@ void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vec
     return;
   }
   PushUndoSnapshot(st, "PDSIZE");
-  st.pdSize = v;
+  st.drawing.pdSize = v;
   BumpCadGpuCache(st);
   char buf[80];
-  std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g.", st.pdSize);
+  std::snprintf(buf, sizeof(buf), "PDSIZE = %.6g.", st.drawing.pdSize);
   log.push_back(buf);
 }
 
@@ -1740,29 +1745,25 @@ bool ParseTableCount(const std::string& line, int lo, int hi, int dflt, int* out
 }
 
 void EndTableCommand(AppCommandState& st) {
-  ResetCadDrawInquiryDrafts(st);
-  st.active = AppCommandState::Kind::None;
-  st.tableStage = 0;
-  st.pointTableStage = 0;
+  stepengine::EndSession(st);
 }
 
 // Places a sized table with its upper-left corner at (\p wx, \p wy) and logs the result.
 }  // namespace
 
 void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
-  BeginInteractive(st, AppCommandState::Kind::Table);
-  st.tableStage = 0;
+  auto* ts = BeginDrawInquirySession(st, std::make_unique<stepengine::TableSession>(), AppCommandState::Kind::Table);
   st.tablePendingStyle.clear();
   st.tablePendingCols = 3;
   st.tablePendingRows = 2;
-  if (const CadTableStyle* standard = CadTableFindStyle(st.tableStyles, "Standard")) {
+  if (const CadTableStyle* standard = CadTableFindStyle(st.drawing.tableStyles, "Standard")) {
     st.tablePendingColumnWidthInches = standard->columnWidthInches;
     st.tablePendingRowHeightInches = standard->rowHeightInches;
   }
   if (st.addPointTableDialogAvailable) {
     st.tablePendingStyle = "Standard";
     st.tablePendingRows = 3;  // one title row, one header row and one initial data row
-    st.tableStage = 3;
+    ts->stage = 3;
     st.tableInsertDialogRequested = true;
     return;
   }
@@ -1770,9 +1771,12 @@ void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.tableStage == 0) {
+  auto* ts = st.sessionAs<stepengine::TableSession>();
+  if (!ts)
+    return false;
+  if (ts->stage == 0) {
     const std::string name = line.empty() ? std::string("Standard") : line;
-    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, name);
     if (!s || s->point) {
       log.push_back("TABLE — no data table style named \"" + name + "\". Type Standard or press Enter.");
       return true;
@@ -1780,25 +1784,25 @@ bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<s
     st.tablePendingStyle = s->name;
     st.tablePendingColumnWidthInches = s->columnWidthInches;
     st.tablePendingRowHeightInches = s->rowHeightInches;
-    st.tableStage = 1;
+    ts->stage = 1;
     log.push_back("TABLE — number of columns <3>:");
     return true;
   }
-  if (st.tableStage == 1) {
+  if (ts->stage == 1) {
     if (!ParseTableCount(line, 1, 50, 3, &st.tablePendingCols)) {
       log.push_back("TABLE — enter a whole number of columns from 1 to 50.");
       return true;
     }
-    st.tableStage = 2;
+    ts->stage = 2;
     log.push_back("TABLE — number of rows <2>:");
     return true;
   }
-  if (st.tableStage == 2) {
+  if (ts->stage == 2) {
     if (!ParseTableCount(line, 1, 500, 2, &st.tablePendingRows)) {
       log.push_back("TABLE — enter a whole number of rows from 1 to 500.");
       return true;
     }
-    st.tableStage = 3;
+    ts->stage = 3;
     log.push_back("TABLE — specify the insertion point (upper-left corner):");
     return true;
   }
@@ -1807,7 +1811,7 @@ bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<s
 }
 
 void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.tablePendingStyle);
+  const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, st.tablePendingStyle);
   if (!s) {
     EndTableCommand(st);
     return;
@@ -1816,15 +1820,15 @@ void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::s
   CadTableStyle sizing = *s;
   sizing.columnWidthInches = st.tablePendingColumnWidthInches;
   sizing.rowHeightInches = st.tablePendingRowHeightInches;
-  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.modelUnitsPerPlottedInch);
+  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.drawing.modelUnitsPerPlottedInch);
   t.insX = static_cast<float>(wx);
   t.insY = static_cast<float>(wy);
   t.insZ = static_cast<float>(CadCommitElevation(st));
   if (const TextStyle* ts = ActiveTextStyle(st))
     t.fontFamily = ts->fontFamily;
   PushUndoSnapshot(st, "TABLE");
-  st.cadTables.push_back(std::move(t));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  st.drawing.cadTables.push_back(std::move(t));
+  AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
   log.push_back("TABLE inserted: " + std::to_string(st.tablePendingCols) + " x " +
@@ -1837,16 +1841,13 @@ void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& lo
     st.addPointTableDialogRequested = true;  // the Qt editor opens the dialog and calls BeginAddPointTableWithPoints
     return;
   }
-  BeginInteractive(st, AppCommandState::Kind::PointTable);
-  st.pointTableStage = 0;
-  st.pointTableStyle.clear();
-  st.pointTableIds.clear();
+  BeginDrawInquirySession(st, std::make_unique<stepengine::PointTableSession>(), AppCommandState::Kind::PointTable);
   log.push_back("ADDPOINTTABLE — point table style (NameNEZD) or Enter:");
 }
 
 bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
                                   std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, styleName);
+  const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, styleName);
   if (!s || !s->point) {
     log.push_back("ADDPOINTTABLE — no point table style named \"" + styleName + "\".");
     return false;
@@ -1855,7 +1856,7 @@ bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleN
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   std::vector<int> present;
   for (int id : ids) {
-    for (const SurveyPoint& p : st.surveyPoints) {
+    for (const SurveyPoint& p : st.drawing.surveyPoints) {
       if (p.id == id) {
         present.push_back(id);
         break;
@@ -1866,35 +1867,39 @@ bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleN
     log.push_back("ADDPOINTTABLE — no survey points to list.");
     return false;
   }
-  BeginInteractive(st, AppCommandState::Kind::PointTable);
-  st.pointTableStage = 2;
-  st.pointTableStyle = s->name;
-  st.pointTableIds = std::move(present);
-  log.push_back("ADDPOINTTABLE — " + std::to_string(st.pointTableIds.size()) +
+  auto* pt = BeginDrawInquirySession(st, std::make_unique<stepengine::PointTableSession>(),
+                                     AppCommandState::Kind::PointTable);
+  pt->stage = 2;
+  pt->style = s->name;
+  pt->ids = std::move(present);
+  log.push_back("ADDPOINTTABLE — " + std::to_string(pt->ids.size()) +
                 " point(s). Specify the insertion point (upper-left corner):");
   return true;
 }
 
 bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
-  if (st.pointTableStage == 0) {
+  auto* pt = st.sessionAs<stepengine::PointTableSession>();
+  if (!pt)
+    return false;
+  if (pt->stage == 0) {
     const std::string name = line.empty() ? std::string("NameNEZD") : line;
-    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    const CadTableStyle* s = CadTableFindStyle(st.drawing.tableStyles, name);
     if (!s || !s->point) {
       log.push_back("ADDPOINTTABLE — no point table style named \"" + name + "\". Type NameNEZD or press Enter.");
       return true;
     }
-    st.pointTableStyle = s->name;
-    st.pointTableStage = 1;
+    pt->style = s->name;
+    pt->stage = 1;
     log.push_back("ADDPOINTTABLE — points: numbers such as 1-5,8, a point group name, or Enter for all survey points:");
     return true;
   }
-  if (st.pointTableStage == 1) {
+  if (pt->stage == 1) {
     std::vector<int> ids;
     if (line.empty()) {
-      for (const SurveyPoint& p : st.surveyPoints)
+      for (const SurveyPoint& p : st.drawing.surveyPoints)
         ids.push_back(p.id);
     } else if (const int g = FindPointGroupIndex(st, line); g >= 0) {
-      ids = ResolvePointGroup(st, st.pointGroups[static_cast<size_t>(g)], &log);
+      ids = ResolvePointGroup(st, st.drawing.pointGroups[static_cast<size_t>(g)], &log);
     } else {
       std::vector<std::string> bad;
       const std::vector<PointIdRange> ranges = ParseIdRanges(line, &bad);
@@ -1902,12 +1907,13 @@ bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vec
         log.push_back("ADDPOINTTABLE — cannot read \"" + bad.front() + "\". Type numbers such as 1-5,8.");
         return true;
       }
-      for (const SurveyPoint& p : st.surveyPoints) {
+      for (const SurveyPoint& p : st.drawing.surveyPoints) {
         if (IdInRanges(ranges, p.id))
           ids.push_back(p.id);
       }
     }
-    BeginAddPointTableWithPoints(st, st.pointTableStyle, std::move(ids), log);
+    const std::string style = pt->style;
+    BeginAddPointTableWithPoints(st, style, std::move(ids), log);
     return true;
   }
   log.push_back("ADDPOINTTABLE — pick the insertion point.");
@@ -1915,14 +1921,15 @@ bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vec
 }
 
 void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.pointTableStyle);
+  const auto* pt = st.sessionAs<stepengine::PointTableSession>();
+  const CadTableStyle* s = pt ? CadTableFindStyle(st.drawing.tableStyles, pt->style) : nullptr;
   if (!s) {
     EndTableCommand(st);
     return;
   }
   std::vector<CadTablePointRow> rows;
-  for (int id : st.pointTableIds) {
-    for (const SurveyPoint& p : st.surveyPoints) {
+  for (int id : pt->ids) {
+    for (const SurveyPoint& p : st.drawing.surveyPoints) {
       if (p.id != id)
         continue;
       CadTablePointRow r;
@@ -1955,7 +1962,7 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
                                          rows.begin() + static_cast<std::ptrdiff_t>(first + count));
     CadTable table;
     const int tableRows = static_cast<int>(count) + 1 + (mergedTitle ? 1 : 0);
-    CadTableApplyStyleSize(&table, *s, tableRows, cols, st.modelUnitsPerPlottedInch);
+    CadTableApplyStyleSize(&table, *s, tableRows, cols, st.drawing.modelUnitsPerPlottedInch);
     table.cells = CadPointTableCells(*s, subset, st.displayLinearPrecision);
     table.surveyPointDataRows = true;
     if (mergedTitle) {
@@ -1975,10 +1982,10 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
         table.columnWeights.clear();
         for (double width : s->columnWidths) table.columnWeights.push_back(static_cast<float>(width));
       } else {
-        CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+        CadTableFitColumnWeightsFromContent(&table, st.drawing.modelUnitsPerPlottedInch);
       }
     } else {
-      CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+      CadTableFitColumnWeightsFromContent(&table, st.drawing.modelUnitsPerPlottedInch);
     }
     const std::size_t stackLimit = static_cast<std::size_t>(std::max(1, st.pointTableMaxStack));
     const std::size_t stack = chunk / stackLimit;
@@ -1997,9 +2004,9 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
   }
   PushUndoSnapshot(st, "ADDPOINTTABLE");
   for (CadTable& table : tables) {
-    st.cadTables.push_back(std::move(table));
-    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
-    if (!st.pointTableLayer.empty()) st.cadTableAttrs.back().layer = st.pointTableLayer;
+    st.drawing.cadTables.push_back(std::move(table));
+    AppendNewObjectAttrs(st, st.drawing.cadTableAttrs, st.drawing.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+    if (!st.pointTableLayer.empty()) st.drawing.cadTableAttrs.back().layer = st.pointTableLayer;
   }
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
@@ -2010,65 +2017,76 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
   EndTableCommand(st);
 }
 
-bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  if (!IsCadDrawInquiryKind(st.active))
-    return false;
-  const double z = CadCommitElevation(st);
-  if (st.active == K::Table) {
-    if (st.tableStage != 3) {
-      log.push_back("TABLE — answer the prompt first.");
-      return true;
-    }
-    CommitTableAt(st, wx, wy, log);
-    return true;
+void SubmitTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ts = st.sessionAs<stepengine::TableSession>();
+  if (!ts || ts->stage != 3) {
+    log.push_back("TABLE — answer the prompt first.");
+    return;
   }
-  if (st.active == K::PointTable) {
-    if (st.pointTableStage != 2) {
-      log.push_back("ADDPOINTTABLE — answer the prompt first.");
-      return true;
-    }
-    CommitPointTableAt(st, wx, wy, log);
-    return true;
+  CommitTableAt(st, wx, wy, log);
+}
+
+void SubmitPointTableViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* pt = st.sessionAs<stepengine::PointTableSession>();
+  if (!pt || pt->stage != 2) {
+    log.push_back("ADDPOINTTABLE — answer the prompt first.");
+    return;
   }
-  if (st.active == K::Point) {
-    CommitCadPointAt(st, wx, wy, z, log);
-    return true;
+  CommitPointTableAt(st, wx, wy, log);
+}
+
+void SubmitLeaderViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* ls = st.sessionAs<stepengine::LeaderSession>();
+  if (!ls || ls->phase == stepengine::LeaderPhase::WaitAnnotation ||
+      ls->phase == stepengine::LeaderPhase::WaitFormat)
+    return;
+  ls->draftPoints.push_back({wx, wy, CadCommitElevation(st)});
+  if (ls->phase == stepengine::LeaderPhase::WaitFirst)
+    ls->phase = stepengine::LeaderPhase::WaitNext;
+  log.push_back("LEADER — specify next point (Enter = annotation):");
+}
+
+void SubmitAreaViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  auto* as = st.sessionAs<stepengine::AreaSession>();
+  if (!as)
+    return;
+  if (as->phase == stepengine::AreaPhase::WaitObject) {
+    (void)HandleAreaObjectPick(st, wx, wy, log);
+    return;
   }
-  if (st.active == K::Leader && st.leaderPhase != AppCommandState::LeaderPhase::WaitAnnotation &&
-      st.leaderPhase != AppCommandState::LeaderPhase::WaitFormat) {
-    st.leaderDraftPoints.push_back({wx, wy, z});
-    if (st.leaderPhase == AppCommandState::LeaderPhase::WaitFirst)
-      st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
-    log.push_back("LEADER — specify next point (Enter = annotation):");
-    return true;
-  }
-  if (st.active == K::Area && st.areaPhase != AppCommandState::AreaPhase::WaitObject) {
-    st.areaDraftPoints.push_back({wx, wy, z});
-    st.areaPhase = AppCommandState::AreaPhase::WaitNext;
-    log.push_back("AREA — specify next point (Enter to close):");
-    return true;
-  }
-  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitVertexMove) {
+  as->draftPoints.push_back({wx, wy, CadCommitElevation(st)});
+  as->phase = stepengine::AreaPhase::WaitNext;
+  log.push_back("AREA — specify next point (Enter to close):");
+}
+
+void SubmitPeditViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return;
+  if (ps->phase == stepengine::PeditPhase::WaitVertexMove) {
     PeditMoveVertex(st, wx, wy, log);
-    return true;
+    return;
   }
-  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert) {
+  if (ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
     PeditInsertVertex(st, wx, wy, log);
-    return true;
+    return;
   }
-  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitJoin)
-    return HandlePeditJoinPick(st, wx, wy, log);
-  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitObject)
-    return HandlePeditObjectPick(st, wx, wy, log);
-  if ((st.active == K::Measure || st.active == K::Divide) &&
-      st.measurePhase == AppCommandState::MeasurePhase::WaitObject)
-    return HandleMeasureObjectPick(st, wx, wy, log);
-  if (st.active == K::List)
-    return HandleListPick(st, wx, wy, log);
-  if (st.active == K::Area && st.areaPhase == AppCommandState::AreaPhase::WaitObject)
-    return HandleAreaObjectPick(st, wx, wy, log);
-  return true;
+  if (ps->phase == stepengine::PeditPhase::WaitJoin) {
+    (void)HandlePeditJoinPick(st, wx, wy, log);
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitObject)
+    (void)HandlePeditObjectPick(st, wx, wy, log);
+}
+
+void SubmitMeasureDivideViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const auto* ms = st.sessionAs<stepengine::MeasureDivideSession>();
+  if (ms && ms->phase == stepengine::MeasurePhase::WaitObject)
+    (void)HandleMeasureObjectPick(st, wx, wy, log);
+}
+
+void SubmitListViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  (void)HandleListPick(st, wx, wy, log);
 }
 
 // DATAEXTRACTION (REQ-467, issue #804). Selection first, then a typed column list, then a file.
@@ -2088,9 +2106,9 @@ const char* DataExtractTypeName(const SelectedEntity& e, const AppCommandState& 
     case T::Multileader: return "MLEADER";
     case T::FilledRegion: return "HATCH";
     case T::Annotation: {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadAnnotations.size())
         return "ANNOTATION";
-      switch (st.cadAnnotations[static_cast<size_t>(e.index)].kind) {
+      switch (st.drawing.cadAnnotations[static_cast<size_t>(e.index)].kind) {
         case CadAnnotation::Kind::Text:      return "TEXT";
         case CadAnnotation::Kind::Mtext:     return "MTEXT";
         case CadAnnotation::Kind::DimAligned:
@@ -2111,42 +2129,44 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
   const EntityAttributes* at = CadEntityAttrsForSelected(st, e);
   r.layer = (at && !at->layer.empty()) ? at->layer : "0";
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 2 < st.userLinesFlat.size()) {
+    const size_t li = static_cast<size_t>(e.index);
+    if (li < st.drawing.lineCount()) {
+      const CadLineRecord ln = st.drawing.line(li);
       r.hasPoint = true;
-      r.x = st.userLinesFlat[k];
-      r.y = st.userLinesFlat[k + 1];
-      r.z = st.userLinesFlat[k + 2];
+      r.x = ln.x0;
+      r.y = ln.y0;
+      r.z = ln.z0;
     }
   } else if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 2 < st.userCirclesCxCyZR.size()) {
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci < st.drawing.circleCount()) {
+      const CadCircleRecord c = st.drawing.circle(ci);
       r.hasPoint = true;
-      r.x = st.userCirclesCxCyZR[k];
-      r.y = st.userCirclesCxCyZR[k + 1];
-      r.z = st.userCirclesCxCyZR[k + 2];
+      r.x = c.cx;
+      r.y = c.cy;
+      r.z = c.cz;
     }
   } else if (e.type == T::Polyline) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.userPolylineOffsets.size()) {
-      const size_t v = static_cast<size_t>(st.userPolylineOffsets[static_cast<size_t>(e.index)]) * 3;
-      if (v + 2 < st.userPolylineVerts.size()) {
+    if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.drawing.userPolylineOffsets.size()) {
+      const size_t v = static_cast<size_t>(st.drawing.userPolylineOffsets[static_cast<size_t>(e.index)]);
+      if (v < st.drawing.vertexCount()) {
         r.hasPoint = true;
-        r.x = st.userPolylineVerts[v];
-        r.y = st.userPolylineVerts[v + 1];
-        r.z = st.userPolylineVerts[v + 2];
+        r.x = st.drawing.vertex(v).x;
+        r.y = st.drawing.vertex(v).y;
+        r.z = st.drawing.vertex(v).z;
       }
     }
   } else if (e.type == T::Point) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadPoints.size()) {
-      const CadPoint& p = st.cadPoints[static_cast<size_t>(e.index)];
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadPoints.size()) {
+      const CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
       r.hasPoint = true;
       r.x = p.x;
       r.y = p.y;
       r.z = p.z;
     }
   } else if (e.type == T::Annotation) {
-    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
-      const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(e.index)];
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadAnnotations.size()) {
+      const CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(e.index)];
       r.hasPoint = true;
       r.x = a.insX;
       r.y = a.insY;
@@ -2181,7 +2201,7 @@ void StartDataExtractCommand(AppCommandState& st, std::vector<std::string>& log)
     log.push_back("DATAEXTRACTION — select the objects to extract first, then run the command.");
     return;
   }
-  BeginInteractive(st, AppCommandState::Kind::DataExtract);
+  BeginDrawInquirySession(st, std::make_unique<stepengine::DataExtractSession>(), AppCommandState::Kind::DataExtract);
   log.push_back("DATAEXTRACTION — " + std::to_string(st.selection.size()) +
                 " object(s). Columns: TYPE, LAYER, TEXT, X, Y, Z separated by commas, or Enter for all:");
 }
@@ -2201,8 +2221,7 @@ bool HandleDataExtractText(const std::string& line, AppCommandState& st, std::ve
 
   char path[1024]{};
   if (!BrowseSaveFileSpreadsheetUtf8(path, sizeof(path), "extract.xlsx") || path[0] == '\0') {
-    ResetCadDrawInquiryDrafts(st);
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     log.push_back("DATAEXTRACTION canceled — no file chosen.");
     return true;
   }
@@ -2210,111 +2229,104 @@ bool HandleDataExtractText(const std::string& line, AppCommandState& st, std::ve
     log.push_back("DATAEXTRACTION — " + err + ".");
     return true;
   }
-  ResetCadDrawInquiryDrafts(st);
-  st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("DATAEXTRACTION wrote " + std::to_string(records.size()) + " row(s) to " + path + ".");
   return true;
 }
 
-bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  using K = AppCommandState::Kind;
-  if (!IsCadDrawInquiryKind(st.active) && st.active != K::DataExtract)
-    return false;
+void HandlePointCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   const std::string line = StringUtil::trimCopy(lineIn);
-  const std::string opt = UpperTrim(line);
-
-  if (st.active == K::Point) {
-    if (line.empty()) {
-      st.active = K::None;
-      log.push_back("POINT ended.");
-      return true;
-    }
-    float x = 0.f, y = 0.f;
-    if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
-      log.push_back("POINT — enter a point as X,Y, or Enter to end.");
-      return true;
-    }
-    CommitCadPointAt(st, x, y, CadCommitElevation(st), log);
-    return true;
+  if (line.empty()) {
+    stepengine::EndSession(st);
+    log.push_back("POINT ended.");
+    return;
   }
-
-  if (st.active == K::Leader)
-    return HandleLeaderText(line, opt, st, log);
-
-  if (st.active == K::Pedit) {
-    if (st.peditPhase == AppCommandState::PeditPhase::WaitOption)
-      return HandlePeditOption(st, opt, log);
-    if (st.peditPhase == AppCommandState::PeditPhase::WaitVertex)
-      return HandlePeditVertex(st, opt, log);
-    if (st.peditPhase == AppCommandState::PeditPhase::WaitJoin) {
-      if (line.empty()) {
-        st.peditPhase = AppCommandState::PeditPhase::WaitOption;
-        log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
-        return true;
-      }
-      log.push_back("PEDIT — pick a touching polyline, or Enter to skip.");
-      return true;
-    }
-    if (st.peditPhase == AppCommandState::PeditPhase::WaitVertexMove ||
-        st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert) {
-      float x = 0.f, y = 0.f;
-      if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
-        log.push_back("PEDIT — enter a point.");
-        return true;
-      }
-      if (st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert)
-        PeditInsertVertex(st, x, y, log);
-      else
-        PeditMoveVertex(st, x, y, log);
-      return true;
-    }
-    if (line.empty()) {
-      log.push_back("PEDIT — select a polyline.");
-      return true;
-    }
-    log.push_back("PEDIT — pick a polyline, line, or arc.");
-    return true;
+  float x = 0.f, y = 0.f;
+  if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
+    log.push_back("POINT — enter a point as X,Y, or Enter to end.");
+    return;
   }
-
-  if (st.active == K::Measure || st.active == K::Divide)
-    return HandleMeasureDivideText(line, st, log);
-
-  if (st.active == K::Table)
-    return HandleTableText(line, st, log);
-  if (st.active == K::PointTable)
-    return HandlePointTableText(line, st, log);
-  if (st.active == K::DataExtract)
-    return HandleDataExtractText(line, st, log);
-  if (st.active == K::Area)
-    return HandleAreaText(line, opt, st, log);
-
-  if (st.active == K::List) {
-    if (line.empty()) {
-      st.active = K::None;
-      log.push_back("LIST complete.");
-      return true;
-    }
-    log.push_back("LIST — pick objects, then Enter.");
-    return true;
-  }
-  return true;
+  CommitCadPointAt(st, x, y, CadCommitElevation(st), log);
 }
 
-const char* CadDrawInquiryCommandInputHint(const AppCommandState& st) {
-  using K = AppCommandState::Kind;
-  if (st.active == K::Point)
-    return "POINT: click or X,Y | Enter ends | ESC cancel";
-  if (st.active == K::Leader)
-    return "LEADER: next point | Annotation / Format | Enter finishes | ESC cancel";
-  if (st.active == K::Pedit)
-    return "PEDIT: pick polyline, or Close/Open/Edit/Fit/Spline/Decurve/Reverse | ESC cancel";
-  if (st.active == K::Measure)
-    return "MEASURE: pick object, then length | ESC cancel";
-  if (st.active == K::Divide)
-    return "DIVIDE: pick object, then number of segments | ESC cancel";
-  if (st.active == K::Area)
-    return "AREA: points | Object | Add | Subtract | Enter reports | ESC cancel";
-  if (st.active == K::List)
-    return "LIST: pick objects | Enter ends | ESC cancel";
-  return nullptr;
+void HandleLeaderCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  (void)HandleLeaderText(line, UpperTrim(line), st, log);
+}
+
+void HandlePeditCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  auto* ps = st.sessionAs<stepengine::PeditSession>();
+  if (!ps)
+    return;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string opt = UpperTrim(line);
+  if (ps->phase == stepengine::PeditPhase::WaitOption) {
+    (void)HandlePeditOption(st, opt, log);
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitVertex) {
+    (void)HandlePeditVertex(st, opt, log);
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitJoin) {
+    if (line.empty()) {
+      ps->phase = stepengine::PeditPhase::WaitOption;
+      log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
+      return;
+    }
+    log.push_back("PEDIT — pick a touching polyline, or Enter to skip.");
+    return;
+  }
+  if (ps->phase == stepengine::PeditPhase::WaitVertexMove ||
+      ps->phase == stepengine::PeditPhase::WaitVertexInsert) {
+    float x = 0.f, y = 0.f;
+    if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
+      log.push_back("PEDIT — enter a point.");
+      return;
+    }
+    if (ps->phase == stepengine::PeditPhase::WaitVertexInsert)
+      PeditInsertVertex(st, x, y, log);
+    else
+      PeditMoveVertex(st, x, y, log);
+    return;
+  }
+  if (line.empty()) {
+    log.push_back("PEDIT — select a polyline.");
+    return;
+  }
+  log.push_back("PEDIT — pick a polyline, line, or arc.");
+}
+
+void HandleMeasureDivideCommandText(const std::string& lineIn, AppCommandState& st,
+                                    std::vector<std::string>& log) {
+  (void)HandleMeasureDivideText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandleAreaCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  (void)HandleAreaText(line, UpperTrim(line), st, log);
+}
+
+void HandleListCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (line.empty()) {
+    stepengine::EndSession(st);
+    log.push_back("LIST complete.");
+    return;
+  }
+  log.push_back("LIST — pick objects, then Enter.");
+}
+
+void HandleDataExtractCommandText(const std::string& lineIn, AppCommandState& st,
+                                  std::vector<std::string>& log) {
+  (void)HandleDataExtractText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandleTableCommandText(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  (void)HandleTableText(StringUtil::trimCopy(lineIn), st, log);
+}
+
+void HandlePointTableCommandText(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  (void)HandlePointTableText(StringUtil::trimCopy(lineIn), st, log);
 }

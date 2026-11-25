@@ -3,6 +3,7 @@
 #include "CadDynInput.hpp"
 
 #include "CadCommands.hpp"
+#include "engine/StepEngine.hpp"
 #include "CadCoordinateFrame.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
 
@@ -274,156 +275,14 @@ std::string Compose(const Group& g, const Live& live, bool directDistance) {
 // REQ-024: the active prompt takes a coordinate point (moved from CadUi.cpp so the headless driver
 // asks the same question the viewport does).
 bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
-  using K = AppCommandState::Kind;
-  switch (cmd.active) {
-  case K::Line: {
-    using LP = AppCommandState::LinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.linePhase == LP::NeedFirstPoint) return true;
-    if (cmd.linePhase == LP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Polyline: {
-    using PP = AppCommandState::PolylinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.polylinePhase == PP::NeedFirstPoint) return true;
-    if (cmd.polylinePhase == PP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Arc: return true;
-  case K::Rect: return true;  // both corners are point prompts (REQ-024/REQ-053)
-  case K::Ellipse: {
-    using EP = AppCommandState::EllipsePhase;
-    return cmd.ellPhase == EP::WaitCenter || cmd.ellPhase == EP::WaitMajorEnd;
-  }
-  case K::Text:
-    return cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion;
-  case K::Mtext: {
-    using MP = AppCommandState::MtextPhase;
-    return cmd.mtextPhase == MP::WaitCorner1 || cmd.mtextPhase == MP::WaitCorner2;
-  }
-  case K::DimAligned:
-  case K::DimLinear: return true;
-  case K::DimAngular: {
-    using DAP = AppCommandState::DimAngularPhase;
-    return cmd.dimAngularPhase == DAP::WaitVertex || cmd.dimAngularPhase == DAP::WaitRay1 ||
-           cmd.dimAngularPhase == DAP::WaitRay2;
-  }
-  case K::IdPoint: return true;
-  case K::StationOffsetPick: return true;
-  case K::SurveyInverse: return true;
-  case K::Dist: return true;
-  // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
-  // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
-  // two lists a point-picking command has to appear in.
-  case K::SurfaceElevGrade: return true;
-  case K::WaterDrop: return true;
-  case K::Catchment: return true;
-  case K::SwapTinEdge: return true;
-  case K::AddTinPoint: return true;
-  case K::DelTinPoint: return true;
-  case K::MoveTinPoint: return true;
-  case K::DelTinLine: return true;
-  case K::QuickProfile: return true;
-  case K::GeoMarkPoint: return true;       // REQ-359
-  case K::GeoReorientMarker: return true;  // REQ-359
-  case K::DrawingSettingsPick: return true;  // REQ-360
-  case K::AlignmentLayout: return true;      // REQ-485.1: every prompt wants a PI
-  case K::GeoCaptureArea:  // REQ-364: Pick Area's corners; nothing to type while it captures
-    return cmd.geoCmdPhase != AppCommandState::GeoCmdPhase::Capturing;
-  // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
-  // from both, so it had neither dynamic input nor a working click. Same phases that
-  // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a
-  // keyword or a number.
-  case K::Ucs: {
-    using UPh = AppCommandState::UcsPhase;
-    return cmd.ucsPhase == UPh::WaitOriginOrOption || cmd.ucsPhase == UPh::WaitXAxisPoint ||
-           cmd.ucsPhase == UPh::WaitXyPoint || cmd.ucsPhase == UPh::WaitRotationAngleP1 ||
-           cmd.ucsPhase == UPh::WaitRotationAngleP2 || cmd.ucsPhase == UPh::WaitZAxisOrigin ||
-           cmd.ucsPhase == UPh::WaitZAxisPoint;
-  }
-  case K::Circle: {
-    using CP = AppCommandState::CirclePhase;
-    return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
-           cmd.circlePhase == CP::ThreeP_WaitP2 || cmd.circlePhase == CP::ThreeP_WaitP3;
-  }
-  case K::Move:
-  case K::Copy: {
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::Scale: {
-    using MP = AppCommandState::ModifyPhase;
-    using SP = AppCommandState::ScalePhase;
-    if (cmd.modifyPhase == MP::NeedBase) return true;
-    if (cmd.modifyPhase == MP::NeedDestination)
-      return cmd.scalePhase == SP::Ref_WaitP1 || cmd.scalePhase == SP::Ref_WaitP2 ||
-             cmd.scalePhase == SP::NewLength_WaitP2;
-    return false;
-  }
-  case K::Rotate: {
-    using RP = AppCommandState::RotatePhase;
-    return cmd.rotatePhase == RP::NeedBase || cmd.rotatePhase == RP::Ref_WaitP1 ||
-           cmd.rotatePhase == RP::Ref_WaitP2 || cmd.rotatePhase == RP::AnglePoints_WaitP1 ||
-           cmd.rotatePhase == RP::AnglePoints_WaitP2;
-  }
-  case K::Trim: {
-    using TP = AppCommandState::TrimPhase;
-    return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
-  }
-  case K::Mirror: {
-    using MirP = AppCommandState::MirrorPhase;
-    return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
-    // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
-  }
-  case K::Stretch: {
-    // REQ-103 step 5. Base and destination are both real points (typed or picked), so STRETCH
-    // gets the same dynamic-input prompt MOVE/COPY do — it was omitted here, the second of the
-    // two lists a point-picking command has to appear in (TASK-099 F2).
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::InsertBlock: {
-    using IPh = AppCommandState::InsertBlockPhase;
-    return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
-  }
-  case K::PdfAttach:
-    return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint;
-  // REQ-354 / GitHub issue #564 section 5: PIPERUN's start and next points are point prompts like
-  // any other (its size and wall prompts are not). It was missing, so PIPERUN had a single field.
-  case K::PipeRun: {
-    using PRP = AppCommandState::PipeRunPhase;
-    return cmd.pipeRunPhase == PRP::WaitFirstPoint || cmd.pipeRunPhase == PRP::WaitNextPoint;
-  }
-  default:
-    return false;
-  }
+  return stepengine::ActiveExpectsPointEntry(cmd);
 }
 
 // REQ-154 / REQ-024. The two UCS axis prompts show a POLAR pair — distance and angle — because what
 // those prompts ask for is a DIRECTION. Returns false, and leaves the output alone, for every prompt
 // that is not one of them.
 bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
-  if (cmd.active != AppCommandState::Kind::Ucs || !baseWorld)
-    return false;
-  using UPh = AppCommandState::UcsPhase;
-  switch (cmd.ucsPhase) {
-  case UPh::WaitXAxisPoint:
-  case UPh::WaitXyPoint:
-    // Both measure from the ORIGIN, not from each other — one reference for both boxes, so the
-    // second prompt does not silently re-base the angle the first one showed.
-    *baseWorld = cmd.ucsPendingOrigin;
-    return true;
-  case UPh::WaitRotationAngleP2:
-    *baseWorld = cmd.ucsAngleBasePoint;
-    return true;
-  default:
-    return false;
-  }
+  return stepengine::ActiveUcsPolarPromptBase(cmd, baseWorld);
 }
 
 bool CadViewIsPlanToActiveUcs(const AppCommandState& cmd) {
@@ -432,66 +291,7 @@ bool CadViewIsPlanToActiveUcs(const AppCommandState& cmd) {
 }
 
 CadDynInputPrompt CadDynInputPromptFor(const AppCommandState& cmd) {
-  CadDynInputPrompt p;
-  p.pointEntry = CadCommandExpectsPointEntry(cmd);
-  if (!p.pointEntry)
-    return p;
-  if (CadUcsPolarPromptBase(cmd, &p.ucsPolarBase)) {
-    p.ucsPolar = true;
-    return p;
-  }
-  const bool modelSpace = cmd.activeSpaceIndex < 0 || InFloatingModelSpace(cmd);
-  p.showZ = modelSpace && !CadViewIsPlanToActiveUcs(cmd);
-
-  // The base each command's own parser measures `@` from, so the live ΔX / ΔY are exactly the
-  // numbers that would be typed.
-  const auto base = [&](float lx, float ly, float z) {
-    double wx = 0.0, wy = 0.0;
-    CadCoord::WorldFromLocal(cmd, lx, ly, &wx, &wy);
-    p.haveBase = true;
-    p.baseWorld = ray3d::Vec3{wx, wy, static_cast<double>(z)};
-  };
-  using K = AppCommandState::Kind;
-  switch (cmd.active) {
-  case K::Line:
-    if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
-      base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
-      p.initialMode = dyninput::Mode::RelativePolar;  // REQ-024: an anchored segment
-      // REQ-047: distance-only entry under ORTHO is handled by the command's ortho-distance path,
-      // not as a polar @dx,dy from the crosshair angle.
-      p.directDistance = cmd.orthoMode;
-    }
-    break;
-  case K::Polyline:
-    if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
-      base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
-      p.initialMode = dyninput::Mode::RelativePolar;
-      p.directDistance = cmd.orthoMode;
-    }
-    break;
-  case K::Move:
-  case K::Copy:
-  case K::Stretch:
-    if (cmd.modifyPhase == AppCommandState::ModifyPhase::NeedDestination)
-      base(cmd.modifyBaseX, cmd.modifyBaseY, cmd.modifyBaseZ);
-    break;
-  case K::Rect:
-    if (cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner)
-      base(cmd.rectX1, cmd.rectY1, CadWorkPlaneElevation(cmd));
-    break;
-  case K::PipeRun:
-    if (cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNextPoint && cmd.pipeRunDraftVerts.size() >= 3) {
-      const size_t n = cmd.pipeRunDraftVerts.size();
-      base(static_cast<float>(cmd.pipeRunDraftVerts[n - 3]), static_cast<float>(cmd.pipeRunDraftVerts[n - 2]),
-           static_cast<float>(cmd.pipeRunDraftVerts[n - 1]));
-      p.initialMode = dyninput::Mode::RelativePolar;  // a rubber-banded segment, like LINE's
-      p.directDistance = cmd.pipeRunCompassOn;         // REQ-346: the compass owns the direction
-    }
-    break;
-  default:
-    break;
-  }
-  return p;
+  return stepengine::ActiveDynInputPromptFor(cmd);
 }
 
 dyninput::Live CadDynInputLive(const AppCommandState& cmd, const CadDynInputPrompt& prompt, dyninput::Mode mode,

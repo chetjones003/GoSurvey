@@ -86,7 +86,11 @@ try {
   } finally {
     $env:PATH = $savedPath
   }
-  if ($code -ne 0) { Fail "GoSurvey.exe --smoke-test from the clean copy exited with code $code" }
+  if ($code -ne 0) {
+    $diagnostic = Join-Path $stage 'qt-editor-smoke.txt'
+    $detail = if (Test-Path -LiteralPath $diagnostic) { (Get-Content -LiteralPath $diagnostic -Raw).Trim() } else { 'No smoke diagnostic was written.' }
+    Fail "GoSurvey.exe --smoke-test from the clean copy exited with code ${code}: $detail"
+  }
   $shot = Join-Path $stage 'qt-editor-smoke.png'
   if (-not (Test-Path -LiteralPath $shot) -or (Get-Item -LiteralPath $shot).Length -eq 0) {
     Fail 'the smoke run produced no screenshot'

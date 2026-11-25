@@ -15,9 +15,11 @@
 - `COPYING`, `AUTHORS`, `README`, `NEWS` from upstream.
 - Not copied: upstream's `test/`, `examples/`, `doc/`, the rest of `programs/`, `bindings/` and
   build system.
-  GoSurvey builds only the library, with its own target in the top-level `CMakeLists.txt`
-  (same sources and flags as upstream's library-only build; 0.14 adds `logging.c`,
-  `decode2.c`, `encode2.c`).
+  GoSurvey builds only the library, with its own target in `cmake/ThirdParty.cmake`
+  (upstream's library-only sources and flags; 0.14 adds `logging.c`, `decode2.c`, `encode2.c`).
+  `src/out_dxfb.c` (binary DXF *writing*) is left out of the build: nothing calls
+  `dwg_write_dxfb`, and it was the slowest file in the whole build (~107 s). Add it back
+  to the source list if GoSurvey ever writes binary DXF.
 
 ## GoSurvey's changes to upstream
 Each change is its own commit. Keep this list current.

@@ -19,6 +19,13 @@ if ($Role -eq 'clang-tidy') {
   $env:Path = (Split-Path -Parent $tidy) + ';' + $env:Path
 }
 $env:CMAKE_BUILD_PARALLEL_LEVEL = if ($Role -eq 'build') { '3' } else { '1' }
+if ($Role -eq 'build' -and $env:GITHUB_EVENT_NAME -eq 'pull_request') {
+  $runnerWorkRoot = Split-Path -Parent $env:RUNNER_TEMP
+  $env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
+  $env:SCCACHE_DIR = Join-Path $runnerWorkRoot 'sccache'
+  $env:SCCACHE_CACHE_SIZE = '4G'
+  New-Item -ItemType Directory -Force -Path $env:SCCACHE_DIR | Out-Null
+}
 $env:CTEST_PARALLEL_LEVEL = '6'
 $env:CMAKE_PREFIX_PATH = $env:GOSURVEY_QT_ROOT
 $env:SCCACHE_GHA_ENABLED = 'false'

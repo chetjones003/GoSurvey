@@ -40,11 +40,11 @@ bool UsSurveyFoot(const DrawingSettings& ds) { return ds.footDefinition == Drawi
 
 geo::ConversionInput InputFor(const AppCommandState& d, const ProjectSettings& ps) {
   geo::ConversionInput in;
-  in.fromZone = d.drawingSettings.zoneCode;
+  in.fromZone = d.drawing.drawingSettings.zoneCode;
   in.toZone = ps.zoneCode;
-  in.fromMetersPerUnit = GoSurvey::Core::MetersPerInsUnit(d.drawingInsUnits, UsSurveyFoot(d.drawingSettings));
+  in.fromMetersPerUnit = GoSurvey::Core::MetersPerInsUnit(d.drawing.drawingInsUnits, UsSurveyFoot(d.drawing.drawingSettings));
   const bool toUs = ps.hasDefaults ? ps.defaults.footDefinition == DrawingSettings::FootDefinition::UsSurvey
-                                   : UsSurveyFoot(d.drawingSettings);
+                                   : UsSurveyFoot(d.drawing.drawingSettings);
   in.toMetersPerUnit = ps.insUnits >= 0 ? GoSurvey::Core::MetersPerInsUnit(ps.insUnits, toUs) : 0.0;
   DrawingWorldExtents(d, &in.minX, &in.maxX, &in.minY, &in.maxY);
   return in;
@@ -54,14 +54,14 @@ geo::ConversionInput InputFor(const AppCommandState& d, const ProjectSettings& p
 void Refresh(const AppCommandState& st, AddDrawingPlan* p) {
   const Session* s = FindSession(st, p->projectUid);
   const AppCommandState& d = *p->drawing;
-  p->pointsWorld = projpts::ToWorld(d.surveyPoints, d.worldDocumentOriginX, d.worldDocumentOriginY);
+  p->pointsWorld = projpts::ToWorld(d.drawing.surveyPoints, d.drawing.worldDocumentOriginX, d.drawing.worldDocumentOriginY);
   p->summary = projadd::Analyze(*s->points, p->pointsWorld);
   p->overrides.clear();
   const ProjectSettings& ps = *s->settings;
   if (ps.hasDefaults)
     for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
-      if (DiffersFromProjectDefault(ps, static_cast<ProjectDefaultKey>(k), d.modelUnitsPerPlottedInch,
-                                    d.drawingSettings))
+      if (DiffersFromProjectDefault(ps, static_cast<ProjectDefaultKey>(k), d.drawing.modelUnitsPerPlottedInch,
+                                    d.drawing.drawingSettings))
         p->overrides.push_back(kProjectDefaultKeyNames[k]);
 }
 
@@ -128,9 +128,9 @@ bool ChooseAddConvert(const AppCommandState& st, AddDrawingPlan* plan, std::vect
   ApplyDrawingConversion(*plan->drawing, plan->conversion.transform, log);
   // The drawing now speaks the project's coordinate system and unit.
   if (s->settings->insUnits >= 0)
-    plan->drawing->drawingInsUnits = s->settings->insUnits;
+    plan->drawing->drawing.drawingInsUnits = s->settings->insUnits;
   if (!s->settings->zoneCode.empty())
-    plan->drawing->drawingSettings.zoneCode = s->settings->zoneCode;
+    plan->drawing->drawing.drawingSettings.zoneCode = s->settings->zoneCode;
   plan->converted = true;
   Refresh(st, plan);
   return true;
@@ -174,17 +174,17 @@ bool CommitAddDrawing(AppCommandState& st, AddDrawingPlan& plan, double now, Add
   // The copy's own state: its points live in the database now, it shows exactly what it brought, the
   // settings that differ from the project become overrides, and the project's values are enforced.
   AppCommandState& d = *plan.drawing;
-  for (size_t i = d.surveyPoints.size(); i-- > 0;)
+  for (size_t i = d.drawing.surveyPoints.size(); i-- > 0;)
     RemoveSurveyPointAt(d, i);  // with their label MTEXT
-  d.pointVisibility = projadd::RulesShowing(outcome.shownIds);
+  d.drawing.pointVisibility = projadd::RulesShowing(outcome.shownIds);
   const ProjectSettings& ps = *s->settings;
   if (ps.hasDefaults)
     for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k) {
       const auto key = static_cast<ProjectDefaultKey>(k);
-      if (DiffersFromProjectDefault(ps, key, d.modelUnitsPerPlottedInch, d.drawingSettings))
-        d.drawingSettings.SetOverridden(key, true);
+      if (DiffersFromProjectDefault(ps, key, d.drawing.modelUnitsPerPlottedInch, d.drawing.drawingSettings))
+        d.drawing.drawingSettings.SetOverridden(key, true);
     }
-  ApplyProjectToDrawing(ps, &d.drawingInsUnits, &d.modelUnitsPerPlottedInch, &d.drawingSettings);
+  ApplyProjectToDrawing(ps, &d.drawing.drawingInsUnits, &d.drawing.modelUnitsPerPlottedInch, &d.drawing.drawingSettings);
   d.drawingTabs.resize(2);
   d.drawingTabs[1].projectUid = plan.projectUid;
   d.drawingTabs[1].pointsMode = AppCommandState::DrawingTab::PointsMode::Shared;

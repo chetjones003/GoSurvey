@@ -17,8 +17,8 @@
 QString RunCreateSheetsDialog(QWidget* parent, const AppCommandState& state) {
   // REQ-518.4: only alignments with a view frame group can make sheets, and only one group per alignment is usable.
   std::vector<QString> alignments;
-  for (const alignment::Alignment& a : state.alignments) {
-    const auto groups = std::count_if(state.viewFrameGroups.begin(), state.viewFrameGroups.end(),
+  for (const alignment::Alignment& a : state.drawing.alignments) {
+    const auto groups = std::count_if(state.drawing.viewFrameGroups.begin(), state.drawing.viewFrameGroups.end(),
                                       [&a](const alignment::ViewFrameGroup& g) { return g.alignmentId == a.id; });
     if (groups == 1) alignments.push_back(QString::fromStdString(a.name));
   }

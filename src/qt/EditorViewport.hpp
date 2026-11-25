@@ -10,6 +10,9 @@
 #include <memory>
 #include <unordered_map>
 #include "CadCommands.hpp"
+
+/// Load acadiso.pat into \p state once, for the hatch pattern renderer and the ribbon pattern gallery.
+void EnsureQtHatchPatternLibrary(AppCommandState& state);
 #include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
 #include "ViewCube.hpp"
@@ -25,7 +28,6 @@ class QOpenGLTextureBlitter;
 class QOpenGLVertexArrayObject;
 
 class EditorViewport final : public QOpenGLWidget {
-  friend class QtEditorTests;
 public:
   EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent);
   ~EditorViewport() override;
@@ -105,6 +107,8 @@ private:
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
   QTimer m_GripMenuTimer;
+  SelectedEntity::Type m_GripMenuType = SelectedEntity::Type::LineSeg;
+  ray3d::Vec3 m_GripMenuPoint{};
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;

@@ -601,7 +601,7 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
 // Height only ever comes from `plottedHeightInches` here: paper inches ARE plotted inches (ADR-025 (g)), so
 // unlike model space there is no drawing scale to divide by.
 inline void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, float* x1, float* y1) {
-  CadTextAnnotationBounds(a, std::max(0.01f, a.plottedHeightInches), x0, y0, x1, y1);
+  CadTextAnnotationBounds(a, std::max(0.01f, a.plottedHeightInches), x0, y0, x1, y1, /*textBaseline=*/false);
 }
 
 // Window/crossing test for a chain of paper-inch points (x,y pairs, in order): window wants EVERY

@@ -239,6 +239,9 @@ int main(int argc, char** argv) {
       QTimer::singleShot(800, &window, [&] {
         QString error;
         const bool ok = window.RunSmokeChecks(error);
+        QFile result(QCoreApplication::applicationDirPath() + "/qt-editor-smoke.txt");
+        if (result.open(QIODevice::WriteOnly | QIODevice::Truncate))
+          result.write(ok ? QByteArray("Qt editor smoke checks passed\n") : error.toUtf8());
         const auto screenshot = window.grab();
         screenshot.save(QCoreApplication::applicationDirPath() + "/qt-editor-smoke.png");
         std::fprintf(ok ? stdout : stderr, "%s\n", ok ? "Qt editor smoke checks passed" : error.toUtf8().constData());

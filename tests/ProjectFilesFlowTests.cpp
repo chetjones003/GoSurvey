@@ -198,9 +198,9 @@ TEST_CASE("req379 saving records the drawing's clouds and PDFs; opening finds th
   WriteText(pdf, "pdf");
   WriteText(dwg, "dwg");
 
-  st.worldDocumentOriginX = 1000.0;
-  st.worldDocumentOriginY = 2000.0;
-  st.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  st.drawing.worldDocumentOriginX = 1000.0;
+  st.drawing.worldDocumentOriginY = 2000.0;
+  st.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   PdfAttachment att;
   att.filePath = pdf.u8string();
   att.pageIndex = 2;
@@ -210,7 +210,7 @@ TEST_CASE("req379 saving records the drawing's clouds and PDFs; opening finds th
   att.rotationDeg = 30.f;
   att.pageWidthPts = 72.f;
   att.texW = 150;
-  st.pdfAttachments.push_back(att);
+  st.drawing.pdfAttachments.push_back(att);
 
   SyncProjectFilesOnSave(st, 1, dwg.u8string(), log);
   gsproj::Project onDisk;
@@ -231,16 +231,16 @@ TEST_CASE("req379 saving records the drawing's clouds and PDFs; opening finds th
   other.drawingTabs.resize(2);
   other.drawingTabs[1].projectUid = 7;
   other.activeDrawingIdx = 1;
-  other.worldDocumentOriginX = 1000.0;
-  other.worldDocumentOriginY = 2000.0;
-  other.cadPointClouds.push_back(Cloud("D:\\Jobs\\Smith\\PointClouds\\site.e57"));
+  other.drawing.worldDocumentOriginX = 1000.0;
+  other.drawing.worldDocumentOriginY = 2000.0;
+  other.drawing.cadPointClouds.push_back(Cloud("D:\\Jobs\\Smith\\PointClouds\\site.e57"));
   log.clear();
   ApplyProjectFilesOnOpen(other, 7, dwg.u8string(), log);
-  CHECK(fs::u8path(other.cadPointClouds[0]->sourcePath) == cloud);
-  CHECK(fs::u8path(other.cadPointClouds[0]->cloudCachePath) == fs::u8path(cloud.u8string() + ".gscloud"));
-  CHECK(other.cadPointClouds[0]->pointsXyz.size() == 6);  // the preview sample survives the remap
+  CHECK(fs::u8path(other.drawing.cadPointClouds[0]->sourcePath) == cloud);
+  CHECK(fs::u8path(other.drawing.cadPointClouds[0]->cloudCachePath) == fs::u8path(cloud.u8string() + ".gscloud"));
+  CHECK(other.drawing.cadPointClouds[0]->pointsXyz.size() == 6);  // the preview sample survives the remap
   // Headless cannot rasterize, so the PDF is reported, not silently dropped; the drawing still opens.
-  CHECK(other.pdfAttachments.empty());
+  CHECK(other.drawing.pdfAttachments.empty());
   bool saidPdf = false;
   for (const std::string& l : log)
     saidPdf = saidPdf || l.find("plan.pdf") != std::string::npos;
@@ -258,10 +258,10 @@ TEST_CASE("req379 a missing tracked PDF or cloud is reported and the drawing sti
   WriteText(dwg, "dwg"); // Sync runs after a drawing was saved, before attachments disappear.
   WriteText(cloud, "scan");
   WriteText(pdf, "pdf");
-  st.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  st.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   PdfAttachment att;
   att.filePath = pdf.u8string();
-  st.pdfAttachments.push_back(att);
+  st.drawing.pdfAttachments.push_back(att);
   SyncProjectFilesOnSave(st, 1, dwg.u8string(), log);
 
   fs::remove(cloud);
@@ -271,11 +271,11 @@ TEST_CASE("req379 a missing tracked PDF or cloud is reported and the drawing sti
   reopened.drawingTabs.resize(2);
   reopened.drawingTabs[1].projectUid = 7;
   reopened.activeDrawingIdx = 1;
-  reopened.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  reopened.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   log.clear();
   ApplyProjectFilesOnOpen(reopened, 7, dwg.u8string(), log);
-  REQUIRE(reopened.cadPointClouds.size() == 1);  // still there: preview sample only
-  CHECK(reopened.pdfAttachments.empty());
+  REQUIRE(reopened.drawing.cadPointClouds.size() == 1);  // still there: preview sample only
+  CHECK(reopened.drawing.pdfAttachments.empty());
   CHECK(log.size() >= 2);
   const projfiles::Health h = ProjectHealthFor(reopened, 7);
   CHECK(h.missing.size() >= 2);
@@ -291,7 +291,7 @@ TEST_CASE("req380 a point cloud left out of a pack opens as unavailable, not as 
   const fs::path dwg = s.project.Folder() / "Drawings" / "EG.dwg";
   WriteText(cloud, "scan");
   WriteText(dwg, "drawing");
-  st.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  st.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   SyncProjectFilesOnSave(st, 1, dwg.u8string(), log);
 
   // The pack was opened without the cloud: it is recorded as left out and is not on disk.
@@ -302,10 +302,10 @@ TEST_CASE("req380 a point cloud left out of a pack opens as unavailable, not as 
   reopened.drawingTabs.resize(2);
   reopened.drawingTabs[1].projectUid = 7;
   reopened.activeDrawingIdx = 1;
-  reopened.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  reopened.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   log.clear();
   ApplyProjectFilesOnOpen(reopened, 7, dwg.u8string(), log);
-  REQUIRE(reopened.cadPointClouds.size() == 1);  // the drawing opens either way
+  REQUIRE(reopened.drawing.cadPointClouds.size() == 1);  // the drawing opens either way
   bool unavailable = false;
   for (const std::string& l : log) {
     CHECK(l.find("is missing") == std::string::npos);
@@ -328,19 +328,19 @@ TEST_CASE("req379 a standalone drawing, a read-only project and a drawing outsid
   AppCommandState standalone;
   standalone.drawingTabs.resize(2);
   standalone.activeDrawingIdx = 1;
-  standalone.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  standalone.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   SyncProjectFilesOnSave(standalone, 1, (root.path / "a.dwg").u8string(), log);  // must not crash or write
   CHECK(standalone.openProjects.empty());
 
   AppCommandState ro;
   auto& rs = OpenProjectTab(ro, root.path / "ro", /*readOnly=*/true);
-  ro.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  ro.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   SyncProjectFilesOnSave(ro, 1, (rs.project.Folder() / "Drawings" / "a.dwg").u8string(), log);
   CHECK(rs.project.items.empty());
 
   AppCommandState st;
   auto& s = OpenProjectTab(st, root.path / "proj");
-  st.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  st.drawing.cadPointClouds.push_back(Cloud(cloud.u8string()));
   SyncProjectFilesOnSave(st, 1, (root.path / "elsewhere.dwg").u8string(), log);  // not inside the project
   CHECK(s.project.items.empty());
 }
@@ -421,14 +421,14 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
   WriteText(outRaster, "png stand-in");
   PdfAttachment pdf;
   pdf.filePath = outPdf.u8string();
-  st.pdfAttachments.push_back(pdf);  // active tab
-  st.cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  st.drawing.pdfAttachments.push_back(pdf);  // active tab
+  st.drawing.cadPointClouds.push_back(Cloud(outCloud.u8string()));
   CadRasterImage raster;
   raster.path = outRaster.u8string();
-  st.cadRasterImages.push_back(raster);
-  st.documents[2].pdfAttachments.push_back(pdf);  // the other tab holds the same link
-  st.documents[2].cadPointClouds.push_back(Cloud(outCloud.u8string()));
-  st.documents[2].cadRasterImages.push_back(raster);
+  st.drawing.cadRasterImages.push_back(raster);
+  st.documents[2].content.pdfAttachments.push_back(pdf);  // the other tab holds the same link
+  st.documents[2].content.cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  st.documents[2].content.cadRasterImages.push_back(raster);
 
   const std::string egDwg = (s.project.Folder() / "Drawings" / "EG.dwg").u8string();
   WriteText(fs::u8path(egDwg), "dwg");
@@ -442,23 +442,23 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
   const std::string pdfCopy = (s.project.Folder() / "PDFs" / "plan.pdf").u8string();
   const std::string cloudCopy = (s.project.Folder() / "PointClouds" / "site.e57").u8string();
   const std::string rasterCopy = (s.project.Folder() / "Points" / "ortho.png").u8string();
-  REQUIRE(st.pdfAttachments.size() == 1);
-  CHECK(st.pdfAttachments[0].filePath == pdfCopy);  // active tab
-  REQUIRE(st.cadPointClouds.size() == 1);
-  CHECK(st.cadPointClouds[0]->sourcePath == cloudCopy);
-  REQUIRE(st.cadRasterImages.size() == 1);
-  CHECK(fs::u8path(st.cadRasterImages[0].path) == fs::u8path(rasterCopy));
-  REQUIRE(st.documents[2].pdfAttachments.size() == 1);
-  CHECK(st.documents[2].pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
-  REQUIRE(st.documents[2].cadPointClouds.size() == 1);
-  CHECK(st.documents[2].cadPointClouds[0]->sourcePath == cloudCopy);
-  REQUIRE(st.documents[2].cadRasterImages.size() == 1);
-  CHECK(fs::u8path(st.documents[2].cadRasterImages[0].path) == fs::u8path(rasterCopy));
+  REQUIRE(st.drawing.pdfAttachments.size() == 1);
+  CHECK(st.drawing.pdfAttachments[0].filePath == pdfCopy);  // active tab
+  REQUIRE(st.drawing.cadPointClouds.size() == 1);
+  CHECK(st.drawing.cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.drawing.cadRasterImages.size() == 1);
+  CHECK(fs::u8path(st.drawing.cadRasterImages[0].path) == fs::u8path(rasterCopy));
+  REQUIRE(st.documents[2].content.pdfAttachments.size() == 1);
+  CHECK(st.documents[2].content.pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
+  REQUIRE(st.documents[2].content.cadPointClouds.size() == 1);
+  CHECK(st.documents[2].content.cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.documents[2].content.cadRasterImages.size() == 1);
+  CHECK(fs::u8path(st.documents[2].content.cadRasterImages[0].path) == fs::u8path(rasterCopy));
 
   // Reopening a packaged drawing resolves the source-machine path through its project attachment.
-  st.cadRasterImages[0].path = outRaster.u8string();
+  st.drawing.cadRasterImages[0].path = outRaster.u8string();
   ApplyProjectFilesOnOpen(st, 7, egDwg, log);
-  CHECK(fs::u8path(st.cadRasterImages[0].path) == fs::u8path(rasterCopy));
+  CHECK(fs::u8path(st.drawing.cadRasterImages[0].path) == fs::u8path(rasterCopy));
 
   // The point of the fix: saving afterwards must not turn the copies back into links.
   SyncProjectFilesOnSave(st, 1, egDwg, log);

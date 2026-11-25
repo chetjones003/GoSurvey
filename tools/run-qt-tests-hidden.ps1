@@ -1,22 +1,19 @@
 <#
 .SYNOPSIS
-  Runs the Qt GUI test executable on a private, invisible Windows desktop.
+  Runs a Qt executable on a private, invisible Windows desktop.
 
 .DESCRIPTION
-  GoSurveyQtTests opens real top-level windows. Run normally they flash on the user's screen,
-  steal focus, and a test that hangs leaves a window up until someone closes it. This starts the
-  executable on its own desktop (CreateDesktop), which is never displayed and has its own input
-  queue, so nothing appears and no keystrokes or clicks are shared with the user's session. The
-  real GPU driver is still used, so the OpenGL viewport tests run (Qt's "offscreen" platform has
-  no OpenGL on Windows).
+  Used by tools/verify-qt-deployment.ps1 to run GoSurvey.exe --smoke-test. The app opens real
+  top-level windows; this starts it on its own desktop (CreateDesktop), which is never displayed
+  and has its own input queue, so nothing appears and no keystrokes or clicks are shared with the
+  user's session. The real GPU driver is still used (Qt's "offscreen" platform has no OpenGL on
+  Windows).
 
   The process is killed if it exceeds -TimeoutSec, so a hung test cannot stall the caller.
   The exit code is the test executable's own (0 = all passed; 124 = timed out).
 
 .EXAMPLE
-  powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQtTests.exe
-  powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQtTests.exe updateOfferShowsBothVersionsAndWaitsForAnExplicitChoice
-  powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQt.exe -PlainArguments --smoke-test
+  powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurvey.exe -PlainArguments -TestArgs --smoke-test
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Exe,

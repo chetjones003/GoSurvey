@@ -35,8 +35,8 @@ TEST_CASE("A named CadPipeRun survives document-payload serialization and loadin
   run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0};
   run.nominalSize = "4in";
   run.pressureClassTag = "CS150";
-  st.cadPipeRuns.push_back(run);
-  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
 
   const std::filesystem::path path = UniqueGsPath("piperun");
   std::vector<std::string> log;
@@ -44,15 +44,15 @@ TEST_CASE("A named CadPipeRun survives document-payload serialization and loadin
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadPipeRuns.size() == 1);
-  const CadPipeRun& r = loaded.cadPipeRuns[0];
+  REQUIRE(loaded.drawing.cadPipeRuns.size() == 1);
+  const CadPipeRun& r = loaded.drawing.cadPipeRuns[0];
   CHECK(r.name == "Cooling Loop A");
   CHECK(r.nominalSize == "4in");
   CHECK(r.pressureClassTag == "CS150");
   REQUIRE(r.vertsXyz.size() == 9);
   CHECK(r.vertsXyz[3] == Catch::Approx(10.0));
   CHECK(r.vertsXyz[7] == Catch::Approx(10.0));
-  REQUIRE(loaded.cadPipeRunAttrs.size() == 1);
+  REQUIRE(loaded.drawing.cadPipeRunAttrs.size() == 1);
 
   std::filesystem::remove(path);
 }
@@ -70,8 +70,8 @@ TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing 
   CadPipeRun defaulted;
   defaulted.vertsXyz = {20.0, 0.0, 0.0, 30.0, 0.0, 0.0};
   defaulted.nominalSize = "4in";
-  st.cadPipeRuns = {stated, defaulted};
-  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  st.drawing.cadPipeRuns = {stated, defaulted};
+  st.drawing.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
 
   const std::filesystem::path path = UniqueGsPath("piperun-wall");
   std::vector<std::string> log;
@@ -92,9 +92,9 @@ TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing 
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadPipeRuns.size() == 2);
-  CHECK(loaded.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));
-  CHECK(loaded.cadPipeRuns[1].wallThicknessIn == 0.0);
+  REQUIRE(loaded.drawing.cadPipeRuns.size() == 2);
+  CHECK(loaded.drawing.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));
+  CHECK(loaded.drawing.cadPipeRuns[1].wallThicknessIn == 0.0);
 
   std::filesystem::remove(path);
 }
@@ -108,7 +108,7 @@ TEST_CASE("A drawing with no pipe runs omits the pipeRuns key and still loads cl
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  CHECK(loaded.cadPipeRuns.empty());
+  CHECK(loaded.drawing.cadPipeRuns.empty());
 
   std::filesystem::remove(path);
 }
@@ -120,12 +120,12 @@ TEST_CASE("A named piping network with runs survives save/load with indices inta
   AppCommandState st;
   CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
   CadPipeRun b; b.vertsXyz = {0.0, 0.0, 0.0, 0.0, 10.0, 0.0}; b.nominalSize = "2in";
-  st.cadPipeRuns = {a, b};
-  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  st.drawing.cadPipeRuns = {a, b};
+  st.drawing.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
   CadPipingSystem sys;
   sys.name = "Cooling Loop 1";
   sys.pipeRunIndices = {0, 1};
-  st.cadPipingSystems.push_back(sys);
+  st.drawing.cadPipingSystems.push_back(sys);
 
   const std::filesystem::path path = UniqueGsPath("pipesys");
   std::vector<std::string> log;
@@ -133,9 +133,9 @@ TEST_CASE("A named piping network with runs survives save/load with indices inta
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadPipingSystems.size() == 1);
-  CHECK(loaded.cadPipingSystems[0].name == "Cooling Loop 1");
-  CHECK(loaded.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0, 1}));
+  REQUIRE(loaded.drawing.cadPipingSystems.size() == 1);
+  CHECK(loaded.drawing.cadPipingSystems[0].name == "Cooling Loop 1");
+  CHECK(loaded.drawing.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0, 1}));
 
   std::filesystem::remove(path);
 }
@@ -149,7 +149,7 @@ TEST_CASE("A drawing with no piping networks omits the pipingSystems key and loa
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  CHECK(loaded.cadPipingSystems.empty());
+  CHECK(loaded.drawing.cadPipingSystems.empty());
 
   std::filesystem::remove(path);
 }
@@ -161,12 +161,12 @@ TEST_CASE("An out-of-range pipeRunIndices entry is dropped rather than trusted",
   // carry a dangling index forward.
   AppCommandState st;
   CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
-  st.cadPipeRuns = {a};
-  st.cadPipeRunAttrs = {EntityAttributes{}};
+  st.drawing.cadPipeRuns = {a};
+  st.drawing.cadPipeRunAttrs = {EntityAttributes{}};
   CadPipingSystem sys;
   sys.name = "Loop A";
   sys.pipeRunIndices = {0};
-  st.cadPipingSystems.push_back(sys);
+  st.drawing.cadPipingSystems.push_back(sys);
 
   const std::filesystem::path path = UniqueGsPath("pipesys-corrupt");
   std::vector<std::string> log;
@@ -187,8 +187,8 @@ TEST_CASE("An out-of-range pipeRunIndices entry is dropped rather than trusted",
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadPipingSystems.size() == 1);
-  CHECK(loaded.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0}));  // 99 dropped
+  REQUIRE(loaded.drawing.cadPipingSystems.size() == 1);
+  CHECK(loaded.drawing.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0}));  // 99 dropped
 
   std::filesystem::remove(path);
 }

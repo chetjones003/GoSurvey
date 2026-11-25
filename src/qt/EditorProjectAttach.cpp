@@ -723,21 +723,24 @@ void EditorWindow::ShowPdfAttachDialog() {
     if (!built) {
       status->setText("The selected page could not be rasterized. Check the file and try again.");
       status->setStyleSheet("color:#c74747;");
-      m_State.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
+      if (auto* ps = m_State.sessionAs<stepengine::PdfAttachSession>())
+        ps->phase = stepengine::PdfAttachPhase::WaitDialog;
       attach->setEnabled(true);
       return;
     }
     if (m_State.pdfAttachSpecifyInsert) {
       m_State.pdfAttachPreview = std::move(attachment);
       m_State.pdfAttachPreviewReady = true;
-      m_State.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitInsertPoint;
+      if (auto* ps = m_State.sessionAs<stepengine::PdfAttachSession>())
+        ps->phase = stepengine::PdfAttachPhase::WaitInsertPoint;
       dialog.accept();
       Refresh();
       return;
     }
     m_State.pdfAttachPreview = std::move(attachment);
     m_State.pdfAttachPreviewReady = true;
-    m_State.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitInsertPoint;
+    if (auto* ps = m_State.sessionAs<stepengine::PdfAttachSession>())
+      ps->phase = stepengine::PdfAttachPhase::WaitInsertPoint;
     SubmitPdfAttachInsertPoint(m_State, m_State.pdfAttachInsertX, m_State.pdfAttachInsertY, m_Log);
     dialog.accept();
     Refresh();

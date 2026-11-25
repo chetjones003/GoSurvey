@@ -40,10 +40,10 @@ const LandXmlUnits* UnitsFor(const AppCommandState& st) {
   static const LandXmlUnits kFoot{false, "foot", "squareFoot", "cubicFeet", "feet"};
   static const LandXmlUnits kMillimeter{true, "millimeter", "squareMillimeter", "cubicMeter", nullptr};
   static const LandXmlUnits kMeter{true, "meter", "squareMeter", "cubicMeter", "meter"};
-  switch (st.drawingInsUnits) {
+  switch (st.drawing.drawingInsUnits) {
     case 1: return &kInch;
     case 2:
-      return st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey ? &kUsFoot : &kFoot;
+      return st.drawing.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey ? &kUsFoot : &kFoot;
     case 4: return &kMillimeter;
     case 6: return &kMeter;
     default: return nullptr;
@@ -102,9 +102,9 @@ bool Finite(double a, double b, double c) { return std::isfinite(a) && std::isfi
 /// world origin added back in double (geometry is stored LOCAL, ADR-025 / REQ-101).
 std::string NorthEastElevation(const AppCommandState& st, double x, double y, double z) {
   std::string text;
-  AppendNumber(text, y + st.worldDocumentOriginY);
+  AppendNumber(text, y + st.drawing.worldDocumentOriginY);
   text += ' ';
-  AppendNumber(text, x + st.worldDocumentOriginX);
+  AppendNumber(text, x + st.drawing.worldDocumentOriginX);
   text += ' ';
   AppendNumber(text, z);
   return text;
@@ -134,7 +134,7 @@ void WritePoints(const AppCommandState& st, pugi::xml_node root, ExportCounts& c
                  std::vector<std::string>& log) {
   pugi::xml_node group;
   std::set<int> seen;
-  for (const SurveyPoint& point : st.surveyPoints) {
+  for (const SurveyPoint& point : st.drawing.surveyPoints) {
     if (!Finite(point.easting, point.northing, point.elevation)) {
       log.push_back("EXPORTLANDXML — skipped point " + std::to_string(point.id) + ": non-finite coordinate.");
       continue;
@@ -174,7 +174,7 @@ std::string TinProblem(const CadSurface& surface) {
 void WriteSurfaces(const AppCommandState& st, pugi::xml_node root, ExportCounts& counts,
                    std::vector<std::string>& log) {
   pugi::xml_node group;
-  for (const CadSurface& surface : st.cadSurfaces) {
+  for (const CadSurface& surface : st.drawing.cadSurfaces) {
     const std::string problem = TinProblem(surface);
     if (!problem.empty()) {
       log.push_back("EXPORTLANDXML — skipped surface \"" + surface.name + "\": " + problem + ".");
@@ -223,21 +223,21 @@ void WriteSurfaces(const AppCommandState& st, pugi::xml_node root, ExportCounts&
 /// (ADR-035 (a)), so flagged vertices are written as ordinary vertices of the same line.
 void WriteFeatureLines(const AppCommandState& st, pugi::xml_node root, ExportCounts& counts,
                        std::vector<std::string>& log) {
-  if (st.featureLineOffsets.size() < 2) return;
+  if (st.drawing.featureLineOffsets.size() < 2) return;
   pugi::xml_node group;
-  const size_t lineCount = st.featureLineOffsets.size() - 1;
+  const size_t lineCount = st.drawing.featureLineOffsets.size() - 1;
   for (size_t i = 0; i < lineCount; ++i) {
-    const std::string name = i < st.featureLineInfo.size() ? st.featureLineInfo[i].name : std::string();
+    const std::string name = i < st.drawing.featureLineInfo.size() ? st.drawing.featureLineInfo[i].name : std::string();
     const std::string label = "feature line " + (name.empty() ? std::to_string(i + 1) : "\"" + name + "\"");
-    const int first = st.featureLineOffsets[i], last = st.featureLineOffsets[i + 1];
-    if (first < 0 || last - first < 2 || static_cast<size_t>(last) * 3 > st.featureLineVerts.size()) {
+    const int first = st.drawing.featureLineOffsets[i], last = st.drawing.featureLineOffsets[i + 1];
+    if (first < 0 || last - first < 2 || static_cast<size_t>(last) * 3 > st.drawing.featureLineVerts.size()) {
       log.push_back("EXPORTLANDXML — skipped " + label + ": it has fewer than two usable vertices.");
       continue;
     }
     std::vector<std::string> vertices;
     bool finite = true;
     for (int v = first; v < last; ++v) {
-      const double* xyz = &st.featureLineVerts[static_cast<size_t>(v) * 3];
+      const double* xyz = &st.drawing.featureLineVerts[static_cast<size_t>(v) * 3];
       finite = finite && Finite(xyz[0], xyz[1], xyz[2]);
       if (finite) vertices.push_back(NorthEastElevation(st, xyz[0], xyz[1], xyz[2]));
     }
@@ -245,12 +245,12 @@ void WriteFeatureLines(const AppCommandState& st, pugi::xml_node root, ExportCou
       log.push_back("EXPORTLANDXML — skipped " + label + ": non-finite coordinate.");
       continue;
     }
-    if (i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0) vertices.push_back(vertices.front());
+    if (i < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[i] != 0) vertices.push_back(vertices.front());
     if (!group) group = root.append_child("PlanFeatures");
     auto feature = group.append_child("PlanFeature");
     if (!name.empty()) feature.append_attribute("name") = XmlText(name, counts.sanitized).c_str();
-    if (i < st.featureLineInfo.size() && !st.featureLineInfo[i].description.empty())
-      feature.append_attribute("desc") = XmlText(st.featureLineInfo[i].description, counts.sanitized).c_str();
+    if (i < st.drawing.featureLineInfo.size() && !st.drawing.featureLineInfo[i].description.empty())
+      feature.append_attribute("desc") = XmlText(st.drawing.featureLineInfo[i].description, counts.sanitized).c_str();
     auto geometry = feature.append_child("CoordGeom");
     for (size_t v = 0; v + 1 < vertices.size(); ++v) {
       auto line = geometry.append_child("Line");
@@ -364,10 +364,10 @@ double MetersPerLandXmlUnit(const std::string& unit) {
 
 /// Meters per drawing unit (INSUNITS, as UnitsFor reads it), or 0 for a unitless drawing.
 double MetersPerDrawingUnit(const AppCommandState& st) {
-  switch (st.drawingInsUnits) {
+  switch (st.drawing.drawingInsUnits) {
     case 1: return 0.0254;
     case 2:
-      return st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey ? 1200.0 / 3937.0 : 0.3048;
+      return st.drawing.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey ? 1200.0 / 3937.0 : 0.3048;
     case 4: return 0.001;
     case 6: return 1.0;
     default: return 0.0;
@@ -453,12 +453,12 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
     } else {
       log.push_back("IMPORTLANDXML — the file declares no known linear unit, so values are taken as drawing units.");
     }
-    const double originX = st.worldDocumentOriginX;
-    const double originY = st.worldDocumentOriginY;
+    const double originX = st.drawing.worldDocumentOriginX;
+    const double originY = st.drawing.worldDocumentOriginY;
 
     // Points. LandXML stores northing first; the survey point model keeps easting first.
     std::set<int> existingIds;
-    for (const SurveyPoint& point : st.surveyPoints) existingIds.insert(point.id);
+    for (const SurveyPoint& point : st.drawing.surveyPoints) existingIds.insert(point.id);
     const std::string layer = CreatePointsLayer(st);
     std::set<int> seenIds;
     std::vector<SurveyPoint> newPoints, conflicts;
@@ -499,7 +499,7 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
 
     // Surfaces: rebuilt from their points (REQ-144 added points), so the source triangle faces are not kept.
     std::set<std::string> surfaceNames;
-    for (const CadSurface& surface : st.cadSurfaces) surfaceNames.insert(surface.name);
+    for (const CadSurface& surface : st.drawing.cadSurfaces) surfaceNames.insert(surface.name);
     std::vector<CadSurface> newSurfaces;
     for (pugi::xml_node group : root.children("Surfaces")) {
       for (pugi::xml_node node : group.children("Surface")) {
@@ -623,31 +623,31 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
                       "\": its points could not be triangulated.");
         continue;
       }
-      st.cadSurfaces.push_back(std::move(surface));
-      AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
-                           st.cadSurfaces.back().name);  // REQ-361
+      st.drawing.cadSurfaces.push_back(std::move(surface));
+      AppendNewObjectAttrs(st, st.drawing.cadSurfaceAttrs, st.drawing.cadSurfaces.size(), ObjectLayerKind::Surface,
+                           st.drawing.cadSurfaces.back().name);  // REQ-361
       ++addedSurfaces;
     }
     for (const PendingFeatureLine& line : newLines) {
-      if (st.featureLineOffsets.empty())
-        st.featureLineOffsets.push_back(0);
-      const int base = st.featureLineOffsets.back();
+      if (st.drawing.featureLineOffsets.empty())
+        st.drawing.featureLineOffsets.push_back(0);
+      const int base = st.drawing.featureLineOffsets.back();
       const int count = static_cast<int>(line.worldXyz.size() / 3);
       for (int v = 0; v < count; ++v) {
         const size_t b = static_cast<size_t>(v) * 3;
-        st.featureLineVerts.push_back(line.worldXyz[b] - originX);
-        st.featureLineVerts.push_back(line.worldXyz[b + 1] - originY);
-        st.featureLineVerts.push_back(line.worldXyz[b + 2]);
-        st.featureLineElevPt.push_back(0);
+        st.drawing.featureLineVerts.push_back(line.worldXyz[b] - originX);
+        st.drawing.featureLineVerts.push_back(line.worldXyz[b + 1] - originY);
+        st.drawing.featureLineVerts.push_back(line.worldXyz[b + 2]);
+        st.drawing.featureLineElevPt.push_back(0);
       }
-      st.featureLineOffsets.push_back(base + count);
-      st.featureLineClosed.push_back(line.closed ? 1 : 0);
+      st.drawing.featureLineOffsets.push_back(base + count);
+      st.drawing.featureLineClosed.push_back(line.closed ? 1 : 0);
       CadFeatureLineInfo info;
       info.name = line.name;
       info.description = line.description;
-      st.featureLineInfo.push_back(std::move(info));
-      AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
-                           st.featureLineInfo.back().name);  // REQ-361
+      st.drawing.featureLineInfo.push_back(std::move(info));
+      AppendNewObjectAttrs(st, st.drawing.featureLineAttrs, st.drawing.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                           st.drawing.featureLineInfo.back().name);  // REQ-361
     }
     if (!newSurfaces.empty() || !newLines.empty())
       BumpCadGpuCache(st);

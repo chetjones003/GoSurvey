@@ -133,12 +133,12 @@ QWidget* BuildGeneralTab(const AppCommandState& st, bool fromObjects, DialogFiel
   auto* tab = new QWidget(parent);
   auto* column = new QVBoxLayout(tab);
   QStringList styles, layers, sets;
-  for (const auto& s : st.alignmentStyles) styles << Q(s.name);
-  for (const auto& l : st.drawingLayerTable) layers << Q(l.name);
-  for (const auto& s : st.alignmentLabelSets) sets << Q(s.name);
+  for (const auto& s : st.drawing.alignmentStyles) styles << Q(s.name);
+  for (const auto& l : st.drawing.drawingLayerTable) layers << Q(l.name);
+  for (const auto& s : st.drawing.alignmentLabelSets) sets << Q(s.name);
   if (layers.isEmpty()) layers << "0";
-  f->style = NameCombo(tab, styles, Q(st.alignmentStyleCurrent));  // REQ-491: the current style
-  f->layer = NameCombo(tab, layers, Q(st.currentLayer));
+  f->style = NameCombo(tab, styles, Q(st.drawing.alignmentStyleCurrent));  // REQ-491: the current style
+  f->layer = NameCombo(tab, layers, Q(st.drawing.currentLayer));
   f->layer->setEditable(true);
   f->labelSet = NameCombo(tab, sets, "Standard");
   f->style->setObjectName("createAlignmentStyle");
@@ -162,7 +162,7 @@ QWidget* BuildCriteriaTab(const AppCommandState& st, DialogFields* f, QWidget* p
   f->speed->setPlaceholderText("none");
   column->addWidget(Captioned("Starting design speed:", f->speed, tab));
   QStringList sets;
-  for (const auto& s : st.alignmentCheckSets) sets << Q(s.name);
+  for (const auto& s : st.drawing.alignmentCheckSets) sets << Q(s.name);
   f->useCheckSet = new QCheckBox("Use design check set", tab);
   f->useCheckSet->setObjectName("createAlignmentUseCheckSet");
   f->checkSet = NameCombo(tab, sets, {});
@@ -190,7 +190,7 @@ QString Validate(const AppCommandState& st, const DialogFields& f, bool fromObje
   assert(f.name != nullptr && f.station != nullptr);
   const QString name = f.name->text().trimmed();
   if (name.isEmpty()) return "Enter a name.";
-  for (const auto& a : st.alignments)
+  for (const auto& a : st.drawing.alignments)
     if (Q(a.name).compare(name, Qt::CaseInsensitive) == 0) return "An alignment named \"" + name + "\" already exists.";
   if (name.contains(',') || DescriptionText(f).contains(',') || f.layer->currentText().contains(','))
     return "Names and descriptions cannot contain commas.";
@@ -282,7 +282,7 @@ void BuildHeader(QDialog* dialog, QVBoxLayout* column, DialogFields* f, const Ap
 
 CreateAlignmentCommands RunCreateAlignmentDialog(QWidget* parent, const AppCommandState& state, bool fromObjects,
                                                  std::function<void()> help) {
-  assert(state.alignments.size() < state.alignments.max_size());
+  assert(state.drawing.alignments.size() < state.drawing.alignments.max_size());
   QDialog dialog(parent);
   dialog.setObjectName(fromObjects ? "createAlignmentFromObjectsDialog" : "createAlignmentLayoutDialog");
   dialog.setWindowTitle(fromObjects ? "Create Alignment from Objects" : "Create Alignment - Layout");
@@ -546,7 +546,7 @@ void AlignmentLayoutTools::EditSettings() {
 
 void AlignmentLayoutTools::DeleteSubEntity() {
   const alignment::Alignment* a = nullptr;
-  for (const auto& candidate : state_.alignments)
+  for (const auto& candidate : state_.drawing.alignments)
     if (Q(candidate.name).compare(Name(), Qt::CaseInsensitive) == 0) a = &candidate;
   if (a == nullptr || a->Empty()) return;
   bool ok = false;
@@ -560,7 +560,7 @@ void AlignmentLayoutTools::DeleteSubEntity() {
 void AlignmentLayoutTools::Sync() {
   const QString name = Name();
   bool exists = false;
-  for (const auto& a : state_.alignments) exists = exists || Q(a.name).compare(name, Qt::CaseInsensitive) == 0;
+  for (const auto& a : state_.drawing.alignments) exists = exists || Q(a.name).compare(name, Qt::CaseInsensitive) == 0;
   if (name.isEmpty() || !exists) {
     hide();
     return;
@@ -598,16 +598,16 @@ void EditorWindow::ShowCreateAlignmentDialog(bool fromObjects) {
     Refresh();
     return;
   }
-  const std::size_t count = m_State.alignments.size();
+  const std::size_t count = m_State.drawing.alignments.size();
   Submit(commands.create);
-  if (fromObjects || m_State.alignments.size() == count) return;  // refused: the command said why
+  if (fromObjects || m_State.drawing.alignments.size() == count) return;  // refused: the command said why
   if (!commands.layout.isEmpty()) {
     Submit(commands.layout);
   } else {
     m_State.alignmentLayoutToolsName = commands.name.toUtf8().toStdString();
     Refresh();
   }
-  assert(m_State.alignments.size() > count);
+  assert(m_State.drawing.alignments.size() > count);
 }
 
 void EditorWindow::SyncAlignmentLayoutTools() {

@@ -612,7 +612,7 @@ bool CopyMleaderContext(Dwg_Data& dwg, const Dwg_MLEADER_AnnotContext& source,
   std::vector<const CadAnnotationScale*> out;
   if (!an.annotativeVisibleScaleNames.empty()) {
     for (const std::string& vn : an.annotativeVisibleScaleNames) {
-      for (const CadAnnotationScale& s : st.annotationScales) {
+      for (const CadAnnotationScale& s : st.drawing.annotationScales) {
         if (s.name == vn) {
           out.push_back(&s);
           break;
@@ -620,18 +620,18 @@ bool CopyMleaderContext(Dwg_Data& dwg, const Dwg_MLEADER_AnnotContext& source,
       }
     }
   } else {
-    for (const CadAnnotationScale& s : st.annotationScales)
+    for (const CadAnnotationScale& s : st.drawing.annotationScales)
       out.push_back(&s);
   }
-  if (out.empty() && !st.annotationScales.empty())
-    out.push_back(&st.annotationScales[static_cast<size_t>(std::max(st.currentAnnotationScaleIndex, 0))]);
+  if (out.empty() && !st.drawing.annotationScales.empty())
+    out.push_back(&st.drawing.annotationScales[static_cast<size_t>(std::max(st.currentAnnotationScaleIndex, 0))]);
   return out;
 }
 
 [[nodiscard]] std::string DefaultScaleName(const AppCommandState& st) {
   if (st.currentAnnotationScaleIndex >= 0 &&
-      st.currentAnnotationScaleIndex < static_cast<int>(st.annotationScales.size()))
-    return st.annotationScales[static_cast<size_t>(st.currentAnnotationScaleIndex)].name;
+      st.currentAnnotationScaleIndex < static_cast<int>(st.drawing.annotationScales.size()))
+    return st.drawing.annotationScales[static_cast<size_t>(st.currentAnnotationScaleIndex)].name;
   return {};
 }
 
@@ -864,16 +864,16 @@ namespace {
 
 [[nodiscard]] size_t CountAnnotativeHosts(const AppCommandState& st) {
   size_t n = 0;
-  for (const CadAnnotation& a : st.cadAnnotations)
+  for (const CadAnnotation& a : st.drawing.cadAnnotations)
     if (a.annotative)
       ++n;
-  for (const CadBlockRef& r : st.cadBlockRefs)
+  for (const CadBlockRef& r : st.drawing.cadBlockRefs)
     if (r.annotative)
       ++n;
-  for (const CadMultileader& ml : st.cadMultileaders)
+  for (const CadMultileader& ml : st.drawing.cadMultileaders)
     if (ml.annotative)
       ++n;
-  for (const CadFilledRegion& fr : st.cadFilledRegions)
+  for (const CadFilledRegion& fr : st.drawing.cadFilledRegions)
     if (fr.annotative)
       ++n;
   return n;
@@ -887,7 +887,7 @@ DwgAnnotContextExportLossCounts DwgExportAnnotContextLossCounts(const AppCommand
     out.annotativeWithoutContext = CountAnnotativeHosts(st);
     return out;
   }
-  for (const CadFilledRegion& fr : st.cadFilledRegions) {
+  for (const CadFilledRegion& fr : st.drawing.cadFilledRegions) {
     if (fr.annotative)
       ++out.hatchSimplifiedContext;
   }

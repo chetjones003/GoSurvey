@@ -307,9 +307,11 @@ TEST_CASE("a spline that cannot be a curve is refused with a reason", "[spline][
 
 TEST_CASE("the live spline rubber matches the curve that the next pick commits", "[spline][req443]") {
   AppCommandState state;
+  auto sp = std::make_unique<stepengine::SplineSession>();
+  sp->method = stepengine::SplineMethod::Fit;
+  sp->draftPoints.assign(kFit4.begin(), kFit4.end() - 1);
+  state.activeSession = std::move(sp);
   state.active = AppCommandState::Kind::Spline;
-  state.splineMethod = AppCommandState::SplineMethod::Fit;
-  state.splineDraftPoints.assign(kFit4.begin(), kFit4.end() - 1);
 
   std::vector<float> rubber;
   std::vector<float> circles;
@@ -352,18 +354,20 @@ TEST_CASE("SPLINE typed workflow commits degree-three curves and preserves an in
   REQUIRE(state.active == AppCommandState::Kind::Spline);
   submit("CV");
   submit("0,0"); submit("5,5"); submit("10,0"); submit("END");
-  CHECK(state.cadSplines.empty());
-  REQUIRE(state.splineDraftPoints.size() == 3);
+  CHECK(state.drawing.cadSplines.empty());
+  const auto* sp = state.sessionAs<stepengine::SplineSession>();
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->draftPoints.size() == 3);
   CHECK(std::any_of(log.begin(), log.end(), [](const std::string& line) { return line.find("four") != std::string::npos; }));
   submit("15,5"); submit("END");
   REQUIRE(state.active == AppCommandState::Kind::None);
-  REQUIRE(state.cadSplines.size() == 1);
-  CHECK(state.cadSplines.front().degree == 3);
-  CHECK_FALSE(state.cadSplines.front().isFit());
+  REQUIRE(state.drawing.cadSplines.size() == 1);
+  CHECK(state.drawing.cadSplines.front().degree == 3);
+  CHECK_FALSE(state.drawing.cadSplines.front().isFit());
 
   submit("UNDO");
-  CHECK(state.cadSplines.empty());
+  CHECK(state.drawing.cadSplines.empty());
   submit("REDO");
-  REQUIRE(state.cadSplines.size() == 1);
-  CHECK(state.cadSplines.front().degree == 3);
+  REQUIRE(state.drawing.cadSplines.size() == 1);
+  CHECK(state.drawing.cadSplines.front().degree == 3);
 }

@@ -39,7 +39,7 @@ TEST_CASE("Per-viewport camera round-trips through document JSON payload (REQ-06
   iso.camFovDeg = 30.f;
   L.viewports.push_back(plan);
   L.viewports.push_back(iso);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::filesystem::path path = UniqueGsPath("vpcam");
   std::vector<std::string> log;
@@ -47,11 +47,11 @@ TEST_CASE("Per-viewport camera round-trips through document JSON payload (REQ-06
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.paperLayouts.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports.size() == 2);
+  REQUIRE(loaded.drawing.paperLayouts.size() == 1);
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports.size() == 2);
 
-  const Viewport& lp = loaded.paperLayouts[0].viewports[0];
-  const Viewport& li = loaded.paperLayouts[0].viewports[1];
+  const Viewport& lp = loaded.drawing.paperLayouts[0].viewports[0];
+  const Viewport& li = loaded.drawing.paperLayouts[0].viewports[1];
   REQUIRE(lp.cameraIsPlan());
   REQUIRE(li.camAzimuthDeg == Approx(45.f));
   REQUIRE(li.camElevationDeg == Approx(35.26439f));
@@ -71,7 +71,7 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
   L.viewports.push_back(wire);
   L.viewports.push_back(hidden);
   L.viewports.push_back(shaded);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::filesystem::path path = UniqueGsPath("vpvis");
   std::vector<std::string> log;
@@ -79,11 +79,11 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.paperLayouts.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
-  CHECK(loaded.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Wireframe2D);
-  CHECK(loaded.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Hidden);
-  CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
+  REQUIRE(loaded.drawing.paperLayouts.size() == 1);
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports.size() == 3);
+  CHECK(loaded.drawing.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Wireframe2D);
+  CHECK(loaded.drawing.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Hidden);
+  CHECK(loaded.drawing.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
 }
 
 TEST_CASE("Closed-polyline viewport clipping boundary round-trips through document JSON (REQ-490)",
@@ -97,25 +97,25 @@ TEST_CASE("Closed-polyline viewport clipping boundary round-trips through docume
   Viewport degenerate;
   degenerate.clipBoundary = {{1.f, 1.f, 0.f}, {5.f, 1.f, 0.f}};
   layout.viewports = {vp, twoArcCircle, degenerate};
-  st.paperLayouts.push_back(layout);
+  st.drawing.paperLayouts.push_back(layout);
   const auto path = UniqueGsPath("vpclip");
   std::vector<std::string> log;
   REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.paperLayouts.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
-  const auto& boundary = loaded.paperLayouts[0].viewports[0].clipBoundary;
+  REQUIRE(loaded.drawing.paperLayouts.size() == 1);
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports.size() == 3);
+  const auto& boundary = loaded.drawing.paperLayouts[0].viewports[0].clipBoundary;
   REQUIRE(boundary.size() == 3);
   CHECK(boundary[0].xIn == Approx(1.f));
   CHECK(boundary[0].yIn == Approx(2.f));
   CHECK(boundary[0].bulge == Approx(0.5f));
   CHECK(boundary[2].bulge == Approx(-0.25f));
-  const auto& circleBoundary = loaded.paperLayouts[0].viewports[1].clipBoundary;
+  const auto& circleBoundary = loaded.drawing.paperLayouts[0].viewports[1].clipBoundary;
   REQUIRE(circleBoundary.size() == 2);
   CHECK(circleBoundary[0].bulge == Approx(1.f));
   CHECK(circleBoundary[1].bulge == Approx(1.f));
-  CHECK(loaded.paperLayouts[0].viewports[2].clipBoundary.empty());
+  CHECK(loaded.drawing.paperLayouts[0].viewports[2].clipBoundary.empty());
 }
 
 TEST_CASE("A legacy document JSON payload with no camera keys loads every viewport in plan view (REQ-061)", "[payload][req061]") {
@@ -125,7 +125,7 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
   vp.paperWIn = 8.f;
   vp.modelCenterX = 500.0;
   L.viewports.push_back(vp);
-  st.paperLayouts.push_back(L);
+  st.drawing.paperLayouts.push_back(L);
 
   const std::filesystem::path path = UniqueGsPath("legacy");
   std::vector<std::string> log;
@@ -166,8 +166,8 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.paperLayouts.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports[0].cameraIsPlan());
-  REQUIRE(loaded.paperLayouts[0].viewports[0].paperWIn == Approx(8.f));  // other fields still parsed
+  REQUIRE(loaded.drawing.paperLayouts.size() == 1);
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports.size() == 1);
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports[0].cameraIsPlan());
+  REQUIRE(loaded.drawing.paperLayouts[0].viewports[0].paperWIn == Approx(8.f));  // other fields still parsed
 }

@@ -48,8 +48,8 @@ const PointGroupRule* GroupRuleOf(const std::vector<PointGroup>& groups, const p
 }
 
 double MetersPerUnitOf(const AppCommandState& st) {
-  return GoSurvey::Core::MetersPerInsUnit(st.drawingInsUnits,
-                               st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);
+  return GoSurvey::Core::MetersPerInsUnit(st.drawing.drawingInsUnits,
+                               st.drawing.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);
 }
 
 }  // namespace
@@ -110,8 +110,8 @@ OtherDrawings CountOtherDrawings(const AppCommandState& st, std::uint32_t projec
     const bool active = static_cast<int>(i) == st.activeDrawingIdx;
     if (!active && i >= st.documents.size())
       continue;
-    const projpts::Rules& rules = active ? st.pointVisibility : st.documents[i].pointVisibility;
-    const auto& groups = active ? st.pointGroups : st.documents[i].pointGroups;
+    const projpts::Rules& rules = active ? st.drawing.pointVisibility : st.documents[i].content.pointVisibility;
+    const auto& groups = active ? st.drawing.pointGroups : st.documents[i].content.pointGroups;
     const PointGroupRule* g = GroupRuleOf(groups, rules);
     if (std::any_of(doomed.begin(), doomed.end(),
                     [&](const projpts::Entry* e) { return projpts::ShowsEntry(rules, g, *e); })) {
@@ -180,10 +180,10 @@ void TagClipboardOrigin(AppCommandState& st) {
   const Session* s = cb.srcProjectUid ? SessionOf(st, cb.srcProjectUid) : nullptr;
   cb.srcProjectName = s ? s->project.name : std::string();
   cb.srcProjectFolder = s ? s->project.Folder().u8string() : std::string();
-  cb.srcZone = st.drawingSettings.zoneCode;
+  cb.srcZone = st.drawing.drawingSettings.zoneCode;
   cb.srcMetersPerUnit = MetersPerUnitOf(st);
-  cb.srcOriginX = st.worldDocumentOriginX;
-  cb.srcOriginY = st.worldDocumentOriginY;
+  cb.srcOriginX = st.drawing.worldDocumentOriginX;
+  cb.srcOriginY = st.drawing.worldDocumentOriginY;
 }
 
 namespace {
@@ -193,7 +193,7 @@ geo::ConversionPlan PlanClipboardConversion(const AppCommandState& st, std::stri
   const CadClipboard& cb = st.clipboard;
   geo::ConversionInput in;
   in.fromZone = cb.srcZone;
-  in.toZone = st.drawingSettings.zoneCode;
+  in.toZone = st.drawing.drawingSettings.zoneCode;
   in.fromMetersPerUnit = cb.srcMetersPerUnit;
   in.toMetersPerUnit = MetersPerUnitOf(st);
   ClipboardWorldExtents(cb, &in.minX, &in.maxX, &in.minY, &in.maxY);
@@ -240,14 +240,14 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
     srcName += " (" + cb.srcProjectFolder + ")";
   }
 
-  const bool zoneDiffers = !cb.srcZone.empty() && !st.drawingSettings.zoneCode.empty() &&
-                           cb.srcZone != st.drawingSettings.zoneCode;
+  const bool zoneDiffers = !cb.srcZone.empty() && !st.drawing.drawingSettings.zoneCode.empty() &&
+                           cb.srcZone != st.drawing.drawingSettings.zoneCode;
 
   if (zoneDiffers) {
     pc.verdict = PasteCheck::Verdict::Block;
     const std::string destination = dest ? "this drawing (project " + destName + ")" : "this standalone drawing";
     pc.text = "The copied objects use the coordinate system " + cb.srcZone + ", but " + destination + " uses " +
-              st.drawingSettings.zoneCode +
+              st.drawing.drawingSettings.zoneCode +
               ". Pasting them as they are would put them in the wrong place on the ground, so this paste is blocked.";
     std::string why;
     const geo::ConversionPlan plan = PlanClipboardConversion(st, why);
@@ -305,8 +305,8 @@ bool ConvertClipboardForPaste(AppCommandState& st, std::vector<std::string>& log
     return false;
   }
   CadClipboard& cb = st.clipboard;
-  ApplyClipboardConversion(cb, plan.transform, st.worldDocumentOriginX, st.worldDocumentOriginY);
-  cb.srcZone = st.drawingSettings.zoneCode;
+  ApplyClipboardConversion(cb, plan.transform, st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY);
+  cb.srcZone = st.drawing.drawingSettings.zoneCode;
   cb.srcMetersPerUnit = MetersPerUnitOf(st);
   char buf[96];
   std::snprintf(buf, sizeof buf, " (leftover error %.4f m).", plan.residualMeters);

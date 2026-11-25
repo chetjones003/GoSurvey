@@ -17,7 +17,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'qt.conf'))) {
   $keepDirectories += @('generic', 'iconengines', 'imageformats', 'networkinformation',
     'platforms', 'styles', 'tls')
 }
-$keepFiles = @('GoSurvey.exe', 'GoSurveyQtTests.exe', 'vc_redist.x64.exe', 'qt.conf')
+$keepFiles = @('GoSurvey.exe', 'vc_redist.x64.exe', 'qt.conf')
 $archiveRoot = Join-Path $buildRoot ('artifacts/legacy-output/' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff'))
 foreach ($item in Get-ChildItem -LiteralPath $runtimeRoot -Force) {
   if ($item.PSIsContainer -and $item.Name -in $keepDirectories) { continue }

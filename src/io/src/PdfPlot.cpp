@@ -145,7 +145,7 @@ plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayou
       continue;
     const EntityAttributes attr = bi < L.paperBlockRefAttrs.size() ? L.paperBlockRefAttrs[bi] : EntityAttributes{};
     std::vector<CadBlockWorldSeg> segs;
-    CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], attr, &segs);
+    CadBlockCollectWorldLines(st.drawing.blockDefs, L.paperBlockRefs[bi], attr, &segs);
     for (const CadBlockWorldSeg& s : segs) {
       e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
       e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
@@ -160,19 +160,19 @@ plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayou
       e.Add(static_cast<float>(p.x), static_cast<float>(p.y));
   }
   // Point markers are sized from the sheet height, as the draw loop sizes them.
-  const double pointHalfSize = CadPointMarkerSize(st.pdSize, std::max(1.0, static_cast<double>(L.sheetHeightIn())));
+  const double pointHalfSize = CadPointMarkerSize(st.drawing.pdSize, std::max(1.0, static_cast<double>(L.sheetHeightIn())));
   for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
     if (!onPlottableLayer(L.paperPointAttrs, pi))
       continue;
     std::vector<CadPointStroke> strokes;
-    CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, pointHalfSize, &strokes);
+    CadPointDisplayStrokes(L.paperPoints[pi], st.drawing.pdMode, pointHalfSize, &strokes);
     for (const CadPointStroke& s : strokes) {
       e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
       e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
     }
   }
   // Multileader leader paths and arrowheads, then their labels (labels plot with the sheet text).
-  const float arrowSize = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+  const float arrowSize = std::max(st.drawing.activeMultileaderStyle.arrowSizeInches, 0.01f);
   for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
     if (!onPlottableLayer(L.paperMultileaderAttrs, mi))
       continue;
@@ -351,8 +351,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
 
   std::unordered_map<std::string, plotstyle::Table> plotStyleTables;
   for (int li : layoutIndices) {
-    if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size()) continue;
-    const std::string& tablePath = st.paperLayouts[static_cast<size_t>(li)].plotStyleTablePath;
+    if (li < 0 || static_cast<size_t>(li) >= st.drawing.paperLayouts.size()) continue;
+    const std::string& tablePath = st.drawing.paperLayouts[static_cast<size_t>(li)].plotStyleTablePath;
     if (tablePath.empty() || plotStyleTables.count(tablePath) != 0) continue;
     plotstyle::Table table;
     std::string error;
@@ -369,7 +369,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
 
   // Layer → plottable lookup (excludes off / frozen / non-plottable layers). Unknown layer → plottable.
   std::unordered_map<std::string, bool> layerPlot;
-  for (const CadLayerRow& r : st.drawingLayerTable)
+  for (const CadLayerRow& r : st.drawing.drawingLayerTable)
     layerPlot[r.name] = r.on && !r.frozen && r.plottable;
   auto plottable = [&](const std::string& layer) {
     auto it = layerPlot.find(layer);
@@ -382,8 +382,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     return false;
   }
 
-  const double oX = st.worldDocumentOriginX;
-  const double oY = st.worldDocumentOriginY;
+  const double oX = st.drawing.worldDocumentOriginX;
+  const double oY = st.drawing.worldDocumentOriginY;
   int pages = 0;
 
   // TrueType fonts embedded for native sheet text (REQ-049). Loaded once per document, keyed by family, and
@@ -427,9 +427,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
   };
 
   for (int li : layoutIndices) {
-    if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size())
+    if (li < 0 || static_cast<size_t>(li) >= st.drawing.paperLayouts.size())
       continue;
-    const PaperLayout& L = st.paperLayouts[static_cast<size_t>(li)];
+    const PaperLayout& L = st.drawing.paperLayouts[static_cast<size_t>(li)];
     const plotstyle::Table* pagePlotStyles = nullptr;
     if (!L.plotStyleTablePath.empty()) {
       const auto it = plotStyleTables.find(L.plotStyleTablePath);
@@ -640,54 +640,53 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       };
 
       // Lines (REQ-028: also skip layers frozen in THIS viewport, matching the on-screen viewport render).
-      for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-        const size_t idx = i / 6;
-        if (idx < st.userLineAttrs.size() &&
-            (!plottable(st.userLineAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userLineAttrs[idx].layer)))
+      for (size_t idx = 0; idx < st.drawing.lineCount(); ++idx) {
+        const CadLineRecord ln = st.drawing.line(idx);
+        if (idx < st.drawing.userLineAttrs.size() &&
+            (!plottable(st.drawing.userLineAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.drawing.userLineAttrs[idx].layer)))
           continue;
-        curColor = (idx < st.userLineAttrs.size())
-                       ? resolveRgb(st.userLineAttrs[idx].layer, st.userLineAttrs[idx].color)
+        curColor = (idx < st.drawing.userLineAttrs.size())
+                       ? resolveRgb(st.drawing.userLineAttrs[idx].layer, st.drawing.userLineAttrs[idx].color)
                        : 0x000000u;
-        setLineStyle(idx < st.userLineAttrs.size() ? &st.userLineAttrs[idx] : nullptr,
-                     idx < st.userLineAttrs.size() ? st.userLineAttrs[idx].layer : std::string("0"));
-        emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
-                     st.userLinesFlat[i + 4] + oY, st.userLinesFlat[i + 2], st.userLinesFlat[i + 5]);
+        setLineStyle(idx < st.drawing.userLineAttrs.size() ? &st.drawing.userLineAttrs[idx] : nullptr,
+                     idx < st.drawing.userLineAttrs.size() ? st.drawing.userLineAttrs[idx].layer : std::string("0"));
+        emitModelSeg(ln.x0 + oX, ln.y0 + oY, ln.x1 + oX, ln.y1 + oY, ln.z0, ln.z1);
       }
       // Polylines.
-      for (size_t pi = 0; pi < st.userPolylineOffsets.size(); ++pi) {
-        if (pi < st.userPolylineAttrs.size() &&
-            (!plottable(st.userPolylineAttrs[pi].layer) || IsLayerFrozenInViewport(vp, st.userPolylineAttrs[pi].layer)))
+      for (size_t pi = 0; pi < st.drawing.userPolylineOffsets.size(); ++pi) {
+        if (pi < st.drawing.userPolylineAttrs.size() &&
+            (!plottable(st.drawing.userPolylineAttrs[pi].layer) || IsLayerFrozenInViewport(vp, st.drawing.userPolylineAttrs[pi].layer)))
           continue;
-        curColor = (pi < st.userPolylineAttrs.size())
-                       ? resolveRgb(st.userPolylineAttrs[pi].layer, st.userPolylineAttrs[pi].color)
+        curColor = (pi < st.drawing.userPolylineAttrs.size())
+                       ? resolveRgb(st.drawing.userPolylineAttrs[pi].layer, st.drawing.userPolylineAttrs[pi].color)
                        : 0x000000u;
-        setLineStyle(pi < st.userPolylineAttrs.size() ? &st.userPolylineAttrs[pi] : nullptr,
-                     pi < st.userPolylineAttrs.size() ? st.userPolylineAttrs[pi].layer : std::string("0"));
-        const int start = st.userPolylineOffsets[pi];
-        const int end = (pi + 1 < st.userPolylineOffsets.size())
-                            ? st.userPolylineOffsets[pi + 1]
-                            : static_cast<int>(st.userPolylineVerts.size() / 3);
+        setLineStyle(pi < st.drawing.userPolylineAttrs.size() ? &st.drawing.userPolylineAttrs[pi] : nullptr,
+                     pi < st.drawing.userPolylineAttrs.size() ? st.drawing.userPolylineAttrs[pi].layer : std::string("0"));
+        const int start = st.drawing.userPolylineOffsets[pi];
+        const int end = (pi + 1 < st.drawing.userPolylineOffsets.size())
+                            ? st.drawing.userPolylineOffsets[pi + 1]
+                            : static_cast<int>(st.drawing.vertexCount());
         std::vector<std::array<double, 3>> w;
         for (int k = start; k < end; ++k) {
-          const size_t b = static_cast<size_t>(k) * 3;
-          w.push_back({st.userPolylineVerts[b] + oX, st.userPolylineVerts[b + 1] + oY, st.userPolylineVerts[b + 2]});
+          const size_t b = static_cast<size_t>(k);
+          w.push_back({st.drawing.vertex(b).x + oX, st.drawing.vertex(b).y + oY, st.drawing.vertex(b).z});
         }
         emitModelChain(w, false);
       }
       // Circles (sampled to a polygon).
-      for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {  // cx,cy,z,r
-        const size_t idx = i / 4;
-        if (idx < st.userCircleAttrs.size() &&
-            (!plottable(st.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userCircleAttrs[idx].layer)))
+      for (size_t idx = 0; idx < st.drawing.circleCount(); ++idx) {  // cx,cy,z,r
+        const CadCircleRecord c = st.drawing.circle(idx);
+        if (idx < st.drawing.userCircleAttrs.size() &&
+            (!plottable(st.drawing.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.drawing.userCircleAttrs[idx].layer)))
           continue;
-        curColor = (idx < st.userCircleAttrs.size())
-                       ? resolveRgb(st.userCircleAttrs[idx].layer, st.userCircleAttrs[idx].color)
+        curColor = (idx < st.drawing.userCircleAttrs.size())
+                       ? resolveRgb(st.drawing.userCircleAttrs[idx].layer, st.drawing.userCircleAttrs[idx].color)
                        : 0x000000u;
-        setLineStyle(idx < st.userCircleAttrs.size() ? &st.userCircleAttrs[idx] : nullptr,
-                     idx < st.userCircleAttrs.size() ? st.userCircleAttrs[idx].layer : std::string("0"));
-        const double cx = st.userCirclesCxCyZR[i] + oX, cy = st.userCirclesCxCyZR[i + 1] + oY;
-        const double cz = st.userCirclesCxCyZR[i + 2];  // REQ-061: carried through the viewport camera
-        const double r = st.userCirclesCxCyZR[i + 3];
+        setLineStyle(idx < st.drawing.userCircleAttrs.size() ? &st.drawing.userCircleAttrs[idx] : nullptr,
+                     idx < st.drawing.userCircleAttrs.size() ? st.drawing.userCircleAttrs[idx].layer : std::string("0"));
+        const double cx = c.cx + oX, cy = c.cy + oY;
+        const double cz = c.cz;  // REQ-061: carried through the viewport camera
+        const double r = c.r;
         constexpr int kSeg = 72;
         std::vector<std::array<double, 3>> w;
         for (int k = 0; k <= kSeg; ++k) {  // the last point repeats the first, closing the polygon
@@ -697,15 +696,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         emitModelChain(w, false);
       }
       // Arcs (sampled). REQ-028: skip layers frozen in this viewport (matches the on-screen viewport render).
-      for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
-        if (ai < st.userArcAttrs.size() && IsLayerFrozenInViewport(vp, st.userArcAttrs[ai].layer))
+      for (size_t ai = 0; ai < st.drawing.userArcs.size(); ++ai) {
+        if (ai < st.drawing.userArcAttrs.size() && IsLayerFrozenInViewport(vp, st.drawing.userArcAttrs[ai].layer))
           continue;
-        curColor = (ai < st.userArcAttrs.size())
-                       ? resolveRgb(st.userArcAttrs[ai].layer, st.userArcAttrs[ai].color)
+        curColor = (ai < st.drawing.userArcAttrs.size())
+                       ? resolveRgb(st.drawing.userArcAttrs[ai].layer, st.drawing.userArcAttrs[ai].color)
                        : 0x000000u;
-        setLineStyle(ai < st.userArcAttrs.size() ? &st.userArcAttrs[ai] : nullptr,
-                     ai < st.userArcAttrs.size() ? st.userArcAttrs[ai].layer : std::string("0"));
-        const CadArc& a = st.userArcs[ai];
+        setLineStyle(ai < st.drawing.userArcAttrs.size() ? &st.drawing.userArcAttrs[ai] : nullptr,
+                     ai < st.drawing.userArcAttrs.size() ? st.drawing.userArcAttrs[ai].layer : std::string("0"));
+        const CadArc& a = st.drawing.userArcs[ai];
         const int kSeg = std::clamp(static_cast<int>(std::fabs(a.sweepRad) / 0.1f) + 2, 2, 256);
         std::vector<std::array<double, 3>> w;
         for (int k = 0; k <= kSeg; ++k) {
@@ -717,15 +716,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       // SPLINEs use adaptive tessellation, then each chord is projected through this viewport's
       // camera and clipped to its paper rectangle.
-      for (size_t si = 0; si < st.cadSplines.size(); ++si) {
-        const EntityAttributes* attr = si < st.cadSplineAttrs.size() ? &st.cadSplineAttrs[si] : nullptr;
+      for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
+        const EntityAttributes* attr = si < st.drawing.cadSplineAttrs.size() ? &st.drawing.cadSplineAttrs[si] : nullptr;
         const std::string layer = attr && !attr->layer.empty() ? attr->layer : "0";
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
         curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
         setLineStyle(attr, layer);
         std::vector<spline::Vec3> points;
-        spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &points);
+        spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &points);
         std::vector<std::array<double, 3>> w;
         for (const auto& p : points)
           w.push_back({p.x + oX, p.y + oY, p.z});
@@ -733,12 +732,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       // REQ-495.1: alignments plot in each viewport from the same exact geometry, sampled for display only, in the
       // style's tangent, curve and spiral colours.
-      for (const alignment::Alignment& al : st.alignments) {
+      for (const alignment::Alignment& al : st.drawing.alignments) {
         const std::string layer = al.layer.empty() ? std::string("0") : al.layer;
         if (al.Empty() || CadEntityIdHidden(&st.hiddenEntityIds, al.id) || !plottable(layer) ||
             IsLayerFrozenInViewport(vp, layer))
           continue;
-        const AlignmentStyle* sty = AlignmentStyles::Resolve(st.alignmentStyles, al.style);
+        const AlignmentStyle* sty = AlignmentStyles::Resolve(st.drawing.alignmentStyles, al.style);
         setLineStyle(nullptr, layer);
         for (int ei = 0; ei < static_cast<int>(al.Entities().size()); ++ei) {
           const SurfaceComponentStyle* comp =
@@ -754,22 +753,22 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       {
         const double viewH = std::max(1.0, static_cast<double>(vy1 - vy0));
-        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        const double halfSize = CadPointMarkerSize(st.drawing.pdSize, viewH);
         std::vector<CadPointStroke> strokes;
-        for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
-          const EntityAttributes* attr = pi < st.cadPointAttrs.size() ? &st.cadPointAttrs[pi] : nullptr;
+        for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
+          const EntityAttributes* attr = pi < st.drawing.cadPointAttrs.size() ? &st.drawing.cadPointAttrs[pi] : nullptr;
           const std::string layer = attr && !attr->layer.empty() ? attr->layer : "0";
           if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
             continue;
           curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
           setLineStyle(attr, layer);
-          CadPointDisplayStrokes(st.cadPoints[pi], st.pdMode, halfSize, &strokes);
+          CadPointDisplayStrokes(st.drawing.cadPoints[pi], st.drawing.pdMode, halfSize, &strokes);
           for (const CadPointStroke& s : strokes)
             emitModelSeg(s.x0 + oX, s.y0 + oY, s.x1 + oX, s.y1 + oY, s.z0, s.z1);
         }
       }
       // Survey-point crosses (fixed 0.05-inch size on the sheet).
-      for (const SurveyPoint& sp : st.surveyPoints) {
+      for (const SurveyPoint& sp : st.drawing.surveyPoints) {
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
           continue;
         curColor = resolveRgb(sp.layer, "ByLayer");
@@ -781,10 +780,10 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         addChain({{pcx, pcy - hc}, {pcx, pcy + hc}}, false, &vpRect);
       }
       // Surfaces (REQ-135): stroke the same display-geometry batches as the viewport.
-      for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-        if (!SurfaceVisible(st, si) || si >= st.cadSurfaceAttrs.size())
+      for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
+        if (!SurfaceVisible(st, si) || si >= st.drawing.cadSurfaceAttrs.size())
           continue;
-        const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+        const EntityAttributes& attr = st.drawing.cadSurfaceAttrs[si];
         if (!plottable(attr.layer) || IsLayerFrozenInViewport(vp, attr.layer))
           continue;
         const std::uint64_t id = attr.id;
@@ -817,7 +816,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           }
           flushRun();
         };
-        const CadSurface& surface = st.cadSurfaces[si];
+        const CadSurface& surface = st.drawing.cadSurfaces[si];
         if (surface.reducedDisplayLod && surface.tin && it->style.triangles.visible) {
           // LOD is a viewport choice only (REQ-508). Plot from every authoritative TIN face instead
           // of the reduced viewport cache so reduced and high LOD drawings produce the same sheet.
@@ -866,16 +865,16 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         emitPreview(st.waterDropPreviewLines);
       }
       CadDimStrokeParams dsp;
-      dsp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
-      dsp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
+      dsp.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
+      dsp.arrowSizeInches = st.drawing.activeDimensionStyle.arrowSizeInches;
       dsp.arrowScale = 1.f;
-      dsp.arrowType = st.activeDimensionStyle.arrowType;
-      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-        const CadAnnotation& ann = st.cadAnnotations[ai];
+      dsp.arrowType = st.drawing.activeDimensionStyle.arrowType;
+      for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+        const CadAnnotation& ann = st.drawing.cadAnnotations[ai];
         if (!CadAnnotationIsDimension(ann))
           continue;
         const EntityAttributes* aa =
-            (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
+            (ai < st.drawing.cadAnnotationAttrs.size()) ? &st.drawing.cadAnnotationAttrs[ai] : nullptr;
         const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
@@ -901,7 +900,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           lab.px = lpx;
           lab.py = lpy;
           lab.rot = strokes.labelRotRad;
-          lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+          lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.drawing.modelUnitsPerPlottedInch));
           lab.text = ann.text;
           lab.fontFamily = ann.fontFamily;
           lab.rgb = curColor;
@@ -909,15 +908,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           vpDimLabels.push_back(std::move(lab));
         }
       }
-      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-        const CadAnnotation& ann = st.cadAnnotations[ai];
+      for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+        const CadAnnotation& ann = st.drawing.cadAnnotations[ai];
         if (CadAnnotationIsDimension(ann) ||
             (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext &&
              ann.kind != CadAnnotation::Kind::Table) ||
             (ann.kind != CadAnnotation::Kind::Table && ann.text.empty()))
           continue;
         const EntityAttributes* aa =
-            (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
+            (ai < st.drawing.cadAnnotationAttrs.size()) ? &st.drawing.cadAnnotationAttrs[ai] : nullptr;
         const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
@@ -935,7 +934,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
             tlab.py = cpy;
             tlab.rot = 0.f;
             tlab.Hin =
-                (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+                (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.drawing.modelUnitsPerPlottedInch));
             tlab.text = ann.tableCells[ci];
             tlab.fontFamily = ann.fontFamily;
             tlab.rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
@@ -948,7 +947,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const std::string plain = MtextRichFlattenToPlain(ann.text);
           std::vector<std::string> lines;
           SplitPlainTextLines(plain, &lines);
-          const float Hm = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+          const float Hm = CadAnnotationHeightWorld(ann, st.drawing.modelUnitsPerPlottedInch);
           const float lineHm = Hm * 1.4f;
           int attach = ann.mtextAttach;
           if (attach < 1 || attach > 9)
@@ -965,7 +964,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
             blockTopY = ann.boxMinY + blockH;
           float baseY = blockTopY - Hm;
           const float Hin =
-              (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+              (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.drawing.modelUnitsPerPlottedInch));
           const uint32_t rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
           for (const std::string& ln : lines) {
             float x = ann.boxMinX;
@@ -1000,17 +999,17 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         lab.px = lpx;
         lab.py = lpy;
         lab.rot = ann.rotationRad;
-        lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+        lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.drawing.modelUnitsPerPlottedInch));
         lab.text = ann.text;
         lab.fontFamily = ann.fontFamily;
         lab.rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
         lab.clipPolygon = vpRect.polygon;
         vpDimLabels.push_back(std::move(lab));
       }
-      for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
-        const CadTable& tbl = st.cadTables[ti];
+      for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
+        const CadTable& tbl = st.drawing.cadTables[ti];
         const EntityAttributes* ta =
-            (ti < st.cadTableAttrs.size()) ? &st.cadTableAttrs[ti] : nullptr;
+            (ti < st.drawing.cadTableAttrs.size()) ? &st.drawing.cadTableAttrs[ti] : nullptr;
         const std::string layer = ta ? (ta->layer.empty() ? std::string("0") : ta->layer) : std::string("0");
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
@@ -1155,7 +1154,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
         sheetStyle(a);
         std::vector<CadBlockWorldSeg> segs;
-        CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
+        CadBlockCollectWorldLines(st.drawing.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
         for (const CadBlockWorldSeg& s : segs)
           addChain({{s.x0, s.y0}, {s.x1, s.y1}}, false, noClip);
       }
@@ -1222,14 +1221,14 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       {
         const double viewH = std::max(1.0, static_cast<double>(L.sheetHeightIn()));
-        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        const double halfSize = CadPointMarkerSize(st.drawing.pdSize, viewH);
         std::vector<CadPointStroke> strokes;
         for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
           const EntityAttributes* a = sheetAttr(L.paperPointAttrs, pi);
           if (a && !plottable(a->layer)) continue;
           curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
           sheetStyle(a);
-          CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, halfSize, &strokes);
+          CadPointDisplayStrokes(L.paperPoints[pi], st.drawing.pdMode, halfSize, &strokes);
           for (const CadPointStroke& s : strokes)
             addChain({{static_cast<float>(s.x0), static_cast<float>(s.y0)},
                       {static_cast<float>(s.x1), static_cast<float>(s.y1)}},
@@ -1285,7 +1284,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           addChain(chain, false, noClip);
         };
         auto arrow = [&](const CadMultileader& ml, const std::vector<float>& pts) {
-          const float sz = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+          const float sz = std::max(st.drawing.activeMultileaderStyle.arrowSizeInches, 0.01f);
           const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, sz);
           if (!a.valid)
             return;

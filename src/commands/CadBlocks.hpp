@@ -97,7 +97,7 @@ void LoadBundledBlockLibrary(AppCommandState& dest, std::vector<std::string>& lo
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
 /// Catalog lookup (issue #486 increment B4 / REQ-345): maps (size, class, part type) to a block
-/// definition name in the bundled/user fittings library, importing it into \p st.blockDefs if it
+/// definition name in the bundled/user fittings library, importing it into \p st.drawing.blockDefs if it
 /// was found but not yet imported. Refuses (returns false, reason pushed to \p log) when nothing
 /// matches, or when the match is ambiguous (more than one candidate) — never guesses among several.
 /// \p pressureClass may be `None` to mean "no restriction"; a specific class prefers an exact-tagged
@@ -109,7 +109,7 @@ bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std
 /// `<UserDataDirectory>/blocks/fittings` — where LIBEXPORT writes user-authored fitting parts
 /// (issue #486 increment A3). Empty if the user data directory cannot be determined.
 [[nodiscard]] std::filesystem::path CadFittingLibraryExportDir();
-/// Import a bundled library file when the user picks an entry that is not yet in \p st.blockDefs.
+/// Import a bundled library file when the user picks an entry that is not yet in \p st.drawing.blockDefs.
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry, std::vector<std::string>& log);
 
 /// One right-hand tab of the Pipe Fittings palette (REQ-350 (b), D-2026-09-24-a (1)). A tab is a

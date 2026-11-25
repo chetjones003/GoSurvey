@@ -613,43 +613,40 @@ inline constexpr float kCadTextAdvanceFactor = 0.55f;
 /// The rectangle a TEXT-like annotation occupies, in whatever units \p heightUnits is expressed in —
 /// world units in model space, paper inches on a sheet. Outputs are a normalized AABB.
 ///
-/// The insertion point is the TOP-LEFT: glyphs occupy `[insX, insX + w]` and `[insY - h, insY]`,
-/// matching what the renderer draws (and `AddText`, which draws from a top-left origin).
+/// Model-space TEXT uses a baseline insertion (\p textBaseline): cap-height glyphs extend upward
+/// from it, as the model renderer draws them. Paper-space TEXT is plotted from a top-left insertion
+/// (PdfPlot emits its baseline one height below `insY`), so paper callers pass false. MTEXT always
+/// uses the top-left of its stored box. Rotation is measured about that entity's own origin.
 ///
 /// One definition for both spaces (REQ-039: a sheet object gets "the exact UX they use in model
 /// space"). Paper space had its own copy, and it differed in three ways that all reached the user:
 /// it ignored the stored box an MTEXT actually occupies, it ignored `rotationRad` so a rotated
 /// string's box stayed axis-aligned at the wrong place, and it used a different advance factor.
-inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, float* mnX, float* mnY,
-                                    float* mxX, float* mxY) {
-  if (CadAnnotationHasTextBox(a.kind)) {
-    // MTEXT and Table carry the box the user actually dragged, and the renderer wraps, anchors and
-    // clips to it. Nothing estimated can beat the real thing.
-    *mnX = std::min(a.boxMinX, a.boxMaxX);
-    *mxX = std::max(a.boxMinX, a.boxMaxX);
-    *mnY = std::min(a.boxMinY, a.boxMaxY);
-    *mxY = std::max(a.boxMinY, a.boxMaxY);
-    return;
-  }
-  const float h = heightUnits;
-  const float w = CadTextEstimatedWidth(a.text, h);
-  const float c = std::cos(a.rotationRad);
-  const float s = std::sin(a.rotationRad);
-  float xs[4];
-  float ys[4];
-  const float lx[4] = {0.f, w, w, 0.f};
-  const float ly[4] = {0.f, 0.f, -h, -h};
+inline void CadTextAnnotationQuad(const CadAnnotation& a, float heightUnits, float* xs, float* ys,
+                                  float naturalWidth = -1.f, float naturalHeight = -1.f,
+                                  bool textBaseline = true) {
+  const bool box = CadAnnotationHasTextBox(a.kind);
+  const float x = box ? std::min(a.boxMinX, a.boxMaxX) : a.insX;
+  const float y = box ? std::max(a.boxMinY, a.boxMaxY) : a.insY;
+  const float w = box ? std::fabs(a.boxMaxX - a.boxMinX) : naturalWidth >= 0.f ? naturalWidth : CadTextEstimatedWidth(a.text, heightUnits);
+  const float h = box ? std::fabs(a.boxMaxY - a.boxMinY) : naturalHeight >= 0.f ? naturalHeight : heightUnits;
+  const float c = std::cos(a.rotationRad), s = std::sin(a.rotationRad);
+  const float top = a.kind == CadAnnotation::Kind::Text && textBaseline ? heightUnits : 0.f;
+  const float lx[4] = {0.f, w, w, 0.f}, ly[4] = {top, top, top - h, top - h};
   for (int i = 0; i < 4; ++i) {
-    xs[i] = a.insX + lx[i] * c - ly[i] * s;
-    ys[i] = a.insY + lx[i] * s + ly[i] * c;
+    xs[i] = x + lx[i] * c - ly[i] * s;
+    ys[i] = y + lx[i] * s + ly[i] * c;
   }
-  *mnX = *mxX = xs[0];
-  *mnY = *mxY = ys[0];
+}
+
+inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, float* mnX, float* mnY,
+                                    float* mxX, float* mxY, bool textBaseline = true) {
+  float xs[4], ys[4];
+  CadTextAnnotationQuad(a, heightUnits, xs, ys, -1.f, -1.f, textBaseline);
+  *mnX = *mxX = xs[0]; *mnY = *mxY = ys[0];
   for (int i = 1; i < 4; ++i) {
-    *mnX = std::min(*mnX, xs[i]);
-    *mxX = std::max(*mxX, xs[i]);
-    *mnY = std::min(*mnY, ys[i]);
-    *mxY = std::max(*mxY, ys[i]);
+    *mnX = std::min(*mnX, xs[i]); *mxX = std::max(*mxX, xs[i]);
+    *mnY = std::min(*mnY, ys[i]); *mxY = std::max(*mxY, ys[i]);
   }
 }
 
@@ -1580,3 +1577,17 @@ struct CadFilledRegion {
 /// ~0.008 ft quantization REQ-101 tightened away; catch it at compile time (TASK-228 Phase D).
 static_assert(std::is_same_v<decltype(CadFilledRegion::vertsXyz)::value_type, double>,
               "CadFilledRegion::vertsXyz must stay double (ADR-054 (a), REQ-101)");
+
+/// The pattern linework of every patterned hatch (REQ-043), derived from the filled regions and kept
+/// outside every undo snapshot, like the solid display cache. ef RefreshHatchDisplayGeometry keeps it
+/// current; the renderer draws it as depth-tested lines.
+struct CadHatchDisplayGeometry {
+  /// Parallel to the drawing's filled regions: x0,y0,x1,y1 per segment in local coordinates, in double
+  /// until the GPU narrowing point (ADR-054). Empty for SOLID fills and unknown patterns.
+  std::vector<std::vector<double>> segments;
+  /// Per region, a fingerprint of everything its segments came from (boundary, pattern, scale, angle,
+  /// library). Unchanged means the segments are reused as they are.
+  std::vector<std::uint64_t> keys;
+  /// Bumps whenever any region's segments change, so the renderer re-uploads only then.
+  std::uint64_t revision = 1;
+};

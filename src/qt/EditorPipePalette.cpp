@@ -120,8 +120,8 @@ bool ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& render
     // SCRATCH state purely to be pictured. Scratch, and not the drawing, because LISTING a part must
     // not add a block definition to the user's drawing — that is what placing one does.
     std::unique_ptr<AppCommandState> scratch;  // owns the preview-only import for this iteration
-    const std::vector<CadBlockDefinition>* defs = &cmd.blockDefs;
-    int di = CadBlockFindDef(cmd.blockDefs, name);
+    const std::vector<CadBlockDefinition>* defs = &cmd.drawing.blockDefs;
+    int di = CadBlockFindDef(cmd.drawing.blockDefs, name);
     if (di < 0) {
       const auto row = std::find_if(cmd.pipeFittingLibraryCache.begin(), cmd.pipeFittingLibraryCache.end(),
                                     [&](const CadBlockLibraryEntry& e) { return e.name == name; });
@@ -129,8 +129,8 @@ bool ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& render
         scratch = std::make_unique<AppCommandState>();
         std::vector<std::string> quiet;  // an unreadable library file is not the command line's business
         if (CadBlocksImportLibraryEntry(*scratch, *row, quiet)) {
-          di = CadBlockFindDef(scratch->blockDefs, name);
-          defs = &scratch->blockDefs;
+          di = CadBlockFindDef(scratch->drawing.blockDefs, name);
+          defs = &scratch->drawing.blockDefs;
         }
       }
     }

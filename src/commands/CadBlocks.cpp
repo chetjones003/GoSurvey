@@ -1,4 +1,7 @@
 #include "CadBlocks.hpp"
+#include "blocks/CadBlocksInternal.hpp"
+#include "blocks/CadBlockCreateInternal.hpp"
+#include "connect/CadBlockConnectInternal.hpp"
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
 #include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
@@ -30,11 +33,6 @@ namespace {
 /// INSERT rotation is entered in the app's angle convention — 0° = north, **clockwise positive**
 /// (CadCommands.hpp; same as ROTATE, which negates for the same reason). The block frame is the
 /// internal CCW-from-east math frame, so a clockwise bearing negates. `xf.rotZ = 0` therefore
-/// inserts the definition exactly as authored.
-float InsertRotZFromCwNorthDeg(float deg) { return -deg * 0.01745329252f; }
-
-/// Distance from the committed insertion point to \p wx,\p wy,\p wz after ORTHO, used for the live
-/// on-screen scale pick. Uses true 3D distance so a solid fitting scaled along a pipe axis matches
 /// the cursor (issue #475 increment 3).
 float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy, float wz) {
   float lx = wx;
@@ -63,164 +61,14 @@ float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
   return BearingCwNorthDegFromMathAngleRad(std::atan2(dy, dx));
 }
 
-EntityAttributes NewBlockAttr(const AppCommandState& st) {
-  EntityAttributes a;
-  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
-  a.linetype = "ByLayer";
-  a.lineweightMm = -1.f;
-  a.transparency = -1.f;
-  return a;
-}
-
-std::vector<std::string> SplitCommaRest(std::istream& in) {
-  std::string rest;
-  std::getline(in, rest);
-  std::vector<std::string> f;
-  std::string cur;
-  for (char c : rest) {
-    if (c == ',') {
-      f.push_back(StringUtil::trimCopy(cur));
-      cur.clear();
-    } else {
-      cur.push_back(c);
-    }
-  }
-  if (!cur.empty() || !rest.empty())
-    f.push_back(StringUtil::trimCopy(cur));
-  if (!f.empty() && f[0].empty())
-    f.erase(f.begin());
-  return f;
-}
-
-void NoteRecent(AppCommandState& st, const std::string& name) {
-  st.blockRecent.erase(std::remove_if(st.blockRecent.begin(), st.blockRecent.end(),
-                                      [&](const std::string& n) { return CadBlockEqCi(n, name); }),
-                       st.blockRecent.end());
-  st.blockRecent.insert(st.blockRecent.begin(), name);
-  if (st.blockRecent.size() > 24)
-    st.blockRecent.resize(24);
-}
-
-void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float bx, float by, float bz) {
-  assert(c != nullptr);
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
-        continue;
-      c->lines.push_back(st.userLinesFlat[k] - bx);
-      c->lines.push_back(st.userLinesFlat[k + 1] - by);
-      c->lines.push_back(st.userLinesFlat[k + 2] - bz);
-      c->lines.push_back(st.userLinesFlat[k + 3] - bx);
-      c->lines.push_back(st.userLinesFlat[k + 4] - by);
-      c->lines.push_back(st.userLinesFlat[k + 5] - bz);
-      EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.userLineAttrs.size())
-        a = st.userLineAttrs[static_cast<size_t>(e.index)];
-      c->lineAttrs.push_back(a);
-      c->lineVis.push_back("");
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
-        continue;
-      c->circles.push_back(st.userCirclesCxCyZR[k] - bx);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 1] - by);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 2] - bz);
-      c->circles.push_back(st.userCirclesCxCyZR[k + 3]);
-      EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-        a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-      c->circleAttrs.push_back(a);
-      float bnx = 0.f, bny = 0.f, bnz = 1.f;
-      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &bnx, &bny, &bnz);
-      PushCircleNormal(c->circleNormals, bnx, bny, bnz);
-      c->circleVis.push_back("");
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
-        continue;
-      CadAnnotation t = st.cadAnnotations[static_cast<size_t>(e.index)];
-      t.insX -= bx;
-      t.insY -= by;
-      t.insZ -= bz;
-      c->texts.push_back(std::move(t));
-      EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadAnnotationAttrs.size())
-        a = st.cadAnnotationAttrs[static_cast<size_t>(e.index)];
-      c->textAttrs.push_back(a);
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
-        continue;
-      CadArc a = st.userArcs[static_cast<size_t>(e.index)];
-      a.cx -= bx;
-      a.cy -= by;
-      c->arcs.push_back(a);
-      EntityAttributes at{};
-      if (static_cast<size_t>(e.index) < st.userArcAttrs.size())
-        at = st.userArcAttrs[static_cast<size_t>(e.index)];
-      c->arcAttrs.push_back(at);
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-        continue;
-      CadBlockNested n;
-      n.defName = st.cadBlockRefs[static_cast<size_t>(e.index)].defName;
-      n.xf = st.cadBlockRefs[static_cast<size_t>(e.index)].xf;
-      n.xf.x -= bx;
-      n.xf.y -= by;
-      n.xf.z -= bz;
-      c->nested.push_back(std::move(n));
-    } else if (e.type == SelectedEntity::Type::Mesh) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMeshes.size())
-        continue;
-      c->meshes.push_back(st.cadMeshes[static_cast<size_t>(e.index)]);
-      EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadMeshAttrs.size())
-        a = st.cadMeshAttrs[static_cast<size_t>(e.index)];
-      c->meshAttrs.push_back(a);
-    } else if (e.type == SelectedEntity::Type::Solid) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSolids.size())
-        continue;
-      const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
-      if (!sp)
-        continue;
-      brep::Solid local =
-          brep::Translate(*sp, brep::Vec3{-static_cast<double>(bx), -static_cast<double>(by),
-                                           -static_cast<double>(bz)});
-      c->solids.push_back(std::make_shared<const brep::Solid>(std::move(local)));
-      EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadSolidAttrs.size())
-        a = st.cadSolidAttrs[static_cast<size_t>(e.index)];
-      c->solidAttrs.push_back(a);
-    }
-  }
-}
-
 void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
-  c->lines = st.userLinesFlat;
-  c->lineAttrs = st.userLineAttrs;
-  c->lineVis.assign(st.userLineAttrs.size(), "");
-  c->circles = st.userCirclesCxCyZR;
-  c->circleAttrs = st.userCircleAttrs;
-  c->circleVis.assign(st.userCircleAttrs.size(), "");
-  c->circleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->arcs = st.userArcs;
-  c->arcAttrs = st.userArcAttrs;
-  c->ellipses = st.userEllipses;
-  c->ellAttrs = st.userEllAttrs;
-  c->polyOffsets = st.userPolylineOffsets;
-  c->polyVerts = st.userPolylineVerts;
-  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  c->polyClosed = st.userPolylineClosed;
-  c->polyAttrs = st.userPolylineAttrs;
-  c->texts = st.cadAnnotations;
-  c->textAttrs = st.cadAnnotationAttrs;
-  c->meshes = st.cadMeshes;
-  c->meshAttrs = st.cadMeshAttrs;
-  c->solids = st.cadSolids;          // REQ-320 / ADR-051
-  c->solidAttrs = st.cadSolidAttrs;
-  for (const CadBlockRef& r : st.cadBlockRefs) {
+  // The entity collections are one shared store (ADR-0010, #1557 phase 3): a single slice copy.
+  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st.drawing);
+  c->lineVis.assign(st.drawing.userLineAttrs.size(), "");
+  c->circleVis.assign(st.drawing.userCircleAttrs.size(), "");
+  EnsureCircleNormals(c->userCircleNormals, st.drawing.circleCount());
+  for (const CadBlockRef& r : st.drawing.cadBlockRefs) {
     CadBlockNested n;
     n.defName = r.defName;
     n.xf = r.xf;
@@ -234,112 +82,61 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
 /// Everything else in the model store is cleared so the viewport, picking and snapping see only
 /// the block (isolation, ADR-043 (b)).
 void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& c) {
-  st.userLinesFlat        = c.lines;
-  st.userLineAttrs        = c.lineAttrs;
-  st.userLineAttrs.resize(c.lines.size() / 6);
-  st.userCirclesCxCyZR    = c.circles;
-  st.userCircleAttrs      = c.circleAttrs;
-  st.userCircleAttrs.resize(c.circles.size() / 4);
-  st.userCircleNormals    = c.circleNormals;
-  EnsureCircleNormals(st.userCircleNormals, c.circles.size() / 4);
-  st.userArcs             = c.arcs;
-  st.userArcAttrs         = c.arcAttrs;
-  st.userArcAttrs.resize(c.arcs.size());
-  st.userEllipses         = c.ellipses;
-  st.userEllAttrs         = c.ellAttrs;
-  st.userEllAttrs.resize(c.ellipses.size());
-  st.userPolylineOffsets  = c.polyOffsets;
-  st.userPolylineVerts    = c.polyVerts;
-  st.userPolylineVertsBulge = c.polyVertsBulge;  // REQ-316 / ADR-047
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // legacy block defs have none
-  st.userPolylineClosed   = c.polyClosed;
-  st.userPolylineAttrs    = c.polyAttrs;
-  st.cadAnnotations       = c.texts;
-  st.cadAnnotationAttrs   = c.textAttrs;
-  st.cadAnnotationAttrs.resize(c.texts.size());
-  st.cadMeshes            = c.meshes;
-  st.cadMeshAttrs         = c.meshAttrs;
-  st.cadMeshAttrs.resize(st.cadMeshes.size());
-  st.cadSolids            = c.solids;
-  st.cadSolidAttrs        = c.solidAttrs;
-  st.cadSolidAttrs.resize(st.cadSolids.size());
+  // The block's entity store replaces the model's (ADR-0010, #1557 phase 3): a single slice copy,
+  // then the attribute arrays are padded to their entity counts as before.
+  static_cast<CadEntityStore&>(st.drawing) = static_cast<const CadEntityStore&>(c);
+  st.drawing.userLineAttrs.resize(st.drawing.lineCount());
+  st.drawing.userCircleAttrs.resize(st.drawing.circleCount());
+  EnsureCircleNormals(st.drawing.userCircleNormals, st.drawing.circleCount());
+  st.drawing.userArcAttrs.resize(st.drawing.userArcs.size());
+  st.drawing.userEllAttrs.resize(st.drawing.userEllipses.size());
+  SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // legacy block defs have none
+  st.drawing.cadAnnotationAttrs.resize(st.drawing.cadAnnotations.size());
+  st.drawing.cadMeshAttrs.resize(st.drawing.cadMeshes.size());
+  st.drawing.cadSolidAttrs.resize(st.drawing.cadSolids.size());
   // Hide everything that is not the block being edited.
-  st.cadFilledRegions.clear();
-  st.cadFilledRegionAttrs.clear();
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
-  st.cadTables.clear();
-  st.cadTableAttrs.clear();
-  st.cadPositionMarkers.clear();  // REQ-359: model-space objects, never block content
-  st.cadPositionMarkerAttrs.clear();
-  st.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
-  st.cadMultileaderAttrs.clear();
-  st.cadSplines.clear();  // REQ-443: model-space objects, never block content
-  st.cadSplineAttrs.clear();
-  st.cadPoints.clear();  // REQ-456: model-space objects, never block content
-  st.cadPointAttrs.clear();
+  st.drawing.cadFilledRegions.clear();
+  st.drawing.cadFilledRegionAttrs.clear();
+  st.drawing.cadSurfaces.clear();
+  st.drawing.cadSurfaceAttrs.clear();
+  st.drawing.cadTables.clear();
+  st.drawing.cadTableAttrs.clear();
+  st.drawing.cadPositionMarkers.clear();  // REQ-359: model-space objects, never block content
+  st.drawing.cadPositionMarkerAttrs.clear();
+  st.drawing.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
+  st.drawing.cadMultileaderAttrs.clear();
+  st.drawing.cadSplines.clear();  // REQ-443: model-space objects, never block content
+  st.drawing.cadSplineAttrs.clear();
+  st.drawing.cadPoints.clear();  // REQ-456: model-space objects, never block content
+  st.drawing.cadPointAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
   // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
-  st.cadPipeRuns.clear();
-  st.cadPipeRunAttrs.clear();
-  st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
-  st.alignments.clear();  // REQ-480: model-space objects, never block content
-  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
-  st.cadBlockRefs.clear();
-  st.cadBlockRefAttrs.clear();
-  st.surveyPoints.clear();
-  st.featureLineOffsets.clear();
-  st.featureLineVerts.clear();
-  st.featureLineClosed.clear();
-  st.featureLineElevPt.clear();
-  st.featureLineInfo.clear();
-  st.featureLineAttrs.clear();
+  st.drawing.cadPipeRuns.clear();
+  st.drawing.cadPipeRunAttrs.clear();
+  st.drawing.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
+  st.drawing.alignments.clear();  // REQ-480: model-space objects, never block content
+  st.drawing.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.drawing.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
+  st.drawing.cadBlockRefs.clear();
+  st.drawing.cadBlockRefAttrs.clear();
+  st.drawing.surveyPoints.clear();
+  st.drawing.featureLineOffsets.clear();
+  st.drawing.featureLineVerts.clear();
+  st.drawing.featureLineClosed.clear();
+  st.drawing.featureLineElevPt.clear();
+  st.drawing.featureLineInfo.clear();
+  st.drawing.featureLineAttrs.clear();
 }
 
 /// ADR-043: harvest the model arrays back into a definition's primitive geometry on Save. Leaves
 /// \c nested and the dynamic-block authoring model (parameters/actions/attrDefs) untouched — those
 /// are edited through their own commands, not this surface.
-void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockContent* c) {
-  assert(c != nullptr);
-  c->lines = st.userLinesFlat;
-  c->lineAttrs = st.userLineAttrs;
-  c->lineAttrs.resize(st.userLinesFlat.size() / 6);
-  c->lineVis.assign(st.userLinesFlat.size() / 6, "");
-  c->circles = st.userCirclesCxCyZR;
-  c->circleAttrs = st.userCircleAttrs;
-  c->circleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
-  c->circleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->arcs = st.userArcs;
-  c->arcAttrs = st.userArcAttrs;
-  c->arcAttrs.resize(st.userArcs.size());
-  c->ellipses = st.userEllipses;
-  c->ellAttrs = st.userEllAttrs;
-  c->ellAttrs.resize(st.userEllipses.size());
-  c->polyOffsets = st.userPolylineOffsets;
-  c->polyVerts = st.userPolylineVerts;
-  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  c->polyClosed = st.userPolylineClosed;
-  c->polyAttrs = st.userPolylineAttrs;
-  c->texts = st.cadAnnotations;
-  c->textAttrs = st.cadAnnotationAttrs;
-  c->textAttrs.resize(st.cadAnnotations.size());
-  c->meshes = st.cadMeshes;
-  c->meshAttrs = st.cadMeshAttrs;
-  c->meshAttrs.resize(st.cadMeshes.size());
-  c->solids = st.cadSolids;
-  c->solidAttrs = st.cadSolidAttrs;
-  c->solidAttrs.resize(st.cadSolids.size());
-}
-
 bool DrawingHasCaptureableGeometry(const AppCommandState& st) {
-  return !st.userLinesFlat.empty() || !st.userCirclesCxCyZR.empty() || !st.userArcs.empty() ||
-         !st.userEllipses.empty() || st.userPolylineOffsets.size() >= 2 || !st.cadAnnotations.empty() ||
-         !st.cadMeshes.empty() || !st.cadSolids.empty() || !st.importedDxfAttrDefs.empty();
+  return !st.drawing.userLinesFlat.empty() || !st.drawing.userCirclesCxCyZR.empty() || !st.drawing.userArcs.empty() ||
+         !st.drawing.userEllipses.empty() || st.drawing.userPolylineOffsets.size() >= 2 || !st.drawing.cadAnnotations.empty() ||
+         !st.drawing.cadMeshes.empty() || !st.drawing.cadSolids.empty() || !st.importedDxfAttrDefs.empty();
 }
 
 std::string FileStemUtf8(const char* pathUtf8) {
@@ -359,14 +156,14 @@ std::string LowerExt(const char* pathUtf8) {
 int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std::string>& log) {
   if (def.name.empty())
     return 0;
-  const int i = CadBlockFindDef(dest.blockDefs, def.name);
+  const int i = CadBlockFindDef(dest.drawing.blockDefs, def.name);
   if (i >= 0) {
-    CadBlockDefinition& have = dest.blockDefs[static_cast<size_t>(i)];
+    CadBlockDefinition& have = dest.drawing.blockDefs[static_cast<size_t>(i)];
     const bool upgradeMatchline =
         CadBlockNameIsMatchline(def.name) &&
-        (have.attrDefs.size() < def.attrDefs.size() || have.content.texts.size() < def.content.texts.size());
-    const bool upgradeSatSolid = !def.content.solids.empty() &&
-                                 (have.content.solids.empty() || have.units != def.units);
+        (have.attrDefs.size() < def.attrDefs.size() || have.content.cadAnnotations.size() < def.content.cadAnnotations.size());
+    const bool upgradeSatSolid = !def.content.cadSolids.empty() &&
+                                 (have.content.cadSolids.empty() || have.units != def.units);
     if (!upgradeMatchline && !upgradeSatSolid) {
       log.push_back("BLOCKIMPORT — skipped duplicate \"" + def.name + "\".");
       return 0;
@@ -374,7 +171,7 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
     have = std::move(def);
     return 1;
   }
-  dest.blockDefs.push_back(std::move(def));
+  dest.drawing.blockDefs.push_back(std::move(def));
   return 1;
 }
 
@@ -402,12 +199,12 @@ bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std:
   if (bb.valid)
     based = brep::Translate(
         based, brep::Vec3{-(bb.mn.x + bb.mx.x) * 0.5, -(bb.mn.y + bb.mx.y) * 0.5, -bb.mn.z});
-  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(based)));
-  scratch.cadSolidAttrs.push_back(EntityAttributes{});
+  scratch.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(based)));
+  scratch.drawing.cadSolidAttrs.push_back(EntityAttributes{});
   // Keep the block definition units-neutral: a `.sat` header's millimetres-per-model-unit is
   // unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), and INSERT scaling a
   // solid it cannot place has no benefit. The solid imports at the file's own coordinates.
-  scratch.drawingInsUnits = 0;
+  scratch.drawing.drawingInsUnits = 0;
   log.push_back("BLOCKIMPORT — imported an ACIS solid from \"" + std::string(pathUtf8) + "\".");
   return true;
 }
@@ -473,7 +270,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // spawning a redundant second, unrelated block definition with the same content every time.
   const bool skipWrapDuringBedit = ext == ".sat" && dest.blockEditActive && dropLooseSatGeometry;
   int n = 0;
-  for (CadBlockDefinition& d : scratch.blockDefs)
+  for (CadBlockDefinition& d : scratch.drawing.blockDefs)
     n += MergeBlockDef(dest, std::move(d), log);
   if (DrawingHasCaptureableGeometry(scratch) && !skipWrapDuringBedit) {
     CadBlockDefinition wrap;
@@ -481,8 +278,8 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     // A standalone `.sat` is re-based into the current drawing's model units (feet for a feet
     // drawing). Tag the block the same way so INSERT does not apply an inch→foot rescale (issue
     // #475). DXF/DWG keep the imported file's $INSUNITS when present.
-    wrap.units = (ext == ".sat") ? CadDrawingInsUnitsName(dest.drawingInsUnits)
-                                 : CadDrawingInsUnitsName(scratch.drawingInsUnits);
+    wrap.units = (ext == ".sat") ? CadDrawingInsUnitsName(dest.drawing.drawingInsUnits)
+                                 : CadDrawingInsUnitsName(scratch.drawing.drawingInsUnits);
     wrap.attrDefs = scratch.importedDxfAttrDefs;
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
@@ -493,13 +290,13 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // it and MOVE it into position; the block definition above is kept for a future 3D INSERT.
   // During BEDIT this instead lands the solid directly in the block being authored (see above).
   if (ext == ".sat" && dropLooseSatGeometry) {
-    for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
-      dest.cadSolids.push_back(scratch.cadSolids[i]);
-      dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
+    for (std::size_t i = 0; i < scratch.drawing.cadSolids.size(); ++i) {
+      dest.drawing.cadSolids.push_back(scratch.drawing.cadSolids[i]);
+      dest.drawing.cadSolidAttrs.push_back(i < scratch.drawing.cadSolidAttrs.size() ? scratch.drawing.cadSolidAttrs[i]
                                                                     : EntityAttributes{});
     }
   }
-  for (CadBlockDefinition& d : dest.blockDefs)
+  for (CadBlockDefinition& d : dest.drawing.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
   // A part that came in without piping metadata of its own takes its sidecar's. Without this the
   // bundled startup sweep (which imports `fittings/*.sat`) turns a tagged 4in flange into an untyped
@@ -509,11 +306,11 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     CadPipePartType sidecarType = CadPipePartType::None;
     std::string sidecarSize;
     CadPipePressureClass sidecarClass = CadPipePressureClass::None;
-    const int di = CadBlockFindDef(dest.blockDefs, FileStemUtf8(pathUtf8));
-    if (di >= 0 && dest.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::None &&
+    const int di = CadBlockFindDef(dest.drawing.blockDefs, FileStemUtf8(pathUtf8));
+    if (di >= 0 && dest.drawing.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::None &&
         ReadFittingSidecar(std::filesystem::u8path(pathUtf8), &sidecarType, &sidecarSize, &sidecarClass) &&
         sidecarType != CadPipePartType::None) {
-      CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
+      CadBlockDefinition& d = dest.drawing.blockDefs[static_cast<size_t>(di)];
       d.partType = sidecarType;
       d.nominalSize = sidecarSize;
       d.pressureClass = sidecarClass;
@@ -571,160 +368,24 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     log.push_back("Block library — loaded " + std::to_string(n) + " bundled definition(s).");
 }
 
-void EraseSelectedSources(AppCommandState& st) {
-  std::vector<int> lines;
-  std::vector<int> circles;
-  std::vector<int> anns;
-  std::vector<int> arcs;
-  std::vector<int> meshes;
-  std::vector<int> refs;
-  // Solids were missing here while `CaptureSelectionInto` has copied them into the definition since
-  // REQ-320 — so BLOCK's "Convert to block" and "Delete" left the original solid in the drawing
-  // alongside a block reference holding a copy of it, silently duplicating the geometry (found by
-  // the `block-create-basepoint-pick` GUI test, 2026-09-23).
-  std::vector<int> solids;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg)
-      lines.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::Circle)
-      circles.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::Annotation)
-      anns.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::Arc)
-      arcs.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::Mesh)
-      meshes.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::BlockRef)
-      refs.push_back(e.index);
-    else if (e.type == SelectedEntity::Type::Solid)
-      solids.push_back(e.index);
-  }
-  auto dropLines = [&](std::vector<int>& idx) {
-    std::sort(idx.begin(), idx.end());
-    idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
-    for (int i = static_cast<int>(idx.size()) - 1; i >= 0; --i) {
-      const int k = idx[static_cast<size_t>(i)];
-      if (k < 0)
-        continue;
-      const size_t o = static_cast<size_t>(k) * 6;
-      if (o + 5 < st.userLinesFlat.size())
-        st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o),
-                               st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o + 6));
-      if (static_cast<size_t>(k) < st.userLineAttrs.size())
-        st.userLineAttrs.erase(st.userLineAttrs.begin() + k);
-    }
-  };
-  dropLines(lines);
-  auto dedup = [](std::vector<int>& v) {
-    std::sort(v.begin(), v.end());
-    v.erase(std::unique(v.begin(), v.end()), v.end());
-  };
-  dedup(circles);
-  for (int i = static_cast<int>(circles.size()) - 1; i >= 0; --i) {
-    const int k = circles[static_cast<size_t>(i)];
-    const size_t o = static_cast<size_t>(k) * 4;
-    if (o + 3 < st.userCirclesCxCyZR.size())
-      st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o),
-                                 st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o + 4));
-    if (static_cast<size_t>(k) < st.userCircleAttrs.size())
-      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + k);
-    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(k));
-  }
-  dedup(anns);
-  for (int i = static_cast<int>(anns.size()) - 1; i >= 0; --i) {
-    const int k = anns[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotations.size())
-      st.cadAnnotations.erase(st.cadAnnotations.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotationAttrs.size())
-      st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + k);
-  }
-  dedup(arcs);
-  for (int i = static_cast<int>(arcs.size()) - 1; i >= 0; --i) {
-    const int k = arcs[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.userArcs.size())
-      st.userArcs.erase(st.userArcs.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + k);
-  }
-  std::sort(meshes.begin(), meshes.end());
-  for (int i = static_cast<int>(meshes.size()) - 1; i >= 0; --i) {
-    const int k = meshes[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadMeshes.size())
-      st.cadMeshes.erase(st.cadMeshes.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadMeshAttrs.size())
-      st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + k);
-  }
-  std::sort(refs.begin(), refs.end());
-  for (int i = static_cast<int>(refs.size()) - 1; i >= 0; --i) {
-    const int k = refs[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefs.size())
-      st.cadBlockRefs.erase(st.cadBlockRefs.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
-  }
-  std::sort(solids.begin(), solids.end());
-  for (int i = static_cast<int>(solids.size()) - 1; i >= 0; --i) {
-    const int k = solids[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadSolids.size())
-      st.cadSolids.erase(st.cadSolids.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + k);
-  }
-  st.selection.clear();
-}
-
-void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttributes& insertAttr) {
-  std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, ref, insertAttr, &segs);
-  for (const CadBlockWorldSeg& s : segs) {
-    st.userLinesFlat.push_back(s.x0);
-    st.userLinesFlat.push_back(s.y0);
-    st.userLinesFlat.push_back(s.z0);
-    st.userLinesFlat.push_back(s.x1);
-    st.userLinesFlat.push_back(s.y1);
-    st.userLinesFlat.push_back(s.z1);
-    EntityAttributes a = s.attr;
-    a.id = 0;
-    st.userLineAttrs.push_back(a);
-  }
-  std::vector<CadAnnotation> anns;
-  CadBlockCollectWorldAnnotations(st.blockDefs, ref, &anns);
-  for (CadAnnotation& t : anns) {
-    st.cadAnnotations.push_back(std::move(t));
-    EntityAttributes a = insertAttr;
-    a.id = 0;
-    st.cadAnnotationAttrs.push_back(std::move(a));
-  }
-  std::vector<CadBlockWorldSolid> solids;
-  CadBlockCollectWorldSolids(st.blockDefs, ref, insertAttr, &solids);
-  for (const CadBlockWorldSolid& ws : solids) {
-    if (!ws.solid)
-      continue;
-    st.cadSolids.push_back(ws.solid);
-    EntityAttributes a = ws.attr;
-    a.id = 0;
-    st.cadSolidAttrs.push_back(std::move(a));
-  }
-}
-
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                      std::vector<std::string>& log, bool pushUndo = true,
                      const EntityAttributes* lineAttrs = nullptr) {
-  const int di = CadBlockFindDef(st.blockDefs, name);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, name);
   if (di < 0) {
     log.push_back("INSERT — no block named \"" + std::string(name) + "\".");
     return false;
   }
   CadBlockRef r;
-  r.defName = st.blockDefs[static_cast<size_t>(di)].name;
+  r.defName = st.drawing.blockDefs[static_cast<size_t>(di)].name;
   r.xf = xf;
   if (pushUndo)
     PushUndoSnapshot(st, "Insert");
-  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
+  const float us = CadBlockInsertUnitsScale(st, st.drawing.blockDefs[static_cast<size_t>(di)]);
   r.xf.sx *= us;
   r.xf.sy *= us;
   r.xf.sz *= us;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   for (const CadBlockAttrDef& ad : def.attrDefs)
     CadBlockAttrSet(&r, ad.tag, ad.defaultValue);
   EntityAttributes attr = NewBlockAttr(st);
@@ -745,15 +406,15 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
     paperTarget->paperBlockRefs.push_back(r);
     paperTarget->paperBlockRefAttrs.push_back(attr);
   } else {
-    st.cadBlockRefs.push_back(r);
-    st.cadBlockRefAttrs.push_back(attr);
+    st.drawing.cadBlockRefs.push_back(r);
+    st.drawing.cadBlockRefAttrs.push_back(attr);
     if (explode) {
-      ExplodeRef(st, st.cadBlockRefs.back(), st.cadBlockRefAttrs.back());
-      st.cadBlockRefs.pop_back();
-      st.cadBlockRefAttrs.pop_back();
+      ExplodeRef(st, st.drawing.cadBlockRefs.back(), st.drawing.cadBlockRefAttrs.back());
+      st.drawing.cadBlockRefs.pop_back();
+      st.drawing.cadBlockRefAttrs.pop_back();
     }
   }
-  if (!def.content.solids.empty() && !CadBlockXformScaleIsUniform(r.xf))
+  if (!def.content.cadSolids.empty() && !CadBlockXformScaleIsUniform(r.xf))
     log.push_back("INSERT — \"" + def.name +
                   "\" carries a 3D solid; non-uniform scale is not supported for solid blocks.");
   NoteRecent(st, r.defName);
@@ -764,38 +425,6 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   else
     log.push_back("INSERT — placed \"" + r.defName + "\".");
   return true;
-}
-
-CadBlockParamKind ParseParamKind(const std::string& s) {
-  const std::string l = StringUtil::toLowerAsciiCopy(s);
-  if (l == "polar")
-    return CadBlockParamKind::Polar;
-  if (l == "rotation" || l == "rotate")
-    return CadBlockParamKind::Rotation;
-  if (l == "flip")
-    return CadBlockParamKind::Flip;
-  if (l == "visibility" || l == "vis")
-    return CadBlockParamKind::Visibility;
-  if (l == "move")
-    return CadBlockParamKind::Move;
-  if (l == "lookup")
-    return CadBlockParamKind::Lookup;
-  return CadBlockParamKind::Linear;
-}
-
-CadBlockActionKind ParseActionKind(const std::string& s) {
-  const std::string l = StringUtil::toLowerAsciiCopy(s);
-  if (l == "move")
-    return CadBlockActionKind::Move;
-  if (l == "rotate")
-    return CadBlockActionKind::Rotate;
-  if (l == "scale")
-    return CadBlockActionKind::Scale;
-  if (l == "flip")
-    return CadBlockActionKind::Flip;
-  if (l == "visibility" || l == "vis")
-    return CadBlockActionKind::Visibility;
-  return CadBlockActionKind::Stretch;
 }
 
 } // namespace
@@ -813,10 +442,10 @@ std::filesystem::path CadFittingLibraryExportDir() {
 
 float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
   // REQ-357: "Scale objects inserted from other drawings" off → inserted as drawn.
-  if (!st.drawingSettings.scaleInsertedObjects)
+  if (!st.drawing.drawingSettings.scaleInsertedObjects)
     return 1.f;
-  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
-  const std::string drawUnits = CadDrawingInsUnitsName(st.drawingInsUnits);
+  const double inchesPerMeter = DrawingInchesPerMeter(st.drawing.drawingSettings.footDefinition);
+  const std::string drawUnits = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   if (st.insertBlockUnitsBuf[0] != '\0')
     return CadBlockUnitsScale(st.insertBlockUnitsBuf, drawUnits, inchesPerMeter);
   return CadBlockUnitsScale(def.units, drawUnits, inchesPerMeter);
@@ -825,7 +454,7 @@ float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefiniti
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out) {
   assert(out != nullptr);
   out->clear();
-  for (const CadBlockDefinition& d : st.blockDefs) {
+  for (const CadBlockDefinition& d : st.drawing.blockDefs) {
     if (d.name.empty() || d.dynamicAnonymous)
       continue;
     CadBlockLibraryEntry e;
@@ -854,7 +483,7 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
     if (ext != ".dxf" && ext != ".dwg" && ext != ".sat")
       return;
     const std::string stem = p.stem().u8string();
-    if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
+    if (stem.empty() || CadBlockFindDef(st.drawing.blockDefs, stem) >= 0)
       return;
     CadBlockLibraryEntry e;
     e.name = stem;
@@ -904,257 +533,12 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry,
                                  std::vector<std::string>& log) {
   if (entry.imported || entry.path.empty())
-    return CadBlockFindDef(st.blockDefs, entry.name) >= 0;
-  const int nBefore = static_cast<int>(st.blockDefs.size());
+    return CadBlockFindDef(st.drawing.blockDefs, entry.name) >= 0;
+  const int nBefore = static_cast<int>(st.drawing.blockDefs.size());
   const bool dropLoose = !entry.isFitting;
   if (ImportCadBlocksFromPathImpl(st, entry.path.c_str(), log, dropLoose) < 0)
     return false;
-  return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
-}
-
-std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c) {
-  switch (c) {
-    case CadPipePaletteCategory::Flanges: return "Flanges";
-    case CadPipePaletteCategory::Valves: return "Valves";
-    case CadPipePaletteCategory::Nozzles: return "Nozzles";
-    case CadPipePaletteCategory::Other: return "Other";
-    case CadPipePaletteCategory::Fittings:
-    default: return "Fittings";
-  }
-}
-
-std::string_view CadPipePaletteCategoryPlural(CadPipePaletteCategory c) {
-  switch (c) {
-    case CadPipePaletteCategory::Flanges: return "flanges";
-    case CadPipePaletteCategory::Valves: return "valves";
-    case CadPipePaletteCategory::Nozzles: return "nozzles";
-    case CadPipePaletteCategory::Other: return "other parts";
-    case CadPipePaletteCategory::Fittings:
-    default: return "fittings";
-  }
-}
-
-CadPipePaletteCategory CadPipePaletteCategoryOf(CadPipePartType t) {
-  switch (t) {
-    case CadPipePartType::Elbow90:
-    case CadPipePartType::Elbow45:
-    case CadPipePartType::Tee:
-    case CadPipePartType::Cross:
-    case CadPipePartType::Reducer:
-    case CadPipePartType::Coupling:
-      return CadPipePaletteCategory::Fittings;
-    case CadPipePartType::Flange:
-      return CadPipePaletteCategory::Flanges;
-    case CadPipePartType::Valve:
-      return CadPipePaletteCategory::Valves;
-    case CadPipePartType::Nozzle:
-      return CadPipePaletteCategory::Nozzles;
-    case CadPipePartType::Cap:
-    case CadPipePartType::Other:
-    case CadPipePartType::None:
-    default:
-      return CadPipePaletteCategory::Other;
-  }
-}
-
-void CadPipePaletteCollectRows(const std::vector<CadBlockLibraryEntry>& entries,
-                               std::string_view runNominalSize, CadPipePressureClass runClass,
-                               CadPipePaletteCategory category, std::vector<CadBlockLibraryEntry>* out) {
-  assert(out != nullptr);
-  out->clear();
-  double runNps = 0.0;
-  if (!CadParsePipeNominalSizeInches(runNominalSize, &runNps))
-    return;  // no usable size — offer nothing rather than the whole library
-
-  for (const CadBlockLibraryEntry& e : entries) {
-    // An ordinary (non-fitting) block is not a catalog part, and an untagged fitting has no category
-    // to file under — neither belongs in a palette that exists to answer "what fits this pipe?".
-    if (!e.isFitting || e.partType == CadPipePartType::None)
-      continue;
-    if (CadPipePaletteCategoryOf(e.partType) != category)
-      continue;
-    double nps = 0.0;
-    if (!CadParsePipeNominalSizeInches(e.nominalSize, &nps))
-      continue;
-    if (std::fabs(nps - runNps) > 1e-9)
-      continue;
-    out->push_back(e);
-  }
-
-  if (runClass == CadPipePressureClass::None)
-    return;  // the run states no class, so every size match stands
-
-  // `CadPipeCatalogFind`'s precedence, scoped per part type (see the header's note on why not per
-  // tab). O(n^2) over the handful of parts one tab shows, which is cheaper to read than a grouping
-  // pass and measurably free at this size.
-  std::vector<CadBlockLibraryEntry> kept;
-  kept.reserve(out->size());
-  for (const CadBlockLibraryEntry& e : *out) {
-    if (e.pressureClass == runClass) {
-      kept.push_back(e);
-      continue;
-    }
-    if (e.pressureClass != CadPipePressureClass::None)
-      continue;  // tagged for a DIFFERENT class — never a match, same as the catalog lookup
-    bool exactExists = false;
-    for (const CadBlockLibraryEntry& o : *out) {
-      if (o.partType == e.partType && o.pressureClass == runClass) {
-        exactExists = true;
-        break;
-      }
-    }
-    if (!exactExists)
-      kept.push_back(e);
-  }
-  *out = std::move(kept);
-}
-
-std::string CadPipePaletteEmptyReason(CadPipePaletteCategory category, std::string_view runNominalSize) {
-  const std::string size = StringUtil::trimCopy(std::string(runNominalSize));
-  if (size.empty())
-    return "No pipe size yet — start PIPERUN and choose a size to see the parts that fit it.";
-  return "No " + size + " " + std::string(CadPipePaletteCategoryPlural(category)) +
-         " in the fittings library. Tag a part with BLOCKFITTING and LIBEXPORT it, or drop a .json "
-         "sidecar beside the file (see resources/blocks/fittings/README.md).";
-}
-
-void CadPipePaletteSetOpen(AppCommandState& st, bool open, std::vector<std::string>& log) {
-  if (st.pipeFittingPaletteOpen == open)
-    return;
-  st.pipeFittingPaletteOpen = open;
-  log.push_back(open ? "Pipe Fittings palette opened (PIPEPALETTE closes it)."
-                     : "Pipe Fittings palette closed (PIPEPALETTE reopens it).");
-}
-
-bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entry,
-                           std::vector<std::string>& log) {
-  if (entry.name.empty()) {
-    log.push_back("Pipe Fittings — that row has no block name.");
-    return false;
-  }
-  // A library row may not be in this drawing's block table yet. Import it now, exactly as picking it
-  // in the INSERT dialog does — and refuse by name if that fails, rather than arming a command that
-  // would have nothing to place (REQ-201).
-  if (CadBlockFindDef(st.blockDefs, entry.name) < 0 && !CadBlocksImportLibraryEntry(st, entry, log)) {
-    log.push_back("Pipe Fittings — could not import \"" + entry.name + "\" from the library.");
-    return false;
-  }
-
-  // Picking a part takes the command away from whatever holds it. If that is an open PIPERUN,
-  // FINISH the route first (D-2026-09-24-d) — before the route was a real entity this threw away the
-  // pipe the user had just drawn, which is precisely the reported "the pipe run disappears".
-  (void)CadPipeRunFinishForHandoff(st, log);
-
-  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", entry.name.c_str());
-  // One click places it: no scale, rotation or face-align prompt, so `InsertAdvanceAfterPoint` goes
-  // straight to placing. A fitting's size comes from the catalog, not from a dragged scale, and its
-  // orientation comes from the port it snaps to.
-  st.insertBlockSpecifyScale = false;
-  st.insertBlockSpecifyRot = false;
-  st.insertBlockSpecifyAlignFace = false;
-  st.insertBlockExplode = false;
-  // Every port on the part is a candidate for the connector snap the click may take
-  // (`SubmitInsertBlockPick`), so whichever one's own configured mode matches what is under the
-  // cursor wins. A name left behind in the INSERT dialog would pin the search to that one port
-  // instead — and on a part it does not even belong to, refuse the snap outright.
-  st.insertBlockConnectorName[0] = '\0';
-  st.insertBlockSpecifyConnectorSnap = false;  // the palette drives the snap itself, per click
-  st.insertBlockRotXDeg = 0.f;
-  st.insertBlockRotYDeg = 0.f;
-  st.insertBlockSx = 1.f;
-  st.insertBlockSy = 1.f;
-  st.insertBlockSz = 1.f;
-  st.insertBlockUniformScale = true;
-  st.insertBlockRotDeg = 0.f;
-  st.insertBlockDialogOpen = false;
-  st.insertBlockPipeSpliceArmed = true;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
-  st.active = AppCommandState::Kind::InsertBlock;
-  log.push_back("Pipe Fittings — \"" + entry.name +
-                "\": click on a pipe run to splice it in, on a connection port or pipe end to snap "
-                "onto it, or anywhere else to place it (ESC cancels).");
-  return true;
-}
-
-bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
-                        CadPipePressureClass pressureClass, std::string* outBlockName,
-                        std::vector<std::string>& log) {
-  if (!outBlockName)
-    return false;
-  outBlockName->clear();
-  if (partType == CadPipePartType::None) {
-    log.push_back("PIPECATALOG - a part type is required.");
-    return false;
-  }
-  if (nominalSize.empty()) {
-    log.push_back("PIPECATALOG - a nominal size is required.");
-    return false;
-  }
-
-  std::vector<CadBlockLibraryEntry> entries;
-  CadBlocksCollectLibraryEntries(st, &entries);
-
-  std::vector<const CadBlockLibraryEntry*> sizeTypeMatches;
-  for (const CadBlockLibraryEntry& e : entries) {
-    if (e.isFitting && e.partType == partType && e.nominalSize == nominalSize)
-      sizeTypeMatches.push_back(&e);
-  }
-
-  const std::string partTag(CadPipePartTypeTag(partType));
-  const std::string classDesc = pressureClass == CadPipePressureClass::None
-                                    ? std::string()
-                                    : (" " + std::string(CadPipePressureClassTag(pressureClass)));
-  const auto refuseNoMatch = [&]() {
-    log.push_back("PIPECATALOG - no " + partTag + " found for " + nominalSize + classDesc +
-                  ". Import or LIBEXPORT a matching fitting first, or PIPECATALOG with a different size/class.");
-    return false;
-  };
-  if (sizeTypeMatches.empty())
-    return refuseNoMatch();
-
-  // A requested class prefers an EXACT match; if none is tagged for that class, fall back to a
-  // class-agnostic part (pressureClass == None on the library entry) rather than refusing outright
-  // — the same exact-then-default precedent `CadBlockResolveMode` already uses for connection modes.
-  // No requested class (None) means no restriction at all: every size/type match qualifies.
-  std::vector<const CadBlockLibraryEntry*> chosen;
-  if (pressureClass != CadPipePressureClass::None) {
-    for (const CadBlockLibraryEntry* e : sizeTypeMatches)
-      if (e->pressureClass == pressureClass)
-        chosen.push_back(e);
-    if (chosen.empty()) {
-      for (const CadBlockLibraryEntry* e : sizeTypeMatches)
-        if (e->pressureClass == CadPipePressureClass::None)
-          chosen.push_back(e);
-    }
-  } else {
-    chosen = sizeTypeMatches;
-  }
-  if (chosen.empty())
-    return refuseNoMatch();
-
-  if (chosen.size() > 1) {
-    std::string names;
-    for (size_t i = 0; i < chosen.size(); ++i) {
-      if (i)
-        names += ", ";
-      names += chosen[i]->name;
-    }
-    // REQ-201: nothing invalid — or ambiguous — is ever guessed. A duplicate-classed catalog is a
-    // library authoring problem for the user to fix, not something this lookup silently resolves.
-    log.push_back("PIPECATALOG - ambiguous: " + std::to_string(chosen.size()) + " parts match " +
-                  partTag + " " + nominalSize + classDesc + " (" + names +
-                  "). Narrow the pressure class, or remove/retag the duplicate in the library.");
-    return false;
-  }
-
-  const CadBlockLibraryEntry entry = *chosen.front();  // copy: CadBlocksImportLibraryEntry mutates st
-  if (!CadBlocksImportLibraryEntry(st, entry, log)) {
-    log.push_back("PIPECATALOG - found \"" + entry.name + "\" but it failed to import.");
-    return false;
-  }
-  *outBlockName = entry.name;
-  log.push_back("PIPECATALOG - " + partTag + " " + nominalSize + classDesc + " -> \"" + entry.name + "\".");
-  return true;
+  return CadBlockFindDef(st.drawing.blockDefs, entry.name) >= 0 || static_cast<int>(st.drawing.blockDefs.size()) > nBefore;
 }
 
 bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& log) {
@@ -1176,8 +560,8 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
   const int runIdx = st.insertBlockSnappedPipeRun;
   st.insertBlockSnappedPipeRun = -1;
   const EntityAttributes* lineAttrs =
-      runIdx >= 0 && static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size()
-          ? &st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+      runIdx >= 0 && static_cast<size_t>(runIdx) < st.drawing.cadPipeRunAttrs.size()
+          ? &st.drawing.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
           : nullptr;
   return PlaceInsertImpl(st, name, xf, explode, log, /*pushUndo=*/true, lineAttrs);
 }
@@ -1191,10 +575,8 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   if (st.active != AppCommandState::Kind::None && st.active != AppCommandState::Kind::InsertBlock)
     CancelActiveCommand(st, log);
   LoadBundledBlockLibrary(st, log);
-  st.active = AppCommandState::Kind::InsertBlock;
-  st.lastCommand = AppCommandState::Kind::InsertBlock;
+  stepengine::BeginSession(st, std::make_unique<stepengine::InsertBlockSession>(), /*recordAsLastCommand=*/true);
   st.insertBlockDialogOpen = true;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockSpecifyPoint = true;
   st.insertBlockSpecifyScale = false;
   st.insertBlockSpecifyRot = true;
@@ -1220,237 +602,26 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockName[0] = '\0';
   if (!st.blockRecent.empty())
     std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.blockRecent.front().c_str());
-  else if (!st.blockDefs.empty())
-    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.blockDefs.front().name.c_str());
+  else if (!st.drawing.blockDefs.empty())
+    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.drawing.blockDefs.front().name.c_str());
   std::snprintf(st.insertBlockAngleBuf, sizeof(st.insertBlockAngleBuf), "0");
   CadBlocksApplyInsertNameDefaults(st);
   log.push_back("INSERT — select a block in the Insert dialog.");
 }
 
-void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.active != AppCommandState::Kind::None)
-    CancelActiveCommand(st, log);
-  st.blockCreateDialogOpen = true;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
-  st.blockCreateName[0] = '\0';
-  st.blockCreateBaseX = 0.f;
-  st.blockCreateBaseY = 0.f;
-  st.blockCreateBaseZ = 0.f;
-  st.blockCreateSpecifyBase = true;
-  st.blockCreateConvertMode = 1;
-  st.blockCreateDescription[0] = '\0';
-  std::string du = CadDrawingInsUnitsName(st.drawingInsUnits);
-  std::snprintf(st.blockCreateUnits, sizeof(st.blockCreateUnits), "%s", du.c_str());
-  log.push_back("BLOCK \u2014 define a new block in the Create dialog.");
-}
-
-static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::string>& log) {
-  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
-  if (name.empty()) {
-    log.push_back("BLOCK \u2014 block name is required.");
-    return false;
-  }
-  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
-    log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
-    return false;
-  }
-  if (st.selection.empty()) {
-    log.push_back("BLOCK \u2014 select geometry first, then run BLOCK.");
-    return false;
-  }
-  float bx = st.blockCreateBaseX;
-  float by = st.blockCreateBaseY;
-  float bz = st.blockCreateBaseZ;
-  std::string mode = "convert";
-  if (st.blockCreateConvertMode == 0) mode = "retain";
-  else if (st.blockCreateConvertMode == 2) mode = "delete";
-  PushUndoSnapshot(st, "Block");
-  CadBlockDefinition def;
-  def.name = name;
-  def.description = StringUtil::trimCopy(std::string(st.blockCreateDescription));
-  def.baseX = bx;
-  def.baseY = by;
-  def.baseZ = bz;
-  std::string unitStr = StringUtil::trimCopy(std::string(st.blockCreateUnits));
-  if (unitStr.empty()) unitStr = CadDrawingInsUnitsName(st.drawingInsUnits);
-  def.units = unitStr;
-  CaptureSelectionInto(st, &def.content, bx, by, bz);
-  CadBlockBakeBasePoint(&def);
-  for (const CadBlockNested& n : def.content.nested) {
-    if (CadBlockWouldCycle(st.blockDefs, def.name, n.defName)) {
-      log.push_back("BLOCK \u2014 refused: nested block would create a circular reference.");
-      return false;
-    }
-  }
-  st.blockDefs.push_back(std::move(def));
-  if (mode == "delete" || mode == "convert")
-    EraseSelectedSources(st);
-  st.selection.clear();
-  if (mode == "convert") {
-    CadBlockRef r;
-    r.defName = name;
-    r.xf.x = bx;
-    r.xf.y = by;
-    r.xf.z = bz;
-    st.cadBlockRefs.push_back(std::move(r));
-    st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
-    st.selection.push_back({SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
-  }
-  NoteRecent(st, name);
-  BumpCadGpuCache(st);
-  log.push_back("BLOCK \u2014 created \"" + name + "\".");
-  st.blockCreateDialogOpen = false;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
-  return true;
-}
-
-void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
-  SubmitBlockCreateBasePointPick(st, wx, wy, 0.f, log);
-}
-
-void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
-  if (st.blockCreatePhase != AppCommandState::BlockCreatePhase::WaitBasePoint)
-    return;
-  st.blockCreateBaseX = wx;
-  st.blockCreateBaseY = wy;
-  st.blockCreateBaseZ = wz;
-  st.blockCreateSpecifyBase = false;
-  // If name and selection are already valid, create immediately; otherwise re-open dialog for user to complete.
-  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
-  bool canCreate = !name.empty() && CadBlockFindDef(st.blockDefs, name) < 0 && !st.selection.empty();
-  if (canCreate) {
-    st.blockCreateDialogOpen = false;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
-    CommitBlockCreateFromState(st, log);
-  } else {
-    st.blockCreateDialogOpen = true;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
-    log.push_back("BLOCK \u2014 base point picked; complete the dialog and click OK.");
-  }
-}
-
-void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
-  if (!st.blockCreateDialogOpen) return;
-  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
-  if (name.empty()) {
-    log.push_back("BLOCK \u2014 block name is required.");
-    return;
-  }
-  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
-    log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
-    return;
-  }
-  if (st.selection.empty()) {
-    log.push_back("BLOCK \u2014 select geometry first, then run BLOCK.");
-    return;
-  }
-  if (st.blockCreateSpecifyBase) {
-    st.blockCreateDialogOpen = false;
-    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitBasePoint;
-    log.push_back("BLOCK \u2014 pick base point (ESC cancels).");
-    return;
-  }
-  CommitBlockCreateFromState(st, log);
-}
-
-void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
-  (void)log;
-  st.blockCreateDialogOpen = false;
-  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
-}
-
-bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,
-                               std::vector<std::string>& log) {
-  // issue #284: WBLOCK writes a single block definition out to its own .dwg, using the same ADR-044
-  // JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds just this one
-  // definition; BLOCKIMPORT reading it back finds scratch.blockDefs already populated (see
-  // ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
-  //
-  // Lifted out of the `wblock` verb so the save dialog writes through exactly this path: two entry
-  // points that each formatted their own messages is how a dialog and a typed command drift apart.
-  if (!pathUtf8 || pathUtf8[0] == '\0') {
-    log.push_back("WBLOCK — no destination file given.");
-    return false;
-  }
-  const int di = CadBlockFindDef(st.blockDefs, name);
-  if (di < 0) {
-    log.push_back("WBLOCK — no block named \"" + std::string(name) + "\".");
-    return false;
-  }
-  AppCommandState tmp;
-  tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
-  if (!ExportDwgFile(tmp, pathUtf8, log)) {
-    log.push_back("WBLOCK — could not write " + std::string(pathUtf8) + ".");
-    return false;
-  }
-  log.push_back("WBLOCK — wrote \"" + std::string(name) + "\" to " + pathUtf8 + ".");
-  return true;
-}
-
-void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.blockDefs.empty()) {
-    // Refused with a reason rather than opening an empty picker (REQ-201's shape): there is nothing
-    // to write, and a dialog listing nothing cannot say why.
-    log.push_back("WBLOCK — this drawing has no block definitions to write.");
-    return;
-  }
-  st.wblockDialogOpen = true;
-  // Default to the most recently used definition when there is one, else the first — the same
-  // "start where the user last was" rule CadBlocksApplyInsertNameDefaults uses for INSERT.
-  std::string pick = st.blockDefs.front().name;
-  if (!st.blockRecent.empty() && CadBlockFindDef(st.blockDefs, st.blockRecent.front()) >= 0)
-    pick = st.blockRecent.front();
-  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", pick.c_str());
-  st.wblockPath[0] = '\0';
-  log.push_back("WBLOCK — choose a block and a destination file.");
-}
-
-void CommitWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
-  if (!st.wblockDialogOpen)
-    return;
-  if (CadBlocksWriteBlockToFile(st, st.wblockName, st.wblockPath, log)) {
-    st.wblockDialogOpen = false;
-    return;
-  }
-  // Left OPEN on failure, so the message names what to change and the user's chosen path and block
-  // are still there to correct — closing it would make them start over to fix a typo.
-}
-
-void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
-  (void)log;
-  st.wblockDialogOpen = false;
-}
-
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (di < 0) {
     st.insertBlockUnitsBuf[0] = '\0';
     return;
   }
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  std::string units = def.units.empty() ? CadDrawingInsUnitsName(st.drawingInsUnits) : def.units;
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
+  std::string units = def.units.empty() ? CadDrawingInsUnitsName(st.drawing.drawingInsUnits) : def.units;
   std::snprintf(st.insertBlockUnitsBuf, sizeof(st.insertBlockUnitsBuf), "%s", units.c_str());
 }
 
 namespace {
 
-// Parse a float without throwing. Returns false (and leaves out untouched) when
-// the token is not a clean number — callers report a usage error instead of
-// letting std::invalid_argument/out_of_range escape the command dispatcher.
-bool TryParseF(const std::string& s, float& out) {
-  try {
-    size_t used = 0;
-    const float v = std::stof(s, &used);
-    while (used < s.size() && std::isspace(static_cast<unsigned char>(s[used])))
-      ++used;
-    if (used != s.size())
-      return false;
-    out = v;
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
 
 void ApplyInsertDialogRotations(const AppCommandState& st, CadBlockXform* xf) {
   assert(xf != nullptr);
@@ -1471,7 +642,6 @@ CadBlockXform InsertDialogXform(const AppCommandState& st) {
   return xf;
 }
 
-void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log);
 
 void ApplyInsertXformToDialog(const CadBlockXform& xf, AppCommandState& st) {
   st.insertBlockX = xf.x;
@@ -1492,19 +662,23 @@ void ApplyInsertXformToDialog(const CadBlockXform& xf, AppCommandState& st) {
 }
 
 void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
   if (st.insertBlockSpecifyAlignFace) {
-    st.insertBlockPhase = Ph::WaitAlignFace;
+    if (sess)
+      sess->phase = Ph::WaitAlignFace;
     log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
     return;
   }
   if (st.insertBlockSpecifyScale) {
-    st.insertBlockPhase = Ph::WaitScale;
+    if (sess)
+      sess->phase = Ph::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
   if (st.insertBlockSpecifyRot) {
-    st.insertBlockPhase = Ph::WaitRotation;
+    if (sess)
+      sess->phase = Ph::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -1513,9 +687,10 @@ void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log)
 }
 
 void InsertAdvanceAfterScaleOrRot(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
   if (st.insertBlockSpecifyRot) {
-    st.insertBlockPhase = Ph::WaitRotation;
+    if (auto* sess = st.sessionAs<stepengine::InsertBlockSession>())
+      sess->phase = Ph::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -1524,83 +699,14 @@ void InsertAdvanceAfterScaleOrRot(AppCommandState& st, std::vector<std::string>&
 }
 
 void InsertAdvanceAfterAlignFace(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
+  using Ph = stepengine::InsertBlockPhase;
   if (st.insertBlockSpecifyScale) {
-    st.insertBlockPhase = Ph::WaitScale;
+    if (auto* sess = st.sessionAs<stepengine::InsertBlockSession>())
+      sess->phase = Ph::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
   InsertAdvanceAfterScaleOrRot(st, log);
-}
-
-void FinishInsertCommand(AppCommandState& st) {
-  // REQ-350 (f) — the palette's splice arming lasts exactly one placement. Cleared here (and on
-  // cancel) so an ordinary INSERT typed afterwards can never inherit it and splice a run.
-  st.insertBlockPipeSpliceArmed = false;
-  st.insertBlockDialogOpen = false;
-  st.insertBlockAttrDialogOpen = false;
-  st.insertBlockAttrRefIndex = -1;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
-  st.active = AppCommandState::Kind::None;
-}
-
-CadBlockRef* InsertAttrTarget(AppCommandState& st) {
-  if (st.insertBlockAttrRefIndex < 0)
-    return nullptr;
-  if (st.insertBlockAttrPaper) {
-    PaperLayout* L = ActivePaperGeometryTarget(st);
-    if (!L || static_cast<size_t>(st.insertBlockAttrRefIndex) >= L->paperBlockRefs.size())
-      return nullptr;
-    return &L->paperBlockRefs[static_cast<size_t>(st.insertBlockAttrRefIndex)];
-  }
-  if (static_cast<size_t>(st.insertBlockAttrRefIndex) >= st.cadBlockRefs.size())
-    return nullptr;
-  return &st.cadBlockRefs[static_cast<size_t>(st.insertBlockAttrRefIndex)];
-}
-
-void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.insertBlockExplode) {
-    FinishInsertCommand(st);
-    return;
-  }
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-  if (di < 0 || st.blockDefs[static_cast<size_t>(di)].attrDefs.empty()) {
-    FinishInsertCommand(st);
-    return;
-  }
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  const bool paper = ActivePaperGeometryTarget(st) != nullptr;
-  if (paper) {
-    PaperLayout* L = ActivePaperGeometryTarget(st);
-    if (!L || L->paperBlockRefs.empty()) {
-      FinishInsertCommand(st);
-      return;
-    }
-    st.insertBlockAttrPaper = true;
-    st.insertBlockAttrRefIndex = static_cast<int>(L->paperBlockRefs.size()) - 1;
-  } else if (!st.cadBlockRefs.empty()) {
-    st.insertBlockAttrPaper = false;
-    st.insertBlockAttrRefIndex = static_cast<int>(st.cadBlockRefs.size()) - 1;
-  } else {
-    FinishInsertCommand(st);
-    return;
-  }
-  CadBlockRef* r = InsertAttrTarget(st);
-  if (!r) {
-    FinishInsertCommand(st);
-    return;
-  }
-  const int n = std::min(8, static_cast<int>(def.attrDefs.size()));
-  for (int i = 0; i < 8; ++i)
-    st.insertBlockAttrBuf[i][0] = '\0';
-  for (int i = 0; i < n; ++i) {
-    const std::string v = CadBlockAttrGet(*r, def, def.attrDefs[static_cast<size_t>(i)].tag);
-    std::snprintf(st.insertBlockAttrBuf[i], sizeof(st.insertBlockAttrBuf[i]), "%s", v.c_str());
-  }
-  st.insertBlockDialogOpen = false;
-  st.insertBlockAttrDialogOpen = true;
-  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAttributes;
-  log.push_back("INSERT — enter attribute values.");
 }
 
 } // namespace
@@ -1637,8 +743,8 @@ bool PickSolidFaceAcrossDrawing(const AppCommandState& st, const ray3d::Ray& ray
     best.index = p.index;
     best.owner = sp;
   };
-  for (size_t i = 0; i < st.cadSolids.size(); ++i)
-    trySolid(st.cadSolids[i], static_cast<int>(i));
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i)
+    trySolid(st.drawing.cadSolids[i], static_cast<int>(i));
   for (size_t i = 0; i < st.blockRefWorldSolids.size(); ++i)
     trySolid(st.blockRefWorldSolids[i], static_cast<int>(i));
   if (!any)
@@ -1686,7 +792,7 @@ bool RayHitAnySolidFace(const AppCommandState& st, const ray3d::Ray& ray, CadSol
       *outHit = hit;
     }
   };
-  for (const CadSolidPtr& sp : st.cadSolids)
+  for (const CadSolidPtr& sp : st.drawing.cadSolids)
     trySolid(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     trySolid(sp);
@@ -1703,9 +809,9 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
   float bestD = maxDist * maxDist;
   CadBlockWorldConnection best{};
   std::vector<CadBlockWorldConnection> world;
-  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
+  for (int i = 0; i < static_cast<int>(st.drawing.cadBlockRefs.size()); ++i) {
     world.clear();
-    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[static_cast<size_t>(i)], i, &world);
     for (const CadBlockWorldConnection& wc : world) {
       const float dx = wc.x - px;
       const float dy = wc.y - py;
@@ -1761,18 +867,19 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     *outNy = diry / l;
     *outNz = dirz / l;
   };
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    const float x0 = static_cast<float>(st.userLinesFlat[i]);
-    const float y0 = static_cast<float>(st.userLinesFlat[i + 1]);
-    const float z0 = static_cast<float>(st.userLinesFlat[i + 2]);
-    const float x1 = static_cast<float>(st.userLinesFlat[i + 3]);
-    const float y1 = static_cast<float>(st.userLinesFlat[i + 4]);
-    const float z1 = static_cast<float>(st.userLinesFlat[i + 5]);
+  for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = st.drawing.line(i);
+    const float x0 = static_cast<float>(ln.x0);
+    const float y0 = static_cast<float>(ln.y0);
+    const float z0 = static_cast<float>(ln.z0);
+    const float x1 = static_cast<float>(ln.x1);
+    const float y1 = static_cast<float>(ln.y1);
+    const float z1 = static_cast<float>(ln.z1);
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
-    const CadPipeRun& run = st.cadPipeRuns[ri];
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.drawing.cadPipeRuns[ri];
     CadPipeRunEndPort start, end;
     if (!CadPipeRunEndPorts(run, &start, &end))
       continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
@@ -1789,16 +896,17 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
 
 bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log,
                                     bool optional) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess || sess->phase != Ph::WaitConnectorTarget)
     return false;
 
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-  if (di < 0 || st.blockDefs[static_cast<size_t>(di)].connections.empty()) {
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
+  if (di < 0 || st.drawing.blockDefs[static_cast<size_t>(di)].connections.empty()) {
     log.push_back("INSERT — the block being inserted has no connection ports.");
     return false;
   }
-  const CadBlockDefinition& insertedDef = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& insertedDef = st.drawing.blockDefs[static_cast<size_t>(di)];
 
   constexpr float kSnap = 2.f;
   CadBlockWorldConnection tgt;
@@ -1908,506 +1016,22 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   return true;
 }
 
-namespace {
-
-std::string BConnectModeTargetPromptList() {
-  return "pipe-end, flange-face, or generic-port";
-}
-
-std::string BConnectModeRolePromptList() {
-  return "inlet, outlet, or branch";
-}
-
-/// Writes \p pending (with any fields left as-typed) into the named mode on \p conn, adding it if
-/// new, and enforces the single-default invariant (issue #496 AC: exactly one default per point).
-void BConnectModeCommit(AppCommandState& st, CadBlockConnection& conn) {
-  CadBlockConnectionMode mode;
-  mode.name = st.bconnectModeModeName;
-  mode.target = st.bconnectModeTargetPending;
-  mode.role = st.bconnectModeRolePending;
-  mode.engagementLength = st.bconnectModeEngagementPending;
-  mode.compatibilityTag = st.bconnectModeCompatTagPending;
-  int mi = -1;
-  for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-    if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, mode.name)) {
-      mi = i;
-      break;
-    }
-  }
-  mode.isDefault = mi >= 0 ? conn.modes[static_cast<size_t>(mi)].isDefault : false;
-  if (mi >= 0)
-    conn.modes[static_cast<size_t>(mi)] = mode;
-  else
-    conn.modes.push_back(mode);
-  st.blockEditorDirty = true;
-}
-
-} // namespace
-
-void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectModePhase;
-  if (st.blockEditorName.empty()) {
-    log.push_back("BCONNECTMODE — open a block with BEDIT first.");
-    return;
-  }
-  st.active = AppCommandState::Kind::BConnectMode;
-  st.bconnectModePhase = Ph::WaitConnName;
-  st.bconnectModeConnName.clear();
-  st.bconnectModeModeName.clear();
-  st.bconnectModeEditingExisting = false;
-  st.bconnectModeTargetPending = CadConnectionModeTarget::GenericPort;
-  st.bconnectModeRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectModeEngagementPending = 0.f;
-  st.bconnectModeCompatTagPending.clear();
-  if (!connNameArg.empty()) {
-    // Power-user shortcut (also how the ribbon button and BCONNECTMODE <name> jump straight past
-    // the first prompt): reuse the phase handler itself so the two entry points can't drift apart.
-    BConnectModeSubmitLine(st, connNameArg, log);
-    return;
-  }
-  log.push_back("BCONNECTMODE — connection point name:");
-}
-
-void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectModePhase;
-  const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-  if (di < 0) {
-    log.push_back("BCONNECTMODE — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-
-  if (st.bconnectModePhase == Ph::WaitConnName) {
-    if (line.empty()) {
-      log.push_back("BCONNECTMODE — connection point name:");
-      return;
-    }
-    const int ci = CadBlockFindConnection(def, line);
-    if (ci < 0) {
-      log.push_back("BCONNECTMODE — no connection named \"" + line + "\" on \"" + st.blockEditorName + "\".");
-      st.active = AppCommandState::Kind::None;
-      return;
-    }
-    st.bconnectModeConnName = line;
-    const CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
-    if (!conn.modes.empty()) {
-      std::string existing = "BCONNECTMODE — \"" + line + "\" already has: ";
-      for (size_t i = 0; i < conn.modes.size(); ++i) {
-        if (i)
-          existing += ", ";
-        existing += conn.modes[i].name;
-        if (conn.modes[i].isDefault)
-          existing += " (default)";
-      }
-      log.push_back(existing);
-    }
-    st.bconnectModePhase = Ph::WaitModeName;
-    log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
-    return;
-  }
-
-  const int ci = CadBlockFindConnection(def, st.bconnectModeConnName);
-  if (ci < 0) {
-    log.push_back("BCONNECTMODE — connection \"" + st.bconnectModeConnName + "\" is gone; canceled.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-  CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
-
-  if (st.bconnectModePhase == Ph::WaitModeName) {
-    if (line.empty()) {
-      log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
-      return;
-    }
-    st.bconnectModeModeName = line;
-    int mi = -1;
-    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, line)) {
-        mi = i;
-        break;
-      }
-    }
-    st.bconnectModeEditingExisting = mi >= 0;
-    if (mi >= 0) {
-      const CadBlockConnectionMode& m = conn.modes[static_cast<size_t>(mi)];
-      st.bconnectModeTargetPending = m.target;
-      st.bconnectModeRolePending = m.role;
-      st.bconnectModeEngagementPending = m.engagementLength;
-      st.bconnectModeCompatTagPending = m.compatibilityTag;
-      st.bconnectModePhase = Ph::WaitRemoveConfirm;
-      log.push_back("BCONNECTMODE — remove mode \"" + line + "\"? (y/N):");
-      return;
-    }
-    st.bconnectModePhase = Ph::WaitTarget;
-    log.push_back("BCONNECTMODE — snap target for \"" + line + "\" (" + BConnectModeTargetPromptList() + "):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitRemoveConfirm) {
-    if (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes")) {
-      int mi = -1;
-      for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-        if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
-          mi = i;
-          break;
-        }
-      }
-      if (mi >= 0) {
-        conn.modes.erase(conn.modes.begin() + mi);
-        st.blockEditorDirty = true;
-        log.push_back("BCONNECTMODE — removed mode \"" + st.bconnectModeModeName + "\".");
-      }
-      st.active = AppCommandState::Kind::None;
-      return;
-    }
-    st.bconnectModePhase = Ph::WaitTarget;
-    log.push_back("BCONNECTMODE — snap target for \"" + st.bconnectModeModeName + "\" [" +
-                  std::string(CadConnectionModeTargetTag(st.bconnectModeTargetPending)) + "] (" +
-                  BConnectModeTargetPromptList() + ", Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitTarget) {
-    if (!line.empty())
-      st.bconnectModeTargetPending = ParseCadConnectionModeTarget(line);
-    st.bconnectModePhase = Ph::WaitRole;
-    log.push_back("BCONNECTMODE — role [" + std::string(CadBlockConnectionRoleTag(st.bconnectModeRolePending)) +
-                  "] (" + BConnectModeRolePromptList() + ", Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitRole) {
-    if (!line.empty())
-      st.bconnectModeRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectModePhase = Ph::WaitEngagement;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%g", st.bconnectModeEngagementPending);
-    log.push_back(std::string("BCONNECTMODE — engagement length [") + buf + "] (Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitEngagement) {
-    if (!line.empty()) {
-      float v = 0.f;
-      if (!TryParseF(line, v)) {
-        log.push_back("BCONNECTMODE — engagement length must be a number.");
-        return;
-      }
-      st.bconnectModeEngagementPending = v;
-    }
-    st.bconnectModePhase = Ph::WaitCompatTag;
-    log.push_back("BCONNECTMODE — compatibility tag [" + st.bconnectModeCompatTagPending +
-                  "] (Enter to keep current, type \"-\" to clear):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitCompatTag) {
-    if (line == "-")
-      st.bconnectModeCompatTagPending.clear();
-    else if (!line.empty())
-      st.bconnectModeCompatTagPending = line;
-    st.bconnectModePhase = Ph::WaitIsDefault;
-    log.push_back("BCONNECTMODE — make \"" + st.bconnectModeModeName + "\" the default mode? (y/N):");
-    return;
-  }
-
-  if (st.bconnectModePhase == Ph::WaitIsDefault) {
-    const bool makeDefault = (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes"));
-    BConnectModeCommit(st, conn);
-    int mi = -1;
-    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
-        mi = i;
-        break;
-      }
-    }
-    if (makeDefault && mi >= 0) {
-      for (CadBlockConnectionMode& m : conn.modes)
-        m.isDefault = false;
-      conn.modes[static_cast<size_t>(mi)].isDefault = true;
-    }
-    // Exactly one default per connection point once any modes exist (issue #496 AC).
-    if (!conn.modes.empty() &&
-        std::none_of(conn.modes.begin(), conn.modes.end(), [](const CadBlockConnectionMode& m) { return m.isDefault; }))
-      conn.modes.front().isDefault = true;
-    log.push_back("BCONNECTMODE — set mode \"" + st.bconnectModeModeName + "\" on \"" + st.bconnectModeConnName +
-                  "\".");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-}
-
-void BConnectStart(AppCommandState& st, const std::string& nameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectPhase;
-  if (st.blockEditorName.empty()) {
-    log.push_back("BCONNECT — open a block with BEDIT first.");
-    return;
-  }
-  st.active = AppCommandState::Kind::BConnect;
-  st.bconnectPhase = Ph::WaitName;
-  st.bconnectNameBuf[0] = '\0';
-  st.bconnectSizeBuf[0] = '\0';
-  st.bconnectRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEngagementPending = 0.f;
-  st.bconnectCompatTagPending.clear();
-  if (!nameArg.empty()) {
-    BConnectSubmitLine(st, nameArg, log);
-    return;
-  }
-  log.push_back("BCONNECT — connection point name:");
-}
-
-void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectPhase;
-  const std::string line = StringUtil::trimCopy(lineIn);
-
-  if (st.bconnectPhase == Ph::WaitName) {
-    if (line.empty()) {
-      log.push_back("BCONNECT — connection point name:");
-      return;
-    }
-    std::snprintf(st.bconnectNameBuf, sizeof(st.bconnectNameBuf), "%s", line.c_str());
-    st.bconnectPhase = Ph::WaitNominalSize;
-    log.push_back("BCONNECT — nominal size (e.g. 2in, Enter to skip):");
-    return;
-  }
-  if (st.bconnectPhase == Ph::WaitNominalSize) {
-    std::snprintf(st.bconnectSizeBuf, sizeof(st.bconnectSizeBuf), "%s", line.c_str());
-    st.bconnectPhase = Ph::WaitRole;
-    log.push_back("BCONNECT — role (" + BConnectModeRolePromptList() + ", Enter for inlet):");
-    return;
-  }
-  if (st.bconnectPhase == Ph::WaitRole) {
-    if (!line.empty())
-      st.bconnectRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectPhase = Ph::WaitEngagement;
-    log.push_back("BCONNECT — engagement length (Enter for 0):");
-    return;
-  }
-  if (st.bconnectPhase == Ph::WaitEngagement) {
-    if (!line.empty()) {
-      float v = 0.f;
-      if (!TryParseF(line, v)) {
-        log.push_back("BCONNECT — engagement length must be a number.");
-        return;
-      }
-      st.bconnectEngagementPending = v;
-    }
-    st.bconnectPhase = Ph::WaitCompatTag;
-    log.push_back("BCONNECT — compatibility tag (Enter to skip):");
-    return;
-  }
-  if (st.bconnectPhase == Ph::WaitCompatTag) {
-    if (!line.empty())
-      st.bconnectCompatTagPending = line;
-    st.bconnectPhase = Ph::WaitPoint;
-    // Arm the face pick immediately (issue #496 follow-up) rather than waiting for an extra blank
-    // Enter — a click in the viewport works right away, and typing coordinates instead still works
-    // because BConnectSubmitLine keeps routing here first (see the K::BConnect check in
-    // ProcessCommandLineSubmit) as long as st.active hasn't been cleared yet.
-    st.bconnectAwaitingFace = true;
-    log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
-    return;
-  }
-  if (st.bconnectPhase == Ph::WaitPoint) {
-    if (line.empty()) {
-      log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
-      return;
-    }
-    std::istringstream ss(line);
-    const std::vector<std::string> f = SplitCommaRest(ss);
-    float x = 0.f, y = 0.f, z = 0.f, nx = 0.f, ny = 0.f, nz = 0.f;
-    if (f.size() != 6 || !TryParseF(f[0], x) || !TryParseF(f[1], y) || !TryParseF(f[2], z) ||
-        !TryParseF(f[3], nx) || !TryParseF(f[4], ny) || !TryParseF(f[5], nz)) {
-      log.push_back("BCONNECT — type 6 comma-separated numbers x,y,z,nx,ny,nz, or click a flat face.");
-      return;
-    }
-    st.bconnectAwaitingFace = false;
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0) {
-      log.push_back("BCONNECT — the block being edited no longer exists.");
-      st.active = AppCommandState::Kind::None;
-      return;
-    }
-    CadBlockConnection conn;
-    conn.name = st.bconnectNameBuf;
-    conn.nominalSize = st.bconnectSizeBuf;
-    conn.x = x;
-    conn.y = y;
-    conn.z = z;
-    conn.nx = nx;
-    conn.ny = ny;
-    conn.nz = nz;
-    conn.role = st.bconnectRolePending;
-    conn.engagementLength = st.bconnectEngagementPending;
-    conn.compatibilityTag = st.bconnectCompatTagPending;
-    const std::string addedName = conn.name;
-    st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
-    st.blockEditorDirty = true;
-    log.push_back("BCONNECT — added connection \"" + addedName + "\".");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-}
-
-void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectEditPhase;
-  if (st.blockEditorName.empty()) {
-    log.push_back("BCONNECTEDIT — open a block with BEDIT first.");
-    return;
-  }
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-  if (di < 0)
-    return;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  if (def.connections.empty()) {
-    log.push_back("BCONNECTEDIT — \"" + st.blockEditorName + "\" has no connection points yet (use BCONNECT).");
-    return;
-  }
-  st.active = AppCommandState::Kind::BConnectEdit;
-  st.bconnectEditPhase = Ph::WaitConnName;
-  st.bconnectEditConnName.clear();
-  st.bconnectEditNominalSizePending.clear();
-  st.bconnectEditRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEditEngagementPending = 0.f;
-  st.bconnectEditCompatTagPending.clear();
-  if (!connNameArg.empty()) {
-    BConnectEditSubmitLine(st, connNameArg, log);
-    return;
-  }
-  std::string names = "BCONNECTEDIT — connection point name (";
-  for (size_t i = 0; i < def.connections.size(); ++i) {
-    if (i)
-      names += ", ";
-    names += def.connections[i].name;
-  }
-  names += "):";
-  log.push_back(names);
-}
-
-void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BConnectEditPhase;
-  const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-  if (di < 0) {
-    log.push_back("BCONNECTEDIT — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-
-  if (st.bconnectEditPhase == Ph::WaitConnName) {
-    if (line.empty()) {
-      log.push_back("BCONNECTEDIT — connection point name:");
-      return;
-    }
-    const int ci = CadBlockFindConnection(def, line);
-    if (ci < 0) {
-      log.push_back("BCONNECTEDIT — no connection named \"" + line + "\" on \"" + st.blockEditorName + "\".");
-      st.active = AppCommandState::Kind::None;
-      return;
-    }
-    st.bconnectEditConnName = line;
-    const CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
-    st.bconnectEditNominalSizePending = c.nominalSize;
-    st.bconnectEditRolePending = c.role;
-    st.bconnectEditEngagementPending = c.engagementLength;
-    st.bconnectEditCompatTagPending = c.compatibilityTag;
-    st.bconnectEditPhase = Ph::WaitRemoveConfirm;
-    log.push_back("BCONNECTEDIT — remove \"" + line + "\"? (y/N):");
-    return;
-  }
-
-  const int ci = CadBlockFindConnection(def, st.bconnectEditConnName);
-  if (ci < 0) {
-    log.push_back("BCONNECTEDIT — connection \"" + st.bconnectEditConnName + "\" is gone; canceled.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-  CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
-
-  if (st.bconnectEditPhase == Ph::WaitRemoveConfirm) {
-    if (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes")) {
-      def.connections.erase(def.connections.begin() + ci);
-      st.blockEditorDirty = true;
-      log.push_back("BCONNECTEDIT — removed \"" + st.bconnectEditConnName + "\".");
-      st.active = AppCommandState::Kind::None;
-      return;
-    }
-    st.bconnectEditPhase = Ph::WaitNominalSize;
-    log.push_back("BCONNECTEDIT — nominal size [" + st.bconnectEditNominalSizePending +
-                  "] (Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectEditPhase == Ph::WaitNominalSize) {
-    if (!line.empty())
-      st.bconnectEditNominalSizePending = line;
-    st.bconnectEditPhase = Ph::WaitRole;
-    log.push_back("BCONNECTEDIT — role [" + std::string(CadBlockConnectionRoleTag(st.bconnectEditRolePending)) +
-                  "] (" + BConnectModeRolePromptList() + ", Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectEditPhase == Ph::WaitRole) {
-    if (!line.empty())
-      st.bconnectEditRolePending = ParseCadBlockConnectionRole(line);
-    st.bconnectEditPhase = Ph::WaitEngagement;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%g", st.bconnectEditEngagementPending);
-    log.push_back(std::string("BCONNECTEDIT — engagement length [") + buf + "] (Enter to keep current):");
-    return;
-  }
-
-  if (st.bconnectEditPhase == Ph::WaitEngagement) {
-    if (!line.empty()) {
-      float v = 0.f;
-      if (!TryParseF(line, v)) {
-        log.push_back("BCONNECTEDIT — engagement length must be a number.");
-        return;
-      }
-      st.bconnectEditEngagementPending = v;
-    }
-    st.bconnectEditPhase = Ph::WaitCompatTag;
-    log.push_back("BCONNECTEDIT — compatibility tag [" + st.bconnectEditCompatTagPending +
-                  "] (Enter to keep current, type \"-\" to clear):");
-    return;
-  }
-
-  if (st.bconnectEditPhase == Ph::WaitCompatTag) {
-    if (line == "-")
-      st.bconnectEditCompatTagPending.clear();
-    else if (!line.empty())
-      st.bconnectEditCompatTagPending = line;
-    c.nominalSize = st.bconnectEditNominalSizePending;
-    c.role = st.bconnectEditRolePending;
-    c.engagementLength = st.bconnectEditEngagementPending;
-    c.compatibilityTag = st.bconnectEditCompatTagPending;
-    st.blockEditorDirty = true;
-    log.push_back("BCONNECTEDIT — updated \"" + st.bconnectEditConnName + "\".");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-}
 
 void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BlockFittingPhase;
   if (st.blockEditorName.empty()) {
     log.push_back("BLOCKFITTING — open a block with BEDIT first.");
     return;
   }
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0)
     return;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  st.active = AppCommandState::Kind::BlockFitting;
-  st.blockFittingPhase = Ph::WaitPartType;
-  st.blockFittingPartTypePending = def.partType;
-  st.blockFittingNominalSizePending = def.nominalSize;
-  st.blockFittingPressureClassPending = def.pressureClass;
-  st.blockFittingPartNumberPending = def.partNumber;
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
+  auto sess = std::make_unique<stepengine::BlockFittingSession>();
+  sess->partTypePending = def.partType;
+  sess->nominalSizePending = def.nominalSize;
+  sess->pressureClassPending = def.pressureClass;
+  sess->partNumberPending = def.partNumber;
+  stepengine::BeginSession(st, std::move(sess), /*recordAsLastCommand=*/false);
   log.push_back(
       "BLOCKFITTING — part type [" +
       (def.partType == CadPipePartType::None ? std::string("none") : std::string(CadPipePartTypeTag(def.partType))) +
@@ -2416,52 +1040,55 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  using Ph = AppCommandState::BlockFittingPhase;
+  using Ph = stepengine::BlockFittingPhase;
+  auto* sess = st.sessionAs<stepengine::BlockFittingSession>();
+  if (!sess)
+    return;
   const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BLOCKFITTING — the block being edited no longer exists.");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
-  if (st.blockFittingPhase == Ph::WaitPartType) {
+  if (sess->phase == Ph::WaitPartType) {
     if (!line.empty())
-      st.blockFittingPartTypePending = CadBlockEqCi(line, "none") ? CadPipePartType::None : ParseCadPipePartType(line);
-    st.blockFittingPhase = Ph::WaitNominalSize;
-    log.push_back("BLOCKFITTING — nominal size [" + st.blockFittingNominalSizePending + "] (Enter to keep current):");
+      sess->partTypePending = CadBlockEqCi(line, "none") ? CadPipePartType::None : ParseCadPipePartType(line);
+    sess->phase = Ph::WaitNominalSize;
+    log.push_back("BLOCKFITTING — nominal size [" + sess->nominalSizePending + "] (Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitNominalSize) {
+  if (sess->phase == Ph::WaitNominalSize) {
     if (!line.empty())
-      st.blockFittingNominalSizePending = line;
-    st.blockFittingPhase = Ph::WaitPressureClass;
+      sess->nominalSizePending = line;
+    sess->phase = Ph::WaitPressureClass;
     log.push_back("BLOCKFITTING — pressure class [" +
-                  (st.blockFittingPressureClassPending == CadPipePressureClass::None
+                  (sess->pressureClassPending == CadPipePressureClass::None
                        ? std::string("none")
-                       : std::string(CadPipePressureClassTag(st.blockFittingPressureClassPending))) +
+                       : std::string(CadPipePressureClassTag(sess->pressureClassPending))) +
                   "] (CS150|CS300|none, Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitPressureClass) {
+  if (sess->phase == Ph::WaitPressureClass) {
     if (!line.empty())
-      st.blockFittingPressureClassPending =
+      sess->pressureClassPending =
           CadBlockEqCi(line, "none") ? CadPipePressureClass::None : ParseCadPipePressureClass(line);
-    st.blockFittingPhase = Ph::WaitPartNumber;
-    log.push_back("BLOCKFITTING — part number [" + st.blockFittingPartNumberPending + "] (Enter to keep current):");
+    sess->phase = Ph::WaitPartNumber;
+    log.push_back("BLOCKFITTING — part number [" + sess->partNumberPending + "] (Enter to keep current):");
     return;
   }
-  if (st.blockFittingPhase == Ph::WaitPartNumber) {
+  if (sess->phase == Ph::WaitPartNumber) {
     if (!line.empty())
-      st.blockFittingPartNumberPending = line;
-    def.partType = st.blockFittingPartTypePending;
-    def.nominalSize = st.blockFittingNominalSizePending;
-    def.pressureClass = st.blockFittingPressureClassPending;
-    def.partNumber = st.blockFittingPartNumberPending;
+      sess->partNumberPending = line;
+    def.partType = sess->partTypePending;
+    def.nominalSize = sess->nominalSizePending;
+    def.pressureClass = sess->pressureClassPending;
+    def.partNumber = sess->partNumberPending;
     st.blockEditorDirty = true;
     log.push_back("BLOCKFITTING — updated \"" + def.name + "\".");
-    st.active = AppCommandState::Kind::None;
+    stepengine::EndSession(st);
     return;
   }
 }
@@ -2471,11 +1098,12 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   // No vertex/edge tolerance needed any more (issue #496 follow-up): RayHitAnySolidFace picks the
   // nearest front face by triangle hit alone, matching "Center of face" rather than
   // solidpick::PickSubObject's vertex/edge-precedence pick.
-  if (!st.blockEditActive || !st.bconnectAwaitingFace)
+  auto* sess = st.sessionAs<stepengine::BConnectSession>();
+  if (!st.blockEditActive || !sess || !sess->awaitingFace)
     return false;
-  if (st.bconnectNameBuf[0] == '\0') {
+  if (sess->name.empty()) {
     log.push_back("BCONNECT — internal error: missing connection name.");
-    st.bconnectAwaitingFace = false;
+    sess->awaitingFace = false;
     return false;
   }
 
@@ -2527,34 +1155,27 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
     return false;
   }
 
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0)
     return false;
   CadBlockConnection conn;
-  conn.name = st.bconnectNameBuf;
-  conn.nominalSize = st.bconnectSizeBuf;
+  conn.name = sess->name;
+  conn.nominalSize = sess->nominalSize;
   conn.x = static_cast<float>(centre.x);
   conn.y = static_cast<float>(centre.y);
   conn.z = static_cast<float>(centre.z);
   conn.nx = static_cast<float>(n.x);
   conn.ny = static_cast<float>(n.y);
   conn.nz = static_cast<float>(n.z);
-  conn.role = st.bconnectRolePending;
-  conn.engagementLength = st.bconnectEngagementPending;
-  conn.compatibilityTag = st.bconnectCompatTagPending;
+  conn.role = sess->rolePending;
+  conn.engagementLength = sess->engagementPending;
+  conn.compatibilityTag = sess->compatTagPending;
   const std::string addedName = conn.name;
-  st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
+  st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
   st.blockEditorDirty = true;
-  st.bconnectAwaitingFace = false;
-  st.bconnectNameBuf[0] = '\0';
-  st.bconnectSizeBuf[0] = '\0';
-  st.bconnectRolePending = CadBlockConnectionRole::Inlet;
-  st.bconnectEngagementPending = 0.f;
-  st.bconnectCompatTagPending.clear();
   // The BCONNECT wizard (issue #496) keeps st.active == Kind::BConnect through the face-pick step
   // so ESC still cancels it as one command; release it now that the pick has committed.
-  if (st.active == AppCommandState::Kind::BConnect)
-    st.active = AppCommandState::Kind::None;
+  stepengine::EndSession(st);
   log.push_back("BCONNECT — added connection \"" + addedName + "\".");
   return true;
 }
@@ -2565,12 +1186,12 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
   ghost.defName = st.insertBlockName;
   ghost.xf = xf;
   std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, ghost, EntityAttributes{}, &segs);
+  CadBlockCollectWorldLines(st.drawing.blockDefs, ghost, EntityAttributes{}, &segs);
   for (const CadBlockWorldSeg& s : segs)
     PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
 
   std::vector<CadBlockWorldSolid> ws;
-  CadBlockCollectWorldSolids(st.blockDefs, ghost, EntityAttributes{}, &ws);
+  CadBlockCollectWorldSolids(st.drawing.blockDefs, ghost, EntityAttributes{}, &ws);
   brep::Problem why = brep::Problem::Ok;
   for (const CadBlockWorldSolid& w : ws) {
     if (!w.solid)
@@ -2586,8 +1207,9 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
 
 bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                                     std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitAlignFace)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess || sess->phase != Ph::WaitAlignFace)
     return false;
 
   RefreshSolidDisplayGeometry(st);
@@ -2636,7 +1258,7 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     log.push_back("INSERT — choose a block name.");
     return;
   }
-  if (CadBlockFindDef(st.blockDefs, st.insertBlockName) < 0) {
+  if (CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName) < 0) {
     log.push_back("INSERT — no block named \"" + std::string(st.insertBlockName) + "\".");
     return;
   }
@@ -2663,38 +1285,44 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     }
     st.insertBlockRotYDeg = ry;
   }
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
   if (st.insertBlockSpecifyConnectorSnap) {
-    const int cdi = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-    if (cdi < 0 || st.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
+    const int cdi = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
+    if (cdi < 0 || st.drawing.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
       log.push_back("INSERT — the block has no connection ports to snap from.");
       return;
     }
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitConnectorTarget;
     log.push_back("INSERT — pick the target connection port to snap to.");
     return;
   }
   if (st.insertBlockSpecifyPoint) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitInsertPoint;
     log.push_back("INSERT — specify insertion point.");
     return;
   }
   if (st.insertBlockSpecifyAlignFace) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAlignFace;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitAlignFace;
     log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
     return;
   }
   if (st.insertBlockSpecifyScale) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitScale;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitScale;
     log.push_back("INSERT — specify scale (click a point).");
     return;
   }
   if (st.insertBlockSpecifyRot) {
     st.insertBlockDialogOpen = false;
-    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+    if (sess)
+      sess->phase = stepengine::InsertBlockPhase::WaitRotation;
     log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
     return;
   }
@@ -2704,9 +1332,9 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
 
 void CadBlocksCommitInsertAttrDialog(AppCommandState& st, std::vector<std::string>& log) {
   CadBlockRef* r = InsertAttrTarget(st);
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (r && di >= 0) {
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
     const int n = std::min(8, static_cast<int>(def.attrDefs.size()));
     for (int i = 0; i < n; ++i)
       CadBlockAttrSet(r, def.attrDefs[static_cast<size_t>(i)].tag, st.insertBlockAttrBuf[i]);
@@ -2722,13 +1350,13 @@ void CadBlocksPlacePendingInsert(AppCommandState& st, std::vector<std::string>& 
 }
 
 bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
-  if (refIndex < 0 || static_cast<size_t>(refIndex) >= st.cadBlockRefs.size())
+  if (refIndex < 0 || static_cast<size_t>(refIndex) >= st.drawing.cadBlockRefs.size())
     return false;
-  CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(refIndex)];
-  const int di = CadBlockFindDef(st.blockDefs, r.defName);
+  CadBlockRef& r = st.drawing.cadBlockRefs[static_cast<size_t>(refIndex)];
+  const int di = CadBlockFindDef(st.drawing.blockDefs, r.defName);
   if (di < 0)
     return false;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   if (which == 3 && CadBlockHasMatchlineDyn(def)) {
     CadBlockToggleMatchlineFlip(&r, def);
     return false;
@@ -2753,9 +1381,9 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
 void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
   if (!r)
     return;
-  const int di = CadBlockFindDef(st.blockDefs, r->defName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, r->defName);
   if (di >= 0) {
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
     if (CadBlockHasLinearStretchDyn(def)) {
       const std::string pname = CadBlockFirstLinearStretchParamName(def);
       if (!pname.empty())
@@ -2780,17 +1408,21 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
 
 bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, float curZ, CadBlockXform* out) {
   assert(out != nullptr);
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
-      st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace &&
-      st.insertBlockPhase != Ph::WaitConnectorTarget)
+  using Ph = stepengine::InsertBlockPhase;
+  const auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess)
     return false;
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const Ph phase = sess->phase;
+  if (phase != Ph::WaitInsertPoint && phase != Ph::WaitScale &&
+      phase != Ph::WaitRotation && phase != Ph::WaitAlignFace &&
+      phase != Ph::WaitConnectorTarget)
+    return false;
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (di < 0)
     return false;
 
   CadBlockXform xf;
-  if (st.insertBlockPhase == Ph::WaitInsertPoint) {
+  if (phase == Ph::WaitInsertPoint) {
     xf.x = curX;
     xf.y = curY;
     xf.z = curZ;
@@ -2803,7 +1435,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   float sx = st.insertBlockSx;
   float sy = st.insertBlockSy;
   float sz = st.insertBlockSz;
-  if (st.insertBlockPhase == Ph::WaitScale && st.insertBlockSpecifyScale) {
+  if (phase == Ph::WaitScale && st.insertBlockSpecifyScale) {
     const float d = InsertLiveScaleDist(st, curX, curY, curZ);
     if (d > 1.e-8f) {
       sx = d;
@@ -2815,17 +1447,17 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   }
 
   float rotDeg = st.insertBlockRotDeg;
-  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+  if (phase == Ph::WaitRotation && st.insertBlockSpecifyRot)
     rotDeg = InsertLiveRotDeg(st, curX, curY);
 
   // CadBlockPlaceInsert multiplies the transform by the block-unit scale after building it from
   // the dialog; fold the same factor in here so the ghost matches the commit within REQ-101.
-  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
+  const float us = CadBlockInsertUnitsScale(st, st.drawing.blockDefs[static_cast<size_t>(di)]);
   xf.sx = sx * us;
   xf.sy = sy * us;
   xf.sz = sz * us;
   ApplyInsertDialogRotations(st, &xf);
-  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+  if (phase == Ph::WaitRotation && st.insertBlockSpecifyRot)
     xf.rotZ = InsertRotZFromCwNorthDeg(rotDeg);
   *out = xf;
   return true;
@@ -2836,14 +1468,15 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<
 }
 
 void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
-  using Ph = AppCommandState::InsertBlockPhase;
-  if (st.active != AppCommandState::Kind::InsertBlock)
+  using Ph = stepengine::InsertBlockPhase;
+  auto* sess = st.sessionAs<stepengine::InsertBlockSession>();
+  if (!sess)
     return;
-  if (st.insertBlockPhase == Ph::WaitConnectorTarget) {
+  if (sess->phase == Ph::WaitConnectorTarget) {
     SubmitInsertBlockConnectorPick(st, wx, wy, wz, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitInsertPoint) {
+  if (sess->phase == Ph::WaitInsertPoint) {
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
@@ -2874,19 +1507,20 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
       int runIdx = -1;
       if (CadPipeRunUnderPick(st, pick, &runIdx)) {
         st.insertBlockPipeSpliceArmed = false;
-        st.insertBlockPhase = Ph::WaitInsertPoint;
-        st.active = AppCommandState::Kind::None;
+        stepengine::EndSession(st);
         if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
           return;
         // Refused, and said why. Re-arm just enough to finish the click as a placement.
-        st.active = AppCommandState::Kind::InsertBlock;
-        st.insertBlockPhase = Ph::WaitInsertPoint;
+        stepengine::BeginSession(
+            st, std::make_unique<stepengine::InsertBlockSession>(Ph::WaitInsertPoint),
+            /*recordAsLastCommand=*/false);
+        sess = st.sessionAs<stepengine::InsertBlockSession>();
       }
       st.insertBlockPipeSpliceArmed = false;
-      st.insertBlockPhase = Ph::WaitConnectorTarget;
+      sess->phase = Ph::WaitConnectorTarget;
       if (SubmitInsertBlockConnectorPick(st, wx, wy, wz, log, /*optional=*/true))
         return;  // snapped and placed
-      st.insertBlockPhase = Ph::WaitInsertPoint;
+      sess->phase = Ph::WaitInsertPoint;
       // The REASON, not the outcome: `InsertAdvanceAfterPoint` below is what actually places
       // it, and "within 2 ft" covers both "nothing there" and "nothing there this part can
       // mate with" — the snap refuses for either, and the user needs to know only that it
@@ -2898,7 +1532,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     InsertAdvanceAfterPoint(st, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitScale) {
+  if (sess->phase == Ph::WaitScale) {
     const float dist = InsertLiveScaleDist(st, wx, wy, wz);
     if (dist < 1.e-8f) {
       log.push_back("INSERT — scale point must be away from the insertion point.");
@@ -2912,7 +1546,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     InsertAdvanceAfterScaleOrRot(st, log);
     return;
   }
-  if (st.insertBlockPhase == Ph::WaitRotation) {
+  if (sess->phase == Ph::WaitRotation) {
     // Store the pick direction in the same clockwise-from-north convention the typed field uses,
     // so InsertRotZFromCwNorthDeg converts it consistently (pick north → rotation 0 → as authored).
     st.insertBlockRotDeg = InsertLiveRotDeg(st, wx, wy);
@@ -2930,7 +1564,7 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
   names->clear();
   names->emplace_back("<Current Drawing>");
   std::vector<std::string> rest;
-  for (const CadBlockDefinition& d : st.blockDefs) {
+  for (const CadBlockDefinition& d : st.drawing.blockDefs) {
     if (!d.name.empty())
       rest.push_back(d.name);
   }
@@ -2950,7 +1584,7 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
         if (extLo != ".dxf")
           continue;
         const std::string stem = e.path().stem().u8string();
-        if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
+        if (stem.empty() || CadBlockFindDef(st.drawing.blockDefs, stem) >= 0)
           continue;
         rest.push_back(stem);
       }
@@ -2973,9 +1607,9 @@ void CadBlocksOpenEditPicker(AppCommandState& st, std::vector<std::string>& log)
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
       continue;
-    const std::string& nm = st.cadBlockRefs[static_cast<size_t>(e.index)].defName;
+    const std::string& nm = st.drawing.cadBlockRefs[static_cast<size_t>(e.index)].defName;
     std::snprintf(st.blockEditPickerName, sizeof(st.blockEditPickerName), "%s", nm.c_str());
     break;
   }
@@ -3000,7 +1634,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
     return;
   }
   LoadBundledBlockLibrary(st, log);
-  int di = CadBlockFindDef(st.blockDefs, name);
+  int di = CadBlockFindDef(st.drawing.blockDefs, name);
   if (di < 0) {
     namespace fs = std::filesystem;
     fs::path dir = ResolveBundledAssetPath(fs::path("resources") / "blocks");
@@ -3025,14 +1659,14 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
         }
       }
     }
-    di = CadBlockFindDef(st.blockDefs, name);
+    di = CadBlockFindDef(st.drawing.blockDefs, name);
   }
   if (di < 0) {
     CadBlockDefinition def;
     def.name = name;
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-    st.blockDefs.push_back(std::move(def));
-    di = CadBlockFindDef(st.blockDefs, name);
+    def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
+    st.drawing.blockDefs.push_back(std::move(def));
+    di = CadBlockFindDef(st.drawing.blockDefs, name);
     log.push_back("BEDIT — created empty definition \"" + name + "\".");
   }
   if (di < 0)
@@ -3050,9 +1684,9 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
   st.blockEditCamEl = st.viewportElevationDeg;
   st.blockEditCamRoll = st.viewportRollDeg;  // #153
   ClearCadSelection(st);
-  st.blockEditorName = st.blockDefs[static_cast<size_t>(di)].name;
-  st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
-  LoadBlockPrimitivesIntoDrawing(st, st.blockDefs[static_cast<size_t>(di)].content);
+  st.blockEditorName = st.drawing.blockDefs[static_cast<size_t>(di)].name;
+  st.blockEditorSnapshot = st.drawing.blockDefs[static_cast<size_t>(di)];
+  LoadBlockPrimitivesIntoDrawing(st, st.drawing.blockDefs[static_cast<size_t>(di)].content);
   st.blockEditActive = true;
   st.blockEditorDirty = false;
   st.blockAuthoringPaletteOpen = true;
@@ -3065,1243 +1699,4 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
 
 void CadBlocksCommitEditPicker(AppCommandState& st, std::vector<std::string>& log) {
   CadBlocksEnterNamedEditor(st, st.blockEditPickerName, log);
-}
-
-int PickCadBlockRefAt(float wx, float wy, const AppCommandState& st, float orthoHalfHeightWorld) {
-  const float tol = std::max(orthoHalfHeightWorld * 0.02f, 1.e-4f);
-  int best = -1;
-  float bestD = 1.e30f;
-  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
-    if (CadBlockHitWorld(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], wx, wy, tol)) {
-      const float dx = wx - st.cadBlockRefs[static_cast<size_t>(i)].xf.x;
-      const float dy = wy - st.cadBlockRefs[static_cast<size_t>(i)].xf.y;
-      const float d = dx * dx + dy * dy;
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    }
-  }
-  return best;
-}
-
-bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, std::istream& args,
-                             std::vector<std::string>& log) {
-  const std::string tok = StringUtil::toLowerAsciiCopy(plotTok);
-
-  if (tok == "block" || tok == "-block") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      log.push_back("BLOCK — usage: BLOCK <name>, <baseX>, <baseY>[, RETAIN|DELETE|CONVERT][, <baseZ>].");
-      return true;
-    }
-    if (st.selection.empty()) {
-      log.push_back("BLOCK — select geometry first, then run BLOCK.");
-      return true;
-    }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
-      log.push_back("BLOCK — name \"" + f[0] + "\" is already used.");
-      return true;
-    }
-    float bx = 0.f, by = 0.f, bz = 0.f;
-    try {
-      bx = std::stof(f[1]);
-      by = std::stof(f[2]);
-      if (f.size() >= 5)
-        bz = std::stof(f[4]);
-    } catch (...) {
-      log.push_back("BLOCK — base point must be numbers.");
-      return true;
-    }
-    std::string mode = "convert";
-    if (f.size() >= 4)
-      mode = StringUtil::toLowerAsciiCopy(f[3]);
-    PushUndoSnapshot(st, "Block");
-    CadBlockDefinition def;
-    def.name = f[0];
-    def.baseX = bx;
-    def.baseY = by;
-    def.baseZ = bz;
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-    CaptureSelectionInto(st, &def.content, bx, by, bz);
-    CadBlockBakeBasePoint(&def);
-    for (const CadBlockNested& n : def.content.nested) {
-      if (CadBlockWouldCycle(st.blockDefs, def.name, n.defName)) {
-        log.push_back("BLOCK — refused: nested block would create a circular reference.");
-        return true;
-      }
-    }
-    st.blockDefs.push_back(std::move(def));
-    if (mode == "delete" || mode == "convert")
-      EraseSelectedSources(st);
-    st.selection.clear();
-    if (mode == "convert" || mode.empty()) {
-      CadBlockRef r;
-      r.defName = f[0];
-      r.xf.x = bx;
-      r.xf.y = by;
-      r.xf.z = bz;
-      st.cadBlockRefs.push_back(std::move(r));
-      st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
-      st.selection.push_back(
-          {SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
-    }
-    NoteRecent(st, f[0]);
-    BumpCadGpuCache(st);
-    log.push_back("BLOCK — created \"" + f[0] + "\".");
-    return true;
-  }
-
-  if (tok == "insert") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      StartInsertBlockCommand(st, log);
-      return true;
-    }
-    CadBlockXform xf;
-    try {
-      xf.x = std::stof(f[1]);
-      xf.y = std::stof(f[2]);
-      if (f.size() >= 5) {
-        xf.sx = std::stof(f[3]);
-        xf.sy = std::stof(f[4]);
-      }
-      if (f.size() >= 6)
-        xf.rotZ = InsertRotZFromCwNorthDeg(std::stof(f[5]));
-      if (f.size() >= 7)
-        xf.sz = std::stof(f[6]);
-      if (f.size() >= 8)
-        xf.z = std::stof(f[7]);
-    } catch (...) {
-      log.push_back("INSERT — coordinates and scales must be numbers.");
-      return true;
-    }
-    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", f[0].c_str());
-    st.insertBlockExplode = false;
-    if (CadBlockPlaceInsert(st, f[0], xf, false, log))
-      CadBlocksAfterPlace(st, log);
-    return true;
-  }
-
-  if (tok == "explode") {
-    int n = 0;
-    PushUndoSnapshot(st, "Explode");
-    std::vector<int> idx;
-    for (const SelectedEntity& e : st.selection) {
-      if (e.type == SelectedEntity::Type::BlockRef)
-        idx.push_back(e.index);
-    }
-    std::sort(idx.begin(), idx.end());
-    idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
-    for (int i = static_cast<int>(idx.size()) - 1; i >= 0; --i) {
-      const int k = idx[static_cast<size_t>(i)];
-      if (k < 0 || static_cast<size_t>(k) >= st.cadBlockRefs.size())
-        continue;
-      EntityAttributes a = NewBlockAttr(st);
-      if (static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-        a = st.cadBlockRefAttrs[static_cast<size_t>(k)];
-      ExplodeRef(st, st.cadBlockRefs[static_cast<size_t>(k)], a);
-      st.cadBlockRefs.erase(st.cadBlockRefs.begin() + k);
-      if (static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-        st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
-      ++n;
-    }
-    // REQ-103 step 8 / issue #390: a Polyline (2D, 3DPOLY, or a rectangle — a 4-vertex polyline per
-    // REQ-053) explodes into one LINE/ARC per segment; other selected kinds are reported (REQ-201).
-    const int nPoly = ExplodeSelectedPolylines(st, log);
-    st.selection.clear();
-    EnsureEntityIds(st);
-    BumpCadGpuCache(st);
-    if (n == 0 && nPoly == 0) {
-      log.push_back("EXPLODE — nothing to explode: select a block reference or a polyline.");
-    } else {
-      std::string msg = "EXPLODE —";
-      if (n > 0)
-        msg += " " + std::to_string(n) + " block reference(s)";
-      if (n > 0 && nPoly > 0)
-        msg += ",";
-      if (nPoly > 0)
-        msg += " " + std::to_string(nPoly) + " polyline(s)";
-      msg += ".";
-      log.push_back(msg);
-    }
-    return true;
-  }
-
-  if (tok == "bedit") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      CadBlocksOpenEditPicker(st, log);
-      return true;
-    }
-    CadBlocksEnterNamedEditor(st, f[0], log);
-    return true;
-  }
-
-  if (tok == "bsave") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BSAVE — no block editor is open.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di >= 0) {
-      if (st.blockEditActive)  // ADR-043: fold the model arrays back into the definition
-        HarvestDrawingPrimitivesIntoContent(st, &st.blockDefs[static_cast<size_t>(di)].content);
-      st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
-    }
-    st.blockEditorDirty = false;
-    BumpCadGpuCache(st);
-    st.blockEditCleanRevision = st.cadGpuRevision;
-    // REQ-350 / ADR-062 — this definition's geometry just changed, so any cached Pipe Fittings
-    // thumbnail of it now shows the part as it WAS. Marked for re-render; the UI's service pass is what
-    // actually drops it, because the renderer is not this layer's to call.
-    if (std::find(st.pipeFittingThumbStale.begin(), st.pipeFittingThumbStale.end(), st.blockEditorName) ==
-        st.pipeFittingThumbStale.end())
-      st.pipeFittingThumbStale.push_back(st.blockEditorName);
-    log.push_back("BSAVE — saved \"" + st.blockEditorName + "\". All references update.");
-    return true;
-  }
-
-  if (tok == "bclose") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (st.blockEditorName.empty()) {
-      log.push_back("BCLOSE — no block editor is open.");
-      return true;
-    }
-    const std::string f0 = f.empty() ? std::string() : StringUtil::toLowerAsciiCopy(f[0]);
-    const bool discard = f0 == "discard";
-    const bool saveArg = f0 == "save";
-    const bool dirty = st.blockEditActive && st.cadGpuRevision != st.blockEditCleanRevision;
-    if (dirty && !discard && !saveArg) {
-      st.blockEditCloseAsked = true;  // CadUi raises the Save / Don't Save / Cancel modal
-      log.push_back("BCLOSE — unsaved changes to \"" + st.blockEditorName +
-                    "\"; choose Save, Don't Save, or Cancel.");
-      return true;
-    }
-    st.blockEditCloseAsked = false;
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (discard) {
-      if (di >= 0)
-        st.blockDefs[static_cast<size_t>(di)] = st.blockEditorSnapshot;
-      log.push_back("BCLOSE — discarded edits to \"" + st.blockEditorName + "\".");
-    } else {
-      if (di >= 0 && st.blockEditActive)
-        HarvestDrawingPrimitivesIntoContent(st, &st.blockDefs[static_cast<size_t>(di)].content);
-      log.push_back("BCLOSE — closed \"" + st.blockEditorName + "\".");
-    }
-    if (st.blockEditActive) {
-      // The stash captured blockDefs at enter time; keep the definitions as this session left them
-      // and take model geometry, INSERT references and everything else back from the stash.
-      std::vector<CadBlockDefinition> editedDefs = std::move(st.blockDefs);
-      CadRestoreGeometrySnapshot(st, st.blockEditModelStash);
-      st.blockDefs = std::move(editedDefs);
-      st.blockEditModelStash = DrawingGeometrySnapshot{};
-      st.viewportPanX = st.blockEditCamPanX;
-      st.viewportPanY = st.blockEditCamPanY;
-      st.viewportPanZ = st.blockEditCamPanZ;
-      st.viewportZoom = st.blockEditCamZoom;
-      st.viewportAzimuthDeg = st.blockEditCamAz;
-      st.viewportElevationDeg = st.blockEditCamEl;
-      st.viewportRollDeg = st.blockEditCamRoll;  // #153
-      CadTruncateActiveUndoStack(st, st.blockEditUndoMark);  // drop session block-geometry snapshots
-      st.blockEditActive = false;
-    }
-    ClearCadSelection(st);
-    st.blockEditorName.clear();
-    st.blockEditorDirty = false;
-    st.blockAuthoringPaletteOpen = false;
-    BumpCadGpuCache(st);
-    return true;
-  }
-
-  if (tok == "bsaveas") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (st.blockEditorName.empty() || f.empty()) {
-      log.push_back("BSAVEAS — usage: BSAVEAS <newname> (while BEDIT is open).");
-      return true;
-    }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
-      log.push_back("BSAVEAS — name \"" + f[0] + "\" is already used.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0) {
-      log.push_back("BSAVEAS — editor block missing.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Bsaveas");
-    CadBlockDefinition copy = st.blockDefs[static_cast<size_t>(di)];
-    copy.name = f[0];
-    copy.id = 0;
-    st.blockDefs.push_back(std::move(copy));
-    st.blockEditorName = f[0];
-    log.push_back("BSAVEAS — copied to \"" + f[0] + "\".");
-    return true;
-  }
-
-  if (tok == "blockredef" || tok == "redefine") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      log.push_back("BLOCKREDEF — usage: BLOCKREDEF <name>, <baseX>, <baseY>[, <baseZ>].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("BLOCKREDEF — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    float bx = 0.f, by = 0.f, bz = 0.f;
-    if (!TryParseF(f[1], bx) || !TryParseF(f[2], by)) {
-      log.push_back("BLOCKREDEF — base point must be numbers.");
-      return true;
-    }
-    if (f.size() >= 4 && !TryParseF(f[3], bz)) {
-      log.push_back("BLOCKREDEF — base Z must be a number.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Blockredef");
-    CadBlockContent c;
-    CaptureSelectionInto(st, &c, bx, by, bz);
-    st.blockDefs[static_cast<size_t>(di)].content = std::move(c);
-    st.blockDefs[static_cast<size_t>(di)].baseX = 0.f;
-    st.blockDefs[static_cast<size_t>(di)].baseY = 0.f;
-    st.blockDefs[static_cast<size_t>(di)].baseZ = 0.f;
-    BumpCadGpuCache(st);
-    log.push_back("BLOCKREDEF — updated \"" + f[0] + "\". References keep their transforms.");
-    return true;
-  }
-
-  if (tok == "attdef") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("ATTDEF — open a block with BEDIT first.");
-      return true;
-    }
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      log.push_back("ATTDEF — usage: ATTDEF <tag>, <prompt>, <default>[, <x>, <y>].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    CadBlockAttrDef d;
-    d.tag = f[0];
-    d.prompt = f[1];
-    d.defaultValue = f[2];
-    if (f.size() >= 5) {
-      if (!TryParseF(f[3], d.localX) || !TryParseF(f[4], d.localY)) {
-        log.push_back("ATTDEF — x and y must be numbers.");
-        return true;
-      }
-    }
-    st.blockDefs[static_cast<size_t>(di)].attrDefs.push_back(std::move(d));
-    st.blockEditorDirty = true;
-    log.push_back("ATTDEF — tag " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "bconnect") {
-    // Prompted, one-value-at-a-time wizard (issue #496) — see BConnectStart/-SubmitLine below.
-    const std::vector<std::string> f = SplitCommaRest(args);
-    BConnectStart(st, f.empty() ? std::string() : f[0], log);
-    return true;
-  }
-
-  if (tok == "bconnectedit") {
-    // Prompted wizard (issue #496) — see BConnectEditStart/-SubmitLine below.
-    const std::vector<std::string> f = SplitCommaRest(args);
-    BConnectEditStart(st, f.empty() ? std::string() : f[0], log);
-    return true;
-  }
-
-  if (tok == "bconnectmode") {
-    // Prompted, one-value-at-a-time wizard (issue #496) — see BConnectModeStart/-SubmitLine below.
-    const std::vector<std::string> f = SplitCommaRest(args);
-    BConnectModeStart(st, f.empty() ? std::string() : f[0], log);
-    return true;
-  }
-
-  if (tok == "blockfitting") {
-    // Prompted wizard (issue #496) — see BlockFittingStart/-SubmitLine below.
-    BlockFittingStart(st, log);
-    return true;
-  }
-
-  if (tok == "attedit") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("ATTEDIT — usage: ATTEDIT <tag>, <value> (with block references selected).");
-      return true;
-    }
-    PushUndoSnapshot(st, "Attedit");
-    int n = 0;
-    for (const SelectedEntity& e : st.selection) {
-      if (e.type != SelectedEntity::Type::BlockRef)
-        continue;
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-        continue;
-      CadBlockAttrSet(&st.cadBlockRefs[static_cast<size_t>(e.index)], f[0], f[1]);
-      ++n;
-    }
-    log.push_back("ATTEDIT — " + std::to_string(n) + " reference(s).");
-    return true;
-  }
-
-  if (tok == "attsync") {
-    PushUndoSnapshot(st, "Attsync");
-    int n = 0;
-    for (CadBlockRef& r : st.cadBlockRefs) {
-      const int di = CadBlockFindDef(st.blockDefs, r.defName);
-      if (di < 0)
-        continue;
-      const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-      for (const CadBlockAttrDef& ad : def.attrDefs) {
-        bool have = false;
-        for (const CadBlockAttrValue& v : r.attributes) {
-          if (CadBlockEqCi(v.tag, ad.tag))
-            have = true;
-        }
-        if (!have) {
-          CadBlockAttrSet(&r, ad.tag, ad.defaultValue);
-          ++n;
-        }
-      }
-    }
-    log.push_back("ATTSYNC — filled " + std::to_string(n) + " missing attribute(s) from definitions.");
-    return true;
-  }
-
-  if (tok == "attext") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    std::ostringstream oss;
-    oss << "ATTEXT";
-    for (const CadBlockRef& r : st.cadBlockRefs) {
-      const int di = CadBlockFindDef(st.blockDefs, r.defName);
-      if (di < 0)
-        continue;
-      const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-      oss << "\n" << r.defName;
-      for (const CadBlockAttrDef& ad : def.attrDefs)
-        oss << "," << ad.tag << "=" << CadBlockAttrGet(r, def, ad.tag);
-    }
-    log.push_back(oss.str());
-    if (!f.empty()) {
-      std::ofstream out(f[0]);
-      if (out)
-        out << oss.str();
-    }
-    return true;
-  }
-
-  if (tok == "blocklist") {
-    if (st.blockDefs.empty()) {
-      log.push_back("BLOCKLIST — (none).");
-      return true;
-    }
-    for (const CadBlockDefinition& d : st.blockDefs) {
-      const int refs = CadBlockCountRefs(st.cadBlockRefs, d.name);
-      log.push_back("BLOCKLIST — " + d.name + " refs=" + std::to_string(refs) +
-                    " nested=" + std::to_string(d.content.nested.size()) +
-                    " attrs=" + std::to_string(d.attrDefs.size()) +
-                    (d.parameters.empty() ? " dynamic=no" : " dynamic=yes") +
-                    " vis=" + std::to_string(d.visibilityStates.size()));
-    }
-    return true;
-  }
-
-  if (tok == "blockstats") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    std::string name = f.empty() ? std::string() : f[0];
-    if (name.empty() && !st.selection.empty() && st.selection[0].type == SelectedEntity::Type::BlockRef) {
-      const int k = st.selection[0].index;
-      if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefs.size())
-        name = st.cadBlockRefs[static_cast<size_t>(k)].defName;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, name);
-    if (di < 0) {
-      log.push_back("BLOCKSTATS — name a definition or select a reference.");
-      return true;
-    }
-    const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
-    log.push_back("Definition: " + d.name);
-    log.push_back("References: " + std::to_string(CadBlockCountRefs(st.cadBlockRefs, d.name)));
-    log.push_back("Attributes: " + std::to_string(d.attrDefs.size()));
-    log.push_back("Nested Blocks: " + std::to_string(d.content.nested.size()));
-    log.push_back(std::string("Dynamic: ") + (d.parameters.empty() ? "No" : "Yes"));
-    log.push_back("Visibility States: " + std::to_string(d.visibilityStates.size()));
-    return true;
-  }
-
-  if (tok == "purge" || tok == "-purge") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    PushUndoSnapshot(st, "Purge");
-    int n = 0;
-    for (int i = static_cast<int>(st.blockDefs.size()) - 1; i >= 0; --i) {
-      const std::string& nm = st.blockDefs[static_cast<size_t>(i)].name;
-      if (CadBlockCountRefs(st.cadBlockRefs, nm) > 0 || CadBlockDefUsedBy(st.blockDefs, nm))
-        continue;
-      if (!f.empty() && !CadBlockEqCi(f[0], "blocks") && !CadBlockEqCi(f[0], nm) &&
-          !CadBlockEqCi(f[0], "*"))
-        continue;
-      st.blockDefs.erase(st.blockDefs.begin() + i);
-      ++n;
-    }
-    log.push_back("PURGE — removed " + std::to_string(n) + " unused block definition(s).");
-    return true;
-  }
-
-  if (tok == "blockrename") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BLOCKRENAME — usage: BLOCKRENAME <old>, <new>.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("BLOCKRENAME — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    if (CadBlockFindDef(st.blockDefs, f[1]) >= 0) {
-      log.push_back("BLOCKRENAME — \"" + f[1] + "\" is already used.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Blockrename");
-    const std::string old = st.blockDefs[static_cast<size_t>(di)].name;
-    st.blockDefs[static_cast<size_t>(di)].name = f[1];
-    for (CadBlockRef& r : st.cadBlockRefs) {
-      if (CadBlockEqCi(r.defName, old))
-        r.defName = f[1];
-    }
-    for (CadBlockDefinition& d : st.blockDefs) {
-      for (CadBlockNested& n : d.content.nested) {
-        if (CadBlockEqCi(n.defName, old))
-          n.defName = f[1];
-      }
-    }
-    log.push_back("BLOCKRENAME — " + old + " -> " + f[1] + ".");
-    return true;
-  }
-
-  if (tok == "bparam") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BPARAM — open a block with BEDIT first.");
-      return true;
-    }
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BPARAM — usage: BPARAM <name>, <kind>[, <value>].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    CadBlockParameter p;
-    p.name = f[0];
-    p.kind = ParseParamKind(f[1]);
-    if (f.size() >= 3 && !TryParseF(f[2], p.value)) {
-      log.push_back("BPARAM — value must be a number.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Block parameter");
-    st.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
-    st.blockEditorDirty = true;
-    BumpCadGpuCache(st);
-    log.push_back("BPARAM — added " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "baction") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BACTION — open a block with BEDIT first.");
-      return true;
-    }
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BACTION — usage: BACTION <kind>, <param>[, ox, oy, dx, dy, thresh].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    CadBlockAction a;
-    a.kind = ParseActionKind(f[0]);
-    a.paramName = f[1];
-    if (f.size() >= 7) {
-      if (!TryParseF(f[2], a.originX) || !TryParseF(f[3], a.originY) ||
-          !TryParseF(f[4], a.dirX) || !TryParseF(f[5], a.dirY) ||
-          !TryParseF(f[6], a.threshold)) {
-        log.push_back("BACTION — ox, oy, dx, dy and thresh must be numbers.");
-        return true;
-      }
-    }
-    PushUndoSnapshot(st, "Block action");
-    st.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
-    st.blockEditorDirty = true;
-    BumpCadGpuCache(st);
-    log.push_back("BACTION — bound to " + f[1] + ".");
-    return true;
-  }
-
-  if (tok == "bvisibility") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BVISIBILITY — open a block with BEDIT first.");
-      return true;
-    }
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("BVISIBILITY — usage: BVISIBILITY <state>.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    PushUndoSnapshot(st, "Block visibility state");
-    st.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
-    st.blockEditorDirty = true;
-    BumpCadGpuCache(st);
-    log.push_back("BVISIBILITY — state " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "bsetvis") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("BSETVIS — usage: BSETVIS <state> (selected references).");
-      return true;
-    }
-    for (const SelectedEntity& e : st.selection) {
-      if (e.type != SelectedEntity::Type::BlockRef)
-        continue;
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadBlockRefs.size())
-        st.cadBlockRefs[static_cast<size_t>(e.index)].visState = f[0];
-    }
-    BumpCadGpuCache(st);
-    log.push_back("BSETVIS — " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "bsetparam") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BSETPARAM — usage: BSETPARAM <name>, <value> (selected references).");
-      return true;
-    }
-    float v = 0.f;
-    if (!TryParseF(f[1], v)) {
-      log.push_back("BSETPARAM — value must be a number.");
-      return true;
-    }
-    for (const SelectedEntity& e : st.selection) {
-      if (e.type != SelectedEntity::Type::BlockRef)
-        continue;
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadBlockRefs.size())
-        CadBlockParamSet(&st.cadBlockRefs[static_cast<size_t>(e.index)], f[0], v);
-    }
-    BumpCadGpuCache(st);
-    log.push_back("BSETPARAM — " + f[0] + "=" + f[1] + ".");
-    return true;
-  }
-
-  if (tok == "beditadd") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BEDITADD — open a block with BEDIT first.");
-      return true;
-    }
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 5 || StringUtil::toLowerAsciiCopy(f[0]) != "line") {
-      log.push_back("BEDITADD — usage: BEDITADD LINE, x1, y1, x2, y2[, visState].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    float x1 = 0.f, y1 = 0.f, x2 = 0.f, y2 = 0.f;
-    if (!TryParseF(f[1], x1) || !TryParseF(f[2], y1) || !TryParseF(f[3], x2) ||
-        !TryParseF(f[4], y2)) {
-      log.push_back("BEDITADD — x1, y1, x2, y2 must be numbers.");
-      return true;
-    }
-    if (st.blockEditActive) {
-      // ADR-043: an active session keeps the geometry in the model arrays; add there so it survives
-      // the harvest on Save (and shows in the isolated view like any other draw).
-      const float seg[6] = {x1, y1, 0.f, x2, y2, 0.f};
-      st.userLinesFlat.insert(st.userLinesFlat.end(), seg, seg + 6);
-      st.userLineAttrs.push_back(EntityAttributes{});
-    } else {
-      CadBlockContent& c = st.blockDefs[static_cast<size_t>(di)].content;
-      c.lines.push_back(x1);
-      c.lines.push_back(y1);
-      c.lines.push_back(0.f);
-      c.lines.push_back(x2);
-      c.lines.push_back(y2);
-      c.lines.push_back(0.f);
-      c.lineAttrs.push_back(EntityAttributes{});
-      c.lineVis.push_back(f.size() >= 6 ? f[5] : std::string());
-    }
-    st.blockEditorDirty = true;
-    BumpCadGpuCache(st);
-    log.push_back("BEDITADD — line added in local coordinates.");
-    return true;
-  }
-
-  if (tok == "blocknest") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BLOCKNEST — usage: BLOCKNEST <host>, <child>.");
-      return true;
-    }
-    const int hi = CadBlockFindDef(st.blockDefs, f[0]);
-    const int ci = CadBlockFindDef(st.blockDefs, f[1]);
-    if (hi < 0 || ci < 0) {
-      log.push_back("BLOCKNEST — both names must exist.");
-      return true;
-    }
-    if (CadBlockWouldCycle(st.blockDefs, f[0], f[1])) {
-      log.push_back("BLOCKNEST — refused circular reference.");
-      return true;
-    }
-    CadBlockNested n;
-    n.defName = st.blockDefs[static_cast<size_t>(ci)].name;
-    st.blockDefs[static_cast<size_t>(hi)].content.nested.push_back(std::move(n));
-    BumpCadGpuCache(st);
-    log.push_back("BLOCKNEST — " + f[1] + " inside " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "insunits") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("INSUNITS — " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
-      return true;
-    }
-    const int code = CadDrawingInsUnitsCode(f[0]);
-    if (code != st.drawingInsUnits) {
-      PushUndoSnapshot(st, "INSUNITS");  // the drawing unit is undoable (REQ-357)
-      st.drawingInsUnits = code;
-      BumpCadGpuCache(st);
-    }
-    log.push_back("INSUNITS — drawing units " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
-    return true;
-  }
-
-  if (tok == "blockunits") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("BLOCKUNITS — usage: BLOCKUNITS <name>, <units>.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("BLOCKUNITS — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    st.blockDefs[static_cast<size_t>(di)].units = f[1];
-    log.push_back("BLOCKUNITS — " + f[0] + " is " + f[1] + ".");
-    return true;
-  }
-
-  if (tok == "blocksearch") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    const std::string q = f.empty() ? st.blockLibraryFilter : f[0];
-    st.blockLibraryFilter = q;
-    int n = 0;
-    for (const CadBlockDefinition& d : st.blockDefs) {
-      if (q.empty() || StringUtil::toLowerAsciiCopy(d.name).find(StringUtil::toLowerAsciiCopy(q)) !=
-                           std::string::npos) {
-        log.push_back("BLOCKSEARCH — " + d.name);
-        ++n;
-      }
-    }
-    if (n == 0)
-      log.push_back("BLOCKSEARCH — no matches.");
-    return true;
-  }
-
-  if (tok == "blockfav") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      for (const std::string& n : st.blockFavorites)
-        log.push_back("BLOCKFAV — " + n);
-      if (st.blockFavorites.empty())
-        log.push_back("BLOCKFAV — (none).");
-      return true;
-    }
-    st.blockFavorites.erase(std::remove_if(st.blockFavorites.begin(), st.blockFavorites.end(),
-                                           [&](const std::string& n) { return CadBlockEqCi(n, f[0]); }),
-                            st.blockFavorites.end());
-    st.blockFavorites.push_back(f[0]);
-    log.push_back("BLOCKFAV — added " + f[0] + ".");
-    return true;
-  }
-
-  if (tok == "blockrecent") {
-    for (const std::string& n : st.blockRecent)
-      log.push_back("BLOCKRECENT — " + n);
-    if (st.blockRecent.empty())
-      log.push_back("BLOCKRECENT — (none).");
-    return true;
-  }
-
-  if (tok == "blocklib" || tok == "blockbrowser") {
-    log.push_back("BLOCKLIB — drawing library:");
-    for (const CadBlockDefinition& d : st.blockDefs) {
-      float mnX = 0, mnY = 0, mxX = 0, mxY = 0;
-      CadBlockRef preview;
-      preview.defName = d.name;
-      CadBlockWorldAabb(st.blockDefs, preview, &mnX, &mnY, &mxX, &mxY);
-      log.push_back("  " + d.name + " preview " + std::to_string(mxX - mnX) + " x " +
-                    std::to_string(mxY - mnY));
-    }
-    return true;
-  }
-
-  if (tok == "wblock") {
-    // issue #284: WBLOCK writes a single block definition out to its own .dwg, using the same
-    // ADR-044 JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds
-    // just this one definition; BLOCKIMPORT reading it back finds scratch.blockDefs already
-    // populated (see ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
-    // Both arguments given: write straight out, the way scripts and the two `[issue284][wblock]`
-    // tests drive it. Bare `WBLOCK` used to answer with a usage line; at the user's request
-    // (2026-09-23) it now opens the save dialog, which is what AutoCAD's own WBLOCK does.
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      StartWblockDialog(st, log);
-      return true;
-    }
-    CadBlocksWriteBlockToFile(st, f[0], f[1].c_str(), log);
-    return true;
-  }
-
-  if (tok == "pipepalette" || tok == "pipepal") {
-    // REQ-350 (a) — reopen (or close) the Pipe Fittings palette. PIPERUN opens it on its own; this is
-    // how it comes back after the close box, and how it is reached without starting a run at all.
-    CadPipePaletteSetOpen(st, !st.pipeFittingPaletteOpen, log);
-    return true;
-  }
-
-  if (tok == "pipecatalog" || tok == "pcat") {
-    // Catalog lookup (issue #486 increment B4 / REQ-345). One-shot report over CadPipeCatalogFind —
-    // no state machine, the same "bare/short verb, immediate answer" shape PIPESYS's own report
-    // verbs use, because this is a query (and a side-effecting import when the match is not yet
-    // imported), not something routed interactively.
-    std::string partTypeTok, sizeTok, classTok;
-    args >> partTypeTok >> sizeTok;
-    if (partTypeTok.empty() || sizeTok.empty()) {
-      log.push_back("PIPECATALOG - usage: PIPECATALOG <part type> <nominal size> [pressure class]. Part "
-                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, "
-                    "nozzle, other.");
-      return true;
-    }
-    const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
-    if (partType == CadPipePartType::None) {
-      log.push_back("PIPECATALOG - unknown part type \"" + partTypeTok + "\".");
-      return true;
-    }
-    CadPipePressureClass pressureClass = CadPipePressureClass::None;
-    if (args >> classTok) {
-      pressureClass = ParseCadPipePressureClass(classTok);
-      if (pressureClass == CadPipePressureClass::None) {
-        log.push_back("PIPECATALOG - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
-        return true;
-      }
-    }
-    std::string blockName;
-    (void)CadPipeCatalogFind(st, partType, sizeTok, pressureClass, &blockName, log);
-    return true;
-  }
-
-  if (tok == "libexport") {
-    // Fittings library export workflow (issue #486 increment A3). Writes the definition as a
-    // .dwg (same ADR-044 trailer WBLOCK uses, so partType/pressureClass/partNumber and every
-    // connection's role/engagementLength/compatibilityTag already round-trip — see #488) plus a
-    // small .json sidecar summarizing that same metadata, so a future library browser (A5) can
-    // filter by size/class/type without opening the DWG. The DWG trailer stays authoritative;
-    // the sidecar is a convenience index only.
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("LIBEXPORT — usage: LIBEXPORT <name>[, <path.dwg>].");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("LIBEXPORT — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-    if (def.partType == CadPipePartType::None) {
-      log.push_back("LIBEXPORT — \"" + f[0] + "\" has no fitting metadata; tag it with BLOCKFITTING first.");
-      return true;
-    }
-    namespace fs = std::filesystem;
-    fs::path dwgPath;
-    if (f.size() >= 2 && !f[1].empty()) {
-      dwgPath = fs::u8path(f[1]);
-    } else {
-      const fs::path dir = CadFittingLibraryExportDir();
-      if (dir.empty()) {
-        log.push_back("LIBEXPORT — could not determine the user library directory; pass an explicit path.");
-        return true;
-      }
-      std::error_code mkEc;
-      fs::create_directories(dir, mkEc);
-      dwgPath = dir / (def.name + ".dwg");
-    }
-    AppCommandState tmp;
-    tmp.blockDefs.push_back(def);
-    if (!ExportDwgFile(tmp, dwgPath.u8string().c_str(), log)) {
-      log.push_back("LIBEXPORT — could not write " + dwgPath.u8string() + ".");
-      return true;
-    }
-    fs::path sidecar = dwgPath;
-    sidecar.replace_extension(".json");
-    std::ofstream out(sidecar, std::ios::binary);
-    if (out) {
-      nlohmann::json j;
-      j["name"] = def.name;
-      j["partType"] = std::string(CadPipePartTypeTag(def.partType));
-      j["nominalSize"] = def.nominalSize;
-      if (def.pressureClass != CadPipePressureClass::None)
-        j["pressureClass"] = std::string(CadPipePressureClassTag(def.pressureClass));
-      if (!def.partNumber.empty())
-        j["partNumber"] = def.partNumber;
-      nlohmann::json conns = nlohmann::json::array();
-      for (const CadBlockConnection& c : def.connections) {
-        nlohmann::json cj;
-        cj["name"] = c.name;
-        cj["role"] = std::string(CadBlockConnectionRoleTag(c.role));
-        cj["nominalSize"] = c.nominalSize;
-        conns.push_back(std::move(cj));
-      }
-      j["connections"] = std::move(conns);
-      out << j.dump(2);
-    } else {
-      log.push_back("LIBEXPORT — wrote the DWG but could not write the metadata sidecar " + sidecar.u8string() + ".");
-    }
-    log.push_back("LIBEXPORT — wrote \"" + def.name + "\" to " + dwgPath.u8string() + ".");
-    return true;
-  }
-
-  if (tok == "blockimport") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty() || f[0].empty()) {
-      CadBlocksImportWithPicker(st, log);
-      return true;
-    }
-    PushUndoSnapshot(st, "Blockimport");
-    ImportCadBlocksFromPath(st, f[0].c_str(), log);
-    BumpCadGpuCache(st);
-    return true;
-  }
-
-  if (tok == "bgrip") {
-    log.push_back("BGRIP — stretch/move/rotate/flip grips follow BPARAM values on the selected INSERT.");
-    return true;
-  }
-
-  if (tok == "makeblock") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("MAKEBLOCK — usage: MAKEBLOCK <name>.");
-      return true;
-    }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
-      log.push_back("MAKEBLOCK — name \"" + f[0] + "\" is already used.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Makeblock");
-    CadBlockDefinition def;
-    def.name = f[0];
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-    st.blockDefs.push_back(std::move(def));
-    log.push_back("MAKEBLOCK — created \"" + f[0] + "\".");
-    return true;
-  }
-
-  if (tok == "mkline") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 4) {
-      log.push_back("MKLINE — usage: MKLINE <x0>, <y0>, <x1>, <y1>.");
-      return true;
-    }
-    try {
-      const float x0 = std::stof(f[0]);
-      const float y0 = std::stof(f[1]);
-      const float x1 = std::stof(f[2]);
-      const float y1 = std::stof(f[3]);
-      PushUndoSnapshot(st, "Mkline");
-      st.userLinesFlat.push_back(x0);
-      st.userLinesFlat.push_back(y0);
-      st.userLinesFlat.push_back(0.f);
-      st.userLinesFlat.push_back(x1);
-      st.userLinesFlat.push_back(y1);
-      st.userLinesFlat.push_back(0.f);
-      st.userLineAttrs.push_back(NewBlockAttr(st));
-      EnsureEntityIds(st);
-      BumpCadGpuCache(st);
-      log.push_back("MKLINE — added.");
-    } catch (...) {
-      log.push_back("MKLINE — coordinates must be numbers.");
-    }
-    return true;
-  }
-
-  if (tok == "selline") {
-    st.selection.clear();
-    const int n = static_cast<int>(st.userLinesFlat.size() / 6);
-    if (n <= 0) {
-      log.push_back("SELLINE — no lines.");
-      return true;
-    }
-    st.selection.push_back({SelectedEntity::Type::LineSeg, n - 1});
-    log.push_back("SELLINE — line " + std::to_string(n - 1) + ".");
-    return true;
-  }
-
-  if (tok == "selblock") {
-    st.selection.clear();
-    if (st.cadBlockRefs.empty()) {
-      log.push_back("SELBLOCK — no block references.");
-      return true;
-    }
-    st.selection.push_back(
-        {SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
-    log.push_back("SELBLOCK — insert " + std::to_string(st.cadBlockRefs.size() - 1) + ".");
-    return true;
-  }
-
-  if (tok == "movesel") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("MOVESEL — usage: MOVESEL <dx>, <dy>.");
-      return true;
-    }
-    try {
-      const float dx = std::stof(f[0]);
-      const float dy = std::stof(f[1]);
-      PushUndoSnapshot(st, "Movesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-          continue;
-        CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("MOVESEL — done.");
-    } catch (...) {
-      log.push_back("MOVESEL — offsets must be numbers.");
-    }
-    return true;
-  }
-
-  if (tok == "copysel") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("COPYSEL — usage: COPYSEL <dx>, <dy>.");
-      return true;
-    }
-    float dx = 0.f;
-    float dy = 0.f;
-    try {
-      dx = std::stof(f[0]);
-      dy = std::stof(f[1]);
-    } catch (...) {
-      log.push_back("COPYSEL — offsets must be numbers.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Copysel");
-    int n = 0;
-    std::vector<CadBlockRef> extra;
-    std::vector<EntityAttributes> extraA;
-    for (const SelectedEntity& e : st.selection) {
-      if (e.type != SelectedEntity::Type::BlockRef)
-        continue;
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-        continue;
-      CadBlockRef c = st.cadBlockRefs[static_cast<size_t>(e.index)];
-      CadBlockTranslate(&c, dx, dy, 0.f);
-      extra.push_back(std::move(c));
-      EntityAttributes a = NewBlockAttr(st);
-      if (static_cast<size_t>(e.index) < st.cadBlockRefAttrs.size())
-        a = st.cadBlockRefAttrs[static_cast<size_t>(e.index)];
-      a.id = 0;
-      extraA.push_back(std::move(a));
-      ++n;
-    }
-    st.cadBlockRefs.insert(st.cadBlockRefs.end(), extra.begin(), extra.end());
-    st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), extraA.begin(), extraA.end());
-    EnsureEntityIds(st);
-    BumpCadGpuCache(st);
-    log.push_back("COPYSEL — " + std::to_string(n) + " reference(s).");
-    return true;
-  }
-
-  if (tok == "rotatesel") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      log.push_back("ROTATESEL — usage: ROTATESEL <baseX>, <baseY>, <deg>.");
-      return true;
-    }
-    try {
-      const float bx = std::stof(f[0]);
-      const float by = std::stof(f[1]);
-      const float rad = std::stof(f[2]) * 0.01745329252f;
-      PushUndoSnapshot(st, "Rotatesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-          continue;
-        CadBlockRotateZ(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("ROTATESEL — done.");
-    } catch (...) {
-      log.push_back("ROTATESEL — values must be numbers.");
-    }
-    return true;
-  }
-
-  if (tok == "scalesel") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
-      log.push_back("SCALESEL — usage: SCALESEL <baseX>, <baseY>, <factor>.");
-      return true;
-    }
-    try {
-      const float bx = std::stof(f[0]);
-      const float by = std::stof(f[1]);
-      const float sc = std::stof(f[2]);
-      PushUndoSnapshot(st, "Scalesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-          continue;
-        CadBlockScaleAbout(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("SCALESEL — done.");
-    } catch (...) {
-      log.push_back("SCALESEL — values must be numbers.");
-    }
-    return true;
-  }
-
-  if (tok == "mirrorsel") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 4) {
-      log.push_back("MIRRORSEL — usage: MIRRORSEL <x0>, <y0>, <x1>, <y1>.");
-      return true;
-    }
-    try {
-      const float x0 = std::stof(f[0]);
-      const float y0 = std::stof(f[1]);
-      const float x1 = std::stof(f[2]);
-      const float y1 = std::stof(f[3]);
-      PushUndoSnapshot(st, "Mirrorsel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
-          continue;
-        CadBlockMirror(&st.cadBlockRefs[static_cast<size_t>(e.index)], x0, y0, x1, y1);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("MIRRORSEL — done.");
-    } catch (...) {
-      log.push_back("MIRRORSEL — coordinates must be numbers.");
-    }
-    return true;
-  }
-
-  if (tok == "undo") {
-    DoUndo(st, log);
-    return true;
-  }
-  if (tok == "redo") {
-    DoRedo(st, log);
-    return true;
-  }
-
-  if (tok == "copyclip") {
-    CopySelectionToClipboard(st, log);
-    return true;
-  }
-
-  if (tok == "pasteblock") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    float dx = 0.f;
-    float dy = 0.f;
-    if (f.size() >= 2) {
-      try {
-        dx = std::stof(f[0]);
-        dy = std::stof(f[1]);
-      } catch (...) {
-        log.push_back("PASTEBLOCK — offsets must be numbers.");
-        return true;
-      }
-    }
-    // Issue #805: Paste Special's menu runs this command from the ribbon, so it takes the same guards as
-    // PASTE and PASTEORIG. A stale layout index refuses (as Cut does), and a coordinate-system mismatch refuses
-    // before any change. A paper layout receives the references on its sheet, as PASTEORIG does.
-    PaperLayout* paperTarget = ActivePaperGeometryTarget(st);
-    if (paperTarget == nullptr && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
-      log.push_back("PASTEBLOCK — the active layout is not available. Switch to model space first.");
-      return true;
-    }
-    if (st.clipboard.blockRefs.empty()) {
-      log.push_back("PASTEBLOCK — clipboard has no block references.");
-      return true;
-    }
-    const PasteCheck pc = CheckClipboardPaste(st);
-    if (pc.verdict != PasteCheck::Verdict::Ok) {
-      // This command has no warning dialog, so it cannot offer "Paste anyway" or Convert. The message says so.
-      log.push_back(std::string("PASTEBLOCK — not pasted (") + (pc.verdict == PasteCheck::Verdict::Block ? "blocked" : "needs a check") +
-                    "): " + pc.text +
-                    " Paste (Ctrl+V) shows the warning, but it pastes the whole clipboard, not only block references.");
-      return true;
-    }
-    PushUndoSnapshot(st, "Pasteblock");
-    for (size_t i = 0; i < st.clipboard.blockRefs.size(); ++i) {
-      CadBlockRef r = st.clipboard.blockRefs[i];
-      CadBlockTranslate(&r, dx, dy, 0.f);
-      // REQ-076: a paste gets new entity ids, so the copied source's id is cleared on both sheet and model.
-      EntityAttributes a = i < st.clipboard.blockRefAttrs.size() ? st.clipboard.blockRefAttrs[i]
-                           : paperTarget != nullptr              ? EntityAttributes{}
-                                                                 : NewBlockAttr(st);
-      a.id = 0;
-      if (paperTarget != nullptr) {
-        paperTarget->paperBlockRefs.push_back(std::move(r));
-        paperTarget->paperBlockRefAttrs.push_back(std::move(a));
-        continue;
-      }
-      st.cadBlockRefs.push_back(std::move(r));
-      st.cadBlockRefAttrs.push_back(std::move(a));
-    }
-    if (paperTarget == nullptr)
-      EnsureEntityIds(st);
-    BumpCadGpuCache(st);
-    log.push_back("PASTEBLOCK — " + std::to_string(st.clipboard.blockRefs.size()) + " reference(s).");
-    return true;
-  }
-
-  if (tok == "blockmodel") {
-    st.activeSpaceIndex = kModelSpaceIndex;
-    log.push_back("BLOCKMODEL — model space.");
-    return true;
-  }
-  if (tok == "blockpaper") {
-    if (st.paperLayouts.empty())
-      AddPaperLayout(st);
-    if (st.paperLayouts.empty()) {
-      log.push_back("BLOCKPAPER — no layouts.");
-      return true;
-    }
-    st.activeSpaceIndex = 0;
-    log.push_back("BLOCKPAPER — " + st.paperLayouts[0].name);
-    return true;
-  }
-
-  return false;
 }

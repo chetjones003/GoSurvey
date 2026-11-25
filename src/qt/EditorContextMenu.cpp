@@ -42,8 +42,8 @@ QString EntityLabel(const AppCommandState& st, const SelectedEntity& e) {
   case T::Spline: return "Spline " + n;
   case T::Polyline: return "Polyline " + n;
   case T::Annotation:
-    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
-      const auto& a = st.cadAnnotations[static_cast<size_t>(e.index)];
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadAnnotations.size()) {
+      const auto& a = st.drawing.cadAnnotations[static_cast<size_t>(e.index)];
       const QString kind = a.kind == CadAnnotation::Kind::Mtext ? "MText" : a.kind == CadAnnotation::Kind::Text ? "Text" : "Dimension";
       return kind + " " + n + " \"" + Text(a.text).left(24) + "\"";
     }
@@ -189,8 +189,8 @@ void EditorWindow::ShowSelectionList() {
       item->setCheckState(isSelected(e) ? Qt::Checked : Qt::Unchecked);
     }
     for (int index : m_State.selectionCycleSurveyPoints) {
-      const bool known = static_cast<size_t>(index) < m_State.surveyPoints.size();
-      auto* item = new QListWidgetItem(known ? QString("Survey Pt #%1").arg(m_State.surveyPoints[static_cast<size_t>(index)].id)
+      const bool known = static_cast<size_t>(index) < m_State.drawing.surveyPoints.size();
+      auto* item = new QListWidgetItem(known ? QString("Survey Pt #%1").arg(m_State.drawing.surveyPoints[static_cast<size_t>(index)].id)
                                              : QString("Survey Pt %1").arg(index + 1), list);
       item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
       item->setCheckState(std::find(m_State.selectedSurveyPointIndices.begin(), m_State.selectedSurveyPointIndices.end(), index) !=

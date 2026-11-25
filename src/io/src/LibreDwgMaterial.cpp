@@ -329,11 +329,11 @@ int DwgExportCountMaterialAppearanceLosses(const AppCommandState& st) {
     }
   };
   if (r2007MaterialExport) {
-    countOverride(st.cadSolidAttrs);
+    countOverride(st.drawing.cadSolidAttrs);
   } else {
-    countOverride(st.cadMeshAttrs);
-    countOverride(st.cadSolidAttrs);
-    countOverride(st.cadSurfaceAttrs);
+    countOverride(st.drawing.cadMeshAttrs);
+    countOverride(st.drawing.cadSolidAttrs);
+    countOverride(st.drawing.cadSurfaceAttrs);
   }
   return n;
 }

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
+- **Amended by:** [ADR-0010](0010-drawing-content-and-entity-store.md), which moves selection ownership to Interaction.
 
 ## Context
 

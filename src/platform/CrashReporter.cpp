@@ -1,6 +1,7 @@
 #include "CrashReporter.hpp"
 
 #include "AppPaths.hpp"
+#include "BuildCommit.hpp"
 #include "CrashBuildInfo.hpp"
 #include <GoSurvey/UI/FailureReportDialog.hpp>
 #include "HttpFetch.hpp"

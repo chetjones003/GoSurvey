@@ -149,12 +149,13 @@ bool OnlineMapController::LocalRectToMercator(double minX, double minY, double m
 
 void OnlineMapController::Update(AppCommandState& st, bool modelView, const Camera& cam, int fbWidth,
                                  int fbHeight, std::vector<std::string>& log) {
-  using GP = AppCommandState::GeoCmdPhase;
+  using GP = stepengine::GeoCmdPhase;
   ++frame_;
   draws_.clear();
-  const DrawingSettings& s = st.drawingSettings;
+  const DrawingSettings& s = st.drawing.drawingSettings;
   const OnlineMapInfo& info = OnlineMapInfoOf(s.onlineMap);
-  bool capturing = st.active == AppCommandState::Kind::GeoCaptureArea && st.geoCmdPhase == GP::Capturing;
+  auto* geoSess = st.sessionAs<stepengine::GeoCmdSession>();
+  bool capturing = geoSess && st.active == AppCommandState::Kind::GeoCaptureArea && geoSess->phase == GP::Capturing;
   if (!capturing)
     job_ = {};  // ended or cancelled (Esc): nothing is kept
   const auto failCapture = [&](const std::string& why) {
@@ -192,8 +193,8 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
   // ---- The drawing's location: any change re-places every tile (the textures stay) -----------------
   const int map = static_cast<int>(s.onlineMap);
   const bool locationChanged = !haveLocation_ || s.zoneCode != locZone_ || s.transform != locTransform_ ||
-                               s.footDefinition != locFoot_ || st.drawingInsUnits != locInsUnits_ ||
-                               st.worldDocumentOriginX != locOriginX_ || st.worldDocumentOriginY != locOriginY_;
+                               s.footDefinition != locFoot_ || st.drawing.drawingInsUnits != locInsUnits_ ||
+                               st.drawing.worldDocumentOriginX != locOriginX_ || st.drawing.worldDocumentOriginY != locOriginY_;
   if (locationChanged || map != map_) {
     latch_.OnLocationChanged();
     havePlan_ = false;
@@ -204,9 +205,9 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
     locZone_ = s.zoneCode;
     locTransform_ = s.transform;
     locFoot_ = s.footDefinition;
-    locInsUnits_ = st.drawingInsUnits;
-    locOriginX_ = st.worldDocumentOriginX;
-    locOriginY_ = st.worldDocumentOriginY;
+    locInsUnits_ = st.drawing.drawingInsUnits;
+    locOriginX_ = st.drawing.worldDocumentOriginX;
+    locOriginY_ = st.drawing.worldDocumentOriginY;
     for (auto& [key, t] : tiles_) {
       t.xyuv.clear();
       t.placeFailed = false;
@@ -272,8 +273,8 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
   }
 
   // ---- Plan a Capture Area (REQ-364 item 2): the displayed level's tiles over the area ----------------
-  if (capturing && !job_.active) {
-    const AppCommandState::MapCaptureState& c = st.mapCapture;
+  if (capturing && !job_.active && geoSess) {
+    const stepengine::MapCaptureState& c = geoSess->mapCapture;
     geo::MercatorBox box;
     const bool ok = c.visibleArea
                         ? LocalRectToMercator(viewX_ - halfW, viewY_ - halfH, viewX_ + halfW, viewY_ + halfH, &box)
@@ -292,7 +293,7 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
         for (int ty = tr.minY; ty <= tr.maxY; ++ty)
           for (int tx = tr.minX; tx <= tr.maxX; ++tx)
             job_.keys.push_back({map, level_, tx, ty});
-        st.mapCapture.total = static_cast<int>(job_.keys.size());
+        geoSess->mapCapture.total = static_cast<int>(job_.keys.size());
       }
     }
   }
@@ -344,9 +345,11 @@ void OnlineMapController::Update(AppCommandState& st, bool modelView, const Came
       else if (notFound_.count(k))
         job_.images[k] = nullptr;
     }
-    st.mapCapture.gathered = static_cast<int>(job_.images.size());
-    st.mapCapture.prompt = "Capturing map\xE2\x80\xA6 " + std::to_string(st.mapCapture.gathered) + " of " +
-                           std::to_string(st.mapCapture.total) + " tiles";
+    if (auto* capSess = st.sessionAs<stepengine::GeoCmdSession>()) {
+      capSess->mapCapture.gathered = static_cast<int>(job_.images.size());
+      capSess->mapCapture.prompt = "Capturing map\xE2\x80\xA6 " + std::to_string(capSess->mapCapture.gathered) + " of " +
+                                   std::to_string(capSess->mapCapture.total) + " tiles";
+    }
     if (job_.images.size() == job_.keys.size()) {
       DrawingSettings::CapturedArea area;
       area.map = static_cast<DrawingSettings::OnlineMap>(job_.map);

@@ -198,7 +198,7 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
   QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
 
   const auto current = [&]() -> const AlignmentStyle* {
-    return AlignmentStyles::Find(state.alignmentStyles, chooser->currentText().toUtf8().toStdString());
+    return AlignmentStyles::Find(state.drawing.alignmentStyles, chooser->currentText().toUtf8().toStdString());
   };
 
   // Reads the style back into every control. Called after each command, so the controls always show the real values.
@@ -210,7 +210,7 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
       QSignalBlocker block(checkSet);
       checkSet->clear();
       checkSet->addItem("(none)");
-      for (const alignment::AlignmentCheckSet& cs : state.alignmentCheckSets)
+      for (const alignment::AlignmentCheckSet& cs : state.drawing.alignmentCheckSets)
         checkSet->addItem(QString::fromStdString(cs.name));
       const int at = s != nullptr ? checkSet->findText(QString::fromStdString(s->checkSetName)) : -1;
       checkSet->setCurrentIndex(at > 0 ? at : 0);
@@ -225,7 +225,7 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
     QSignalBlocker b1(markerShow), b2(markerSize), b3(tickShow), b4(tickSide), b5(majorTick), b6(minorTick),
         b7(arrowShow), b8(arrowLength), b9(labelShow);
     infoName->setText(Q(s->name));
-    infoUsers->setText(QString::number(AlignmentStyles::CountAlignmentsResolvingTo(state.alignments, state.alignmentStyles, s->name)));
+    infoUsers->setText(QString::number(AlignmentStyles::CountAlignmentsResolvingTo(state.drawing.alignments, state.drawing.alignmentStyles, s->name)));
     markerShow->setChecked(s->markers.visible);
     markerSize->setValue(s->markerHalfSize);
     tickShow->setChecked(s->ticks.visible);
@@ -254,15 +254,15 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
             .arg(s->tangent.visible ? "shown" : "hidden").arg(Q(s->tangent.color))
             .arg(s->curve.visible ? "shown" : "hidden").arg(Q(s->curve.color))
             .arg(s->spiral.visible ? "shown" : "hidden").arg(Q(s->spiral.color))
-            .arg(AlignmentStyles::CountAlignmentsResolvingTo(state.alignments, state.alignmentStyles, s->name));
+            .arg(AlignmentStyles::CountAlignmentsResolvingTo(state.drawing.alignments, state.drawing.alignmentStyles, s->name));
     summaryText->setText(summaryLines);
-    infoUsers->setText(QString::number(AlignmentStyles::CountAlignmentsResolvingTo(state.alignments, state.alignmentStyles, s->name)));
+    infoUsers->setText(QString::number(AlignmentStyles::CountAlignmentsResolvingTo(state.drawing.alignments, state.drawing.alignmentStyles, s->name)));
   };
 
   const auto fillChooser = [&](const std::string& select) {
     QSignalBlocker block(chooser);
     chooser->clear();
-    for (const AlignmentStyle& s : state.alignmentStyles) chooser->addItem(Q(s.name));
+    for (const AlignmentStyle& s : state.drawing.alignmentStyles) chooser->addItem(Q(s.name));
     const int ix = chooser->findText(Q(select), Qt::MatchFixedString);
     if (ix >= 0) chooser->setCurrentIndex(ix);
     else if (chooser->count() > 0) chooser->setCurrentIndex(0);

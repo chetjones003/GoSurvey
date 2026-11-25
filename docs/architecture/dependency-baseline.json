@@ -37,97 +37,6 @@
       "message": "src/commands/CadBlocks.hpp includes \"util/solidpick.hpp\": Commands may not depend on Interaction (forbidden dependency)"
     },
     {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/CadPointCloudE57.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/CadPointCloudE57.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/CadPointCloudPts.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/CadPointCloudPts.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/CadPointCloudPtx.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/CadPointCloudPtx.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/CadPointCloudLas.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/CadPointCloudLas.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/CadPointCloudLaz.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/CadPointCloudLaz.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/RasterImage.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/RasterImage.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/LandXmlIo.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/LandXmlIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/SurveyCsv.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/SurveyCsv.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/gltfimport.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/gltfimport.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "io/src/stlimport.hpp",
-      "target": "IO",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"io/src/stlimport.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "AppPaths.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"AppPaths.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "AppPaths.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"AppPaths.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "CadSnap.hpp",
-      "target": "Interaction",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"CadSnap.hpp\": Commands may not depend on Interaction (forbidden dependency)"
-    },
-    {
       "file": "src/commands/CadCommands.hpp",
       "include": "update/UpdateCheck.hpp",
       "target": "Network",
@@ -315,13 +224,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/src/GsIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/GsIo.cpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/src/GsIo.cpp includes \"DimensionStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/io/src/GsIo.cpp",
@@ -1200,20 +1102,6 @@
     },
     {
       "file": "src/qt/EditorRibbon.cpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorRibbon.cpp includes \"DimensionStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorRibbon.cpp",
-      "include": "MultileaderStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorRibbon.cpp includes \"MultileaderStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorRibbon.cpp",
       "include": "GoSurvey/Document/cadtablestyle.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
@@ -1869,20 +1757,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/StyleEditors.hpp includes \"CadEntities.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/StyleEditors.hpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/StyleEditors.hpp includes \"DimensionStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/StyleEditors.hpp",
-      "include": "MultileaderStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/StyleEditors.hpp includes \"MultileaderStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/qt/StyleEditors.hpp",

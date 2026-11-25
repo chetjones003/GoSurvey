@@ -47,8 +47,8 @@ constexpr double kDatasheetScaleFactor = 0.99995905;
 AppCommandState TexasFeetDrawing() {
   LoadShippedDictionary();
   AppCommandState st;
-  st.drawingInsUnits = 2;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingInsUnits = 2;
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
   return st;
 }
 
@@ -126,11 +126,11 @@ TEST_CASE("CS-MAP's scale factor at NGS AG9976 matches the datasheet (REQ-360)",
 
   // Through the drawing: Reference Point computation at G_ref = AG9976.
   AppCommandState st = TexasFeetDrawing();
-  Tx& t = st.drawingSettings.transform;
+  Tx& t = st.drawing.drawingSettings.transform;
   t.apply = true;
   t.refGridE = kEFt;
   t.refGridN = kNFt;
-  DrawingTransformFactors f = ResolveDrawingTransform(st.drawingSettings, st.drawingInsUnits);
+  DrawingTransformFactors f = ResolveDrawingTransform(st.drawing.drawingSettings, st.drawing.drawingInsUnits);
   REQUIRE(f.transformOk);
   CHECK(std::abs(f.gridFactor - kDatasheetScaleFactor) <= 1e-8);
   CHECK(f.combined == f.gridFactor);  // sea level factor off
@@ -141,7 +141,7 @@ TEST_CASE("CS-MAP's scale factor at NGS AG9976 matches the datasheet (REQ-360)",
   t.applySeaLevel = true;
   t.elevation = 1000.0;
   t.spheroidRadiusM = 20906000.0 * 1200.0 / 3937.0;
-  f = ResolveDrawingTransform(st.drawingSettings, st.drawingInsUnits);
+  f = ResolveDrawingTransform(st.drawing.drawingSettings, st.drawing.drawingInsUnits);
   REQUIRE(f.transformOk);
   CHECK(f.seaFactor == Catch::Approx(0.999952169).margin(1e-9));
   CHECK(f.combined == Catch::Approx(f.gridFactor * f.seaFactor).epsilon(1e-15));
@@ -149,10 +149,10 @@ TEST_CASE("CS-MAP's scale factor at NGS AG9976 matches the datasheet (REQ-360)",
 
 TEST_CASE("The drawing conversion goes through the transform only when applied (REQ-360)", "[req360]") {
   AppCommandState st = TexasFeetDrawing();
-  st.worldDocumentOriginX = 1000.0;
-  st.worldDocumentOriginY = 2000.0;
-  st.drawingSettings.transform = HandCase();
-  st.drawingSettings.transform.apply = false;
+  st.drawing.worldDocumentOriginX = 1000.0;
+  st.drawing.worldDocumentOriginY = 2000.0;
+  st.drawing.drawingSettings.transform = HandCase();
+  st.drawing.drawingSettings.transform.apply = false;
 
   // Off: grid = world in zone units (feet drawing, US-feet zone: the same numbers).
   geo::GeoResult g = DrawingPointToGrid(st, 500.0, 600.0);
@@ -160,14 +160,14 @@ TEST_CASE("The drawing conversion goes through the transform only when applied (
   CHECK(g.x == Catch::Approx(1500.0).margin(1e-9));
   CHECK(g.y == Catch::Approx(2600.0).margin(1e-9));
   // …and in a meter zone, world converted to meters with the drawing's foot.
-  st.drawingSettings.zoneCode = "HARN/TX.TX-C";
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-C";
   g = DrawingPointToGrid(st, 500.0, 600.0);
   REQUIRE(g.ok);
   CHECK(g.x == Catch::Approx(1500.0 * 1200.0 / 3937.0).margin(1e-9));
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
 
   // On: the hand case, LOCAL (500, 600) = WORLD (1500, 2600).
-  st.drawingSettings.transform.apply = true;
+  st.drawing.drawingSettings.transform.apply = true;
   g = DrawingPointToGrid(st, 500.0, 600.0);
   REQUIRE(g.ok);
   CHECK(g.x == Catch::Approx(3000489.403458).margin(0.0001));
@@ -178,9 +178,9 @@ TEST_CASE("The drawing conversion goes through the transform only when applied (
   CHECK(back.y == Catch::Approx(600.0).epsilon(1e-9));
 
   // Azimuth (local 1° becomes grid 0°) and Rotation point state the same θ: the same grid.
-  st.drawingSettings.transform.rotation = Tx::Rotation::Azimuth;
-  st.drawingSettings.transform.localAzimuthDeg = 91.0;
-  st.drawingSettings.transform.gridAzimuthDeg = 90.0;
+  st.drawing.drawingSettings.transform.rotation = Tx::Rotation::Azimuth;
+  st.drawing.drawingSettings.transform.localAzimuthDeg = 91.0;
+  st.drawing.drawingSettings.transform.gridAzimuthDeg = 90.0;
   geo::GeoResult a = DrawingPointToGrid(st, 500.0, 600.0);
   REQUIRE(a.ok);
   CHECK(a.x == Catch::Approx(g.x).margin(1e-6));
@@ -188,10 +188,10 @@ TEST_CASE("The drawing conversion goes through the transform only when applied (
 
   // A meter drawing in the same US-feet zone: the drawing unit is converted before the transform.
   AppCommandState m = TexasFeetDrawing();
-  m.drawingInsUnits = 6;
-  m.drawingSettings.transform = HandCase();
-  m.drawingSettings.transform.refLocalX = 1000.0 * 1200.0 / 3937.0;  // the same ground point, in meters
-  m.drawingSettings.transform.refLocalY = 2000.0 * 1200.0 / 3937.0;
+  m.drawing.drawingInsUnits = 6;
+  m.drawing.drawingSettings.transform = HandCase();
+  m.drawing.drawingSettings.transform.refLocalX = 1000.0 * 1200.0 / 3937.0;  // the same ground point, in meters
+  m.drawing.drawingSettings.transform.refLocalY = 2000.0 * 1200.0 / 3937.0;
   const geo::GeoResult gm = DrawingPointToGrid(m, 1500.0 * 1200.0 / 3937.0, 2600.0 * 1200.0 / 3937.0);
   REQUIRE(gm.ok);
   CHECK(gm.x == Catch::Approx(3000489.403458).margin(0.0001));
@@ -200,12 +200,12 @@ TEST_CASE("The drawing conversion goes through the transform only when applied (
 
 TEST_CASE("Mark Position uses the transform (REQ-360 item 7)", "[req360]") {
   AppCommandState st = TexasFeetDrawing();
-  st.worldDocumentOriginX = 3115000.0;
-  st.worldDocumentOriginY = 10077000.0;
+  st.drawing.worldDocumentOriginX = 3115000.0;
+  st.drawing.worldDocumentOriginY = 10077000.0;
   std::vector<std::string> log;
   const int plain = PlacePositionMarkerAtLatLong(st, kLat, kLon, log);
   REQUIRE(plain >= 0);
-  const double plainX = st.cadPositionMarkers[static_cast<size_t>(plain)].x;
+  const double plainX = st.drawing.cadPositionMarkers[static_cast<size_t>(plain)].x;
 
   // Ground = grid scaled about AG9976 and rotated 1°: the marker lands elsewhere in the drawing,
   // and that drawing point converts back to AG9976's grid coordinate.
@@ -219,16 +219,16 @@ TEST_CASE("Mark Position uses the transform (REQ-360 item 7)", "[req360]") {
   t.elevation = 594.0;  // the datasheet's NAVD 88 height, feet
   t.rotation = Tx::Rotation::ToNorth;
   t.toNorthDeg = 1.0;
-  DrawingSettings s = st.drawingSettings;
+  DrawingSettings s = st.drawing.drawingSettings;
   s.transform = t;
-  REQUIRE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
+  REQUIRE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
   // At the reference point itself the transform is the identity: move the check 1000 ft away.
   const geo::GeoResult near = DrawingPointToGrid(st, kEFt - 3115000.0 + 1000.0, kNFt - 10077000.0);
   REQUIRE(near.ok);
   CHECK(std::hypot(near.x - kEFt, near.y - kNFt) < 1000.0);  // scaled down (k < 1)
   const int placed = PlacePositionMarkerAtLatLong(st, kLat, kLon, log);
   REQUIRE(placed >= 0);
-  const CadPositionMarker& m = st.cadPositionMarkers[static_cast<size_t>(placed)];
+  const CadPositionMarker& m = st.drawing.cadPositionMarkers[static_cast<size_t>(placed)];
   const geo::GeoResult grid = DrawingPointToGrid(st, m.x, m.y);
   REQUIRE(grid.ok);
   CHECK(grid.x == Catch::Approx(kEFt).margin(0.001));
@@ -237,7 +237,7 @@ TEST_CASE("Mark Position uses the transform (REQ-360 item 7)", "[req360]") {
 
   // A point 1000 ft east of the reference, marked by drawing position, gets the transformed lat/long.
   const geo::GeoResult east = DrawingPointToLatLong(st, kEFt - 3115000.0 + 1000.0, kNFt - 10077000.0);
-  st.drawingSettings.transform.apply = false;
+  st.drawing.drawingSettings.transform.apply = false;
   const geo::GeoResult eastPlain = DrawingPointToLatLong(st, kEFt - 3115000.0 + 1000.0, kNFt - 10077000.0);
   REQUIRE(east.ok);
   REQUIRE(eastPlain.ok);
@@ -249,48 +249,48 @@ TEST_CASE("Bad transform input is refused; the transform is one undo step and fo
   AppCommandState st = TexasFeetDrawing();
   std::vector<std::string> log;
 
-  DrawingSettings s = st.drawingSettings;
+  DrawingSettings s = st.drawing.drawingSettings;
   s.transform = HandCase();
   s.transform.rotation = Tx::Rotation::RotationPoint;
   s.transform.rotLocalX = s.transform.refLocalX;  // coincident with the reference point
   s.transform.rotLocalY = s.transform.refLocalY;
   s.transform.rotGridE = s.transform.refGridE + 10.0;
   CHECK_FALSE(ValidateDrawingTransform(s).empty());
-  CHECK_FALSE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
+  CHECK_FALSE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
   CHECK(log.back().find("coincides") != std::string::npos);
-  CHECK_FALSE(st.drawingSettings.transform.apply);  // nothing changed
+  CHECK_FALSE(st.drawing.drawingSettings.transform.apply);  // nothing changed
 
   s.transform = HandCase();
   s.transform.userScaleFactor = 0.0;
-  CHECK_FALSE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
+  CHECK_FALSE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
   s.transform.userScaleFactor = 0.9999;
   s.transform.apply = false;
   s.transform.userScaleFactor = -1.0;  // not checked while the transform is off
   CHECK(ValidateDrawingTransform(s).empty());
 
   s.transform = HandCase();
-  REQUIRE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
-  CHECK(st.drawingSettings.transform == HandCase());
+  REQUIRE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
+  CHECK(st.drawing.drawingSettings.transform == HandCase());
   REQUIRE(DoUndo(st, log));
-  CHECK_FALSE(st.drawingSettings.transform.apply);
+  CHECK_FALSE(st.drawing.drawingSettings.transform.apply);
   REQUIRE(DoRedo(st, log));
-  CHECK(st.drawingSettings.transform == HandCase());
+  CHECK(st.drawing.drawingSettings.transform == HandCase());
 
   // The transform belongs to the zone: No Datum, No Projection or Remove Location resets it.
-  s = st.drawingSettings;
+  s = st.drawing.drawingSettings;
   s.zoneCode.clear();
-  REQUIRE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
-  CHECK(st.drawingSettings.transform == Tx{});
+  REQUIRE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
+  CHECK(st.drawing.drawingSettings.transform == Tx{});
   REQUIRE(DoUndo(st, log));
-  CHECK(st.drawingSettings.transform == HandCase());
+  CHECK(st.drawing.drawingSettings.transform == HandCase());
   REQUIRE(RemoveGeoLocation(st, log));
-  CHECK(st.drawingSettings.transform == Tx{});
+  CHECK(st.drawing.drawingSettings.transform == Tx{});
 }
 
 TEST_CASE("Every transform setting survives the trailer (REQ-360)", "[req360]") {
   AppCommandState src;
-  src.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  Tx& t = src.drawingSettings.transform;
+  src.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  Tx& t = src.drawing.drawingSettings.transform;
   t = HandCase();
   t.applySeaLevel = true;
   t.elevation = 594.25;
@@ -307,23 +307,23 @@ TEST_CASE("Every transform setting survives the trailer (REQ-360)", "[req360]") 
   std::vector<std::string> log;
   AppCommandState back;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
-  CHECK(back.drawingSettings.transform == t);
+  CHECK(back.drawing.drawingSettings.transform == t);
 
   // A drawing written before REQ-360 opens with the defaults.
   AppCommandState plain;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(plain), log));
-  CHECK(back.drawingSettings.transform == Tx{});
+  CHECK(back.drawing.drawingSettings.transform == Tx{});
 }
 
 TEST_CASE("DRAWINGSETTINGS picks a point, a survey point or a direction for the tab (REQ-360)", "[req360]") {
   AppCommandState st = TexasFeetDrawing();
-  st.worldDocumentOriginX = 1000.0;
-  st.worldDocumentOriginY = 2000.0;
+  st.drawing.worldDocumentOriginX = 1000.0;
+  st.drawing.worldDocumentOriginY = 2000.0;
   SurveyPoint p;
   p.id = 101;
   p.easting = 25.0;  // LOCAL
   p.northing = 50.0;
-  st.surveyPoints.push_back(p);
+  st.drawing.surveyPoints.push_back(p);
   std::vector<std::string> log;
 
   CHECK_FALSE(StartDrawingSettingsPick(st, PickTarget::None, log));
@@ -345,7 +345,7 @@ TEST_CASE("DRAWINGSETTINGS picks a point, a survey point or a direction for the 
   far.id = 202;
   far.easting = 3115243.14 - 1000.0;  // LOCAL
   far.northing = 10077391.26 - 2000.0;
-  st.surveyPoints.push_back(far);
+  st.drawing.surveyPoints.push_back(far);
   REQUIRE(StartDrawingSettingsPick(st, PickTarget::ReferencePoint, log));
   char typed[] = "3115243.14,10077391.26";
   ProcessCommandLineSubmit(typed, sizeof(typed), st, log);
@@ -398,7 +398,7 @@ TEST_CASE("ResolveTraverseScaleFactor resolves Combined/GridOnly and reports why
 
   // A real zone + reference point, same fixture REQ-360's own test proved against the NGS datasheet.
   AppCommandState st = TexasFeetDrawing();
-  Tx& t = st.drawingSettings.transform;
+  Tx& t = st.drawing.drawingSettings.transform;
   t.refGridE = kEFt;
   t.refGridN = kNFt;  // apply left false: REQ-401 wants the factor whether or not the transform is "on"
 

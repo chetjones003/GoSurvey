@@ -107,7 +107,7 @@ void EditorWindow::ShowPointTransfer(bool importing) {
       apply->setEnabled(!readOnly() && !m_State.blockEditActive && !m_State.surveyImportFileBlocked);
       if (readOnly()) summary->appendPlainText("This project is read-only. Import is disabled.");
     } else {
-      summary->setPlainText(QString("Export %1 drawing point(s) in world coordinates.").arg(m_State.surveyPoints.size()));
+      summary->setPlainText(QString("Export %1 drawing point(s) in world coordinates.").arg(m_State.drawing.surveyPoints.size()));
       apply->setEnabled(!path->text().trimmed().isEmpty());
     }
   };

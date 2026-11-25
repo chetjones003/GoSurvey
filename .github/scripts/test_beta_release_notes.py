@@ -118,6 +118,24 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("No user-facing changes.", release_text)
         self.assertIn("No user-facing changes in this beta.", full_markdown)
 
+    def test_without_key_features_inserts_before_first_section(self):
+        authored = "# GoSurvey 0.8.0\n\nIntro.\n\n## Drawing and layout\n\n- Keep me\n\n## Editor\n"
+        _, full_markdown = notes.format_outputs("0.8.3", authored, [])
+        self.assertTrue(full_markdown.startswith("# GoSurvey 0.8.0\n\nIntro.\n\n## New in beta 0.8.3\n"))
+        self.assertIn("---\n\n## Drawing and layout\n\n- Keep me\n\n## Editor\n", full_markdown)
+        self.assertEqual(full_markdown.count("## New in beta"), 1)
+
+    def test_key_features_wins_over_earlier_sections(self):
+        authored = "# GoSurvey\n\n## Intro\n\nText.\n\n## Key Features\n"
+        _, full_markdown = notes.format_outputs("0.8.3", authored, [])
+        self.assertLess(full_markdown.index("## Intro"), full_markdown.index("## New in beta"))
+        self.assertLess(full_markdown.index("## New in beta"), full_markdown.index("## Key Features"))
+
+    def test_current_whats_new_page_has_an_insertion_point(self):
+        page = Path(__file__).resolve().parents[2] / "resources" / "whats-new.md"
+        _, full_markdown = notes.format_outputs("0.0.0", page.read_text(encoding="utf-8"), [])
+        self.assertIn("## New in beta 0.0.0", full_markdown)
+
     def test_missing_insertion_point_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "insertion point"):
             notes.format_outputs("0.7.9", "# GoSurvey\n", [])

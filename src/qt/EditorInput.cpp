@@ -35,8 +35,34 @@
 #include <QColor>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QCursor>
 #include <algorithm>
 #include <cmath>
+
+namespace {
+
+/// What F1 should document for the widget under the cursor: a ribbon/menu action's command route
+/// and tooltip, or a plain widget's tooltip (status-bar toggles).
+struct HelpHoverTopic {
+  QString command;
+  QString tooltip;
+};
+
+HelpHoverTopic HelpTopicForAction(const QAction* action) {
+  if (!action) return {};
+  return {action->property("ribbonCommand").toString(), action->toolTip()};
+}
+
+HelpHoverTopic HelpTopicForWidget(QWidget* widget) {
+  for (QWidget* w = widget; w; w = w->isWindow() ? nullptr : w->parentWidget()) {
+    if (auto* button = qobject_cast<QToolButton*>(w); button && button->defaultAction())
+      return HelpTopicForAction(button->defaultAction());
+    if (!w->toolTip().isEmpty()) return {{}, w->toolTip()};
+  }
+  return {};
+}
+
+}  // namespace
 
 void EditorWindow::BuildDraftingInput() {
   const auto mode = [this](const char* name, const char* label, int key, bool AppCommandState::*member) {
@@ -208,9 +234,9 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
+  const auto* angSt = stepengine::ActiveSegmentAngleState(m_State);
   const bool bearingPickAwaitingCommand =
-      (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
-      m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
+      angSt && angSt->pickPhase == stepengine::SegmentAnglePickPhase::WaitAdjustOrCommit;
   if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
   // REQ-501.2: near an alignment, a point being entered or a grip being dragged reads its station, offset and bearing.
   const QString readout = QString::fromUtf8(m_State.alignmentCursorReadout.c_str());
@@ -293,8 +319,8 @@ void EditorWindow::CancelDraftingInput() {
   else if (m_State.selBoxWaitingSecond) m_Viewport->CancelSelectionBox();
   else if (m_State.sectionPlaneGripDrag >= 0) AbortSectionPlaneGripDrag(m_State);
   else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) CancelGizmoDrag(m_State);
-  else if ((m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
-           m_State.segmentAnglePickPhase != AppCommandState::SegmentAnglePickPhase::Idle)
+  else if (const auto* angSt = stepengine::ActiveSegmentAngleState(m_State);
+           angSt && angSt->pickPhase != stepengine::SegmentAnglePickPhase::Idle)
     CancelSegmentAnglePick(m_State, &m_Log);
   else if (m_State.active != AppCommandState::Kind::None || m_State.paperLengthenPhase || m_State.paperExtendPhase ||
            m_State.paperBreakPhase || m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase)
@@ -309,6 +335,22 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   const bool suggestionPopupWidget = widget && m_CommandSuggestions &&
       (widget == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(widget));
   const bool ownSuggestionsPopup = QApplication::activePopupWidget() == m_CommandSuggestions;
+  if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_F1 &&
+      !QApplication::activeModalWidget()) {
+    // F1 over a ribbon flyout entry documents that entry; the menus must close before the modal opens.
+    auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+    const QAction* action = menu ? menu->activeAction() : nullptr;
+    // Only menus opened from this window: walk submenus up to the widget that owns the menu.
+    QWidget* owner = menu ? menu->parentWidget() : nullptr;
+    while (qobject_cast<QMenu*>(owner)) owner = owner->parentWidget();
+    const bool ownMenu = owner && (owner == this || isAncestorOf(owner));
+    if (ownMenu && action && action->property("ribbonCommand").isValid()) {
+      const HelpHoverTopic topic = HelpTopicForAction(action);
+      while (auto* open = qobject_cast<QMenu*>(QApplication::activePopupWidget())) open->close();
+      ShowContextualHelp(topic.command, topic.tooltip);
+      return true;
+    }
+  }
   if (!widget || !(widget == this || isAncestorOf(widget) || suggestionPopupWidget) ||
       QApplication::activeModalWidget() ||
       (QApplication::activePopupWidget() && !ownSuggestionsPopup)) return false;
@@ -340,6 +382,12 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
+    if (m_State.activeDrawingIdx == 0) {
+      if (widget == m_Command) m_Command->clear();
+      if (m_CommandSuggestions) m_CommandSuggestions->hide();
+      if (m_CommandBar) m_CommandBar->Append("Open or create a drawing before entering commands.");
+      return true;
+    }
     if (widget == m_Command && DynamicInputAcceptsInput()) return SubmitDraftingInput();
     if (m_CommandSuggestions && m_CommandSuggestions->isVisible() &&
         m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
@@ -411,14 +459,30 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     CancelDraftingInput(); key->accept(); return true;
   }
   if (event->type() != QEvent::KeyPress) return false;
-  if (key->key() == Qt::Key_F1) { ShowContextualHelp(); return true; }
+  if (key->key() == Qt::Key_F1) {
+    // The highlighted (or hovered) fuzzy match wins while the command line is offering suggestions;
+    // otherwise document whatever is under the cursor, then the running or last command.
+    if (m_CommandSuggestions && m_CommandSuggestions->isVisible() && m_CommandSuggestionModel &&
+        m_CommandSuggestionModel->rowCount() > 0) {
+      QModelIndex row = m_CommandSuggestions->indexAt(m_CommandSuggestions->viewport()->mapFromGlobal(QCursor::pos()));
+      if (!row.isValid()) row = m_CommandSuggestions->currentIndex();
+      if (!row.isValid()) row = m_CommandSuggestionModel->index(0, 0);
+      ShowContextualHelp(row.data(Qt::DisplayRole).toString());
+      return true;
+    }
+    const HelpHoverTopic topic = HelpTopicForWidget(QApplication::widgetAt(QCursor::pos()));
+    ShowContextualHelp(topic.command, topic.tooltip);
+    return true;
+  }
   if (!editing && key->key() == Qt::Key_Delete) {
     StartDeleteCommand(m_State, m_Log); Refresh(); return true;
   }
-  if (!editing && m_State.active == AppCommandState::Kind::DimLinear &&
-      m_State.dimPhase == AppCommandState::DimPhase::WaitDimLinePt &&
-      (key->key() == Qt::Key_H || key->key() == Qt::Key_V) && !ctrl) {
-    CadDimLinearApplyHVHotkey(m_State, key->key() == Qt::Key_V, m_Log); Refresh(); return true;
+  if (!editing) {
+    if (const auto* ds = m_State.sessionAs<stepengine::DimSession>();
+        ds && ds->linear && ds->phase == stepengine::DimPhase::WaitDimLinePt &&
+        (key->key() == Qt::Key_H || key->key() == Qt::Key_V) && !ctrl) {
+      CadDimLinearApplyHVHotkey(m_State, key->key() == Qt::Key_V, m_Log); Refresh(); return true;
+    }
   }
   for (int i = 0; i < 3; ++i) if (widget == m_DynamicFields[i]) {
     // Consume Return here: propagation after returnPressed would submit a second blank line.
@@ -433,10 +497,19 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (key->key() == Qt::Key_Backspace && !m_DynamicGroup.f[i].locked &&
         dyninput::BackspaceAtEmpty(m_DynamicGroup, i)) { RefreshDraftingInput(); return true; }
   }
-  if (widget == m_Viewport && DynamicInputAcceptsInput() &&
+  // While a point is being entered the dynamic fields own the keyboard, as AutoCAD's do: not only with the
+  // drawing focused, but also from an empty command line (where focus stays after typing the command) and
+  // from any other panel that is not itself being typed into. Without this, coordinates and Tab went to
+  // the command line and the fields beside the cursor were display-only.
+  const bool fieldsOwnKeys = widget == m_Viewport ||
+      (m_DynamicGeometry.pointEntry && widget == m_Command && m_Command->text().isEmpty()) ||
+      (m_DynamicGeometry.pointEntry && !editing);
+  if (fieldsOwnKeys && DynamicInputAcceptsInput() &&
       !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
-    if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) return SubmitDraftingInput();
-    if (key->key() == Qt::Key_Tab || (!key->text().isEmpty() && key->text()[0].isPrint())) {
+    if (widget == m_Viewport && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter))
+      return SubmitDraftingInput();
+    const bool spaceAsEnter = widget != m_Viewport && key->key() == Qt::Key_Space;
+    if (key->key() == Qt::Key_Tab || (!spaceAsEnter && !key->text().isEmpty() && key->text()[0].isPrint())) {
       auto* edit = m_DynamicFields[0]; edit->setFocus(); edit->selectAll();
       if (key->key() != Qt::Key_Tab) QApplication::sendEvent(edit, key);
       return true;
@@ -522,72 +595,4 @@ void EditorWindow::ShowPolarSettings() {
     dialog.accept();
   });
   dialog.exec(); Refresh();
-}
-
-void EditorWindow::ShowContextualHelp(const QString& topicCommand) {
-  if (!m_WikiLoaded) {
-    m_WikiBundle = LoadWikiBundle();
-    WikiHelpBuildIndex(m_WikiBundle);
-    m_WikiLoaded = true;
-  }
-  QDialog dialog(this); dialog.setObjectName("contextualHelpDialog");
-  dialog.setWindowTitle("GoSurvey User Manual"); dialog.resize(1080, 720);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* title = new QLabel("User Manual", &dialog); title->setObjectName("manualTitle");
-  const bool darkHelp = palette().color(QPalette::Window).lightness() < 128;
-  title->setStyleSheet(QString("font-size:20px; font-weight:600; padding:10px; background:%1; color:#f1f6fa; border-radius:4px;")
-                           .arg(darkHelp ? "#30373c" : "#263e53"));
-  layout->addWidget(title);
-  auto* splitter = new QSplitter(&dialog); splitter->setObjectName("manualSplitter"); layout->addWidget(splitter, 1);
-  auto* pages = new QListWidget(splitter); pages->setObjectName("manualPages");
-  auto* browser = new QTextBrowser(splitter); browser->setObjectName("manualContent");
-  browser->setOpenLinks(false); browser->setOpenExternalLinks(false);
-  splitter->addWidget(pages); splitter->addWidget(browser); splitter->setStretchFactor(1, 1);
-  auto showPage = [this, browser, title](const QString& slug) {
-    const auto found = m_WikiBundle.pagesBySlug.find(slug.toUtf8().toStdString());
-    if (found == m_WikiBundle.pagesBySlug.end()) return;
-    title->setText(QString::fromUtf8(found->second.title.c_str()));
-    QString markdown = QString::fromUtf8(found->second.markdown.c_str());
-    QRegularExpression image("wiki-img:([A-Za-z0-9._-]+)");
-    auto match = image.globalMatch(markdown);
-    while (match.hasNext()) {
-      const auto item = match.next();
-      const auto path = std::filesystem::path(m_WikiBundle.rootPath) / "images" / item.captured(1).toStdWString();
-      markdown.replace(item.capturedStart(), item.capturedLength(), QUrl::fromLocalFile(QString::fromStdWString(path.wstring())).toString());
-    }
-    browser->setMarkdown(markdown);
-  };
-  for (const auto& entry : m_WikiBundle.nav) {
-    if (entry.isSection) {
-      auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      item->setFlags(Qt::NoItemFlags); item->setForeground(QColor(QtAccentFor(true).quiet));
-    } else {
-      auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      item->setData(Qt::UserRole, QString::fromUtf8(entry.slug.c_str()));
-    }
-  }
-  connect(pages, &QListWidget::currentItemChanged, &dialog,
-      [showPage](QListWidgetItem* current) { if (current) showPage(current->data(Qt::UserRole).toString()); });
-  connect(browser, &QTextBrowser::anchorClicked, &dialog, [this, pages, showPage](const QUrl& url) {
-    if (url.scheme() != "wiki") { QDesktopServices::openUrl(url); return; }
-    const QString slug = url.path().isEmpty() ? url.host() : url.path();
-    for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == slug) {
-      pages->setCurrentRow(i); showPage(slug); return;
-    }
-    showPage(slug);
-  });
-  QString command = topicCommand;
-  if (command.isEmpty() && m_State.active != AppCommandState::Kind::None)
-    command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
-  else if (command.isEmpty() && m_State.lastCommand != AppCommandState::Kind::None)
-    command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
-  const auto target = WikiHelpLookupCommand(command.toLower().toUtf8().toStdString());
-  const QString initial = target.pageSlug.empty() ? QStringLiteral("Home") : QString::fromUtf8(target.pageSlug.c_str());
-  bool selected = false;
-  for (int i = 0; i < pages->count(); ++i) if (pages->item(i)->data(Qt::UserRole).toString() == initial) {
-    pages->setCurrentRow(i); selected = true; break;
-  }
-  if (!selected) showPage(initial);
-  if (!m_WikiBundle.ok) browser->setPlainText(QString::fromUtf8(m_WikiBundle.fallbackMessage.c_str()));
-  dialog.exec();
 }

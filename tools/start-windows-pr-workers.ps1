@@ -2,6 +2,7 @@
 param(
   [string]$BuildRunnerDirectory = 'C:\actions-runner',
   [string]$WorkersRoot = (Join-Path $env:USERPROFILE 'GoSurveyCI\pr-workers'),
+  [string]$ThirdPrRunnerDirectory = 'C:\actions-pr-3',
   [string]$EnvironmentFile = 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1'
 )
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,8 @@ $launcher = Join-Path $PSScriptRoot 'start-windows-pr-worker.ps1'
 $workers = @(
   @{ role = 'build'; directory = $BuildRunnerDirectory },
   @{ role = 'clang-tidy'; directory = (Join-Path $WorkersRoot 'clang-tidy') },
-  @{ role = 'msvc-analyze'; directory = (Join-Path $WorkersRoot 'msvc-analyze') }
+  @{ role = 'msvc-analyze'; directory = (Join-Path $WorkersRoot 'msvc-analyze') },
+  @{ role = 'pr-3'; directory = $ThirdPrRunnerDirectory }
 )
 foreach ($worker in $workers) {
   $directory = (Resolve-Path -LiteralPath $worker.directory).Path

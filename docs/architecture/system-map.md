@@ -21,6 +21,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 - [Commands may use Math primitives](../adr/0007-commands-may-use-math-primitives.md)
 - [Geometry public kernel interface](../adr/0008-geometry-public-kernel-interface.md)
 - [Qt may present Survey public models](../adr/0009-qt-survey-view-dependency.md)
+- [Drawing content and the entity store](../adr/0010-drawing-content-and-entity-store.md)
 
 ## Systems
 
@@ -32,7 +33,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | UI | T0 Foundation | Defines toolkit-neutral window, dialog, progress, clipboard, and timer interfaces. | Concrete widgets and toolkit implementations. | Core, Events |
 | Debug | T0 Foundation | Provides developer diagnostics: profiling, reproducible benchmark scenes, document-invariant checks, frame-stall measurements, and crash-report triggers. | Product workflows and command orchestration, persistent domain state, widgets, and platform APIs. | Core |
 | Geometry | T1 Kernel | Provides reusable 2D/3D curves, NURBS, B-rep, and mesh algorithms. | Document ownership, survey policy, GPU resources. | Math, Core |
-| Document | T2 Domain | Owns drawing entities, layers, blocks, tables, text, undo, and selection state. | GPU-shaped caches, import/export formats, widget state. | Geometry, Math, Core, Events |
+| Document | T2 Domain | Owns drawing entities, layers, blocks, tables, text, and undo. | GPU-shaped caches, import/export formats, widget state. | Geometry, Math, Core, Events |
 | Survey | T2 Domain | Owns survey points, traverses, alignments, and coordinate systems. | UI presentation, file formats, rendering. | Geometry, Math, Core, Document |
 | Terrain | T2 Domain | Owns terrain surfaces, TINs, contours, volumes, and daylight models. | Viewport rendering, file parsing, UI. | Geometry, Math, Core, Document, Survey |
 | PointCloud | T2 Domain | Owns point-cloud storage, indexing, and cache policy. | Point-file parsing, viewport rendering, UI. | Math, Core |
@@ -41,7 +42,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | IO | T3 Services | Reads and writes drawing and exchange formats, including DXF, DWG, glTF, STL, SAT, point files, and StarNet. | Domain ownership, UI, OS services. | Geometry, Math, Core, Document, Survey, Terrain, PointCloud, Pdf |
 | Network | T3 Services | Provides map tiles, update checks, and telemetry behind replaceable interfaces. | UI presentation and OS transport implementation. | Core, Events |
 | Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, Geometry, UI, Events, Math, Core, Debug |
-| Interaction | T4 Application | Coordinates snapping, grips, previews, picking, and transient user interaction. | Persistent document ownership, concrete widgets, GPU APIs. | Commands, Renderer, Document, Survey, Terrain, PointCloud, Geometry, Math, Events, UI, Core |
+| Interaction | T4 Application | Coordinates snapping, grips, previews, picking, transient selection, and other transient user interaction. | Persistent document ownership, concrete widgets, GPU APIs. | Commands, Renderer, Document, Survey, Terrain, PointCloud, Geometry, Math, Events, UI, Core |
 | Qt | Platform backend | Implements UI and event interfaces using Qt; presents public Survey and Terrain models in editor views and forms. | Domain rules, command behavior, application ownership. | Core, Events, UI, Survey, Terrain |
 | OpenGL | Platform backend | Implements renderer device interfaces using OpenGL. | Draw-list policy and domain state. | Core, Math, Renderer |
 | Windows | Platform backend | Implements OS paths, HTTP, crash reporting, process and native dialog services. | Domain behavior and cross-platform interfaces. | Core, UI, Network |
@@ -56,7 +57,7 @@ flowchart TB
   subgraph T4["GoSurvey engine · Application systems"]
     direction LR
     commands["`**Commands**\nregistry · command families`"]
-    interaction["`**Interaction**\nsnap · grips · previews · picking`"]
+    interaction["`**Interaction**\nsnap · grips · previews · picking · selection`"]
   end
   subgraph T3["GoSurvey engine · Services"]
     direction LR
@@ -66,7 +67,7 @@ flowchart TB
   end
   subgraph T2["GoSurvey engine · Domain"]
     direction LR
-    document["`**Document**\nentities · layers · blocks · tables · text · undo · selection`"]
+    document["`**Document**\nentities · layers · blocks · tables · text · undo`"]
     survey["`**Survey**\npoints · traverse · alignment · coordinate systems`"]
     terrain["`**Terrain**\nTIN · contours · volumes · daylight`"]
     pointcloud["`**PointCloud**\nstorage · octree · cache`"]

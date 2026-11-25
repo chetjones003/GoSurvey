@@ -62,9 +62,9 @@ bool AddViewportZoomScale(AppCommandState& st, const std::string& name, float pa
       !(paperUnits > 0.f) || !(drawingUnits > 0.f) ||
       !std::isfinite(drawingUnits / paperUnits) || !(drawingUnits / paperUnits > 0.f))
     return false;
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
-  for (std::size_t i = 0; i < st.viewportZoomScales.size(); ++i) {
-    if (NormalizeScaleName(st.viewportZoomScales[i].name) == normalized) {
+  EnsureDefaultViewportZoomScales(st.drawing.viewportZoomScales);
+  for (std::size_t i = 0; i < st.drawing.viewportZoomScales.size(); ++i) {
+    if (NormalizeScaleName(st.drawing.viewportZoomScales[i].name) == normalized) {
       st.currentViewportZoomScaleIndex = static_cast<int>(i);
       return true;
     }
@@ -73,8 +73,8 @@ bool AddViewportZoomScale(AppCommandState& st, const std::string& name, float pa
   entry.name = normalized;
   entry.paperUnits = paperUnits;
   entry.drawingUnits = drawingUnits;
-  st.viewportZoomScales.push_back(std::move(entry));
-  st.currentViewportZoomScaleIndex = static_cast<int>(st.viewportZoomScales.size()) - 1;
+  st.drawing.viewportZoomScales.push_back(std::move(entry));
+  st.currentViewportZoomScaleIndex = static_cast<int>(st.drawing.viewportZoomScales.size()) - 1;
   return true;
 }
 
@@ -126,18 +126,18 @@ void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, int
 }
 
 void SetCurrentViewportZoomScaleIndex(AppCommandState& st, int index) {
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
-  if (index < 0 || index >= static_cast<int>(st.viewportZoomScales.size()))
+  EnsureDefaultViewportZoomScales(st.drawing.viewportZoomScales);
+  if (index < 0 || index >= static_cast<int>(st.drawing.viewportZoomScales.size()))
     return;
   st.currentViewportZoomScaleIndex = index;
 }
 
 void ApplyViewportZoomScaleIndex(AppCommandState& st, int index, float viewportHeightPx, float dpiY) {
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
-  if (index < 0 || index >= static_cast<int>(st.viewportZoomScales.size()))
+  EnsureDefaultViewportZoomScales(st.drawing.viewportZoomScales);
+  if (index < 0 || index >= static_cast<int>(st.drawing.viewportZoomScales.size()))
     return;
   SetCurrentViewportZoomScaleIndex(st, index);
-  const float mupi = CadViewportZoomScaleModelUnitsPerInch(st.viewportZoomScales[static_cast<std::size_t>(index)]);
+  const float mupi = CadViewportZoomScaleModelUnitsPerInch(st.drawing.viewportZoomScales[static_cast<std::size_t>(index)]);
   st.viewportZoom = ViewportZoomForModelUnitsPerInch(mupi, viewportHeightPx, dpiY);
   if (st.activeSpaceIndex == kModelSpaceIndex) {
     st.modelViewPanX = st.viewportPanX;
@@ -149,16 +149,16 @@ void ApplyViewportZoomScaleIndex(AppCommandState& st, int index, float viewportH
 }
 
 void EnsureViewportZoomScaleIndexForDisplay(AppCommandState& st) {
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
-  if (st.viewportZoomScales.empty()) {
+  EnsureDefaultViewportZoomScales(st.drawing.viewportZoomScales);
+  if (st.drawing.viewportZoomScales.empty()) {
     st.currentViewportZoomScaleIndex = -1;
     return;
   }
   if (st.currentViewportZoomScaleIndex >= 0 &&
-      st.currentViewportZoomScaleIndex < static_cast<int>(st.viewportZoomScales.size()))
+      st.currentViewportZoomScaleIndex < static_cast<int>(st.drawing.viewportZoomScales.size()))
     return;
-  for (int i = 0; i < static_cast<int>(st.viewportZoomScales.size()); ++i) {
-    if (st.viewportZoomScales[static_cast<std::size_t>(i)].name == "1:50") {
+  for (int i = 0; i < static_cast<int>(st.drawing.viewportZoomScales.size()); ++i) {
+    if (st.drawing.viewportZoomScales[static_cast<std::size_t>(i)].name == "1:50") {
       st.currentViewportZoomScaleIndex = i;
       return;
     }

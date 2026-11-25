@@ -29,8 +29,8 @@ void Submit(AppCommandState& st, const std::string& text, std::vector<std::strin
 }
 
 void OneLine(AppCommandState& st) {
-  st.userLinesFlat = {1.25, 2.5, 0.0, 10.75, 20.5, 3.0};
-  st.userLineAttrs = {EntityAttributes{}};
+  st.drawing.userLinesFlat = {1.25, 2.5, 0.0, 10.75, 20.5, 3.0};
+  st.drawing.userLineAttrs = {EntityAttributes{}};
 }
 
 std::string ReadFile(const std::filesystem::path& p) {
@@ -70,11 +70,11 @@ TEST_CASE("Applying Drawing Settings is one undo step and moves no geometry (REQ
   std::vector<std::string> log;
   AppCommandState st;
   OneLine(st);
-  const std::vector<double> before = st.userLinesFlat;
+  const std::vector<double> before = st.drawing.userLinesFlat;
   const size_t undo0 = CadActiveUndoStackSize(st);
 
   // Nothing changed: no undo frame.
-  REQUIRE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, st.drawingSettings, log));
+  REQUIRE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, st.drawing.drawingSettings, log));
   CHECK(CadActiveUndoStackSize(st) == undo0);
 
   DrawingSettings s;
@@ -84,51 +84,51 @@ TEST_CASE("Applying Drawing Settings is one undo step and moves no geometry (REQ
   s.setDrawingVariables = false;
   REQUIRE(ApplyDrawingSettings(st, 6, 20.f, s, log));
   CHECK(CadActiveUndoStackSize(st) == undo0 + 1);
-  CHECK(st.drawingInsUnits == 6);
-  CHECK(st.modelUnitsPerPlottedInch == 20.f);
-  CHECK(st.drawingSettings == s);
-  CHECK(st.userLinesFlat == before);  // a relabel: every coordinate identical
+  CHECK(st.drawing.drawingInsUnits == 6);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 20.f);
+  CHECK(st.drawing.drawingSettings == s);
+  CHECK(st.drawing.userLinesFlat == before);  // a relabel: every coordinate identical
 
   REQUIRE(DoUndo(st, log));
-  CHECK(st.drawingInsUnits == 2);
-  CHECK(st.modelUnitsPerPlottedInch == 50.f);
-  CHECK(st.drawingSettings == DrawingSettings{});
-  CHECK(st.userLinesFlat == before);
+  CHECK(st.drawing.drawingInsUnits == 2);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 50.f);
+  CHECK(st.drawing.drawingSettings == DrawingSettings{});
+  CHECK(st.drawing.userLinesFlat == before);
 
   REQUIRE(DoRedo(st, log));
-  CHECK(st.drawingInsUnits == 6);
-  CHECK(st.drawingSettings == s);
+  CHECK(st.drawing.drawingInsUnits == 6);
+  CHECK(st.drawing.drawingSettings == s);
 }
 
 TEST_CASE("A scale that is not a positive number is refused (REQ-357)", "[req357]") {
   std::vector<std::string> log;
   AppCommandState st;
   const size_t undo0 = CadActiveUndoStackSize(st);
-  CHECK_FALSE(ApplyDrawingSettings(st, 6, 0.f, st.drawingSettings, log));
-  CHECK_FALSE(ApplyDrawingSettings(st, 6, -10.f, st.drawingSettings, log));
-  CHECK_FALSE(ApplyDrawingSettings(st, 6, std::numeric_limits<float>::quiet_NaN(), st.drawingSettings, log));
-  CHECK(st.drawingInsUnits == 2);  // nothing was changed
-  CHECK(st.modelUnitsPerPlottedInch == 50.f);
+  CHECK_FALSE(ApplyDrawingSettings(st, 6, 0.f, st.drawing.drawingSettings, log));
+  CHECK_FALSE(ApplyDrawingSettings(st, 6, -10.f, st.drawing.drawingSettings, log));
+  CHECK_FALSE(ApplyDrawingSettings(st, 6, std::numeric_limits<float>::quiet_NaN(), st.drawing.drawingSettings, log));
+  CHECK(st.drawing.drawingInsUnits == 2);  // nothing was changed
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 50.f);
   CHECK(CadActiveUndoStackSize(st) == undo0);
 }
 
 TEST_CASE("INSERT's unit factor uses the drawing's foot definition and can be switched off (REQ-357)",
           "[req357]") {
   AppCommandState st;
-  st.drawingInsUnits = 2;  // feet
+  st.drawing.drawingInsUnits = 2;  // feet
   CadBlockDefinition def;
   def.units = "meters";
 
-  st.drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
+  st.drawing.drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
   CHECK(CadBlockInsertUnitsScale(st, def) == Catch::Approx(39.37 / 12.0).epsilon(1e-7));  // 3.2808333…
-  st.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
+  st.drawing.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
   CHECK(CadBlockInsertUnitsScale(st, def) == Catch::Approx(1.0 / 0.3048).epsilon(1e-7));  // 3.2808399…
-  st.drawingSettings.scaleInsertedObjects = false;
+  st.drawing.drawingSettings.scaleInsertedObjects = false;
   CHECK(CadBlockInsertUnitsScale(st, def) == 1.f);
 
   // Millimetres follow the same foot: a 1000 mm block is exactly 1 m.
-  st.drawingSettings.scaleInsertedObjects = true;
-  st.drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
+  st.drawing.drawingSettings.scaleInsertedObjects = true;
+  st.drawing.drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
   def.units = "millimeters";
   CHECK(CadBlockInsertUnitsScale(st, def) == Catch::Approx(39.37 / 12.0 / 1000.0).epsilon(1e-7));
 }
@@ -151,61 +151,61 @@ TEST_CASE("PLOTSCALE and INSUNITS changes are undoable, and undo restores the sc
   std::vector<std::string> log;
   AppCommandState st;
   Submit(st, "PLOTSCALE 20", log);
-  CHECK(st.modelUnitsPerPlottedInch == 20.f);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 20.f);
   Submit(st, "INSUNITS meters", log);
-  CHECK(st.drawingInsUnits == 6);
+  CHECK(st.drawing.drawingInsUnits == 6);
   REQUIRE(DoUndo(st, log));
-  CHECK(st.drawingInsUnits == 2);
-  CHECK(st.modelUnitsPerPlottedInch == 20.f);
+  CHECK(st.drawing.drawingInsUnits == 2);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 20.f);
   REQUIRE(DoUndo(st, log));
-  CHECK(st.modelUnitsPerPlottedInch == 50.f);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 50.f);
 }
 
 TEST_CASE("Drawing Settings survive the drawing's save and reopen; old drawings get the defaults (REQ-357)",
           "[req357]") {
   std::vector<std::string> log;
   AppCommandState st;
-  st.drawingInsUnits = 4;
-  st.modelUnitsPerPlottedInch = 12700.f;
-  st.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Radians;
-  st.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
-  st.drawingSettings.scaleInsertedObjects = false;
-  st.drawingSettings.setDrawingVariables = false;
+  st.drawing.drawingInsUnits = 4;
+  st.drawing.modelUnitsPerPlottedInch = 12700.f;
+  st.drawing.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Radians;
+  st.drawing.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
+  st.drawing.drawingSettings.scaleInsertedObjects = false;
+  st.drawing.drawingSettings.setDrawingVariables = false;
 
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState back;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, log));
-  CHECK(back.drawingInsUnits == 4);
-  CHECK(back.modelUnitsPerPlottedInch == 12700.f);
-  CHECK(back.drawingSettings == st.drawingSettings);
+  CHECK(back.drawing.drawingInsUnits == 4);
+  CHECK(back.drawing.modelUnitsPerPlottedInch == 12700.f);
+  CHECK(back.drawing.drawingSettings == st.drawing.drawingSettings);
 
   std::string legacy = json;
   const size_t at = legacy.find("\"drawingSettings\"");
   REQUIRE(at != std::string::npos);
   legacy.replace(at, std::string("\"drawingSettings\"").size(), "\"unusedSettings\"");
   AppCommandState old;
-  old.drawingSettings.scaleInsertedObjects = false;  // must be reset, not kept from before the load
+  old.drawing.drawingSettings.scaleInsertedObjects = false;  // must be reset, not kept from before the load
   REQUIRE(LoadGoSurveyFromJsonUtf8(old, legacy, log));
-  CHECK(old.drawingSettings == DrawingSettings{});
+  CHECK(old.drawing.drawingSettings == DrawingSettings{});
 }
 
 TEST_CASE("Each drawing tab keeps its own units, scale and Drawing Settings (REQ-357)", "[req357]") {
   AppCommandState st;
   st.documents.resize(3);
-  st.drawingInsUnits = 6;
-  st.modelUnitsPerPlottedInch = 12.7f;
-  st.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Grads;
+  st.drawing.drawingInsUnits = 6;
+  st.drawing.modelUnitsPerPlottedInch = 12.7f;
+  st.drawing.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Grads;
   SaveDocumentToSnapshot(st, 1);
 
   RestoreDocumentFromSnapshot(st, 2);  // a drawing that never changed them
-  CHECK(st.drawingInsUnits == 2);
-  CHECK(st.modelUnitsPerPlottedInch == 50.f);
-  CHECK(st.drawingSettings == DrawingSettings{});
+  CHECK(st.drawing.drawingInsUnits == 2);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 50.f);
+  CHECK(st.drawing.drawingSettings == DrawingSettings{});
 
   RestoreDocumentFromSnapshot(st, 1);
-  CHECK(st.drawingInsUnits == 6);
-  CHECK(st.modelUnitsPerPlottedInch == 12.7f);
-  CHECK(st.drawingSettings.angularUnits == DrawingSettings::AngularUnits::Grads);
+  CHECK(st.drawing.drawingInsUnits == 6);
+  CHECK(st.drawing.modelUnitsPerPlottedInch == 12.7f);
+  CHECK(st.drawing.drawingSettings.angularUnits == DrawingSettings::AngularUnits::Grads);
 }
 
 TEST_CASE("DXF export writes LUNITS and AUNITS only with Set drawing variables on (REQ-357)", "[req357]") {
@@ -217,8 +217,8 @@ TEST_CASE("DXF export writes LUNITS and AUNITS only with Set drawing variables o
 
   AppCommandState st;
   OneLine(st);
-  st.drawingInsUnits = 4;
-  st.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Radians;
+  st.drawing.drawingInsUnits = 4;
+  st.drawing.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Radians;
   REQUIRE(ExportDxfFile(st, p.string().c_str(), log));
   std::string dxf = ReadFile(p);
   CHECK(DxfHeaderValue(dxf, "$INSUNITS") == "4");
@@ -227,9 +227,9 @@ TEST_CASE("DXF export writes LUNITS and AUNITS only with Set drawing variables o
 
   AppCommandState in;  // a millimetre drawing's unit comes back on import
   REQUIRE(ImportDxfFile(in, p.string().c_str(), log));
-  CHECK(in.drawingInsUnits == 4);
+  CHECK(in.drawing.drawingInsUnits == 4);
 
-  st.drawingSettings.setDrawingVariables = false;
+  st.drawing.drawingSettings.setDrawingVariables = false;
   REQUIRE(ExportDxfFile(st, p.string().c_str(), log));
   dxf = ReadFile(p);
   CHECK(DxfHeaderValue(dxf, "$INSUNITS") == "4");
@@ -245,8 +245,8 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   dim.textSizeInches = 0.18f;
   dim.unitPrecision = 4;
   dim.props = {{"suppressExt1", "1"}, {"altMultiplier", "25.4"}, {"tolUpper", "0.125"}};
-  original.dimensionStyles.push_back(dim);
-  original.activeDimensionStyle = dim;
+  original.drawing.dimensionStyles.push_back(dim);
+  original.drawing.activeDimensionStyle = dim;
   CadTableStyle table;
   table.name = "Field Notes";
   table.point = true;
@@ -256,13 +256,13 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   table.borderColor = "5";
   table.dataTextColor = "150";
   table.props = {{"Data.horizontalMargin", "0.2"}, {"Title.fillColor", "Yellow"}};
-  original.tableStyles.push_back(table);
+  original.drawing.tableStyles.push_back(table);
   MultileaderStyle mleader = MultileaderStyles::Default();
   mleader.name = "Site Callout";
   mleader.textSizeInches = 0.16f;
   mleader.props = {{"leaderType", "Spline"}, {"defaultText", "Survey note"}};
-  original.multileaderStyles.push_back(mleader);
-  original.activeMultileaderStyle = mleader;
+  original.drawing.multileaderStyles.push_back(mleader);
+  original.drawing.activeMultileaderStyle = mleader;
   TextStyle textStyle;
   textStyle.name = "Wide Survey";
   textStyle.fontFamily = "romans.shx";
@@ -270,39 +270,39 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   textStyle.widthFactor = 0.82f;
   textStyle.obliqueDeg = 7.f;
   textStyle.props = {{"backwards", "1"}, {"bigFont", "bigfont.shx"}};
-  original.textStyles.push_back(textStyle);
+  original.drawing.textStyles.push_back(textStyle);
   SurveyPointStyleDefinition pointStyle;
   pointStyle.name = "Construction Point";
   pointStyle.crossSpanPlottedInches = 0.22f;
   pointStyle.color = "ACI:3";
   pointStyle.markerVisible = false;
   pointStyle.labelVisible = false;
-  original.surveyPointStyles.push_back(pointStyle);
+  original.drawing.surveyPointStyles.push_back(pointStyle);
   SurveyPointLabelStyleDefinition labelStyle;
   labelStyle.name = "Coordinates";
   labelStyle.templates.northEast = "N={north}\nE={east}";
   labelStyle.fontFamily = "ROMANS";
   labelStyle.visible = false;
   labelStyle.civilTextContents = {"<[16797697]>", "<[67129348(2449)]>"};
-  original.surveyPointLabelStyles.push_back(labelStyle);
+  original.drawing.surveyPointLabelStyles.push_back(labelStyle);
   SurveyPoint point;
   point.id = 42;
   point.styleName = pointStyle.name;
   point.labelStyleName = labelStyle.name;
-  original.surveyPoints.push_back(point);
+  original.drawing.surveyPoints.push_back(point);
 
   const std::string payload = SerializeGoSurveyJson(original);
   AppCommandState loaded;
   std::vector<std::string> log;
   REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, payload, log));
-  const DimensionStyle* loadedDim = DimensionStyles::Find(loaded.dimensionStyles, "Project Survey");
+  const DimensionStyle* loadedDim = DimensionStyles::Find(loaded.drawing.dimensionStyles, "Project Survey");
   REQUIRE(loadedDim != nullptr);
   CHECK(loadedDim->unitPrecision == 4);
   CHECK(loadedDim->props == dim.props);
-  CHECK(loaded.activeDimensionStyle.props == dim.props);
+  CHECK(loaded.drawing.activeDimensionStyle.props == dim.props);
   CHECK(loadedDim->textSizeInches == Catch::Approx(0.18f));
-  CHECK(loaded.activeDimensionStyle.name == "Project Survey");
-  const CadTableStyle* loadedTable = CadTableFindStyle(loaded.tableStyles, "Field Notes");
+  CHECK(loaded.drawing.activeDimensionStyle.name == "Project Survey");
+  const CadTableStyle* loadedTable = CadTableFindStyle(loaded.drawing.tableStyles, "Field Notes");
   REQUIRE(loadedTable != nullptr);
   CHECK_FALSE(loadedTable->headerRow);
   CHECK(loadedTable->pointColumns == table.pointColumns);
@@ -310,47 +310,47 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   CHECK(loadedTable->borderColor == "5");
   CHECK(loadedTable->dataTextColor == "150");
   CHECK(loadedTable->props == table.props);
-  CHECK(MultileaderStyles::Find(loaded.multileaderStyles, "Site Callout") != nullptr);
-  CHECK(loaded.activeMultileaderStyle.name == "Site Callout");
-  CHECK(loaded.activeMultileaderStyle.props == mleader.props);
-  const TextStyle* loadedTextStyle = TextStyles::Find(loaded.textStyles, "Wide Survey");
+  CHECK(MultileaderStyles::Find(loaded.drawing.multileaderStyles, "Site Callout") != nullptr);
+  CHECK(loaded.drawing.activeMultileaderStyle.name == "Site Callout");
+  CHECK(loaded.drawing.activeMultileaderStyle.props == mleader.props);
+  const TextStyle* loadedTextStyle = TextStyles::Find(loaded.drawing.textStyles, "Wide Survey");
   REQUIRE(loadedTextStyle != nullptr);
   CHECK(loadedTextStyle->widthFactor == Catch::Approx(0.82f));
   CHECK(loadedTextStyle->obliqueDeg == Catch::Approx(7.f));
   CHECK(loadedTextStyle->props == textStyle.props);
-  REQUIRE(loaded.surveyPointStyles.size() == 2);
-  CHECK(loaded.surveyPointStyles.back().name == "Construction Point");
-  CHECK(loaded.surveyPointStyles.back().crossSpanPlottedInches == Catch::Approx(0.22f));
-  CHECK_FALSE(loaded.surveyPointStyles.back().markerVisible);
-  CHECK_FALSE(loaded.surveyPointStyles.back().labelVisible);
-  REQUIRE(loaded.surveyPointLabelStyles.size() == 2);
-  CHECK(loaded.surveyPointLabelStyles.back().templates.northEast == "N={north}\nE={east}");
-  CHECK_FALSE(loaded.surveyPointLabelStyles.back().visible);
-  CHECK(loaded.surveyPointLabelStyles.back().civilTextContents == labelStyle.civilTextContents);
-  REQUIRE(loaded.surveyPoints.size() == 1);
-  CHECK(loaded.surveyPoints.front().styleName == "Construction Point");
-  CHECK(loaded.surveyPoints.front().labelStyleName == "Coordinates");
-  CHECK_FALSE(SurveyPointMarkerVisible(loaded.surveyPoints.front(), loaded.surveyPointStyles));
-  CHECK_FALSE(SurveyPointLabelVisible(loaded.surveyPoints.front(), loaded.surveyPointStyles));
+  REQUIRE(loaded.drawing.surveyPointStyles.size() == 2);
+  CHECK(loaded.drawing.surveyPointStyles.back().name == "Construction Point");
+  CHECK(loaded.drawing.surveyPointStyles.back().crossSpanPlottedInches == Catch::Approx(0.22f));
+  CHECK_FALSE(loaded.drawing.surveyPointStyles.back().markerVisible);
+  CHECK_FALSE(loaded.drawing.surveyPointStyles.back().labelVisible);
+  REQUIRE(loaded.drawing.surveyPointLabelStyles.size() == 2);
+  CHECK(loaded.drawing.surveyPointLabelStyles.back().templates.northEast == "N={north}\nE={east}");
+  CHECK_FALSE(loaded.drawing.surveyPointLabelStyles.back().visible);
+  CHECK(loaded.drawing.surveyPointLabelStyles.back().civilTextContents == labelStyle.civilTextContents);
+  REQUIRE(loaded.drawing.surveyPoints.size() == 1);
+  CHECK(loaded.drawing.surveyPoints.front().styleName == "Construction Point");
+  CHECK(loaded.drawing.surveyPoints.front().labelStyleName == "Coordinates");
+  CHECK_FALSE(SurveyPointMarkerVisible(loaded.drawing.surveyPoints.front(), loaded.drawing.surveyPointStyles));
+  CHECK_FALSE(SurveyPointLabelVisible(loaded.drawing.surveyPoints.front(), loaded.drawing.surveyPointStyles));
 }
 
 TEST_CASE("Active styles are merged into their named collections on save", "[issue804][styles]") {
   AppCommandState original;
-  original.activeDimensionStyle.name = "Legacy Dimension";
-  original.activeDimensionStyle.textSizeInches = 0.19f;
-  original.activeMultileaderStyle.name = "Legacy Leader";
-  original.activeMultileaderStyle.textSizeInches = 0.21f;
+  original.drawing.activeDimensionStyle.name = "Legacy Dimension";
+  original.drawing.activeDimensionStyle.textSizeInches = 0.19f;
+  original.drawing.activeMultileaderStyle.name = "Legacy Leader";
+  original.drawing.activeMultileaderStyle.textSizeInches = 0.21f;
 
   AppCommandState loaded;
   std::vector<std::string> log;
   REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, SerializeGoSurveyJson(original), log));
 
-  const DimensionStyle* dimension = DimensionStyles::Find(loaded.dimensionStyles, "Legacy Dimension");
+  const DimensionStyle* dimension = DimensionStyles::Find(loaded.drawing.dimensionStyles, "Legacy Dimension");
   REQUIRE(dimension != nullptr);
   CHECK(dimension->textSizeInches == Catch::Approx(0.19f));
-  CHECK(loaded.activeDimensionStyle.name == "Legacy Dimension");
-  const MultileaderStyle* leader = MultileaderStyles::Find(loaded.multileaderStyles, "Legacy Leader");
+  CHECK(loaded.drawing.activeDimensionStyle.name == "Legacy Dimension");
+  const MultileaderStyle* leader = MultileaderStyles::Find(loaded.drawing.multileaderStyles, "Legacy Leader");
   REQUIRE(leader != nullptr);
   CHECK(leader->textSizeInches == Catch::Approx(0.21f));
-  CHECK(loaded.activeMultileaderStyle.name == "Legacy Leader");
+  CHECK(loaded.drawing.activeMultileaderStyle.name == "Legacy Leader");
 }

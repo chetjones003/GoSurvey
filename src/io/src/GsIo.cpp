@@ -474,29 +474,29 @@ void EntityAttrArrayFromJson(const json& o, const char* key, std::vector<EntityA
 
 json CadBlockContentToJson(const CadBlockContent& c) {
   json o;
-  o["lines"] = c.lines;
+  o["lines"] = c.userLinesFlat;
   json la = json::array();
-  for (const auto& a : c.lineAttrs) {
+  for (const auto& a : c.userLineAttrs) {
     json e;
     EntityAttributesToJson(a, e);
     la.push_back(std::move(e));
   }
   o["lineAttrs"] = std::move(la);
   o["lineVis"] = c.lineVis;
-  o["circles"] = c.circles;
+  o["circles"] = c.userCirclesCxCyZR;
   // Block circle normals (REQ-312), omitted when every one is flat so an existing block definition
   // serializes unchanged. BLOCK and BEDIT both round-trip through here, which is why the field
   // exists on CadBlockContent at all — without it, editing a block would flatten a tilted circle
   // inside it on the way out.
   {
     bool anyTilted = false;
-    for (size_t i = 0; i * 4 + 3 < c.circles.size(); ++i)
-      anyTilted = anyTilted || !CircleIsFlat(c.circleNormals, i);
+    for (size_t i = 0; i < c.circleCount(); ++i)
+      anyTilted = anyTilted || !CircleIsFlat(c.userCircleNormals, i);
     if (anyTilted)
-      o["circleNormals"] = c.circleNormals;
+      o["circleNormals"] = c.userCircleNormals;
   }
   json ca = json::array();
-  for (const auto& a : c.circleAttrs) {
+  for (const auto& a : c.userCircleAttrs) {
     json e;
     EntityAttributesToJson(a, e);
     ca.push_back(std::move(e));
@@ -505,63 +505,63 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   o["circleVis"] = c.circleVis;
 
   json arcs = json::array();
-  for (const CadArc& a : c.arcs) {
+  for (const CadArc& a : c.userArcs) {
     json aj;
     CadArcToJson(a, aj);
     arcs.push_back(std::move(aj));
   }
   o["arcs"] = std::move(arcs);
   json arcAttrs;
-  EntityAttrArrayToJson(c.arcAttrs, arcAttrs);
+  EntityAttrArrayToJson(c.userArcAttrs, arcAttrs);
   o["arcAttrs"] = std::move(arcAttrs);
 
   json ellipses = json::array();
-  for (const CadEllipse& e : c.ellipses) {
+  for (const CadEllipse& e : c.userEllipses) {
     json ej;
     CadEllipseToJson(e, ej);
     ellipses.push_back(std::move(ej));
   }
   o["ellipses"] = std::move(ellipses);
   json ellAttrs;
-  EntityAttrArrayToJson(c.ellAttrs, ellAttrs);
+  EntityAttrArrayToJson(c.userEllAttrs, ellAttrs);
   o["ellAttrs"] = std::move(ellAttrs);
 
-  o["polyOffsets"] = c.polyOffsets;
-  o["polyVerts"] = c.polyVerts;
+  o["polyOffsets"] = c.userPolylineOffsets;
+  o["polyVerts"] = c.userPolylineVerts;
   {
     bool anyBulge = false;
-    for (float b : c.polyVertsBulge)
+    for (float b : c.userPolylineVertsBulge)
       if (b != 0.0f) { anyBulge = true; break; }
     if (anyBulge)
-      o["polyVertsBulge"] = c.polyVertsBulge;  // REQ-316 / ADR-047, additive
+      o["polyVertsBulge"] = c.userPolylineVertsBulge;  // REQ-316 / ADR-047, additive
   }
   json polyClosed = json::array();
-  for (std::uint8_t v : c.polyClosed)
+  for (std::uint8_t v : c.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(v));
   o["polyClosed"] = std::move(polyClosed);
   json polyAttrs;
-  EntityAttrArrayToJson(c.polyAttrs, polyAttrs);
+  EntityAttrArrayToJson(c.userPolylineAttrs, polyAttrs);
   o["polyAttrs"] = std::move(polyAttrs);
 
   json meshes = json::array();
-  for (const auto& mp : c.meshes) {
+  for (const auto& mp : c.cadMeshes) {
     if (mp)
       meshes.push_back(CadMeshToJson(*mp));
   }
   o["meshes"] = std::move(meshes);
   json meshAttrs;
-  EntityAttrArrayToJson(c.meshAttrs, meshAttrs);
+  EntityAttrArrayToJson(c.cadMeshAttrs, meshAttrs);
   o["meshAttrs"] = std::move(meshAttrs);
 
-  if (!c.solids.empty()) {
+  if (!c.cadSolids.empty()) {
     json solids = json::array();
-    for (const CadSolidPtr& sp : c.solids) {
+    for (const CadSolidPtr& sp : c.cadSolids) {
       if (sp)
         solids.push_back(gsio::SolidToJson(*sp));
     }
     o["solids"] = std::move(solids);
     json solidAttrs;
-    EntityAttrArrayToJson(c.solidAttrs, solidAttrs);
+    EntityAttrArrayToJson(c.cadSolidAttrs, solidAttrs);
     o["solidAttrs"] = std::move(solidAttrs);
   }
 
@@ -580,14 +580,14 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   }
   o["nested"] = std::move(nested);
   json texts = json::array();
-  for (const CadAnnotation& t : c.texts) {
+  for (const CadAnnotation& t : c.cadAnnotations) {
     json tj;
     CadAnnotationToJson(t, tj);
     texts.push_back(std::move(tj));
   }
   o["texts"] = std::move(texts);
   json textAttrs;
-  EntityAttrArrayToJson(c.textAttrs, textAttrs);
+  EntityAttrArrayToJson(c.cadAnnotationAttrs, textAttrs);
   o["textAttrs"] = std::move(textAttrs);
   return o;
 }
@@ -595,60 +595,60 @@ json CadBlockContentToJson(const CadBlockContent& c) {
 CadBlockContent CadBlockContentFromJson(const json& o) {
   CadBlockContent c;
   if (o.contains("lines") && o["lines"].is_array())
-    c.lines = o["lines"].get<std::vector<double>>();
+    c.userLinesFlat = o["lines"].get<std::vector<double>>();
   if (o.contains("lineAttrs") && o["lineAttrs"].is_array()) {
     for (const auto& e : o["lineAttrs"])
-      c.lineAttrs.push_back(EntityAttributesFromJson(e));
+      c.userLineAttrs.push_back(EntityAttributesFromJson(e));
   }
   if (o.contains("lineVis") && o["lineVis"].is_array())
     c.lineVis = o["lineVis"].get<std::vector<std::string>>();
   if (o.contains("circles") && o["circles"].is_array())
-    c.circles = o["circles"].get<std::vector<double>>();
-  EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
+    c.userCirclesCxCyZR = o["circles"].get<std::vector<double>>();
+  EntityAttrArrayFromJson(o, "circleAttrs", c.userCircleAttrs);
   if (o.contains("circleVis") && o["circleVis"].is_array())
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
   if (o.contains("circleNormals") && o["circleNormals"].is_array())
-    c.circleNormals = o["circleNormals"].get<std::vector<float>>();   // REQ-312
-  EnsureCircleNormals(c.circleNormals, c.circles.size() / 4);   // absent or short → flat default
+    c.userCircleNormals = o["circleNormals"].get<std::vector<float>>();   // REQ-312
+  EnsureCircleNormals(c.userCircleNormals, c.circleCount());   // absent or short → flat default
 
   if (o.contains("arcs") && o["arcs"].is_array())
     for (const auto& aj : o["arcs"])
-      c.arcs.push_back(CadArcFromJson(aj));
-  EntityAttrArrayFromJson(o, "arcAttrs", c.arcAttrs);
+      c.userArcs.push_back(CadArcFromJson(aj));
+  EntityAttrArrayFromJson(o, "arcAttrs", c.userArcAttrs);
 
   if (o.contains("ellipses") && o["ellipses"].is_array())
     for (const auto& ej : o["ellipses"])
-      c.ellipses.push_back(CadEllipseFromJson(ej));
-  EntityAttrArrayFromJson(o, "ellAttrs", c.ellAttrs);
+      c.userEllipses.push_back(CadEllipseFromJson(ej));
+  EntityAttrArrayFromJson(o, "ellAttrs", c.userEllAttrs);
 
   if (o.contains("polyOffsets") && o["polyOffsets"].is_array())
-    c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
+    c.userPolylineOffsets = o["polyOffsets"].get<std::vector<int>>();
   if (o.contains("polyVerts") && o["polyVerts"].is_array())
-    c.polyVerts = o["polyVerts"].get<std::vector<double>>();
+    c.userPolylineVerts = o["polyVerts"].get<std::vector<double>>();
   if (o.contains("polyVertsBulge") && o["polyVertsBulge"].is_array())  // REQ-316 / ADR-047
-    c.polyVertsBulge = o["polyVertsBulge"].get<std::vector<float>>();
+    c.userPolylineVertsBulge = o["polyVertsBulge"].get<std::vector<float>>();
   if (o.contains("polyClosed") && o["polyClosed"].is_array())
     for (const auto& v : o["polyClosed"])
-      c.polyClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
-  EntityAttrArrayFromJson(o, "polyAttrs", c.polyAttrs);
+      c.userPolylineClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  EntityAttrArrayFromJson(o, "polyAttrs", c.userPolylineAttrs);
 
   if (o.contains("meshes") && o["meshes"].is_array())
     for (const auto& mj : o["meshes"]) {
       auto m = CadMeshFromJson(mj);
       if (m)
-        c.meshes.push_back(std::move(m));
+        c.cadMeshes.push_back(std::move(m));
     }
-  EntityAttrArrayFromJson(o, "meshAttrs", c.meshAttrs);
+  EntityAttrArrayFromJson(o, "meshAttrs", c.cadMeshAttrs);
 
   if (o.contains("solids") && o["solids"].is_array()) {
     for (const auto& el : o["solids"]) {
       brep::Solid s;
       if (gsio::SolidFromJson(el, &s))
-        c.solids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+        c.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     }
   }
-  EntityAttrArrayFromJson(o, "solidAttrs", c.solidAttrs);
-  c.solidAttrs.resize(c.solids.size());
+  EntityAttrArrayFromJson(o, "solidAttrs", c.cadSolidAttrs);
+  c.cadSolidAttrs.resize(c.cadSolids.size());
 
   if (o.contains("nested") && o["nested"].is_array()) {
     for (const auto& nj : o["nested"]) {
@@ -664,9 +664,9 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   }
   if (o.contains("texts") && o["texts"].is_array()) {
     for (const auto& t : o["texts"])
-      c.texts.push_back(CadAnnotationFromJson(t));
+      c.cadAnnotations.push_back(CadAnnotationFromJson(t));
   }
-  EntityAttrArrayFromJson(o, "textAttrs", c.textAttrs);
+  EntityAttrArrayFromJson(o, "textAttrs", c.cadAnnotationAttrs);
   return c;
 }
 
@@ -1203,9 +1203,9 @@ json BuildRoot(const AppCommandState& st) {
   root["version"] = kGsFormatVersion;
 
   json doc;
-  doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
+  doc["worldDocumentOriginX"] = st.drawing.worldDocumentOriginX;
   {  // REQ-483.4: written only when it differs from the default, so legacy drawings save unchanged
-    const alignment::StationFormat& sf = st.alignmentStationFormat;
+    const alignment::StationFormat& sf = st.drawing.alignmentStationFormat;
     const alignment::StationFormat def{};
     if (sf.delimiter != def.delimiter || sf.digitsRight != def.digitsRight || sf.decimals != def.decimals ||
         sf.prefix != def.prefix || sf.suffix != def.suffix)
@@ -1215,7 +1215,7 @@ json BuildRoot(const AppCommandState& st) {
                               {"prefix", sf.prefix},
                               {"suffix", sf.suffix}};
   }
-  doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
+  doc["worldDocumentOriginY"] = st.drawing.worldDocumentOriginY;
   // The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Additive: a reader that
   // does not know the key ignores it, and a file saved before this loads with the clip off — the
   // same "legacy file loads unchanged" rule every other additive section here follows (ADR-020
@@ -1252,7 +1252,7 @@ json BuildRoot(const AppCommandState& st) {
   // points on demand, so persisting a member list would only let it go stale.
   {
     json groups = json::array();
-    for (const PointGroup& g : st.pointGroups) {
+    for (const PointGroup& g : st.drawing.pointGroups) {
       json o;
       o["name"] = g.name;
       o["idRanges"] = g.rule.idRangesText;
@@ -1268,17 +1268,17 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["pointGroups"] = std::move(groups);
   }
-  doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
-  doc["drawingInsUnits"] = st.drawingInsUnits;
-  doc["drawingSettings"] = DrawingSettingsToJson(st.drawingSettings);  // REQ-357; additive: absent opens with the defaults
-  doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
-  doc["currentLayer"] = st.currentLayer;
-  doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
+  doc["modelUnitsPerPlottedInch"] = st.drawing.modelUnitsPerPlottedInch;
+  doc["drawingInsUnits"] = st.drawing.drawingInsUnits;
+  doc["drawingSettings"] = DrawingSettingsToJson(st.drawing.drawingSettings);  // REQ-357; additive: absent opens with the defaults
+  doc["defaultPlottedTextHeightInches"] = st.drawing.defaultPlottedTextHeightInches;
+  doc["currentLayer"] = st.drawing.currentLayer;
+  doc["currentColor"] = st.drawing.currentColor;  // REQ-356; additive, older readers ignore it
   // Named text styles (REQ-044). Additive — older readers ignore it; no kGsFormatVersion bump.
-  doc["activeTextStyleName"] = st.activeTextStyleName;
+  doc["activeTextStyleName"] = st.drawing.activeTextStyleName;
   {
     json styles = json::array();
-    for (const TextStyle& s : st.textStyles) {
+    for (const TextStyle& s : st.drawing.textStyles) {
       json o;
       o["name"] = s.name;
       if (!s.fontFamily.empty()) o["fontFamily"] = s.fontFamily;
@@ -1301,8 +1301,8 @@ json BuildRoot(const AppCommandState& st) {
   // made of, and a section that appears on every file the moment it is opened is exactly that defect.
   {
     const bool onlyUntouchedStandard =
-        st.surfaceStyles.size() == 1 && st.surfaceStyles[0] == SurfaceStyles::StandardSurfaceStyle();
-    if (!st.surfaceStyles.empty() && !onlyUntouchedStandard) {
+        st.drawing.surfaceStyles.size() == 1 && st.drawing.surfaceStyles[0] == SurfaceStyles::StandardSurfaceStyle();
+    if (!st.drawing.surfaceStyles.empty() && !onlyUntouchedStandard) {
       const auto componentToJson = [](const SurfaceComponentStyle& c) {
         json o;
         o["visible"] = c.visible;
@@ -1322,7 +1322,7 @@ json BuildRoot(const AppCommandState& st) {
         return a;
       };
       json styles = json::array();
-      for (const SurfaceStyle& s : st.surfaceStyles) {
+      for (const SurfaceStyle& s : st.drawing.surfaceStyles) {
         json o;
         o["name"] = s.name;
         o["triangles"] = componentToJson(s.triangles);
@@ -1358,8 +1358,8 @@ json BuildRoot(const AppCommandState& st) {
   }
   {
     const bool onlyUntouchedStandard =
-        st.alignmentStyles.size() == 1 && st.alignmentStyles[0] == AlignmentStyles::StandardAlignmentStyle();
-    if (!st.alignmentStyles.empty() && !onlyUntouchedStandard) {
+        st.drawing.alignmentStyles.size() == 1 && st.drawing.alignmentStyles[0] == AlignmentStyles::StandardAlignmentStyle();
+    if (!st.drawing.alignmentStyles.empty() && !onlyUntouchedStandard) {
       const auto componentToJson = [](const SurfaceComponentStyle& c) {
         json o;
         o["visible"] = c.visible;
@@ -1369,7 +1369,7 @@ json BuildRoot(const AppCommandState& st) {
         return o;
       };
       json styles = json::array();
-      for (const AlignmentStyle& s : st.alignmentStyles) {
+      for (const AlignmentStyle& s : st.drawing.alignmentStyles) {
         json o;
         o["name"] = s.name;
         o["tangent"] = componentToJson(s.tangent);
@@ -1397,13 +1397,13 @@ json BuildRoot(const AppCommandState& st) {
       doc["alignmentStyles"] = std::move(styles);
     }
   }
-  if (st.alignmentStyleCurrent != AlignmentStyles::kStandardName) doc["alignmentStyleCurrent"] = st.alignmentStyleCurrent;
+  if (st.drawing.alignmentStyleCurrent != AlignmentStyles::kStandardName) doc["alignmentStyleCurrent"] = st.drawing.alignmentStyleCurrent;
   {
     const bool onlyUntouchedStandard =
-        st.alignmentLabelSets.size() == 1 && st.alignmentLabelSets[0] == AlignmentLabelSets::StandardLabelSet();
-    if (!st.alignmentLabelSets.empty() && !onlyUntouchedStandard) {
+        st.drawing.alignmentLabelSets.size() == 1 && st.drawing.alignmentLabelSets[0] == AlignmentLabelSets::StandardLabelSet();
+    if (!st.drawing.alignmentLabelSets.empty() && !onlyUntouchedStandard) {
       json sets = json::array();
-      for (const AlignmentLabelSet& s : st.alignmentLabelSets) {
+      for (const AlignmentLabelSet& s : st.drawing.alignmentLabelSets) {
         json o;
         o["name"] = s.name;
         o["majorStationsOn"] = s.majorStationsOn;
@@ -1436,11 +1436,11 @@ json BuildRoot(const AppCommandState& st) {
     }
   }
   {  // REQ-492.5: alignment label styles (omitted while only an untouched Standard exists)
-    const bool onlyUntouchedStandard = st.alignmentLabelStyles.size() == 1 &&
-                                       st.alignmentLabelStyles[0] == AlignmentLabelStyles::StandardLabelStyle();
-    if (!st.alignmentLabelStyles.empty() && !onlyUntouchedStandard) {
+    const bool onlyUntouchedStandard = st.drawing.alignmentLabelStyles.size() == 1 &&
+                                       st.drawing.alignmentLabelStyles[0] == AlignmentLabelStyles::StandardLabelStyle();
+    if (!st.drawing.alignmentLabelStyles.empty() && !onlyUntouchedStandard) {
       json styles = json::array();
-      for (const AlignmentLabelStyle& s : st.alignmentLabelStyles) {
+      for (const AlignmentLabelStyle& s : st.drawing.alignmentLabelStyles) {
         json o;
         o["name"] = s.name;
         o["textStyle"] = s.textStyle;
@@ -1456,15 +1456,15 @@ json BuildRoot(const AppCommandState& st) {
     }
   }
   {  // REQ-502: drawing-owned check sets (omitted when there are none)
-    if (!st.alignmentCheckSets.empty()) {
+    if (!st.drawing.alignmentCheckSets.empty()) {
       json sets = json::array();
-      for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) sets.push_back(CheckSetToJson(s));
+      for (const alignment::AlignmentCheckSet& s : st.drawing.alignmentCheckSets) sets.push_back(CheckSetToJson(s));
       doc["alignmentCheckSets"] = std::move(sets);
     }
   }
   // Dimension style (issue #99). Single active style, additive, no version bump.
   {
-    const DimensionStyle& ds = st.activeDimensionStyle;
+    const DimensionStyle& ds = st.drawing.activeDimensionStyle;
     const DimensionStyle def = DimensionStyles::Default();
     const bool isDefault = (ds == def);
     if (!isDefault) {
@@ -1490,7 +1490,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     json all = json::array();
     std::vector<DimensionStyle> styles =
-        st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+        st.drawing.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.drawing.dimensionStyles;
     auto active = std::find_if(styles.begin(), styles.end(), [&](const DimensionStyle& style) {
       return style.name == ds.name;
     });
@@ -1522,7 +1522,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["dimensionStyles"] = std::move(all);
   }
   {
-    const MultileaderStyle& ms = st.activeMultileaderStyle;
+    const MultileaderStyle& ms = st.drawing.activeMultileaderStyle;
     const MultileaderStyle def = MultileaderStyles::Default();
     if (ms != def) {
       json o;
@@ -1540,7 +1540,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     json all = json::array();
     std::vector<MultileaderStyle> named =
-        st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
+        st.drawing.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.drawing.multileaderStyles;
     auto active = std::find_if(named.begin(), named.end(), [&](const MultileaderStyle& style) {
       return style.name == ms.name;
     });
@@ -1563,7 +1563,7 @@ json BuildRoot(const AppCommandState& st) {
   }
   {
     json styles = json::array();
-    for (const CadTableStyle& style : st.tableStyles) {
+    for (const CadTableStyle& style : st.drawing.tableStyles) {
       json o;
       o["name"] = style.name;
       o["point"] = style.point;
@@ -1601,8 +1601,8 @@ json BuildRoot(const AppCommandState& st) {
     // one for that viewport so a save mid-float records what the user sees.
     auto liveViewportUcs = [&](const PaperLayout& l, const Viewport& v) -> const ucs::Ucs& {
       if (st.floatingUcsSwapActive && st.floatingViewportLayout >= 0 &&
-          static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size() &&
-          &st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)] == &l &&
+          static_cast<size_t>(st.floatingViewportLayout) < st.drawing.paperLayouts.size() &&
+          &st.drawing.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)] == &l &&
           st.floatingViewportIndex >= 0 &&
           static_cast<size_t>(st.floatingViewportIndex) < l.viewports.size() &&
           &l.viewports[static_cast<size_t>(st.floatingViewportIndex)] == &v)
@@ -1610,7 +1610,7 @@ json BuildRoot(const AppCommandState& st) {
       return v.activeUcs;
     };
     json layouts = json::array();
-    for (const PaperLayout& l : st.paperLayouts) {
+    for (const PaperLayout& l : st.drawing.paperLayouts) {
       json o;
       o["name"] = l.name;
       o["portraitWidthIn"] = l.portraitWidthIn;
@@ -1795,7 +1795,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["paperLayouts"] = layouts;
     doc["activeSpaceIndex"] = st.activeSpaceIndex;
     json setups = json::array();
-    for (const PageSetup& ps : st.savedPageSetups) {
+    for (const PageSetup& ps : st.drawing.savedPageSetups) {
       json o;
       o["name"] = ps.name;
       o["presetIdx"] = ps.presetIdx;
@@ -1814,9 +1814,9 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["savedPageSetups"] = setups;
   }
-  doc["lineVerts"] = st.userLinesFlat;
+  doc["lineVerts"] = st.drawing.userLinesFlat;
   json lineAttrs = json::array();
-  for (const auto& a : st.userLineAttrs) {
+  for (const auto& a : st.drawing.userLineAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     lineAttrs.push_back(std::move(o));
@@ -1833,19 +1833,20 @@ json BuildRoot(const AppCommandState& st) {
     json cn = json::array();
     bool anyZ = false;
     bool anyTilted = false;
-    for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-      cxyr.push_back(st.userCirclesCxCyZR[i + 0]);
-      cxyr.push_back(st.userCirclesCxCyZR[i + 1]);
-      cxyr.push_back(st.userCirclesCxCyZR[i + 3]);  // radius
-      cz.push_back(st.userCirclesCxCyZR[i + 2]);    // z
-      anyZ = anyZ || st.userCirclesCxCyZR[i + 2] != 0.f;
+    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+      const CadCircleRecord c = st.drawing.circle(ci);
+      cxyr.push_back(c.cx);
+      cxyr.push_back(c.cy);
+      cxyr.push_back(c.r);  // radius
+      cz.push_back(c.cz);   // z
+      anyZ = anyZ || c.cz != 0.f;
       // The plane normal (REQ-312), in an additive "circlesN" of 3 floats per circle — the same
       // shape and the same bargain as "circlesZ" above. Omitted when every circle is flat, which is
       // every drawing that predates the field, so those still save byte-identically.
       float nx = kFlatNormalX;
       float ny = kFlatNormalY;
       float nz = kFlatNormalZ;
-      CircleNormalAt(st.userCircleNormals, i / 4, &nx, &ny, &nz);
+      CircleNormalAt(st.drawing.userCircleNormals, ci, &nx, &ny, &nz);
       cn.push_back(nx);
       cn.push_back(ny);
       cn.push_back(nz);
@@ -1858,7 +1859,7 @@ json BuildRoot(const AppCommandState& st) {
       doc["circlesN"] = std::move(cn);
   }
   json circleAttrs = json::array();
-  for (const auto& a : st.userCircleAttrs) {
+  for (const auto& a : st.drawing.userCircleAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     circleAttrs.push_back(std::move(o));
@@ -1866,14 +1867,14 @@ json BuildRoot(const AppCommandState& st) {
   doc["circleAttrs"] = std::move(circleAttrs);
 
   json arcs = json::array();
-  for (const auto& a : st.userArcs) {
+  for (const auto& a : st.drawing.userArcs) {
     json o;
     CadArcToJson(a, o);
     arcs.push_back(std::move(o));
   }
   doc["arcs"] = std::move(arcs);
   json arcAttrs = json::array();
-  for (const auto& a : st.userArcAttrs) {
+  for (const auto& a : st.drawing.userArcAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     arcAttrs.push_back(std::move(o));
@@ -1881,30 +1882,30 @@ json BuildRoot(const AppCommandState& st) {
   doc["arcAttrs"] = std::move(arcAttrs);
 
   json ells = json::array();
-  for (const auto& e : st.userEllipses) {
+  for (const auto& e : st.drawing.userEllipses) {
     json o;
     CadEllipseToJson(e, o);
     ells.push_back(std::move(o));
   }
   doc["ellipses"] = std::move(ells);
   json ellAttrs = json::array();
-  for (const auto& a : st.userEllAttrs) {
+  for (const auto& a : st.drawing.userEllAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     ellAttrs.push_back(std::move(o));
   }
   doc["ellAttrs"] = std::move(ellAttrs);
 
-  doc["polylineOffsets"] = st.userPolylineOffsets;
-  doc["polylineVerts"] = st.userPolylineVerts;
+  doc["polylineOffsets"] = st.drawing.userPolylineOffsets;
+  doc["polylineVerts"] = st.drawing.userPolylineVerts;
   // REQ-316 / ADR-047: additive, no kGsFormatVersion bump. Written only when at least one segment
   // is actually curved, so a drawing with no arcs re-saves byte-identically to a pre-ADR-047 file.
   {
     bool anyBulge = false;
-    for (float b : st.userPolylineVertsBulge)
+    for (float b : st.drawing.userPolylineVertsBulge)
       if (b != 0.0f) { anyBulge = true; break; }
     if (anyBulge)
-      doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
+      doc["polylineVertsBulge"] = st.drawing.userPolylineVertsBulge;
   }
   // REQ-325 / ADR-053: the plane each curved segment turns in. Additive and guarded exactly as the
   // bulge array above is — written only when something is actually tilted, so a drawing with nothing
@@ -1913,18 +1914,18 @@ json BuildRoot(const AppCommandState& st) {
   // carried it.
   {
     bool anyTilted = false;
-    for (std::size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
-      if (!IsFlatNormal(st.userPolylineVertsNormal[i], st.userPolylineVertsNormal[i + 1],
-                        st.userPolylineVertsNormal[i + 2])) { anyTilted = true; break; }
+    for (std::size_t i = 0; i + 2 < st.drawing.userPolylineVertsNormal.size(); i += 3)
+      if (!IsFlatNormal(st.drawing.userPolylineVertsNormal[i], st.drawing.userPolylineVertsNormal[i + 1],
+                        st.drawing.userPolylineVertsNormal[i + 2])) { anyTilted = true; break; }
     if (anyTilted)
-      doc["polylineVertsNormal"] = st.userPolylineVertsNormal;
+      doc["polylineVertsNormal"] = st.drawing.userPolylineVertsNormal;
   }
   json polyClosed = json::array();
-  for (uint8_t c : st.userPolylineClosed)
+  for (uint8_t c : st.drawing.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(c));
   doc["polylineClosed"] = std::move(polyClosed);
   json polyAttrs = json::array();
-  for (const auto& a : st.userPolylineAttrs) {
+  for (const auto& a : st.drawing.userPolylineAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     polyAttrs.push_back(std::move(o));
@@ -1934,18 +1935,18 @@ json BuildRoot(const AppCommandState& st) {
   // Feature lines (REQ-087). Same shape as polylines, plus the per-vertex elevation-point flag and
   // the per-line name. All six arrays are additive — a drawing written before REQ-087 has none of
   // them, and the reader guards on that.
-  doc["featureLineOffsets"] = st.featureLineOffsets;
-  doc["featureLineVerts"] = st.featureLineVerts;
+  doc["featureLineOffsets"] = st.drawing.featureLineOffsets;
+  doc["featureLineVerts"] = st.drawing.featureLineVerts;
   json flClosed = json::array();
-  for (uint8_t c : st.featureLineClosed)
+  for (uint8_t c : st.drawing.featureLineClosed)
     flClosed.push_back(static_cast<int>(c));
   doc["featureLineClosed"] = std::move(flClosed);
   json flElev = json::array();
-  for (uint8_t c : st.featureLineElevPt)
+  for (uint8_t c : st.drawing.featureLineElevPt)
     flElev.push_back(static_cast<int>(c));
   doc["featureLineElevPt"] = std::move(flElev);
   json flInfo = json::array();
-  for (const CadFeatureLineInfo& i : st.featureLineInfo) {
+  for (const CadFeatureLineInfo& i : st.drawing.featureLineInfo) {
     json o;
     o["name"] = i.name;
     o["description"] = i.description;
@@ -1977,9 +1978,9 @@ json BuildRoot(const AppCommandState& st) {
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
-  if (!st.gradingPresets.empty()) {
+  if (!st.drawing.gradingPresets.empty()) {
     json presets = json::array();
-    for (const CadGradingPreset& p : st.gradingPresets) {
+    for (const CadGradingPreset& p : st.drawing.gradingPresets) {
       json o;
       o["name"] = p.name;
       o["targetSurfaceId"] = p.targetSurfaceId;
@@ -1994,7 +1995,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["gradingPresets"] = std::move(presets);
   }
   json flAttrs = json::array();
-  for (const auto& a : st.featureLineAttrs) {
+  for (const auto& a : st.drawing.featureLineAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     flAttrs.push_back(std::move(o));
@@ -2002,14 +2003,14 @@ json BuildRoot(const AppCommandState& st) {
   doc["featureLineAttrs"] = std::move(flAttrs);
 
   json anns = json::array();
-  for (const auto& a : st.cadAnnotations) {
+  for (const auto& a : st.drawing.cadAnnotations) {
     json o;
     CadAnnotationToJson(a, o);
     anns.push_back(std::move(o));
   }
   doc["annotations"] = std::move(anns);
   json annAttrs = json::array();
-  for (const auto& a : st.cadAnnotationAttrs) {
+  for (const auto& a : st.drawing.cadAnnotationAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     annAttrs.push_back(std::move(o));
@@ -2017,7 +2018,7 @@ json BuildRoot(const AppCommandState& st) {
   doc["annotationAttrs"] = std::move(annAttrs);
 
   json tables = json::array();
-  for (const auto& t : st.cadTables) {
+  for (const auto& t : st.drawing.cadTables) {
     json o;
     CadTableToJson(t, o);
     tables.push_back(std::move(o));
@@ -2025,7 +2026,7 @@ json BuildRoot(const AppCommandState& st) {
   if (!tables.empty())
     doc["tables"] = std::move(tables);
   json tableAttrs = json::array();
-  for (const auto& a : st.cadTableAttrs) {
+  for (const auto& a : st.drawing.cadTableAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     tableAttrs.push_back(std::move(o));
@@ -2035,7 +2036,7 @@ json BuildRoot(const AppCommandState& st) {
 
   // Position Markers (REQ-359 item 3): additive arrays, absent when empty (ADR-020 (d)).
   json markers = json::array();
-  for (const CadPositionMarker& m : st.cadPositionMarkers) {
+  for (const CadPositionMarker& m : st.drawing.cadPositionMarkers) {
     json o;
     o["x"] = m.x;
     o["y"] = m.y;
@@ -2050,7 +2051,7 @@ json BuildRoot(const AppCommandState& st) {
   if (!markers.empty())
     doc["positionMarkers"] = std::move(markers);
   json markerAttrs = json::array();
-  for (const auto& a : st.cadPositionMarkerAttrs) {
+  for (const auto& a : st.drawing.cadPositionMarkerAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     markerAttrs.push_back(std::move(o));
@@ -2059,7 +2060,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["positionMarkerAttrs"] = std::move(markerAttrs);
 
   json multileaders = json::array();
-  for (const CadMultileader& ml : st.cadMultileaders) {
+  for (const CadMultileader& ml : st.drawing.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
     o["arrowSizeWorld"] = ml.arrowSizeWorld;
@@ -2089,7 +2090,7 @@ json BuildRoot(const AppCommandState& st) {
   if (!multileaders.empty())
     doc["multileaders"] = std::move(multileaders);
   json multileaderAttrs = json::array();
-  for (const auto& a : st.cadMultileaderAttrs) {
+  for (const auto& a : st.drawing.cadMultileaderAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     multileaderAttrs.push_back(std::move(o));
@@ -2098,12 +2099,12 @@ json BuildRoot(const AppCommandState& st) {
     doc["multileaderAttrs"] = std::move(multileaderAttrs);
 
   json splines = json::array();
-  for (const CadSpline& s : st.cadSplines)
+  for (const CadSpline& s : st.drawing.cadSplines)
     splines.push_back(CadSplineToJson(s));
   if (!splines.empty())
     doc["splines"] = std::move(splines);
   json splineAttrs = json::array();
-  for (const auto& a : st.cadSplineAttrs) {
+  for (const auto& a : st.drawing.cadSplineAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     splineAttrs.push_back(std::move(o));
@@ -2112,36 +2113,36 @@ json BuildRoot(const AppCommandState& st) {
     doc["splineAttrs"] = std::move(splineAttrs);
 
   json points = json::array();
-  for (const CadPoint& p : st.cadPoints)
+  for (const CadPoint& p : st.drawing.cadPoints)
     points.push_back({p.x, p.y, p.z});
   if (!points.empty())
     doc["cadPoints"] = std::move(points);
   json pointAttrs = json::array();
-  for (const auto& a : st.cadPointAttrs) {
+  for (const auto& a : st.drawing.cadPointAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     pointAttrs.push_back(std::move(o));
   }
   if (!pointAttrs.empty())
     doc["cadPointAttrs"] = std::move(pointAttrs);
-  if (st.pdMode != 0)
-    doc["pdMode"] = st.pdMode;
-  if (st.pdSize != 0.0)
-    doc["pdSize"] = st.pdSize;
+  if (st.drawing.pdMode != 0)
+    doc["pdMode"] = st.drawing.pdMode;
+  if (st.drawing.pdSize != 0.0)
+    doc["pdSize"] = st.drawing.pdSize;
 
-  doc["drawingInsUnits"] = st.drawingInsUnits;
+  doc["drawingInsUnits"] = st.drawing.drawingInsUnits;
   json blockDefs = json::array();
-  for (const CadBlockDefinition& d : st.blockDefs)
+  for (const CadBlockDefinition& d : st.drawing.blockDefs)
     blockDefs.push_back(CadBlockDefToJson(d));
   if (!blockDefs.empty())
     doc["blockDefs"] = std::move(blockDefs);
   json blockRefs = json::array();
-  for (const CadBlockRef& r : st.cadBlockRefs)
+  for (const CadBlockRef& r : st.drawing.cadBlockRefs)
     blockRefs.push_back(CadBlockRefToJson(r));
   if (!blockRefs.empty())
     doc["blockRefs"] = std::move(blockRefs);
   json blockRefAttrs = json::array();
-  for (const auto& a : st.cadBlockRefAttrs) {
+  for (const auto& a : st.drawing.cadBlockRefAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     blockRefAttrs.push_back(std::move(o));
@@ -2155,7 +2156,7 @@ json BuildRoot(const AppCommandState& st) {
 
   // Filled regions (ADR-011): each is {verts:[x,y,…], loops:[startPairIdx,…]} + a parallel attribute object.
   json fills = json::array();
-  for (const auto& fr : st.cadFilledRegions) {
+  for (const auto& fr : st.drawing.cadFilledRegions) {
     json o;
     // The in-memory store is interleaved XYZ (ADR-025 (a)), but the ON-DISK schema keeps the
     // long-standing XY "verts" array and adds Z as an additive "vertsZ" sidecar (the ADR-020 (d)
@@ -2190,9 +2191,9 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["filledRegions"] = std::move(fills);
 
-  if (!st.annotationScales.empty()) {
+  if (!st.drawing.annotationScales.empty()) {
     json scales = json::array();
-    for (const CadAnnotationScale& s : st.annotationScales) {
+    for (const CadAnnotationScale& s : st.drawing.annotationScales) {
       json o;
       o["name"] = s.name;
       o["paperUnits"] = s.paperUnits;
@@ -2204,9 +2205,9 @@ json BuildRoot(const AppCommandState& st) {
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
   }
 
-  if (!st.viewportZoomScales.empty()) {
+  if (!st.drawing.viewportZoomScales.empty()) {
     json scales = json::array();
-    for (const CadAnnotationScale& s : st.viewportZoomScales) {
+    for (const CadAnnotationScale& s : st.drawing.viewportZoomScales) {
       json o;
       o["name"] = s.name;
       o["paperUnits"] = s.paperUnits;
@@ -2272,9 +2273,9 @@ json BuildRoot(const AppCommandState& st) {
   // Positions and normals are written as flat float arrays and indices as flat integers: the JSON
   // is large for a big model, but it is exact. Vertex positions must reload bit-identically
   // (REQ-063 acceptance), which is why nothing here is rounded or reformatted on the way out.
-  if (!st.cadMeshes.empty()) {
+  if (!st.drawing.cadMeshes.empty()) {
     json meshes = json::array();
-    for (const auto& mp : st.cadMeshes) {
+    for (const auto& mp : st.drawing.cadMeshes) {
       if (!mp)
         continue;
       json m;
@@ -2297,7 +2298,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["meshes"] = std::move(meshes);
     json meshAttrs = json::array();
-    for (const auto& a : st.cadMeshAttrs) {
+    for (const auto& a : st.drawing.cadMeshAttrs) {
       json o;
       EntityAttributesToJson(a, o);
       meshAttrs.push_back(std::move(o));
@@ -2310,9 +2311,9 @@ json BuildRoot(const AppCommandState& st) {
   // (`CadPointCloud::pointsXyz`) is written, not the full cloud — `cloudCache` names the `.gscloud`
   // sidecar the LOD renderer pages full detail from, so this is not the only copy of the data. A
   // cloud with no cache (e.g. `cloudCachePath` empty) still round-trips its preview sample alone.
-  if (!st.cadPointClouds.empty()) {
+  if (!st.drawing.cadPointClouds.empty()) {
     json clouds = json::array();
-    for (const auto& pc : st.cadPointClouds) {
+    for (const auto& pc : st.drawing.cadPointClouds) {
       if (!pc)
         continue;
       json c;
@@ -2330,7 +2331,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["pointClouds"] = std::move(clouds);
     json cloudAttrs = json::array();
-    for (const auto& a : st.cadPointCloudAttrs) {
+    for (const auto& a : st.drawing.cadPointCloudAttrs) {
       json o;
       EntityAttributesToJson(a, o);
       cloudAttrs.push_back(std::move(o));
@@ -2342,16 +2343,16 @@ json BuildRoot(const AppCommandState& st) {
   // written before solids existed still serializes byte-identically — the same ADR-020 (d)
   // precedent the mesh section above follows. See SolidToJson for why the topology is written
   // rather than the recipe.
-  if (!st.cadSolids.empty()) {
+  if (!st.drawing.cadSolids.empty()) {
     json solids = json::array();
-    for (const CadSolidPtr& sp : st.cadSolids) {
+    for (const CadSolidPtr& sp : st.drawing.cadSolids) {
       if (!sp)
         continue;
       solids.push_back(gsio::SolidToJson(*sp));
     }
     doc["solids"] = std::move(solids);
     json solidAttrs = json::array();
-    for (const auto& a : st.cadSolidAttrs) {
+    for (const auto& a : st.drawing.cadSolidAttrs) {
       json o;
       EntityAttributesToJson(a, o);
       solidAttrs.push_back(std::move(o));
@@ -2363,9 +2364,9 @@ json BuildRoot(const AppCommandState& st) {
   // the PATH and its size/class labels are written — never the swept solid, which
   // `RebuildPipeRunWorldSolids` derives from this on load, the same "topology, not geometry" split
   // CadPipeRun's own doc comment explains.
-  if (!st.cadPipeRuns.empty()) {
+  if (!st.drawing.cadPipeRuns.empty()) {
     json pipeRuns = json::array();
-    for (const CadPipeRun& r : st.cadPipeRuns) {
+    for (const CadPipeRun& r : st.drawing.cadPipeRuns) {
       json o;
       o["vertsXyz"] = r.vertsXyz;
       if (!r.name.empty())  // issue #486, "pipe runs need to be namable"
@@ -2383,7 +2384,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["pipeRuns"] = std::move(pipeRuns);
     json pipeRunAttrs = json::array();
-    for (const auto& a : st.cadPipeRunAttrs) {
+    for (const auto& a : st.drawing.cadPipeRunAttrs) {
       json o;
       EntityAttributesToJson(a, o);
       pipeRunAttrs.push_back(std::move(o));
@@ -2393,9 +2394,9 @@ json BuildRoot(const AppCommandState& st) {
 
   // Alignments (REQ-480 / REQ-496, ADR-075). Additive and omitted when there are none. Exact parameters
   // only - never a sampled polyline (REQ-480.2) - in drawing-local doubles.
-  if (!st.alignments.empty()) {
+  if (!st.drawing.alignments.empty()) {
     json arr = json::array();
-    for (const alignment::Alignment& a : st.alignments) {
+    for (const alignment::Alignment& a : st.drawing.alignments) {
       json o;
       o["id"] = a.id;
       o["name"] = a.name;
@@ -2487,9 +2488,9 @@ json BuildRoot(const AppCommandState& st) {
 
   // View frame groups (REQ-517). Only the settings are stored; the frames are rebuilt from them on load, so the file
   // holds no derived geometry and cannot disagree with the alignment it follows.
-  if (!st.viewFrameGroups.empty()) {
+  if (!st.drawing.viewFrameGroups.empty()) {
     json arr = json::array();
-    for (const alignment::ViewFrameGroup& g : st.viewFrameGroups) {
+    for (const alignment::ViewFrameGroup& g : st.drawing.viewFrameGroups) {
       json o;
       o["id"] = g.id;
       o["alignmentId"] = g.alignmentId;
@@ -2510,9 +2511,9 @@ json BuildRoot(const AppCommandState& st) {
 
   // Sample lines (REQ-519). Their geometry is stored in plan coordinates and their sections as sampled, so a line and its
   // section persist with the drawing and stay put when the alignment is edited (REQ-519.13).
-  if (!st.sampleLines.empty()) {
+  if (!st.drawing.sampleLines.empty()) {
     json arr = json::array();
-    for (const alignment::SampleLine& l : st.sampleLines) {
+    for (const alignment::SampleLine& l : st.drawing.sampleLines) {
       json o;
       o["id"] = l.id;
       o["alignmentId"] = l.alignmentId;
@@ -2536,9 +2537,9 @@ json BuildRoot(const AppCommandState& st) {
 
   // Design vertical profiles (REQ-521): the PVIs and the alignment id each belongs to. A deleted alignment's id is kept,
   // so the profile reports "alignment missing" rather than vanishing (REQ-521.7). Omitted when there are none.
-  if (!st.profiles.empty()) {
+  if (!st.drawing.profiles.empty()) {
     json arr = json::array();
-    for (const alignment::VerticalProfile& p : st.profiles) {
+    for (const alignment::VerticalProfile& p : st.drawing.profiles) {
       json o;
       o["id"] = p.id;
       o["name"] = p.name;
@@ -2552,9 +2553,9 @@ json BuildRoot(const AppCommandState& st) {
     doc["designProfiles"] = std::move(arr);
   }
 
-  if (!st.surfaceProfiles.empty()) {
+  if (!st.drawing.surfaceProfiles.empty()) {
     json profiles = json::array();
-    for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
+    for (const CadSurfaceProfile& profile : st.drawing.surfaceProfiles) {
       json p;
       p["id"] = profile.id; p["name"] = profile.name; p["surfaceId"] = profile.surfaceId;
       p["alignmentId"] = profile.alignmentId; p["sampleInterval"] = profile.sampleInterval;
@@ -2570,9 +2571,9 @@ json BuildRoot(const AppCommandState& st) {
   // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
   // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
   // into pipeRuns), never geometry.
-  if (!st.cadPipingSystems.empty()) {
+  if (!st.drawing.cadPipingSystems.empty()) {
     json pipingSystems = json::array();
-    for (const CadPipingSystem& sys : st.cadPipingSystems) {
+    for (const CadPipingSystem& sys : st.drawing.cadPipingSystems) {
       json o;
       o["name"] = sys.name;
       o["pipeRunIndices"] = sys.pipeRunIndices;
@@ -2588,9 +2589,9 @@ json BuildRoot(const AppCommandState& st) {
   // make opening a drawing depend on its point groups still resolving the same way, and REQ-068's
   // acceptance requires vertex positions to reload **bit-identically**, which only storing them can
   // guarantee. Nothing here is rounded or reformatted on the way out.
-  if (!st.cadSurfaces.empty()) {
+  if (!st.drawing.cadSurfaces.empty()) {
     json surfaces = json::array();
-    for (const CadSurface& s : st.cadSurfaces) {
+    for (const CadSurface& s : st.drawing.cadSurfaces) {
       json o;
       o["name"] = s.name;
       if (s.reducedDisplayLod)
@@ -2761,16 +2762,16 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["surfaces"] = std::move(surfaces);
     json surfAttrs = json::array();
-    for (const auto& a : st.cadSurfaceAttrs) {
+    for (const auto& a : st.drawing.cadSurfaceAttrs) {
       json o;
       EntityAttributesToJson(a, o);
       surfAttrs.push_back(std::move(o));
     }
     doc["surfaceAttrs"] = std::move(surfAttrs);
   }
-  if (!st.cadRasterImages.empty()) {
+  if (!st.drawing.cadRasterImages.empty()) {
     json images = json::array();
-    for (const CadRasterImage& image : st.cadRasterImages) {
+    for (const CadRasterImage& image : st.drawing.cadRasterImages) {
       images.push_back({{"id", image.id}, {"surfaceId", image.surfaceId}, {"path", image.path},
                         {"layer", image.layer}, {"insX", image.insX}, {"insY", image.insY},
                         {"width", image.width}, {"height", image.height},
@@ -2780,7 +2781,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["modelImages"] = std::move(images);
   }
   json fillAttrs = json::array();
-  for (const auto& a : st.cadFilledRegionAttrs) {
+  for (const auto& a : st.drawing.cadFilledRegionAttrs) {
     json o;
     EntityAttributesToJson(a, o);
     fillAttrs.push_back(std::move(o));
@@ -2788,7 +2789,7 @@ json BuildRoot(const AppCommandState& st) {
   doc["filledRegionAttrs"] = std::move(fillAttrs);
 
   json layers = json::array();
-  for (const auto& r : st.drawingLayerTable) {
+  for (const auto& r : st.drawing.drawingLayerTable) {
     json o;
     CadLayerRowToJson(r, o);
     layers.push_back(std::move(o));
@@ -2798,7 +2799,7 @@ json BuildRoot(const AppCommandState& st) {
   json survey = json::array();
   // REQ-376 / ADR-065 (c): a project drawing's trailer carries no points, only its rules and overrides.
   const std::vector<SurveyPoint> noPoints;
-  for (const auto& p : ProjectOwnsActiveTabPoints(st) ? noPoints : st.surveyPoints) {
+  for (const auto& p : ProjectOwnsActiveTabPoints(st) ? noPoints : st.drawing.surveyPoints) {
     json o;
     o["id"] = p.id;
     o["easting"] = p.easting;
@@ -2816,7 +2817,7 @@ json BuildRoot(const AppCommandState& st) {
   doc["surveyPoints"] = std::move(survey);
   {
     json styles = json::array();
-    for (const SurveyPointStyleDefinition& style : st.surveyPointStyles) {
+    for (const SurveyPointStyleDefinition& style : st.drawing.surveyPointStyles) {
       json item;
       item["name"] = style.name;
       item["crossSpanPlottedInches"] = style.crossSpanPlottedInches;
@@ -2849,7 +2850,7 @@ json BuildRoot(const AppCommandState& st) {
   }
   {
     json styles = json::array();
-    for (const SurveyPointLabelStyleDefinition& style : st.surveyPointLabelStyles) {
+    for (const SurveyPointLabelStyleDefinition& style : st.drawing.surveyPointLabelStyles) {
       json item;
       item["name"] = style.name;
       json templates;
@@ -2864,9 +2865,9 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["surveyPointLabelStyles"] = std::move(styles);
   }
-  doc["createPointsNextId"] = st.createPointsNextId;
-  if (!st.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
-    const projpts::Rules& r = st.pointVisibility;
+  doc["createPointsNextId"] = st.drawing.createPointsNextId;
+  if (!st.drawing.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
+    const projpts::Rules& r = st.drawing.pointVisibility;
     json v;
     v["idRanges"] = r.idRanges;
     v["description"] = r.description;
@@ -2880,7 +2881,7 @@ json BuildRoot(const AppCommandState& st) {
     doc["pointVisibility"] = std::move(v);
   }
   json cpo;
-  CreatePointsOptionsToJson(st.createPointsOpts, cpo);
+  CreatePointsOptionsToJson(st.drawing.createPointsOpts, cpo);
   doc["createPointsOptions"] = std::move(cpo);
 
   // Saved view (REQ-055): reopen the drawing looking at what the user left on screen.
@@ -2888,8 +2889,8 @@ json BuildRoot(const AppCommandState& st) {
   // loading may rebase the document origin (MaybeRebaseLargeCoordinates), which would silently move a
   // local pan somewhere else in the drawing. World coordinates are invariant under that rebase.
   json view;
-  view["panWorldX"] = st.viewportPanX + st.worldDocumentOriginX;
-  view["panWorldY"] = st.viewportPanY + st.worldDocumentOriginY;
+  view["panWorldX"] = st.viewportPanX + st.drawing.worldDocumentOriginX;
+  view["panWorldY"] = st.viewportPanY + st.drawing.worldDocumentOriginY;
   view["zoom"] = st.viewportZoom;
   // Camera orientation and work plane (REQ-058), additive and omitted at their defaults so a
   // drawing that was never orbited still serializes exactly as before.
@@ -2929,9 +2930,9 @@ json BuildRoot(const AppCommandState& st) {
   }
   if (st.ucsFollow)
     view["ucsFollow"] = true;
-  if (!st.ucsNamed.empty()) {
+  if (!st.drawing.ucsNamed.empty()) {
     json named = json::array();
-    for (const NamedUcs& n : st.ucsNamed) {
+    for (const NamedUcs& n : st.drawing.ucsNamed) {
       json entry = writeUcs(n.frame);
       entry["name"] = n.name;
       named.push_back(std::move(entry));
@@ -2941,9 +2942,9 @@ json BuildRoot(const AppCommandState& st) {
   // Named views (REQ-106), additive and omitted when empty for the same reason as the keys above: a
   // drawing that never saved a view serializes byte-for-byte as it did before this existed, so no
   // format-version bump is needed (the ADR-020 (d) / ADR-025 (g) precedent).
-  if (!st.namedViews.empty()) {
+  if (!st.drawing.namedViews.empty()) {
     json views = json::array();
-    for (const NamedView& v : st.namedViews) {
+    for (const NamedView& v : st.drawing.namedViews) {
       json e;
       e["name"] = v.name;
       e["panX"] = v.panX;
@@ -3367,18 +3368,18 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
 }
 
 void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std::string>& log) {
-  st.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
-  st.alignmentStationFormat = alignment::StationFormat{};
+  st.drawing.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
+  st.drawing.alignmentStationFormat = alignment::StationFormat{};
   if (doc.contains("stationFormat") && doc["stationFormat"].is_object()) {  // REQ-483.4
     const json& sf = doc["stationFormat"];
     const std::string delim = sf.value("delimiter", std::string("+"));
-    st.alignmentStationFormat.delimiter = delim.empty() ? '\0' : delim[0];
-    st.alignmentStationFormat.digitsRight = std::clamp(sf.value("digits", 2), 1, 6);
-    st.alignmentStationFormat.decimals = std::clamp(sf.value("decimals", 2), 0, 6);
-    st.alignmentStationFormat.prefix = sf.value("prefix", std::string());
-    st.alignmentStationFormat.suffix = sf.value("suffix", std::string());
+    st.drawing.alignmentStationFormat.delimiter = delim.empty() ? '\0' : delim[0];
+    st.drawing.alignmentStationFormat.digitsRight = std::clamp(sf.value("digits", 2), 1, 6);
+    st.drawing.alignmentStationFormat.decimals = std::clamp(sf.value("decimals", 2), 0, 6);
+    st.drawing.alignmentStationFormat.prefix = sf.value("prefix", std::string());
+    st.drawing.alignmentStationFormat.suffix = sf.value("suffix", std::string());
   }
-  st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
+  st.drawing.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
   // A legacy file has no counter; 1 is correct there because every entity in it also has no id, so
   // the post-load EnsureEntityIds numbers the whole drawing from 1. EnsureEntityIds independently
   // raises the counter above any id actually present, so a hand-edited or newer file cannot make it
@@ -3426,7 +3427,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   // Point groups (REQ-067). Absent in every file written before them → no groups, which is the
   // "legacy `internal document payload` loads unchanged" acceptance condition.
-  st.pointGroups.clear();
+  st.drawing.pointGroups.clear();
   if (doc.contains("pointGroups") && doc["pointGroups"].is_array()) {
     for (const auto& o : doc["pointGroups"]) {
       if (!o.is_object())
@@ -3447,16 +3448,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& v : o["explicitIds"])
           if (v.is_number_integer())
             g.rule.explicitIds.push_back(v.get<int>());
-      st.pointGroups.push_back(std::move(g));
+      st.drawing.pointGroups.push_back(std::move(g));
     }
   }
-  st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
-  st.drawingInsUnits = doc.value("drawingInsUnits", 2);
-  st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
+  st.drawing.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
+  st.drawing.drawingInsUnits = doc.value("drawingInsUnits", 2);
+  st.drawing.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
   if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
-    DrawingSettingsFromJson(doc["drawingSettings"], st.drawingSettings, log);
+    DrawingSettingsFromJson(doc["drawingSettings"], st.drawing.drawingSettings, log);
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
-  st.paperLayouts.clear();
+  st.drawing.paperLayouts.clear();
   if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
     for (const auto& o : doc["paperLayouts"]) {
       if (!o.is_object())
@@ -3749,18 +3750,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         readAttrs("paperPointAttrs", l.paperPointAttrs);
         l.paperPointAttrs.resize(l.paperPoints.size());
       }
-      st.paperLayouts.push_back(l);
+      st.drawing.paperLayouts.push_back(l);
     }
   }
   {
     int asi = doc.value("activeSpaceIndex", kModelSpaceIndex);
-    if (asi < 0 || asi >= static_cast<int>(st.paperLayouts.size()))
+    if (asi < 0 || asi >= static_cast<int>(st.drawing.paperLayouts.size()))
       asi = kModelSpaceIndex;
     st.activeSpaceIndex = asi;
     st.lastPaperLayoutIndex =
-        st.paperLayouts.empty() ? 0 : std::max(0, asi < 0 ? 0 : asi);
+        st.drawing.paperLayouts.empty() ? 0 : std::max(0, asi < 0 ? 0 : asi);
   }
-  st.savedPageSetups.clear();
+  st.drawing.savedPageSetups.clear();
   if (doc.contains("savedPageSetups") && doc["savedPageSetups"].is_array()) {
     for (const auto& o : doc["savedPageSetups"]) {
       if (!o.is_object())
@@ -3779,26 +3780,26 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ps.offsetYIn = o.value("offsetYIn", ps.offsetYIn);
       ps.centerPlot = o.value("centerPlot", ps.centerPlot);
       ps.plotStyleTablePath = o.value("plotStyleTablePath", ps.plotStyleTablePath);
-      st.savedPageSetups.push_back(ps);
+      st.drawing.savedPageSetups.push_back(ps);
     }
   }
-  st.defaultPlottedTextHeightInches = doc.value("defaultPlottedTextHeightInches", 0.125f);
+  st.drawing.defaultPlottedTextHeightInches = doc.value("defaultPlottedTextHeightInches", 0.125f);
   if (doc.contains("currentLayer") && doc["currentLayer"].is_string())
-    st.currentLayer = doc["currentLayer"].get<std::string>();
+    st.drawing.currentLayer = doc["currentLayer"].get<std::string>();
   else
-    st.currentLayer = "0";
+    st.drawing.currentLayer = "0";
   // REQ-356: a drawing saved before the current colour existed opens ByLayer, as it was drawn.
   if (doc.contains("currentColor") && doc["currentColor"].is_string() &&
       !doc["currentColor"].get<std::string>().empty())
-    st.currentColor = doc["currentColor"].get<std::string>();
+    st.drawing.currentColor = doc["currentColor"].get<std::string>();
   else
-    st.currentColor = "ByLayer";
+    st.drawing.currentColor = "ByLayer";
 
   // Named text styles (REQ-044). Read tolerantly: a missing table (older internal document payload) synthesizes "Standard",
   // so existing text — which carries no styleName — renders from its own fields, unchanged.
   const bool hadTextStyles =
       doc.contains("textStyles") && doc["textStyles"].is_array() && !doc["textStyles"].empty();
-  st.textStyles.clear();
+  st.drawing.textStyles.clear();
   if (hadTextStyles) {
     for (const auto& o : doc["textStyles"]) {
       TextStyle s;
@@ -3813,27 +3814,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       s.bold         = o.value("bold", false);
       s.italic       = o.value("italic", false);
-      if (!s.name.empty()) st.textStyles.push_back(std::move(s));
+      if (!s.name.empty()) st.drawing.textStyles.push_back(std::move(s));
     }
   }
-  TextStyles::EnsureStandard(st.textStyles);
-  st.activeTextStyleName = doc.value("activeTextStyleName", std::string(TextStyles::kStandardName));
-  if (!TextStyles::Find(st.textStyles, st.activeTextStyleName))
-    st.activeTextStyleName = TextStyles::kStandardName;
+  TextStyles::EnsureStandard(st.drawing.textStyles);
+  st.drawing.activeTextStyleName = doc.value("activeTextStyleName", std::string(TextStyles::kStandardName));
+  if (!TextStyles::Find(st.drawing.textStyles, st.drawing.activeTextStyleName))
+    st.drawing.activeTextStyleName = TextStyles::kStandardName;
   // Keep the active style's height and the new-text default height consistent. For an older file (no
   // table) the synthesized "Standard" inherits the file's default so new-text height is unchanged; for a
   // file that carries styles the active style drives the new-text height.
   if (!hadTextStyles) {
-    if (TextStyle* standard = TextStyles::Find(st.textStyles, TextStyles::kStandardName))
-      standard->heightInches = std::max(st.defaultPlottedTextHeightInches, 1.e-6f);
-  } else if (const TextStyle* active = TextStyles::Find(st.textStyles, st.activeTextStyleName)) {
-    st.defaultPlottedTextHeightInches = std::max(active->heightInches, 1.e-6f);
+    if (TextStyle* standard = TextStyles::Find(st.drawing.textStyles, TextStyles::kStandardName))
+      standard->heightInches = std::max(st.drawing.defaultPlottedTextHeightInches, 1.e-6f);
+  } else if (const TextStyle* active = TextStyles::Find(st.drawing.textStyles, st.drawing.activeTextStyleName)) {
+    st.drawing.defaultPlottedTextHeightInches = std::max(active->heightInches, 1.e-6f);
   }
 
   // Named surface styles (REQ-070 / ADR-036 (d)). Read tolerantly, every field with a default: a file
   // with no section synthesizes "Standard" and every surface in it — whose styleName is empty —
   // resolves to it, which is REQ-070's "a legacy `internal document payload` loads unchanged".
-  st.surfaceStyles.clear();
+  st.drawing.surfaceStyles.clear();
   if (doc.contains("surfaceStyles") && doc["surfaceStyles"].is_array()) {
     const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
       if (!o.is_object())
@@ -3902,12 +3903,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         bandsFromJson(o["bands"], &s.bands);
       if (o.contains("arrowBands"))
         bandsFromJson(o["arrowBands"], &s.arrowBands);
-      st.surfaceStyles.push_back(std::move(s));
+      st.drawing.surfaceStyles.push_back(std::move(s));
     }
   }
-  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  SurfaceStyles::EnsureStandard(st.drawing.surfaceStyles);
 
-  st.alignmentStyles.clear();
+  st.drawing.alignmentStyles.clear();
   if (doc.contains("alignmentStyles") && doc["alignmentStyles"].is_array()) {
     const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
       if (!o.is_object() || c == nullptr) return;
@@ -3946,18 +3947,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           s.codeMarkers.push_back(std::move(spec));
         }
       }
-      st.alignmentStyles.push_back(std::move(s));
+      st.drawing.alignmentStyles.push_back(std::move(s));
     }
   }
-  AlignmentStyles::EnsureStandard(st.alignmentStyles);
-  st.alignmentStyleCurrent = AlignmentStyles::kStandardName;  // REQ-491 current style
+  AlignmentStyles::EnsureStandard(st.drawing.alignmentStyles);
+  st.drawing.alignmentStyleCurrent = AlignmentStyles::kStandardName;  // REQ-491 current style
   if (doc.contains("alignmentStyleCurrent") && doc["alignmentStyleCurrent"].is_string()) {
     const std::string current = doc["alignmentStyleCurrent"].get<std::string>();
-    if (AlignmentStyles::Find(st.alignmentStyles, current) != nullptr) st.alignmentStyleCurrent = current;
+    if (AlignmentStyles::Find(st.drawing.alignmentStyles, current) != nullptr) st.drawing.alignmentStyleCurrent = current;
     else log.push_back("ALIGNMENTSTYLE — current style \"" + current + "\" is missing; using Standard.");
   }
 
-  st.alignmentLabelSets.clear();
+  st.drawing.alignmentLabelSets.clear();
   if (doc.contains("alignmentLabelSets") && doc["alignmentLabelSets"].is_array()) {
     for (const auto& o : doc["alignmentLabelSets"]) {
       if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
@@ -4001,12 +4002,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       s.profileGeometryPointsOn = o.value("profileGeometryPointsOn", false);
       s.superelevationPointsOn = o.value("superelevationPointsOn", false);
-      st.alignmentLabelSets.push_back(std::move(s));
+      st.drawing.alignmentLabelSets.push_back(std::move(s));
     }
   }
-  AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+  AlignmentLabelSets::EnsureStandard(st.drawing.alignmentLabelSets);
 
-  st.alignmentLabelStyles.clear();  // REQ-492.5
+  st.drawing.alignmentLabelStyles.clear();  // REQ-492.5
   if (doc.contains("alignmentLabelStyles") && doc["alignmentLabelStyles"].is_array()) {
     for (const auto& o : doc["alignmentLabelStyles"]) {
       if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
@@ -4020,24 +4021,24 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("prefix") && o["prefix"].is_string()) s.prefix = o["prefix"].get<std::string>();
       if (o.contains("suffix") && o["suffix"].is_string()) s.suffix = o["suffix"].get<std::string>();
       s.viewOriented = o.value("viewOriented", false);
-      st.alignmentLabelStyles.push_back(std::move(s));
+      st.drawing.alignmentLabelStyles.push_back(std::move(s));
     }
   }
-  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
-  for (AlignmentLabelSet& set : st.alignmentLabelSets) {  // REQ-492.5: a label set's styles must exist
+  AlignmentLabelStyles::EnsureStandard(st.drawing.alignmentLabelStyles);
+  for (AlignmentLabelSet& set : st.drawing.alignmentLabelSets) {  // REQ-492.5: a label set's styles must exist
     for (std::string* ref : AlignmentLabelStyles::References(set)) {
-      if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, *ref) != nullptr) continue;
+      if (AlignmentLabelStyles::Find(st.drawing.alignmentLabelStyles, *ref) != nullptr) continue;
       log.push_back("ALIGNMENTLABELSET — label set \"" + set.name + "\" references missing label style \"" + *ref +
                     "\"; using Standard.");
       *ref = AlignmentLabelStyles::kStandardName;
     }
   }
 
-  st.alignmentCheckSets.clear();  // REQ-502
+  st.drawing.alignmentCheckSets.clear();  // REQ-502
   if (doc.contains("alignmentCheckSets") && doc["alignmentCheckSets"].is_array()) {
     for (const auto& o : doc["alignmentCheckSets"]) {
       alignment::AlignmentCheckSet s;
-      if (CheckSetFromJson(o, &s)) st.alignmentCheckSets.push_back(std::move(s));
+      if (CheckSetFromJson(o, &s)) st.drawing.alignmentCheckSets.push_back(std::move(s));
     }
   }
 
@@ -4067,7 +4068,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (property.value().is_string()) ds.props[property.key()] = property.value().get<std::string>();
       }
     }
-    st.dimensionStyles.clear();
+    st.drawing.dimensionStyles.clear();
     if (doc.contains("dimensionStyles") && doc["dimensionStyles"].is_array()) {
       for (const auto& o : doc["dimensionStyles"]) {
         if (!o.is_object()) continue;
@@ -4092,14 +4093,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& property : o["props"].items())
           if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
       }
-        if (std::none_of(st.dimensionStyles.begin(), st.dimensionStyles.end(), [&](const DimensionStyle& existing) {
+        if (std::none_of(st.drawing.dimensionStyles.begin(), st.drawing.dimensionStyles.end(), [&](const DimensionStyle& existing) {
               return existing.name == style.name;
-            })) st.dimensionStyles.push_back(std::move(style));
+            })) st.drawing.dimensionStyles.push_back(std::move(style));
       }
     }
-    if (st.dimensionStyles.empty()) st.dimensionStyles.push_back(ds);
-    if (const DimensionStyle* active = DimensionStyles::Find(st.dimensionStyles, ds.name)) ds = *active;
-    st.activeDimensionStyle = ds;
+    if (st.drawing.dimensionStyles.empty()) st.drawing.dimensionStyles.push_back(ds);
+    if (const DimensionStyle* active = DimensionStyles::Find(st.drawing.dimensionStyles, ds.name)) ds = *active;
+    st.drawing.activeDimensionStyle = ds;
     st.dimStyleDraft = ds;
   }
 
@@ -4118,9 +4119,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (property.value().is_string()) ms.props[property.key()] = property.value().get<std::string>();
       }
     }
-    st.activeMultileaderStyle = ms;
+    st.drawing.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
-    st.multileaderStyles.clear();
+    st.drawing.multileaderStyles.clear();
     if (doc.contains("multileaderStyles") && doc["multileaderStyles"].is_array()) {
       for (const auto& o : doc["multileaderStyles"]) {
         if (!o.is_object()) continue;
@@ -4136,19 +4137,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& property : o["props"].items())
           if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
       }
-        if (MultileaderStyles::Find(st.multileaderStyles, style.name) == nullptr)
-          st.multileaderStyles.push_back(std::move(style));
+        if (MultileaderStyles::Find(st.drawing.multileaderStyles, style.name) == nullptr)
+          st.drawing.multileaderStyles.push_back(std::move(style));
       }
     }
-    if (st.multileaderStyles.empty()) st.multileaderStyles.push_back(ms);
-    if (MultileaderStyles::Find(st.multileaderStyles, ms.name) == nullptr)
-      st.multileaderStyles.push_back(ms);
-    else if (const MultileaderStyle* active = MultileaderStyles::Find(st.multileaderStyles, ms.name))
+    if (st.drawing.multileaderStyles.empty()) st.drawing.multileaderStyles.push_back(ms);
+    if (MultileaderStyles::Find(st.drawing.multileaderStyles, ms.name) == nullptr)
+      st.drawing.multileaderStyles.push_back(ms);
+    else if (const MultileaderStyle* active = MultileaderStyles::Find(st.drawing.multileaderStyles, ms.name))
       ms = *active;
-    st.activeMultileaderStyle = ms;
+    st.drawing.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
   }
-  st.tableStyles.clear();
+  st.drawing.tableStyles.clear();
   if (doc.contains("tableStyles") && doc["tableStyles"].is_array()) {
     for (const auto& o : doc["tableStyles"]) {
       if (!o.is_object()) continue;
@@ -4186,33 +4187,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             style.pointColumns.push_back(static_cast<CadPointTableColumn>(value));
         }
       }
-      if (std::none_of(st.tableStyles.begin(), st.tableStyles.end(), [&](const CadTableStyle& existing) {
+      if (std::none_of(st.drawing.tableStyles.begin(), st.drawing.tableStyles.end(), [&](const CadTableStyle& existing) {
             return existing.name == style.name;
-          })) st.tableStyles.push_back(std::move(style));
+          })) st.drawing.tableStyles.push_back(std::move(style));
     }
   }
-  if (st.tableStyles.empty()) st.tableStyles = CadTableBuiltinStyles();
+  if (st.drawing.tableStyles.empty()) st.drawing.tableStyles = CadTableBuiltinStyles();
 
-  st.userLinesFlat.clear();
+  st.drawing.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
-    st.userLinesFlat.push_back(v.get<double>());
-  st.userLineAttrs.clear();
+    st.drawing.userLinesFlat.push_back(v.get<double>());
+  st.drawing.userLineAttrs.clear();
   for (const auto& o : doc["lineAttrs"])
-    st.userLineAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.userLineAttrs.push_back(EntityAttributesFromJson(o));
 
   // "circles" is cx,cy,r on disk; "circlesZ" is the additive per-circle Z (absent → all flat,
   // which is exactly how every pre-3D drawing loads).
-  st.userCirclesCxCyZR.clear();
+  st.drawing.userCirclesCxCyZR.clear();
   {
     const auto& cxyr = doc["circles"];
     const bool hasZ = doc.contains("circlesZ");
     const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
     size_t ci = 0;
     for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
-      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<double>());          // cx
-      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<double>());          // cy
-      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0);
-      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<double>());          // r
+      st.drawing.pushCircle(CadCircleRecord{cxyr[i + 0].get<double>(), cxyr[i + 1].get<double>(),
+                                            hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0, cxyr[i + 2].get<double>()});
     }
   }
   // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent
@@ -4223,83 +4222,83 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // second document over a first would have kept the first document's normals for every index the
   // new one also has. Invisible while every normal in every file was +Z; a real cross-document leak
   // the moment one is not.
-  st.userCircleNormals.clear();
+  st.drawing.userCircleNormals.clear();
   if (doc.contains("circlesN") && doc["circlesN"].is_array())
     for (const auto& v : doc["circlesN"])
-      st.userCircleNormals.push_back(v.get<float>());
+      st.drawing.userCircleNormals.push_back(v.get<float>());
   // Short, long or absent, the side-car ends up matching the circle count, so `docinvariants`
   // cannot fire on a freshly loaded document (REQ-204).
-  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
-  st.userCircleAttrs.clear();
+  EnsureCircleNormals(st.drawing.userCircleNormals, st.drawing.circleCount());
+  st.drawing.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])
-    st.userCircleAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.userCircleAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.userArcs.clear();
+  st.drawing.userArcs.clear();
   for (const auto& o : doc["arcs"])
-    st.userArcs.push_back(CadArcFromJson(o));
-  st.userArcAttrs.clear();
+    st.drawing.userArcs.push_back(CadArcFromJson(o));
+  st.drawing.userArcAttrs.clear();
   for (const auto& o : doc["arcAttrs"])
-    st.userArcAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.userArcAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.userEllipses.clear();
+  st.drawing.userEllipses.clear();
   for (const auto& o : doc["ellipses"])
-    st.userEllipses.push_back(CadEllipseFromJson(o));
-  st.userEllAttrs.clear();
+    st.drawing.userEllipses.push_back(CadEllipseFromJson(o));
+  st.drawing.userEllAttrs.clear();
   for (const auto& o : doc["ellAttrs"])
-    st.userEllAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.userEllAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.userPolylineOffsets.clear();
+  st.drawing.userPolylineOffsets.clear();
   for (const auto& v : doc["polylineOffsets"])
-    st.userPolylineOffsets.push_back(v.get<int>());
-  st.userPolylineVerts.clear();
+    st.drawing.userPolylineOffsets.push_back(v.get<int>());
+  st.drawing.userPolylineVerts.clear();
   for (const auto& v : doc["polylineVerts"])
-    st.userPolylineVerts.push_back(v.get<double>());
+    st.drawing.userPolylineVerts.push_back(v.get<double>());
   // REQ-316 / ADR-047: additive, guarded (no kGsFormatVersion bump) — a pre-ADR-047 file has no
   // "polylineVertsBulge" key and loads with the array left EMPTY, which every reader treats as
   // "all segments straight". Kept empty (not zero-filled) so a straight drawing re-saves identically.
-  st.userPolylineVertsBulge.clear();
+  st.drawing.userPolylineVertsBulge.clear();
   if (doc.contains("polylineVertsBulge"))
     for (const auto& v : doc["polylineVertsBulge"])
-      st.userPolylineVertsBulge.push_back(v.get<float>());
-  if (!st.userPolylineVertsBulge.empty())
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      st.drawing.userPolylineVertsBulge.push_back(v.get<float>());
+  if (!st.drawing.userPolylineVertsBulge.empty())
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
   // REQ-325 / ADR-053, same guarded shape: a file without the key loads with the array EMPTY, which
   // every reader treats as "every segment flat" (GitHub #521).
-  st.userPolylineVertsNormal.clear();
+  st.drawing.userPolylineVertsNormal.clear();
   if (doc.contains("polylineVertsNormal"))
     for (const auto& v : doc["polylineVertsNormal"])
-      st.userPolylineVertsNormal.push_back(v.get<float>());
-  if (!st.userPolylineVertsNormal.empty())
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-  st.userPolylineClosed.clear();
+      st.drawing.userPolylineVertsNormal.push_back(v.get<float>());
+  if (!st.drawing.userPolylineVertsNormal.empty())
+    SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
+  st.drawing.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
-    st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
-  st.userPolylineAttrs.clear();
+    st.drawing.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  st.drawing.userPolylineAttrs.clear();
   for (const auto& o : doc["polylineAttrs"])
-    st.userPolylineAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.userPolylineAttrs.push_back(EntityAttributesFromJson(o));
 
   // Feature lines (REQ-087). Every key is guarded, unlike the polyline block above, because these
   // arrays are NEW: a drawing written before REQ-087 has none of them and `doc["..."]` on a missing
   // key would throw rather than yield an empty surface.
-  st.featureLineOffsets.clear();
-  st.featureLineVerts.clear();
-  st.featureLineClosed.clear();
-  st.featureLineElevPt.clear();
-  st.featureLineInfo.clear();
-  st.gradingPresets.clear();
-  st.featureLineAttrs.clear();
+  st.drawing.featureLineOffsets.clear();
+  st.drawing.featureLineVerts.clear();
+  st.drawing.featureLineClosed.clear();
+  st.drawing.featureLineElevPt.clear();
+  st.drawing.featureLineInfo.clear();
+  st.drawing.gradingPresets.clear();
+  st.drawing.featureLineAttrs.clear();
   if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
     for (const auto& v : doc["featureLineOffsets"])
-      st.featureLineOffsets.push_back(v.get<int>());
+      st.drawing.featureLineOffsets.push_back(v.get<int>());
   if (doc.contains("featureLineVerts") && doc["featureLineVerts"].is_array())
     for (const auto& v : doc["featureLineVerts"])
-      st.featureLineVerts.push_back(v.get<double>());
+      st.drawing.featureLineVerts.push_back(v.get<double>());
   if (doc.contains("featureLineClosed") && doc["featureLineClosed"].is_array())
     for (const auto& v : doc["featureLineClosed"])
-      st.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+      st.drawing.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
   if (doc.contains("featureLineElevPt") && doc["featureLineElevPt"].is_array())
     for (const auto& v : doc["featureLineElevPt"])
-      st.featureLineElevPt.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+      st.drawing.featureLineElevPt.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
   if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array())
     for (const auto& o : doc["featureLineInfo"]) {
       CadFeatureLineInfo i;
@@ -4338,7 +4337,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             i.grading = d;
         }
       }
-      st.featureLineInfo.push_back(std::move(i));
+      st.drawing.featureLineInfo.push_back(std::move(i));
     }
   if (doc.contains("gradingPresets") && doc["gradingPresets"].is_array())
     for (const auto& o : doc["gradingPresets"]) {
@@ -4351,36 +4350,36 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       p.target = static_cast<CadGradingDefinition::Target>(o.at("target").get<int>());
       p.targetValue = o.at("targetValue").get<double>();
       p.distanceGradePercent = o.at("distanceGradePercent").get<double>();
-      st.gradingPresets.push_back(std::move(p));
+      st.drawing.gradingPresets.push_back(std::move(p));
     }
   if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
     for (const auto& o : doc["featureLineAttrs"])
-      st.featureLineAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.featureLineAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.cadAnnotations.clear();
+  st.drawing.cadAnnotations.clear();
   for (const auto& o : doc["annotations"])
-    st.cadAnnotations.push_back(CadAnnotationFromJson(o));
-  st.cadAnnotationAttrs.clear();
+    st.drawing.cadAnnotations.push_back(CadAnnotationFromJson(o));
+  st.drawing.cadAnnotationAttrs.clear();
   for (const auto& o : doc["annotationAttrs"])
-    st.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
+    st.drawing.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.cadTables.clear();
-  st.cadTableAttrs.clear();
+  st.drawing.cadTables.clear();
+  st.drawing.cadTableAttrs.clear();
   if (doc.contains("tables") && doc["tables"].is_array()) {
     for (const auto& o : doc["tables"])
-      st.cadTables.push_back(CadTableFromJson(o));
+      st.drawing.cadTables.push_back(CadTableFromJson(o));
   }
   if (doc.contains("tableAttrs") && doc["tableAttrs"].is_array()) {
     for (const auto& o : doc["tableAttrs"])
-      st.cadTableAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.cadTableAttrs.push_back(EntityAttributesFromJson(o));
   }
-  st.cadTableAttrs.resize(st.cadTables.size());
+  st.drawing.cadTableAttrs.resize(st.drawing.cadTables.size());
   MigrateLegacyAnnotationTables(st);
-  CadTableSyncSurveyPointTables(st.cadTables, st.tableStyles, st.modelUnitsPerPlottedInch);
+  CadTableSyncSurveyPointTables(st.drawing.cadTables, st.drawing.tableStyles, st.drawing.modelUnitsPerPlottedInch);
 
   // Position Markers (REQ-359 item 3). Missing / garbage entries are skipped, never a crash.
-  st.cadPositionMarkers.clear();
-  st.cadPositionMarkerAttrs.clear();
+  st.drawing.cadPositionMarkers.clear();
+  st.drawing.cadPositionMarkerAttrs.clear();
   if (doc.contains("positionMarkers") && doc["positionMarkers"].is_array()) {
     for (const auto& o : doc["positionMarkers"]) {
       if (!o.is_object())
@@ -4394,17 +4393,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("label") && o["label"].is_object())
         m.label = CadAnnotationFromJson(o["label"]);
       m.label.kind = CadAnnotation::Kind::Mtext;
-      st.cadPositionMarkers.push_back(std::move(m));
+      st.drawing.cadPositionMarkers.push_back(std::move(m));
     }
   }
   if (doc.contains("positionMarkerAttrs") && doc["positionMarkerAttrs"].is_array()) {
     for (const auto& o : doc["positionMarkerAttrs"])
-      st.cadPositionMarkerAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.cadPositionMarkerAttrs.push_back(EntityAttributesFromJson(o));
   }
-  st.cadPositionMarkerAttrs.resize(st.cadPositionMarkers.size());
+  st.drawing.cadPositionMarkerAttrs.resize(st.drawing.cadPositionMarkers.size());
 
-  st.cadMultileaders.clear();
-  st.cadMultileaderAttrs.clear();
+  st.drawing.cadMultileaders.clear();
+  st.drawing.cadMultileaderAttrs.clear();
   if (doc.contains("multileaders") && doc["multileaders"].is_array()) {
     for (const auto& o : doc["multileaders"]) {
       if (!o.is_object())
@@ -4440,17 +4439,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         ml.label = CadAnnotationFromJson(o["label"]);
       ml.label.kind = CadAnnotation::Kind::Mtext;
       if (ml.pathXyz.size() >= 6)
-        st.cadMultileaders.push_back(std::move(ml));
+        st.drawing.cadMultileaders.push_back(std::move(ml));
     }
   }
   if (doc.contains("multileaderAttrs") && doc["multileaderAttrs"].is_array()) {
     for (const auto& o : doc["multileaderAttrs"])
-      st.cadMultileaderAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.cadMultileaderAttrs.push_back(EntityAttributesFromJson(o));
   }
-  st.cadMultileaderAttrs.resize(st.cadMultileaders.size());
+  st.drawing.cadMultileaderAttrs.resize(st.drawing.cadMultileaders.size());
 
-  st.cadSplines.clear();
-  st.cadSplineAttrs.clear();
+  st.drawing.cadSplines.clear();
+  st.drawing.cadSplineAttrs.clear();
   if (doc.contains("splines") && doc["splines"].is_array()) {
     const json* attrs = doc.contains("splineAttrs") && doc["splineAttrs"].is_array()
                             ? &doc["splineAttrs"] : nullptr;
@@ -4461,17 +4460,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         continue;
       CadSpline s = CadSplineFromJson(o);
       if (spline::Validate(s).empty()) {
-        st.cadSplines.push_back(std::move(s));
-        st.cadSplineAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
+        st.drawing.cadSplines.push_back(std::move(s));
+        st.drawing.cadSplineAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
                                         ? EntityAttributesFromJson((*attrs)[attrIndex])
                                         : EntityAttributes{});
       }
     }
   }
-  st.cadSplineAttrs.resize(st.cadSplines.size());
+  st.drawing.cadSplineAttrs.resize(st.drawing.cadSplines.size());
 
-  st.cadPoints.clear();
-  st.cadPointAttrs.clear();
+  st.drawing.cadPoints.clear();
+  st.drawing.cadPointAttrs.clear();
   if (doc.contains("cadPoints") && doc["cadPoints"].is_array()) {
     const json* attrs = doc.contains("cadPointAttrs") && doc["cadPointAttrs"].is_array()
                             ? &doc["cadPointAttrs"] : nullptr;
@@ -4480,33 +4479,33 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       const size_t attrIndex = i++;
       if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
         continue;
-      st.cadPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
-      st.cadPointAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
+      st.drawing.cadPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+      st.drawing.cadPointAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
                                      ? EntityAttributesFromJson((*attrs)[attrIndex])
                                      : EntityAttributes{});
     }
   }
-  st.cadPointAttrs.resize(st.cadPoints.size());
-  st.pdMode = doc.value("pdMode", 0);
-  st.pdSize = doc.value("pdSize", 0.0);
+  st.drawing.cadPointAttrs.resize(st.drawing.cadPoints.size());
+  st.drawing.pdMode = doc.value("pdMode", 0);
+  st.drawing.pdSize = doc.value("pdSize", 0.0);
 
-  st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
-  st.blockDefs.clear();
-  st.cadBlockRefs.clear();
-  st.cadBlockRefAttrs.clear();
+  st.drawing.drawingInsUnits = doc.value("drawingInsUnits", st.drawing.drawingInsUnits);
+  st.drawing.blockDefs.clear();
+  st.drawing.cadBlockRefs.clear();
+  st.drawing.cadBlockRefAttrs.clear();
   if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
     for (const auto& o : doc["blockDefs"])
-      st.blockDefs.push_back(CadBlockDefFromJson(o));
+      st.drawing.blockDefs.push_back(CadBlockDefFromJson(o));
   }
   if (doc.contains("blockRefs") && doc["blockRefs"].is_array()) {
     for (const auto& o : doc["blockRefs"])
-      st.cadBlockRefs.push_back(CadBlockRefFromJson(o));
+      st.drawing.cadBlockRefs.push_back(CadBlockRefFromJson(o));
   }
   if (doc.contains("blockRefAttrs") && doc["blockRefAttrs"].is_array()) {
     for (const auto& o : doc["blockRefAttrs"])
-      st.cadBlockRefAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.cadBlockRefAttrs.push_back(EntityAttributesFromJson(o));
   }
-  st.cadBlockRefAttrs.resize(st.cadBlockRefs.size());
+  st.drawing.cadBlockRefAttrs.resize(st.drawing.cadBlockRefs.size());
   if (doc.contains("blockFavorites") && doc["blockFavorites"].is_array())
     st.blockFavorites = doc["blockFavorites"].get<std::vector<std::string>>();
   if (doc.contains("blockRecent") && doc["blockRecent"].is_array())
@@ -4518,8 +4517,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // Every mesh is VALIDATED before it is stored. A malformed or truncated file must be refused with
   // a specific reason rather than partly loaded (REQ-201): an index that overruns the vertex array
   // would otherwise reach the GPU, where it is an out-of-bounds read rather than an error message.
-  st.cadMeshes.clear();
-  st.cadMeshAttrs.clear();
+  st.drawing.cadMeshes.clear();
+  st.drawing.cadMeshAttrs.clear();
   if (doc.contains("meshes") && doc["meshes"].is_array()) {
     int meshIdx = 0;
     for (const auto& el : doc["meshes"]) {
@@ -4570,13 +4569,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         p.indexCount = static_cast<int>(m->indices.size());
         m->parts.push_back(std::move(p));
       }
-      st.cadMeshes.push_back(std::move(m));
+      st.drawing.cadMeshes.push_back(std::move(m));
     }
   }
   if (doc.contains("meshAttrs") && doc["meshAttrs"].is_array())
     for (const auto& o : doc["meshAttrs"])
-      st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
-  st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
+      st.drawing.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
+  st.drawing.cadMeshAttrs.resize(st.drawing.cadMeshes.size());  // keep the parallel arrays length-locked
 
   // Point clouds (REQ-171 / ADR-042). Guarded with contains(), so a pre-REQ-171 drawing simply has
   // none — the "legacy internal document payload loads unchanged" acceptance condition, same as meshes above.
@@ -4584,8 +4583,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // A cloud whose points array is not a multiple of 3, or whose parallel colour/intensity array
   // does not match the point count, is refused (REQ-201) rather than loaded with a silently
   // truncated or misaligned channel.
-  st.cadPointClouds.clear();
-  st.cadPointCloudAttrs.clear();
+  st.drawing.cadPointClouds.clear();
+  st.drawing.cadPointCloudAttrs.clear();
   if (doc.contains("pointClouds") && doc["pointClouds"].is_array()) {
     int cloudIdx = 0;
     for (const auto& el : doc["pointClouds"]) {
@@ -4626,13 +4625,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                       " skipped — malformed point/colour/intensity array length.");
         continue;
       }
-      st.cadPointClouds.push_back(std::move(pc));
+      st.drawing.cadPointClouds.push_back(std::move(pc));
     }
   }
   if (doc.contains("pointCloudAttrs") && doc["pointCloudAttrs"].is_array())
     for (const auto& o : doc["pointCloudAttrs"])
-      st.cadPointCloudAttrs.push_back(EntityAttributesFromJson(o));
-  st.cadPointCloudAttrs.resize(st.cadPointClouds.size());  // keep the parallel arrays length-locked
+      st.drawing.cadPointCloudAttrs.push_back(EntityAttributesFromJson(o));
+  st.drawing.cadPointCloudAttrs.resize(st.drawing.cadPointClouds.size());  // keep the parallel arrays length-locked
 
   // B-rep solids (REQ-313 / ADR-045). Guarded, so a drawing written before them simply has none.
   //
@@ -4640,8 +4639,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // reason: an invalid solid does not crash, it quietly reports a wrong volume and hands a Phase 4
   // boolean a shape that is not closed. A file that carries one is refused with the kernel's own
   // reason (REQ-201) rather than partly loaded.
-  st.cadSolids.clear();
-  st.cadSolidAttrs.clear();
+  st.drawing.cadSolids.clear();
+  st.drawing.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
   if (doc.contains("solids") && doc["solids"].is_array()) {
@@ -4658,20 +4657,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         log.push_back("Solid " + std::to_string(solidIdx) + " skipped — " + brep::ProblemText(why));
         continue;
       }
-      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+      st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     }
   }
   if (doc.contains("solidAttrs") && doc["solidAttrs"].is_array())
     for (const auto& o : doc["solidAttrs"])
-      st.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
-  st.cadSolidAttrs.resize(st.cadSolids.size());  // keep the parallel arrays length-locked
+      st.drawing.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
+  st.drawing.cadSolidAttrs.resize(st.drawing.cadSolids.size());  // keep the parallel arrays length-locked
 
   // Pipe runs (issue #486 increment B1 / REQ-345). Guarded, so a drawing written before them
   // simply has none. `pipeRunWorldSolidsSig` is left at its default (0) so the very next
   // `RefreshSolidDisplayGeometry` call rebuilds the swept solids from the loaded path rather than
   // trusting whatever was cached before the load.
-  st.cadPipeRuns.clear();
-  st.cadPipeRunAttrs.clear();
+  st.drawing.cadPipeRuns.clear();
+  st.drawing.cadPipeRunAttrs.clear();
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
@@ -4691,18 +4690,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         r.wallThicknessIn = el["wallThicknessIn"].get<double>();
       if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())
         r.pressureClassTag = el["pressureClassTag"].get<std::string>();
-      st.cadPipeRuns.push_back(std::move(r));
+      st.drawing.cadPipeRuns.push_back(std::move(r));
     }
   }
   if (doc.contains("pipeRunAttrs") && doc["pipeRunAttrs"].is_array())
     for (const auto& o : doc["pipeRunAttrs"])
-      st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
-  st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
+      st.drawing.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
+  st.drawing.cadPipeRunAttrs.resize(st.drawing.cadPipeRuns.size());  // keep the parallel arrays length-locked
 
   // Alignments (REQ-480 / REQ-496). Guarded, so a drawing written before them simply has none. An invalid
   // entity (REQ-499: non-positive length or radius) drops THAT alignment; the entity setter refuses what the
   // spec forbids, so a corrupt entity can never be stored.
-  st.alignments.clear();
+  st.drawing.alignments.clear();
   if (doc.contains("alignments") && doc["alignments"].is_array()) {
     for (const auto& el : doc["alignments"]) {
       if (!el.is_object()) continue;
@@ -4819,19 +4818,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           (void)a.AddStationEquation(eq);  // a refused equation is dropped, never stored half-valid
         }
       }
-      st.alignments.push_back(std::move(a));
+      st.drawing.alignments.push_back(std::move(a));
     }
   }
-  for (alignment::Alignment& a : st.alignments) {
+  for (alignment::Alignment& a : st.drawing.alignments) {
     if (a.style.empty()) continue;
-    if (AlignmentStyles::Find(st.alignmentStyles, a.style) != nullptr) continue;
+    if (AlignmentStyles::Find(st.drawing.alignmentStyles, a.style) != nullptr) continue;
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing style \"" + a.style +
                   "\"; using Standard.");
     a.style = AlignmentStyles::kStandardName;
   }
   // View frame groups (REQ-517). Frames are regenerated from the stored settings against their alignment. A group
   // whose alignment is missing is dropped (REQ-517.9); one whose settings no longer fit is kept and logged.
-  st.viewFrameGroups.clear();
+  st.drawing.viewFrameGroups.clear();
   if (doc.contains("viewFrameGroups") && doc["viewFrameGroups"].is_array()) {
     for (const auto& el : doc["viewFrameGroups"]) {
       if (!el.is_object()) continue;
@@ -4857,16 +4856,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (el.contains("sheetName") && el["sheetName"].is_string()) g.settings.sheetName = el["sheetName"].get<std::string>();
       if (el.contains("scaleName") && el["scaleName"].is_string()) g.settings.scaleName = el["scaleName"].get<std::string>();
-      st.viewFrameGroups.push_back(std::move(g));
+      st.drawing.viewFrameGroups.push_back(std::move(g));
     }
   }
   {
     std::vector<std::string> notes;
-    alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
+    alignment::SyncViewFrameGroups(st.drawing.alignments, st.drawing.viewFrameGroups, &notes);
     for (const std::string& n : notes) log.push_back(n);
   }
   // Sample lines (REQ-519): loaded as saved. A line whose alignment is missing is dropped.
-  st.sampleLines.clear();
+  st.drawing.sampleLines.clear();
   if (doc.contains("sampleLines") && doc["sampleLines"].is_array()) {
     for (const auto& el : doc["sampleLines"]) {
       if (!el.is_object()) continue;
@@ -4895,16 +4894,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           }
         }
       }
-      st.sampleLines.push_back(std::move(l));
+      st.drawing.sampleLines.push_back(std::move(l));
     }
   }
-  alignment::SyncSampleLines(st.alignments, st.sampleLines);
+  alignment::SyncSampleLines(st.drawing.alignments, st.drawing.sampleLines);
 
   // Design vertical profiles (REQ-521). Loaded as saved, with type guards: a field of the wrong type is ignored, never
   // thrown on. A profile is NOT loaded, and the load log names it, when its name is missing or repeats an earlier name,
   // or when its points are missing or malformed (REQ-521.8): a partial profile would show elevations the designer never
   // drew. A profile whose alignment is gone is kept (REQ-521.7).
-  st.profiles.clear();
+  st.drawing.profiles.clear();
   if (doc.contains("designProfiles") && doc["designProfiles"].is_array()) {
     size_t entry = 0;  // 1-based position, so a skipped entry with no usable name can still be named
     for (const auto& el : doc["designProfiles"]) {
@@ -4927,7 +4926,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         continue;
       }
       bool repeats = false;  // REQ-521.1: names are unique within the drawing, ignoring capitals
-      for (const alignment::VerticalProfile& q : st.profiles) {
+      for (const alignment::VerticalProfile& q : st.drawing.profiles) {
         std::string a = q.name, b = p.name;
         for (char& c : a) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
         for (char& c : b) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
@@ -4955,10 +4954,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         log.push_back("Design profile \"" + p.name + "\" was not loaded: a stored vertical point is malformed.");
         continue;
       }
-      st.profiles.push_back(std::move(p));
+      st.drawing.profiles.push_back(std::move(p));
     }
   }
-  st.surfaceProfiles.clear();
+  st.drawing.surfaceProfiles.clear();
   if (doc.contains("surfaceProfiles") && doc["surfaceProfiles"].is_array()) {
     for (const auto& el : doc["surfaceProfiles"]) {
       if (!el.is_object()) continue;
@@ -4977,29 +4976,29 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (p.stations.size() != p.elevations.size() || p.sampleInterval <= 0.0 || p.horizontalScale <= 0.0 || p.verticalScale <= 0.0) {
         log.push_back("PROFILE — invalid saved surface profile \"" + p.name + "\" was ignored."); continue;
       }
-      st.surfaceProfiles.push_back(std::move(p));
+      st.drawing.surfaceProfiles.push_back(std::move(p));
     }
   }
-  for (alignment::Alignment& a : st.alignments) {
+  for (alignment::Alignment& a : st.drawing.alignments) {
     if (a.labelSet.empty()) continue;
-    if (AlignmentLabelSets::Find(st.alignmentLabelSets, a.labelSet) != nullptr) continue;
+    if (AlignmentLabelSets::Find(st.drawing.alignmentLabelSets, a.labelSet) != nullptr) continue;
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing label set \"" + a.labelSet +
                   "\"; using Standard.");
     a.labelSet = AlignmentLabelSets::kStandardName;
   }
-  for (AlignmentStyle& s : st.alignmentStyles) {  // REQ-502: a style's check set must exist
+  for (AlignmentStyle& s : st.drawing.alignmentStyles) {  // REQ-502: a style's check set must exist
     if (s.checkSetName.empty()) continue;
     bool found = false;
-    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == s.checkSetName;
+    for (const alignment::AlignmentCheckSet& cs : st.drawing.alignmentCheckSets) found = found || cs.name == s.checkSetName;
     if (found) continue;
     log.push_back("ALIGNMENT — style \"" + s.name + "\" references missing check set \"" + s.checkSetName +
                   "\"; no criteria applied.");
     s.checkSetName.clear();
   }
-  for (alignment::Alignment& a : st.alignments) {  // REQ-502
+  for (alignment::Alignment& a : st.drawing.alignments) {  // REQ-502
     if (a.checkSetName.empty()) continue;
     bool found = false;
-    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == a.checkSetName;
+    for (const alignment::AlignmentCheckSet& cs : st.drawing.alignmentCheckSets) found = found || cs.name == a.checkSetName;
     if (found) continue;
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing check set \"" + a.checkSetName +
                   "\"; no criteria applied.");
@@ -5010,7 +5009,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // simply has none. An out-of-range index (a hand-edited or corrupted file) is dropped rather than
   // trusted — REQ-201: nothing invalid is ever stored, and pipeRuns above is already loaded so its
   // final size is known here.
-  st.cadPipingSystems.clear();
+  st.drawing.cadPipingSystems.clear();
   if (doc.contains("pipingSystems") && doc["pipingSystems"].is_array()) {
     for (const auto& el : doc["pipingSystems"]) {
       if (!el.is_object())
@@ -5024,17 +5023,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (!iv.is_number_integer())
             continue;
           const int idx = iv.get<int>();
-          if (idx >= 0 && static_cast<size_t>(idx) < st.cadPipeRuns.size())
+          if (idx >= 0 && static_cast<size_t>(idx) < st.drawing.cadPipeRuns.size())
             sys.pipeRunIndices.push_back(idx);
         }
       }
-      st.cadPipingSystems.push_back(std::move(sys));
+      st.drawing.cadPipingSystems.push_back(std::move(sys));
     }
   }
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
+  st.drawing.cadSurfaces.clear();
+  st.drawing.cadSurfaceAttrs.clear();
   if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
     for (const auto& el : doc["surfaces"]) {
       if (!el.is_object())
@@ -5239,14 +5238,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           log.push_back("Surface \"" + s.name + "\": stored triangulation is inconsistent — dropped.");
       }
       s.importedFixedTin = s.tin && el.value("importedFixedTin", false);
-      st.cadSurfaces.push_back(std::move(s));
+      st.drawing.cadSurfaces.push_back(std::move(s));
     }
   }
   if (doc.contains("surfaceAttrs") && doc["surfaceAttrs"].is_array())
     for (const auto& o : doc["surfaceAttrs"])
-      st.cadSurfaceAttrs.push_back(EntityAttributesFromJson(o));
-  st.cadSurfaceAttrs.resize(st.cadSurfaces.size());  // length-locked, as with meshes
-  st.cadRasterImages.clear();
+      st.drawing.cadSurfaceAttrs.push_back(EntityAttributesFromJson(o));
+  st.drawing.cadSurfaceAttrs.resize(st.drawing.cadSurfaces.size());  // length-locked, as with meshes
+  st.drawing.cadRasterImages.clear();
   if (doc.contains("modelImages") && doc["modelImages"].is_array()) {
     for (const auto& item : doc["modelImages"]) {
       if (!item.is_object() || !item.contains("path") || !item["path"].is_string()) continue;
@@ -5262,31 +5261,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       image.rotationRad = item.value("rotationRad", 0.f);
       image.pixelW = item.value("pixelW", 0);
       image.pixelH = item.value("pixelH", 0);
-      st.cadRasterImages.push_back(std::move(image));
+      st.drawing.cadRasterImages.push_back(std::move(image));
     }
   }
-  if (!st.cadMeshes.empty()) {
+  if (!st.drawing.cadMeshes.empty()) {
     // REQ-063 requires the count to be REPORTED, not merely survived: a silent truncation and a
     // successful load are indistinguishable without it.
     long long tris = 0;
     long long parts = 0;
-    for (const auto& mp : st.cadMeshes) {
+    for (const auto& mp : st.drawing.cadMeshes) {
       tris += mp->triangleCount();
       parts += static_cast<long long>(mp->parts.size());
     }
-    log.push_back("Loaded " + std::to_string(st.cadMeshes.size()) + " mesh(es): " + std::to_string(tris) +
+    log.push_back("Loaded " + std::to_string(st.drawing.cadMeshes.size()) + " mesh(es): " + std::to_string(tris) +
                   " triangles, " + std::to_string(parts) + " part(s).");
   }
-  if (!st.cadPointClouds.empty()) {
+  if (!st.drawing.cadPointClouds.empty()) {
     // REQ-172 requires the count to be REPORTED, same reason as meshes above.
     long long pts = 0;
-    for (const auto& pc : st.cadPointClouds) pts += pc->pointCount();
-    log.push_back("Loaded " + std::to_string(st.cadPointClouds.size()) + " point cloud(s): " +
+    for (const auto& pc : st.drawing.cadPointClouds) pts += pc->pointCount();
+    log.push_back("Loaded " + std::to_string(st.drawing.cadPointClouds.size()) + " point cloud(s): " +
                   std::to_string(pts) + " points.");
   }
 
   // Filled regions (ADR-011) — guarded with contains() so older internal document payload files load unchanged.
-  st.cadFilledRegions.clear();
+  st.drawing.cadFilledRegions.clear();
   if (doc.contains("filledRegions") && doc["filledRegions"].is_array()) {
     for (const auto& el : doc["filledRegions"]) {
       CadFilledRegion fr;
@@ -5328,16 +5327,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (fr.loopStart.empty() && fr.vertsXyz.size() >= 9)  // >= 3 vertices × 3 floats
         fr.loopStart.push_back(0);
-      st.cadFilledRegions.push_back(std::move(fr));
+      st.drawing.cadFilledRegions.push_back(std::move(fr));
     }
   }
-  st.cadFilledRegionAttrs.clear();
+  st.drawing.cadFilledRegionAttrs.clear();
   if (doc.contains("filledRegionAttrs") && doc["filledRegionAttrs"].is_array()) {
     for (const auto& o : doc["filledRegionAttrs"])
-      st.cadFilledRegionAttrs.push_back(EntityAttributesFromJson(o));
+      st.drawing.cadFilledRegionAttrs.push_back(EntityAttributesFromJson(o));
   }
 
-  st.annotationScales.clear();
+  st.drawing.annotationScales.clear();
   if (doc.contains("annotationScales") && doc["annotationScales"].is_array()) {
     for (const auto& el : doc["annotationScales"]) {
       CadAnnotationScale s;
@@ -5345,14 +5344,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.paperUnits = el.value("paperUnits", 1.f);
       s.drawingUnits = el.value("drawingUnits", 1.f);
       if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
-        st.annotationScales.push_back(std::move(s));
+        st.drawing.annotationScales.push_back(std::move(s));
     }
     st.currentAnnotationScaleIndex = doc.value("currentAnnotationScaleIndex", -1);
-    if (st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size()))
-      st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
+    if (st.currentAnnotationScaleIndex >= static_cast<int>(st.drawing.annotationScales.size()))
+      st.currentAnnotationScaleIndex = st.drawing.annotationScales.empty() ? -1 : 0;
   }
 
-  st.viewportZoomScales.clear();
+  st.drawing.viewportZoomScales.clear();
   st.currentViewportZoomScaleIndex = -1;
   if (doc.contains("viewportZoomScales") && doc["viewportZoomScales"].is_array()) {
     for (const auto& el : doc["viewportZoomScales"]) {
@@ -5361,11 +5360,11 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.paperUnits = el.value("paperUnits", 1.f);
       s.drawingUnits = el.value("drawingUnits", 1.f);
       if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
-        st.viewportZoomScales.push_back(std::move(s));
+        st.drawing.viewportZoomScales.push_back(std::move(s));
     }
     st.currentViewportZoomScaleIndex = doc.value("currentViewportZoomScaleIndex", -1);
-    if (st.currentViewportZoomScaleIndex >= static_cast<int>(st.viewportZoomScales.size()))
-      st.currentViewportZoomScaleIndex = st.viewportZoomScales.empty() ? -1 : 0;
+    if (st.currentViewportZoomScaleIndex >= static_cast<int>(st.drawing.viewportZoomScales.size()))
+      st.currentViewportZoomScaleIndex = st.drawing.viewportZoomScales.empty() ? -1 : 0;
   }
 
   st.dwgImportedLights.clear();
@@ -5423,13 +5422,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.dwgImportedLightListDictKey = "Default";
   }
 
-  st.drawingLayerTable.clear();
+  st.drawing.drawingLayerTable.clear();
   if (doc.contains("layers") && doc["layers"].is_array()) {
     for (const auto& o : doc["layers"])
-      st.drawingLayerTable.push_back(CadLayerRowFromJson(o));
+      st.drawing.drawingLayerTable.push_back(CadLayerRowFromJson(o));
   }
 
-  st.surveyPoints.clear();
+  st.drawing.surveyPoints.clear();
   if (doc.contains("surveyPoints") && doc["surveyPoints"].is_array()) {
     for (const auto& o : doc["surveyPoints"]) {
       SurveyPoint p;
@@ -5454,10 +5453,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // rebuilt from the annotation side alone (see ReconcileSurveyLabelLinks), which needs one
       // direction, not two that could disagree.
       p.labelMtextAnnId = o.value("labelMtextAnnId", static_cast<std::uint64_t>(0));
-      st.surveyPoints.push_back(std::move(p));
+      st.drawing.surveyPoints.push_back(std::move(p));
     }
   }
-  st.surveyPointStyles.clear();
+  st.drawing.surveyPointStyles.clear();
   if (doc.contains("surveyPointStyles") && doc["surveyPointStyles"].is_array()) {
     for (const auto& o : doc["surveyPointStyles"]) {
       if (!o.is_object()) continue;
@@ -5496,11 +5495,11 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           component.linetypeScale = components[i].value("linetypeScale", component.linetypeScale);
         }
       }
-      st.surveyPointStyles.push_back(std::move(style));
+      st.drawing.surveyPointStyles.push_back(std::move(style));
     }
   }
-  if (st.surveyPointStyles.empty()) st.surveyPointStyles = DefaultSurveyPointStyles();
-  st.surveyPointLabelStyles.clear();
+  if (st.drawing.surveyPointStyles.empty()) st.drawing.surveyPointStyles = DefaultSurveyPointStyles();
+  st.drawing.surveyPointLabelStyles.clear();
   if (doc.contains("surveyPointLabelStyles") && doc["surveyPointLabelStyles"].is_array()) {
     for (const auto& o : doc["surveyPointLabelStyles"]) {
       if (!o.is_object()) continue;
@@ -5516,16 +5515,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("civilTextContents") && o["civilTextContents"].is_array())
         for (const auto& content : o["civilTextContents"])
           if (content.is_string()) style.civilTextContents.push_back(content.get<std::string>());
-      st.surveyPointLabelStyles.push_back(std::move(style));
+      st.drawing.surveyPointLabelStyles.push_back(std::move(style));
     }
   }
-  if (st.surveyPointLabelStyles.empty()) st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  if (st.drawing.surveyPointLabelStyles.empty()) st.drawing.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
 
-  st.createPointsNextId = doc.value("createPointsNextId", 1);
-  st.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
+  st.drawing.createPointsNextId = doc.value("createPointsNextId", 1);
+  st.drawing.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
   if (doc.contains("pointVisibility") && doc["pointVisibility"].is_object()) {
     const json& v = doc["pointVisibility"];
-    projpts::Rules& r = st.pointVisibility;
+    projpts::Rules& r = st.drawing.pointVisibility;
     r.idRanges = v.value("idRanges", std::string());
     r.description = v.value("description", std::string());
     r.useElevation = v.value("useElevation", false);
@@ -5537,9 +5536,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     r.hidden = projpts::IdsFromText(v.value("hidden", std::string()));
   }
   if (doc.contains("createPointsOptions") && doc["createPointsOptions"].is_object())
-    st.createPointsOpts = CreatePointsOptionsFromJson(doc["createPointsOptions"]);
+    st.drawing.createPointsOpts = CreatePointsOptionsFromJson(doc["createPointsOptions"]);
   else
-    st.createPointsOpts = CreatePointsOptions{};
+    st.drawing.createPointsOpts = CreatePointsOptions{};
 
   CadCoord::MaybeRebaseLargeCoordinates(st, &log);
 
@@ -5552,8 +5551,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     const double panWorldX = view.value("panWorldX", 0.0);
     const double panWorldY = view.value("panWorldY", 0.0);
     const float zoom = view.value("zoom", 1.f);
-    st.viewportPanX = panWorldX - st.worldDocumentOriginX;
-    st.viewportPanY = panWorldY - st.worldDocumentOriginY;
+    st.viewportPanX = panWorldX - st.drawing.worldDocumentOriginX;
+    st.viewportPanY = panWorldY - st.drawing.worldDocumentOriginY;
     // Clamp to the range the zoom controls themselves use, so a corrupt or hand-edited value cannot
     // leave the drawing on an unrecoverable view (REQ-201).
     st.viewportZoom = std::clamp(zoom, 1.e-9f, 1.e9f);
@@ -5610,7 +5609,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.activeUcs.origin.z = view.value("ucsElevation", 0.0);
     }
     st.ucsFollow = view.value("ucsFollow", false);
-    st.ucsNamed.clear();
+    st.drawing.ucsNamed.clear();
     const auto namedIt = view.find("namedUcs");
     if (namedIt != view.end() && namedIt->is_array()) {
       for (const auto& entry : *namedIt) {
@@ -5620,14 +5619,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         n.name = entry.value("name", std::string());
         if (n.name.empty() || !readUcs(entry, &n.frame))
           continue;
-        st.ucsNamed.push_back(std::move(n));
+        st.drawing.ucsNamed.push_back(std::move(n));
       }
     }
 
     // Named views (REQ-106). A view whose numbers are not finite is DISCARDED rather than loaded:
     // restoring it would send the camera somewhere it cannot come back from, and losing one saved
     // bookmark is a far smaller harm than a drawing you cannot look at (REQ-201).
-    st.namedViews.clear();
+    st.drawing.namedViews.clear();
     const auto nvIt = view.find("namedViews");
     if (nvIt != view.end() && nvIt->is_array()) {
       for (const auto& entry : *nvIt) {
@@ -5658,7 +5657,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         const auto vu = entry.find("ucs");
         if (vu != entry.end() && vu->is_object() && !readUcs(*vu, &v.ucs))
           v.ucs = ucs::Ucs{};  // a broken frame falls back to World, as the active one does
-        st.namedViews.push_back(std::move(v));
+        st.drawing.namedViews.push_back(std::move(v));
       }
     }
     st.activeViewName = view.value("activeViewName", std::string());
@@ -5686,14 +5685,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     // Rebuild both halves from the annotation side. That direction alone is sufficient, and using
     // only one source means the two cannot contradict each other — which the old index pair could,
     // and which is why the code below it existed at all.
-    for (SurveyPoint& p : st.surveyPoints)
+    for (SurveyPoint& p : st.drawing.surveyPoints)
       p.labelMtextAnnId = 0;
     int migrated = 0;
     int skippedNotMtext = 0;
     int skippedBadIndex = 0;
     int skippedNoId = 0;
-    for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-      CadAnnotation& a = st.cadAnnotations[ai];
+    for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+      CadAnnotation& a = st.drawing.cadAnnotations[ai];
       const int legacyPointIndex = a.surveyPointLabelForId;  // still an index on this path
       a.surveyPointLabelForId = -1;
       if (legacyPointIndex < 0)
@@ -5702,17 +5701,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         ++skippedNotMtext;
         continue;
       }
-      if (static_cast<size_t>(legacyPointIndex) >= st.surveyPoints.size()) {
+      if (static_cast<size_t>(legacyPointIndex) >= st.drawing.surveyPoints.size()) {
         ++skippedBadIndex;
         continue;
       }
-      const std::uint64_t annId = st.cadAnnotationAttrs[ai].id;
+      const std::uint64_t annId = st.drawing.cadAnnotationAttrs[ai].id;
       if (annId == 0) {
         // Would silently produce an unlinked label and a duplicate on the next step (REQ-201).
         ++skippedNoId;
         continue;
       }
-      SurveyPoint& p = st.surveyPoints[static_cast<size_t>(legacyPointIndex)];
+      SurveyPoint& p = st.drawing.surveyPoints[static_cast<size_t>(legacyPointIndex)];
       a.surveyPointLabelForId = p.id;
       p.labelMtextAnnId = annId;
       ++migrated;
@@ -5733,18 +5732,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   // Current files: drop any half-link. Both directions must agree, or neither is trusted — a label
   // pointing at a point that does not point back is an orphan, not a label.
-  for (SurveyPoint& p : st.surveyPoints) {
+  for (SurveyPoint& p : st.drawing.surveyPoints) {
     const int ai = FindSurveyLabelAnnIndex(st, p);
-    if (ai < 0 || st.cadAnnotations[static_cast<size_t>(ai)].kind != CadAnnotation::Kind::Mtext ||
-        st.cadAnnotations[static_cast<size_t>(ai)].surveyPointLabelForId != p.id)
+    if (ai < 0 || st.drawing.cadAnnotations[static_cast<size_t>(ai)].kind != CadAnnotation::Kind::Mtext ||
+        st.drawing.cadAnnotations[static_cast<size_t>(ai)].surveyPointLabelForId != p.id)
       p.labelMtextAnnId = 0;
   }
-  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-    CadAnnotation& a = st.cadAnnotations[ai];
+  for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+    CadAnnotation& a = st.drawing.cadAnnotations[ai];
     if (a.surveyPointLabelForId < 0)
       continue;
     const int pi = SurveyPointIndexForId(st, a.surveyPointLabelForId);
-    if (pi < 0 || st.surveyPoints[static_cast<size_t>(pi)].labelMtextAnnId != st.cadAnnotationAttrs[ai].id)
+    if (pi < 0 || st.drawing.surveyPoints[static_cast<size_t>(pi)].labelMtextAnnId != st.drawing.cadAnnotationAttrs[ai].id)
       a.surveyPointLabelForId = -1;
   }
 }
@@ -5939,29 +5938,29 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
     CloseMtextRichEditorUi(st);
     st.mtextRichEditorBuf.clear();
     ClearCadGeometry(st);
-    st.surveyPoints.clear();
+    st.drawing.surveyPoints.clear();
     st.surveyPointIdBuffers.clear();
     st.selectedSurveyPointIndices.clear();
-    st.drawingLayerTable.clear();
-    st.textStyles.clear();
+    st.drawing.drawingLayerTable.clear();
+    st.drawing.textStyles.clear();
 
     ApplyDocumentFromJson(st, doc, log);
 
     if (root.contains("settings") && root["settings"].is_object())
       ApplySettingsFromJson(st, root["settings"]);
 
-    if (!st.annotationScales.empty() &&
+    if (!st.drawing.annotationScales.empty() &&
         (st.currentAnnotationScaleIndex < 0 ||
-         st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size())))
+         st.currentAnnotationScaleIndex >= static_cast<int>(st.drawing.annotationScales.size())))
       SyncCurrentAnnotationScaleIndex(st);
 
     EnsureAttrCounts(st);
     SyncDrawingLayerTableWithGeometry(st);
     RepositionAllSurveyPointLabels(st);
     int recreated = 0;
-    for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
-      if (st.surveyPoints[i].labelStyle != SurveyPointLabelStyle::None &&
-          FindSurveyLabelAnnIndex(st, st.surveyPoints[i]) < 0) {
+    for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i) {
+      if (st.drawing.surveyPoints[i].labelStyle != SurveyPointLabelStyle::None &&
+          FindSurveyLabelAnnIndex(st, st.drawing.surveyPoints[i]) < 0) {
         EnsureSurveyPointLabelMtext(st, i, &log);
         ++recreated;
       }

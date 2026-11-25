@@ -1,147 +1,42 @@
-# GoSurvey 0.7.8
+# GoSurvey 0.8.9
 
-This release is built around **Projects** — one place for every drawing, point file, PDF, and cloud
-that belongs to a job. The sections below walk through what is new and how it fits together.
+## New in 0.8.9
 
-## Key Features
-
-- **Projects** — organize every drawing, point file, PDF, and cloud for one job in one place; share
-  survey points across tabs; pack and email the whole project when it is ready to send
-- **Coordinate systems and maps** — work in real survey zones; show USGS aerial imagery under your
-  drawing and keep captured map areas with the file
-- **Built-in PDF viewer** — open plan sheets inside GoSurvey, mark them up, measure, compare
-  revisions, and split pages without leaving the app
-- **Point clouds** — attach scan and LIDAR data, clip and style it, and use it alongside your linework
-- **Piping** — lay out **pipe runs** with standard fittings from the library; export pipe geometry
-  with your drawing
-- **3D surfaces and grading** — build TIN surfaces, drape linework, grade side slopes to daylight,
-  and model pads and solids on real ground
+- Improved TRIM, PIPERUN, text editing, selection, and hatch display.
+- Start opens without an empty drawing, and Properties shows more object details.
+- Undo and drawing tabs retain more drawing settings and content.
+- Fixed viewport picks and command completion for HATCH and EXTRACTCENTERLINE.
+- Improved hatch tools, PDF dimensions, viewport picking, and editor input.
+- F1 help is more context-aware, and the manual now includes searchable command pages.
 
 ---
 
-## Projects
+## Drawing and layout
 
-![Recent Projects and the project workspace with shared survey points](whats-new:projects.png)
+- Create view frames and sample lines along alignments, then generate plan and section sheets.
+- Preview and export layouts to PDF with page setup offsets, centering, fit-to-paper scaling, and plot ratios.
+- Manage paper layouts and viewports, including viewport scale and clipping.
+- Save paper-space dimensions, points, splines, and raster images as native DWG objects.
 
-**Projects change how you open and deliver work.** Instead of loose drawings on disk, you work inside
-a project folder with shared survey points and tracked files.
+## Survey, surfaces, and design
 
-- Create a **project** with its own settings and **shared survey point database**
-- Open several drawings on one project; points stay in sync across tabs
-- **Add drawing to project** with preview; convert units or coordinate system when needed
-- Track DWG, PDF, and point cloud files; **pack** the whole project to send
-- **Recent Projects** on the start screen; turnover records for clean handoffs
+- Copy and paste survey points, with options for point-number conflicts and coordinate-system mismatches.
+- Create and manage grading presets and groups, copy grading results, and edit feature-line elevations and grades.
+- Create vertical design profiles along alignments and save them with the drawing.
+- Create and edit alignments with transition spirals, stationing, grips, and design-criteria checks.
+- Import LandXML survey points, TIN surfaces, and feature lines, with unit conversion when units are known.
 
----
+## Drafting and drawing exchange
 
-## Coordinate systems and maps
+- Use additive click and box selection, live text and PDF transforms, and magnetic snaps.
+- Set model-space annotation scale without changing the viewport zoom.
+- Use DIMALIGNED and DIMLINEAR with the active dimension style.
+- Run CUT from the ribbon, context menu, Ctrl+X, or command line; Undo restores cut objects.
+- Open and save R2010 or R2018 DWG files with improved support for layouts, viewports, and drawing data.
 
-![Drawing with coordinate zone and USGS aerial map underlay](whats-new:maps.png)
+## Editor and startup
 
-**Work in real survey coordinates** and see your linework on live imagery for context.
+- See clearer input focus, command history, selection feedback, and PDF workflow guidance in the editor and panels.
+- The start screen shows update-checking progress before an available update is offered.
 
-- Set and enforce a **coordinate system** for the project or drawing
-- **Online map** underlay from USGS aerial imagery, aligned to your zone
-- **Capture map** areas into the drawing so the background travels with the file
-- Geographic marker and geodata support exchange with Civil 3D and GIS workflows
-
----
-
-## Built-in PDF viewer
-
-![PDF viewer with markup and measure tools on a plan sheet](whats-new:pdf-viewer.png)
-
-**Open plan sheets inside GoSurvey** — no switching to another app for review and markup.
-
-- **PDFVIEW** opens sheets in a dedicated window (dockable or on a second monitor)
-- Annotate, measure, set scale, compare two revisions, and highlight changes
-- Split pages and attach PDFs to a project without placing them on a layout
-
----
-
-## Point clouds
-
-![Point cloud displayed with linework in the model view](whats-new:point-clouds.png)
-
-**Bring scan and LIDAR data into the same view as your survey linework.**
-
-- Attach **E57** and other cloud formats; control density, color, and clipping
-- Use clouds for context, clearance checks, and as-built comparison
-- Project file tracking includes cloud paths when you pack a job
-
----
-
-## Piping and fittings
-
-![Pipe run with fittings from the library in 3D or plan view](whats-new:piping.png)
-
-**Route pipe runs with standard fittings** and export geometry with your drawing.
-
-- **PIPERUN** and related commands to route pipe with size and elevation
-- Place **fittings** from the built-in library (for example weld-neck and blind flanges)
-- Snap to run ends; move and copy runs like other model objects
-
----
-
-## Surfaces, grading, and 3D
-
-![TIN surface, grading daylight line, or pad solid on existing ground](whats-new:surfaces-3d.png)
-
-**Model ground, pads, and slopes** on the surfaces and solids you already use in GoSurvey.
-
-- Build and edit TIN **surfaces**; volumes, contours, and surface styles
-- **DRAPE** linework onto a surface; **PADSOLID** for cut/fill pads
-- **GRADING** side slopes from a feature line to a **daylight line**
-- Continued improvements to **3D solids**, DWG exchange, dimensions, and **F1** help
-
----
-
-## What's changed since 0.7.0
-
-**0.7.1**
-- Installer now bundles the Visual C++ runtime GoSurvey needs, so it starts on a fresh PC.
-- A startup problem dialog explains what went wrong and can send a pre-filled support report.
-- Software Update dialog uses the same illustrated look as What's New.
-
-**0.7.2**
-- **Extract Coordinates** — drag a box over coordinate text in a PDF and read it straight into
-  survey points or circles, reviewed before anything is created.
-- Pasted content can be converted to the destination project's coordinate system and units.
-- Paper-space content (viewports, sheet geometry) now survives DXF export and DWG round-trip.
-- Plant 3D piping DWGs: more solids import correctly, and Plant fittings now write back out on save.
-- Runtime crash reports: a shared dialog explains what happened and can send a report.
-- Various paper-space and ribbon fixes.
-
-**0.7.3**
-- Set up paper layouts and viewport scales with the new `LAYOUT`, `PAGESETUP`, and `VPSCALE`
-  commands.
-- Browse and edit survey points in the new Survey Point Database grid.
-- Start pipe runs and Feature Line commands directly from the ribbon.
-
-**0.7.4**
-- Adjust traverses with the new least-squares editor, including ground-to-grid scaling and
-  curvature/refraction corrections.
-- Import and export E57, LAS, LAZ, PTS, and PTX point clouds.
-
-**0.7.5**
-- GoSurvey now installs under `%LOCALAPPDATA%\Programs\GoSurvey`. The first update from Program
-  Files asks once for Windows approval and keeps your settings and user data.
-- Startup and crash reports can include a stack-focused memory dump when available. See the Privacy
-  Policy for what is sent and how long uploaded dumps are kept.
-
-**0.7.6**
-- Paper-space viewports keep their camera, UCS, layer colors, and independent annotation scale when
-  you save and reopen R2018 DWG and DXF drawings.
-- The PowerShell install command now recognizes stable releases and continues with setup.
-
-**0.7.7**
-- Moving an older Program Files installation to your user profile now recognizes and removes the old version, so the Start Menu opens the updated copy.
-- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
-
-**0.7.8**
-- Fixed the Start Menu still opening an old version after an update: the installer and install command now ask Windows for permission to remove an older Program Files copy, keep your settings, and stop with a clear message if it can't be removed.
-
----
-
-See the [releases page](https://github.com/chetjones003/GoSurvey/releases) for the installer and
-full release notes.
+See the [0.8.9 release notes](https://github.com/chetjones003/GoSurvey/releases/tag/v0.8.9) for the full list of changes.

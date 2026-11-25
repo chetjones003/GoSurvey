@@ -67,7 +67,6 @@ MSVC x64 Qt 6.8+ kit; set `$env:GOSURVEY_QT_ROOT` if it isn't at `C:\Qt\6.8.3\ms
 | Task | Command (PowerShell, repo root) |
 | --- | --- |
 | Build everything (Release) | `.\build.bat` |
-| Qt GUI tests (hidden desktop) | `ctest --preset ninja-release -R "^qt[.]editor$"` |
 | Full suite | `ctest --preset ninja-release` |
 | Output layout check | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
 | Clean rebuild | `.\build.bat release --clean-first` |
@@ -84,7 +83,7 @@ GoSurvey process from another worktree. If a build is blocked, check the process
 
 ### Build output
 
-- `build/`: only `GoSurvey.exe`, `GoSurveyQtTests.exe` and their runtime files (DLLs, `qt.conf`,
+- `build/`: only `GoSurvey.exe` and its runtime files (DLLs, `qt.conf`,
   `qt-plugins/`, `resources/`, `.ini`). Debug goes in `build/debug/`.
 - `build/.cmake/<preset>/`: caches, generated headers, libs, symbols, helper executables.
 - `build/artifacts/`: screenshots, logs, test reports. Never commit them.
@@ -106,26 +105,6 @@ GoSurvey process from another worktree. If a build is blocked, check the process
 5. **Record** hard-to-reverse decisions as an ADR in `docs/adr/` and new terms in `GLOSSARY.md`
    (`domain-modeling`). Skip routine choices.
 6. **Open the PR** against `beta` with `Closes #N`.
-
-### Qt UI changes: Civil 3D comparison
-
-Visible Qt UI changes must pass this panel before the work is done. User approval is not required.
-
-1. Capture every affected surface and state (normal, busy, error, empty, disabled) from the hidden
-   test run (`tools/run-qt-tests-hidden.ps1`) with `widget->grab()` or `grabFramebuffer()`.
-2. Reproduce the same task and view in Civil 3D (match size, scale, theme, camera and zoom; note
-   what can't be matched) and capture it.
-3. Three agents score the pairs independently, 0–2 each (0 = material mismatch, 1 = noticeable,
-   2 = close), citing locations: structure/geometry, hierarchy/typography, color/visual weight,
-   state/feedback, overall composition.
-4. Pass when every item's median is ≥ 1 and there's no blocker. A blocker is a mismatch that hides
-   a work area, makes a control unreadable or changes meaning, cited by at least two reviewers.
-   On a fail: fix, recapture, and run a fresh panel.
-5. Save captures, settings, score sheets and the result under `build/artifacts/`, and report it in
-   the PR.
-
-If Civil 3D can't be used or matched, mark the comparison **inconclusive** in the PR. Never claim
-a pass from unpaired screenshots.
 
 ## Coding principles
 

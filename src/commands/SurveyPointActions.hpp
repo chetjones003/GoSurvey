@@ -8,19 +8,19 @@
 
 struct AppCommandState;
 
-/// Resolve a survey point's label link to an index into \c st.cadAnnotations, or -1 if there is none.
+/// Resolve a survey point's label link to an index into \c st.drawing.cadAnnotations, or -1 if there is none.
 ///
 /// The link is stored as a stable entity id (REQ-076), so this is the one place that turns it back
 /// into an index — and the index is a return value, never something a caller stores.
 [[nodiscard]] int FindSurveyLabelAnnIndex(const AppCommandState& st, const SurveyPoint& p);
 
-/// Resolve a label MTEXT's back-link to an index into \c st.surveyPoints, or -1 if there is none.
+/// Resolve a label MTEXT's back-link to an index into \c st.drawing.surveyPoints, or -1 if there is none.
 ///
 /// The argument is a \c SurveyPoint::id (the point number), not an array position — that is what
 /// \c CadAnnotation::surveyPointLabelForId now holds (REQ-076).
 [[nodiscard]] int SurveyPointIndexForId(const AppCommandState& st, int surveyPointId);
 
-/// Indices into \c st.surveyPoints of every point matching \p group (REQ-067).
+/// Indices into \c st.drawing.surveyPoints of every point matching \p group (REQ-067).
 ///
 /// Computed fresh on every call — a group stores a rule, never a member list (ASSUMPTION-3). Returns
 /// indices rather than ids because callers immediately want the points; ids are what get *stored*.

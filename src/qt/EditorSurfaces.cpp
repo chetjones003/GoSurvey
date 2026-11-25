@@ -72,7 +72,7 @@ QTableWidget* MakeTable(QWidget* parent, const char* name, const QStringList& he
 
 void EditorWindow::ShowCreateSurface() {
   if (findChild<QDialog*>("createSurfaceDialog")) return;
-  SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
+  SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
   const bool outerModal = m_ModalOpen;
   m_ModalOpen = true;
 
@@ -141,7 +141,7 @@ void EditorWindow::ShowCreateSurface() {
   description->setObjectName("createSurfaceDescription");
   auto* style = new QComboBox(infoBox);
   style->setObjectName("createSurfaceStyle");
-  for (const SurfaceStyle& entry : m_State.surfaceStyles) style->addItem(Q(entry.name));
+  for (const SurfaceStyle& entry : m_State.drawing.surfaceStyles) style->addItem(Q(entry.name));
   style->setCurrentText(SurfaceStyles::kStandardName);
   auto* layer = new QComboBox(infoBox);
   layer->setObjectName("createSurfaceLayer");
@@ -180,12 +180,12 @@ void EditorWindow::ShowCreateSurface() {
 
   bool layerChosen = false;  // REQ-361: follows the name's Object Layers layer until a layer is chosen
   const auto syncLayer = [&] {
-    const auto& row = m_State.drawingSettings.ObjectLayer(ObjectLayerKind::Surface);
+    const auto& row = m_State.drawing.drawingSettings.ObjectLayer(ObjectLayerKind::Surface);
     const QSignalBlocker blocker(layer);
     QString shown = layer->currentText();
-    if (!layerChosen || row.locked) shown = Q(ResolveObjectLayer(m_State.drawingSettings, ObjectLayerKind::Surface, S(name->text())));
+    if (!layerChosen || row.locked) shown = Q(ResolveObjectLayer(m_State.drawing.drawingSettings, ObjectLayerKind::Surface, S(name->text())));
     layer->clear();
-    for (const CadLayerRow& entry : m_State.drawingLayerTable) layer->addItem(Q(entry.name));
+    for (const CadLayerRow& entry : m_State.drawing.drawingLayerTable) layer->addItem(Q(entry.name));
     if (layer->findText(shown) < 0) layer->insertItem(0, shown);
     layer->setCurrentText(shown);
     layer->setEnabled(!row.locked);
@@ -195,7 +195,7 @@ void EditorWindow::ShowCreateSurface() {
     const QSignalBlocker blocker(combo);
     combo->clear();
     combo->addItem("(select)", QString());
-    for (const CadSurface& surface : m_State.cadSurfaces) {
+    for (const CadSurface& surface : m_State.drawing.cadSurfaces) {
       if (gridsOnly && surface.kind != SurfaceKind::Grid) continue;
       combo->addItem(Q(surface.name), Q(surface.name));
     }
@@ -203,9 +203,9 @@ void EditorWindow::ShowCreateSurface() {
     combo->setCurrentIndex(at >= 0 ? at : 0);
   };
   QString baseName, comparisonName;
-  if (m_State.cadSurfaces.size() >= 2) {
-    baseName = Q(m_State.cadSurfaces[0].name);
-    comparisonName = Q(m_State.cadSurfaces[1].name);
+  if (m_State.drawing.cadSurfaces.size() >= 2) {
+    baseName = Q(m_State.drawing.cadSurfaces[0].name);
+    comparisonName = Q(m_State.drawing.cadSurfaces[1].name);
   }
   const auto syncKind = [&] {
     const int index = kind->currentIndex();
@@ -270,8 +270,8 @@ void EditorWindow::ShowCreateSurface() {
 
 void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
   if (findChild<QDialog*>("surfacePropertiesDialog")) return;
-  if (surfaceIndex < 0 || surfaceIndex >= static_cast<int>(m_State.cadSurfaces.size())) return;
-  SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
+  if (surfaceIndex < 0 || surfaceIndex >= static_cast<int>(m_State.drawing.cadSurfaces.size())) return;
+  SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
   const bool outerModal = m_ModalOpen;
   m_ModalOpen = true;
   const int si = surfaceIndex;
@@ -391,12 +391,12 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
   root->addLayout(buttons);
   surfaceui::StyleDialog(&dialog);
 
-  const auto surface = [&]() -> CadSurface& { return m_State.cadSurfaces[static_cast<size_t>(si)]; };
+  const auto surface = [&]() -> CadSurface& { return m_State.drawing.cadSurfaces[static_cast<size_t>(si)]; };
   std::string committedStyle = surface().styleName.empty() ? std::string(SurfaceStyles::kStandardName) : surface().styleName;
   const auto fillStyles = [&](const std::string& select) {
     const QSignalBlocker blocker(styleCombo);
     styleCombo->clear();
-    for (const SurfaceStyle& entry : m_State.surfaceStyles) styleCombo->addItem(Q(entry.name));
+    for (const SurfaceStyle& entry : m_State.drawing.surfaceStyles) styleCombo->addItem(Q(entry.name));
     if (styleCombo->findText(Q(select)) < 0) styleCombo->addItem(Q(select));
     styleCombo->setCurrentText(Q(select));
   };
@@ -434,8 +434,8 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
     moveDown->setEnabled(surfedit::CanMoveDefinitionRow(definitionRows, current, 1));
   };
   const auto currentStyle = [&]() -> SurfaceStyle* {
-    SurfaceStyle* found = SurfaceStyles::Find(m_State.surfaceStyles, surface().styleName);
-    return found ? found : &SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
+    SurfaceStyle* found = SurfaceStyles::Find(m_State.drawing.surfaceStyles, surface().styleName);
+    return found ? found : &SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
   };
   const auto loadAnalysis = [&] {
     const SurfaceStyle* style = currentStyle();
@@ -478,8 +478,8 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
     add("Edges", QString::number(stats.uniqueEdges));
     add("Breakline edges", QString::number(stats.breaklineEdges));
     // Statistics are in the drawing's local frame; show world coordinates, as Civil 3D does.
-    add("X range", QString("%1 to %2").arg(stats.minX + m_State.worldDocumentOriginX, 0, 'f', 3).arg(stats.maxX + m_State.worldDocumentOriginX, 0, 'f', 3));
-    add("Y range", QString("%1 to %2").arg(stats.minY + m_State.worldDocumentOriginY, 0, 'f', 3).arg(stats.maxY + m_State.worldDocumentOriginY, 0, 'f', 3));
+    add("X range", QString("%1 to %2").arg(stats.minX + m_State.drawing.worldDocumentOriginX, 0, 'f', 3).arg(stats.maxX + m_State.drawing.worldDocumentOriginX, 0, 'f', 3));
+    add("Y range", QString("%1 to %2").arg(stats.minY + m_State.drawing.worldDocumentOriginY, 0, 'f', 3).arg(stats.maxY + m_State.drawing.worldDocumentOriginY, 0, 'f', 3));
     add("Elevation", QString("%1 to %2").arg(stats.minZ, 0, 'f', 3).arg(stats.maxZ, 0, 'f', 3));
     add("2D area", QString::number(stats.area2d, 'f', 3));
     add("3D area", QString::number(stats.area3d, 'f', 3));
@@ -526,7 +526,7 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
     ShowSurfaceStyles(styleCombo->currentText(), false);
     m_ModalOpen = wasModal;
     std::string keep = S(styleCombo->currentText());
-    if (!SurfaceStyles::Find(m_State.surfaceStyles, keep)) keep = surface().styleName.empty() ? std::string(SurfaceStyles::kStandardName) : surface().styleName;
+    if (!SurfaceStyles::Find(m_State.drawing.surfaceStyles, keep)) keep = surface().styleName.empty() ? std::string(SurfaceStyles::kStandardName) : surface().styleName;
     committedStyle = surface().styleName.empty() ? std::string(SurfaceStyles::kStandardName) : surface().styleName;
     fillStyles(keep);
     loadAnalysis();
@@ -595,21 +595,21 @@ QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
     if (!enabled) entry->setToolTip("Not available right now");
     connect(entry, &QAction::triggered, this, [action = std::move(action)] { action(); });  // NOLINT(bugprone-exception-escape): a slot, like every other lambda in this file
   };
-  const bool valid = surface >= 0 && surface < static_cast<int>(m_State.cadSurfaces.size());
+  const bool valid = surface >= 0 && surface < static_cast<int>(m_State.drawing.cadSurfaces.size());
   if (kind == "surfacesFolder") {
     add("Create Surface...", "toolspaceCreateSurface", true, [this] { m_State.showCreateSurfaceWindow = true; Refresh(); });
     add("Surfaces Manager...", "toolspaceSurfaceManager", true, [this] { m_State.showSurfaceManagerWindow = true; Refresh(); });
     menu.addSeparator();
-    add("Rebuild Out of Date Items", "toolspaceRebuildAll", !m_State.cadSurfaces.empty(), [this] { Submit("SURFACEREBUILD"); });
+    add("Rebuild Out of Date Items", "toolspaceRebuildAll", !m_State.drawing.cadSurfaces.empty(), [this] { Submit("SURFACEREBUILD"); });
   } else if (kind == "surface" && valid) {
-    const std::string name = m_State.cadSurfaces[static_cast<size_t>(surface)].name;
+    const std::string name = m_State.drawing.cadSurfaces[static_cast<size_t>(surface)].name;
     add("Surface Properties...", "toolspaceSurfaceProperties", true, [this, surface] {
       m_State.surfacePropertiesIndex = surface;
       m_State.showSurfacePropertiesWindow = true;
       Refresh();
     });
     add("Edit Surface Style...", "toolspaceEditSurfaceStyle", true, [this, surface] {
-      const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(surface)];
+      const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(surface)];
       m_State.surfaceStyleEditorFocusName = s.styleName.empty() ? std::string(SurfaceStyles::kStandardName) : s.styleName;
       m_State.surfaceStyleUseSurfacesTitle = false;
       m_State.showSurfaceStyleWindow = true;

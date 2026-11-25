@@ -98,7 +98,7 @@ void EditorWindow::ShowSurfaceManager() {
     existing->activateWindow();
     return;
   }
-  SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
+  SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
   auto* dialog = new QDialog(this);
   dialog->setObjectName("surfaceManager");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -205,7 +205,7 @@ void EditorWindow::ShowSurfaceManager() {
   surfaceui::StyleDialog(dialog);
 
   // --- helpers ----------------------------------------------------------------------------------
-  const auto validSurface = [this, state] { return state->selected >= 0 && state->selected < static_cast<int>(m_State.cadSurfaces.size()); };
+  const auto validSurface = [this, state] { return state->selected >= 0 && state->selected < static_cast<int>(m_State.drawing.cadSurfaces.size()); };
   const auto runModal = [this](QDialog& d) {
     const bool was = m_ModalOpen;
     m_ModalOpen = true;
@@ -222,8 +222,8 @@ void EditorWindow::ShowSurfaceManager() {
                         deleteSurface, addButton, removeButton, upButton, downButton, importButton, validSurface, nodeType](bool force) {
     struct Row { QString text; int type; int surface; int index; int depth; };
     std::vector<Row> rows;
-    for (size_t si = 0; si < m_State.cadSurfaces.size(); ++si) {
-      const CadSurface& s = m_State.cadSurfaces[si];
+    for (size_t si = 0; si < m_State.drawing.cadSurfaces.size(); ++si) {
+      const CadSurface& s = m_State.drawing.cadSurfaces[si];
       const SurfaceState st = SurfaceRebuildStateOf(m_State, si);
       rows.push_back({Q(s.name) + (st == SurfaceState::Current ? QString() : " [" + StateChip(st) + "]"), SurfaceNode, int(si), 0, 0});
       rows.push_back({"Definition", DefinitionNode, int(si), 0, 1});
@@ -283,7 +283,7 @@ void EditorWindow::ShowSurfaceManager() {
         if (r.type == keepType && r.surface == keepSurface && r.index == keepIndex) restore = item;
         const QString key = QString("%1/%2").arg(r.surface).arg(r.type);
         if (r.type == SurfaceNode || r.type == DefinitionNode) {
-          const QString surfaceName = Q(m_State.cadSurfaces[static_cast<size_t>(r.surface)].name);
+          const QString surfaceName = Q(m_State.drawing.cadSurfaces[static_cast<size_t>(r.surface)].name);
           if (r.type == SurfaceNode) newSurface = !state->seenSurfaces.contains(surfaceName);
           item->setExpanded(newSurface || expanded.contains(key));
           if (r.type == DefinitionNode) state->seenSurfaces.insert(surfaceName);
@@ -295,15 +295,15 @@ void EditorWindow::ShowSurfaceManager() {
       else if (tree->topLevelItemCount() > 0) tree->setCurrentItem(tree->topLevelItem(std::min(state->selected, tree->topLevelItemCount() - 1)));
     }
     if (tree->currentItem()) state->selected = tree->currentItem()->data(0, kRoleSurface).toInt();
-    if (state->selected >= static_cast<int>(m_State.cadSurfaces.size())) state->selected = static_cast<int>(m_State.cadSurfaces.size()) - 1;
+    if (state->selected >= static_cast<int>(m_State.drawing.cadSurfaces.size())) state->selected = static_cast<int>(m_State.drawing.cadSurfaces.size()) - 1;
     if (state->selected < 0) state->selected = 0;
 
     // Footer buttons.
-    newVolume->setEnabled(m_State.cadSurfaces.size() >= 2);
-    newVolume->setToolTip(m_State.cadSurfaces.size() < 2 ? "A volume surface needs two existing TIN surfaces." : QString());
-    newGroup->setEnabled(!m_State.pointGroups.empty());
-    newGroup->setToolTip(m_State.pointGroups.empty() ? "A surface is built from point groups - create one in Survey > Groups first." : QString());
-    deleteSurface->setEnabled(!m_State.cadSurfaces.empty());
+    newVolume->setEnabled(m_State.drawing.cadSurfaces.size() >= 2);
+    newVolume->setToolTip(m_State.drawing.cadSurfaces.size() < 2 ? "A volume surface needs two existing TIN surfaces." : QString());
+    newGroup->setEnabled(!m_State.drawing.pointGroups.empty());
+    newGroup->setToolTip(m_State.drawing.pointGroups.empty() ? "A surface is built from point groups - create one in Survey > Groups first." : QString());
+    deleteSurface->setEnabled(!m_State.drawing.cadSurfaces.empty());
 
     // Node buttons follow the selected node.
     const int type = nodeType(tree->currentItem());
@@ -312,7 +312,7 @@ void EditorWindow::ShowSurfaceManager() {
     const int itemIndex = tree->currentItem() ? tree->currentItem()->data(0, kRoleIndex).toInt() : 0;
     int count = 0;
     if (validSurface() && (type == BreaklineItem || type == BoundaryItem)) {
-      const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(state->selected)];
+      const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)];
       count = static_cast<int>(type == BreaklineItem ? s.breaklines.size() : s.boundaries.size());
     }
     addButton->setEnabled(category);
@@ -323,21 +323,21 @@ void EditorWindow::ShowSurfaceManager() {
     importButton->setEnabled(type == FileItem);
 
     // Right panel.
-    if (m_State.cadSurfaces.empty()) {
+    if (m_State.drawing.cadSurfaces.empty()) {
       pages->setCurrentIndex(0);
       return;
     }
     pages->setCurrentIndex(1);
-    const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(state->selected)];
+    const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)];
     if (!nameEdit->hasFocus() && nameEdit->text() != Q(s.name)) nameEdit->setText(Q(s.name));
     volumeInfo->setVisible(s.isVolumeSurface());
     volumeInfo->setText(QString("TIN volume surface\nBase: %1\nComparison: %2").arg(Q(s.volumeBaseName), Q(s.volumeComparisonName)));
-    SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
-    const SurfaceStyle* resolved = SurfaceStyles::Resolve(m_State.surfaceStyles, s.styleName);
+    SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
+    const SurfaceStyle* resolved = SurfaceStyles::Resolve(m_State.drawing.surfaceStyles, s.styleName);
     {
       const QSignalBlocker blocker(styleCombo);
       styleCombo->clear();
-      for (const SurfaceStyle& st : m_State.surfaceStyles) styleCombo->addItem(Q(st.name));
+      for (const SurfaceStyle& st : m_State.drawing.surfaceStyles) styleCombo->addItem(Q(st.name));
       styleCombo->setCurrentText(resolved ? Q(resolved->name) : QString());
     }
     // REQ-201: contours the display path declined to generate are said out loud.
@@ -359,7 +359,7 @@ void EditorWindow::ShowSurfaceManager() {
       if (surfedit::ElevationRange(s, &lo, &hi)) text += QString("\nElevation %1 to %2 (%3 range).").arg(lo, 0, 'f', 2).arg(hi, 0, 'f', 2).arg(hi - lo, 0, 'f', 2);
       builtLabel->setText(text);
       QString watershed;
-      const std::uint64_t sid = m_State.cadSurfaceAttrs[static_cast<size_t>(state->selected)].id;
+      const std::uint64_t sid = m_State.drawing.cadSurfaceAttrs[static_cast<size_t>(state->selected)].id;
       for (const auto& entry : m_State.surfaceWatershedCache) {
         if (entry.surfaceId != sid || !entry.analysis.ok) continue;
         watershed = QString("Watershed: %1 basin(s).").arg(entry.analysis.basins.size());
@@ -398,8 +398,8 @@ void EditorWindow::ShowSurfaceManager() {
     layout->addWidget(new QLabel("Add a point group to this surface:", &entry));
     auto* list = new QListWidget(&entry);
     list->setObjectName("surfaceAddPointGroupList");
-    const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(state->selected)];
-    for (const auto& group : m_State.pointGroups) {
+    const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)];
+    for (const auto& group : m_State.drawing.pointGroups) {
       if (std::find(s.sourcePointGroups.begin(), s.sourcePointGroups.end(), group.name) != s.sourcePointGroups.end()) continue;
       auto* item = new QListWidgetItem(QString("%1  (%2)").arg(Q(group.name)).arg(ResolvePointGroup(m_State, group, nullptr).size()), list);
       item->setData(Qt::UserRole, Q(group.name));
@@ -449,7 +449,7 @@ void EditorWindow::ShowSurfaceManager() {
     QObject::connect(ok, &QPushButton::clicked, &entry, &QDialog::accept);
     QObject::connect(cancel, &QPushButton::clicked, &entry, &QDialog::reject);
     if (runModal(entry) != QDialog::Accepted || !validSurface()) return;
-    const std::string surfaceName = m_State.cadSurfaces[static_cast<size_t>(state->selected)].name;
+    const std::string surfaceName = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)].name;
     if (boundary) {
       static const CadBoundaryKind kinds[] = {CadBoundaryKind::Outer, CadBoundaryKind::Hide, CadBoundaryKind::Show, CadBoundaryKind::Clip, CadBoundaryKind::Mask};
       m_State.designateBoundaryName = S(text->text());
@@ -573,7 +573,7 @@ void EditorWindow::ShowSurfaceManager() {
       QObject::connect(entry, &QAction::triggered, dialog, action);
     };
     const int count = [&] {
-      const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(state->selected)];
+      const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)];
       return static_cast<int>(type == BreaklineItem ? s.breaklines.size() : type == BoundaryItem ? s.boundaries.size() : 0);
     }();
     const int index = item->data(0, kRoleIndex).toInt();
@@ -600,10 +600,10 @@ void EditorWindow::ShowSurfaceManager() {
 
   // Surface panel.
   QObject::connect(nameEdit, &QLineEdit::editingFinished, dialog, [=] {
-    if (!validSurface() || S(nameEdit->text()) == m_State.cadSurfaces[static_cast<size_t>(state->selected)].name) return;
+    if (!validSurface() || S(nameEdit->text()) == m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)].name) return;
     if (!surfedit::RenameSurface(m_State, state->selected, S(nameEdit->text()), m_Log)) {
       say(Q(m_Log.empty() ? std::string() : m_Log.back()));
-      nameEdit->setText(Q(m_State.cadSurfaces[static_cast<size_t>(state->selected)].name));
+      nameEdit->setText(Q(m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)].name));
       return;
     }
     say({});
@@ -618,15 +618,15 @@ void EditorWindow::ShowSurfaceManager() {
     if (!validSurface()) return;
     // Edit... copies the style for THIS surface when others still share it, so toggling triangles here
     // does not rewrite every TIN (REQ-070).
-    SurfaceStyles::EnsureStandard(m_State.surfaceStyles);
-    const CadSurface& s = m_State.cadSurfaces[static_cast<size_t>(state->selected)];
-    const SurfaceStyle* resolved = SurfaceStyles::Resolve(m_State.surfaceStyles, s.styleName);
-    const int users = resolved ? SurfaceStyles::CountSurfacesResolvingTo(m_State.cadSurfaces, m_State.surfaceStyles, resolved->name) : 0;
+    SurfaceStyles::EnsureStandard(m_State.drawing.surfaceStyles);
+    const CadSurface& s = m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)];
+    const SurfaceStyle* resolved = SurfaceStyles::Resolve(m_State.drawing.surfaceStyles, s.styleName);
+    const int users = resolved ? SurfaceStyles::CountSurfacesResolvingTo(m_State.drawing.cadSurfaces, m_State.drawing.surfaceStyles, resolved->name) : 0;
     if (users > 1) {
       PushUndoSnapshot(m_State, "Surface style");
       DetachSurfaceStyleIfShared(m_State, static_cast<size_t>(state->selected), &m_Log);
     }
-    const SurfaceStyle* now = SurfaceStyles::Resolve(m_State.surfaceStyles, m_State.cadSurfaces[static_cast<size_t>(state->selected)].styleName);
+    const SurfaceStyle* now = SurfaceStyles::Resolve(m_State.drawing.surfaceStyles, m_State.drawing.cadSurfaces[static_cast<size_t>(state->selected)].styleName);
     const bool was = m_ModalOpen;
     ShowSurfaceStyles(now ? Q(now->name) : QString(), true);
     m_ModalOpen = was;
@@ -646,7 +646,7 @@ void EditorWindow::ShowSurfaceManager() {
   QObject::connect(deleteSurface, &QPushButton::clicked, dialog, [=] {
     if (!validSurface()) return;
     surfedit::DeleteSurface(m_State, state->selected, m_Log);
-    state->selected = std::min(state->selected, static_cast<int>(m_State.cadSurfaces.size()) - 1);
+    state->selected = std::min(state->selected, static_cast<int>(m_State.drawing.cadSurfaces.size()) - 1);
     Refresh();
     refresh(true);
   });
@@ -663,7 +663,7 @@ void EditorWindow::ShowSurfaceManager() {
     layout->addWidget(new QLabel("Build from point groups:", &entry));
     auto* groups = new QListWidget(&entry);
     groups->setObjectName("surfaceNewGroups");
-    for (const auto& group : m_State.pointGroups) {
+    for (const auto& group : m_State.drawing.pointGroups) {
       auto* item = new QListWidgetItem(QString("%1  (%2)").arg(Q(group.name)).arg(ResolvePointGroup(m_State, group, nullptr).size()), groups);
       item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
       item->setCheckState(Qt::Unchecked);
@@ -732,7 +732,7 @@ void EditorWindow::ShowSurfaceManager() {
     base->setObjectName("surfaceVolumeBase");
     auto* comparison = new QComboBox(&entry);
     comparison->setObjectName("surfaceVolumeComparison");
-    for (const CadSurface& s : m_State.cadSurfaces) {
+    for (const CadSurface& s : m_State.drawing.cadSurfaces) {
       if (s.isVolumeSurface()) continue;
       base->addItem(Q(s.name));
       comparison->addItem(Q(s.name));

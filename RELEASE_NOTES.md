@@ -19,6 +19,15 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.8.9
+
+- Editor interaction improvements include clearer TRIM previews, object-snapped PIPERUN input, more accurate text selection and editing, ORTHO-aware previews, and patterned hatch display.
+- GoSurvey now opens to the Start page without an empty drawing, prevents typed commands there, and shows more object details in Properties.
+- Undo and drawing tabs now retain additional drawing settings and content, including current layer and colour, text and alignment styles, saved page setups, named UCS and views, and point numbering.
+- Fixed viewport-pick handling for HATCH and EXTRACTCENTERLINE so picks are processed and the command session ends on completion.
+- Hatch tools, PDF dimensions, layer properties, viewport picking and visual styles, and editor input behavior have been improved.
+- F1 help now uses the control under your cursor when available, and the manual adds searchable pages for all registered commands.
+
 ## 0.8.0
 
 - The first click in Qt ZOOM WINDOW now starts the selection box, and the second completes the zoom area.

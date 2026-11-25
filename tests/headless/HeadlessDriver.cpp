@@ -80,7 +80,7 @@ std::string FirstWord(const std::string& line, std::string* rest) {
 /// `userPolylineOffsets` is CSR: polyline i spans [offsets[i], offsets[i+1]), so N polylines need
 /// N+1 offsets. Counting the array directly is off by one — see docinvariants.cpp for the same note.
 size_t PolylineCountOf(const AppCommandState& st) {
-  return st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
+  return st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.size() - 1;
 }
 
 /// Escape a string for a JSON scalar. Small on purpose — the driver emits JSON, it does not parse it.
@@ -248,7 +248,7 @@ void TickFrame(Run& run) {
   // shared_ptr: keeping one alive here would pin a superseded triangulation for the whole run and
   // change the very lifetime the assertion is about.
   const std::shared_ptr<const CadTin> tin =
-      run.st.cadSurfaces.empty() ? nullptr : run.st.cadSurfaces[0].tin;
+      run.st.drawing.cadSurfaces.empty() ? nullptr : run.st.drawing.cadSurfaces[0].tin;
   if (!run.sawSurfaceTin || run.lastSurfaceTin.lock() != tin) {
     if (tin || run.sawSurfaceTin)
       ++run.surfaceTinGeneration;
@@ -264,9 +264,9 @@ void TickFrame(Run& run) {
 /// an array position that happens to line up.
 size_t SurfaceCacheSegs(const AppCommandState& st,
                         std::vector<float> AppCommandState::SurfaceDisplayCacheEntry::*member) {
-  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+  if (st.drawing.cadSurfaces.empty() || st.drawing.cadSurfaceAttrs.empty())
     return 0;
-  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[0].id;
   if (id == 0)
     return 0;
   for (const auto& e : st.surfaceDisplayCache)
@@ -280,9 +280,9 @@ size_t SurfaceCacheSegs(const AppCommandState& st,
 /// across all buckets, because EXPECT is asking "how much banded geometry exists", not which band it
 /// landed in — the per-band split is what the Analysis tab's colours are for, not this driver.
 size_t SurfaceCacheBandTriCount(const AppCommandState& st) {
-  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+  if (st.drawing.cadSurfaces.empty() || st.drawing.cadSurfaceAttrs.empty())
     return 0;
-  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[0].id;
   if (id == 0)
     return 0;
   for (const auto& e : st.surfaceDisplayCache)
@@ -299,9 +299,9 @@ size_t SurfaceCacheBandTriCount(const AppCommandState& st) {
 /// (`arrowLineBuffers`) — shaft plus both head barbs count as three segments per arrow
 /// (`BuildSurfaceAnalysisGeometry`, `CadCommands.cpp`).
 size_t SurfaceCacheArrowSegCount(const AppCommandState& st) {
-  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+  if (st.drawing.cadSurfaces.empty() || st.drawing.cadSurfaceAttrs.empty())
     return 0;
-  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  const std::uint64_t id = st.drawing.cadSurfaceAttrs[0].id;
   if (id == 0)
     return 0;
   for (const auto& e : st.surfaceDisplayCache)
@@ -350,15 +350,15 @@ bool ExtractedContoursMatchDisplay(const AppCommandState& st) {
   std::vector<Seg> baked;
   const size_t plCount = PolylineCountOf(st);
   for (size_t p = 0; p < plCount; ++p) {
-    const int b = st.userPolylineOffsets[p];
-    const int e = st.userPolylineOffsets[p + 1];
+    const int b = st.drawing.userPolylineOffsets[p];
+    const int e = st.drawing.userPolylineOffsets[p + 1];
     const auto vx = [&](int v, int c) {
-      return static_cast<float>(st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]);
+      return static_cast<float>(st.drawing.userPolylineVerts[static_cast<size_t>(v) * 3 + c]);
     };
     for (int v = b; v + 1 < e; ++v)
       baked.push_back(canon(vx(v, 0), vx(v, 1), vx(v, 2), vx(v + 1, 0), vx(v + 1, 1), vx(v + 1, 2)));
     // A closed polyline's closing segment is implied, exactly as the display buffer's is.
-    if (e - b > 2 && p < st.userPolylineClosed.size() && st.userPolylineClosed[p])
+    if (e - b > 2 && p < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[p])
       baked.push_back(canon(vx(e - 1, 0), vx(e - 1, 1), vx(e - 1, 2), vx(b, 0), vx(b, 1), vx(b, 2)));
   }
 
@@ -415,7 +415,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // first switch so PAPER has somewhere to go".
     const std::string which = UpperAscii(Trim(rest));
     if (which == "PAPER") {
-      if (run.st.paperLayouts.empty())
+      if (run.st.drawing.paperLayouts.empty())
         AddPaperLayout(run.st);
       SetActiveSpace(run.st, 0);
       run.log.push_back("[driver] SPACE PAPER");
@@ -795,26 +795,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // derive one from). CLICK subsumes TRIMPICK; TRIMPICK stays for the transcripts using it.
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
-    case ViewportClickRoute::HatchPick: {
-      // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
-      // HatchPick case does — same two calls, same order, same miss message. Until this existed no
-      // filled region could be created headless, so nothing about hatches had a transcript at all:
-      // not their rendering, not their Z, not their round trip through `document JSON payload` or DXF.
-      //
-      // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
-      // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
-      // found, and the user gets to click again). A transcript asserts the miss with EXPECT LOG.
-      std::vector<float> loop;
-      if (CadHatchTraceAt(run.st, x, y, &loop) && CadHatchCommitLoop(run.st, loop, run.log)) {
-        run.st.active = AppCommandState::Kind::None;
-        run.st.hatchPreviewValid = false;
-        run.st.hatchPreviewLoop.clear();
-      } else {
-        run.log.push_back(
-            "HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
-      }
+    case ViewportClickRoute::HatchPick:
+      // HATCH (REQ-043): route through HatchSession::onViewportPick so trace, commit, and session
+      // teardown stay identical across Qt and headless runs.
+      SubmitViewportPick(run.st, x, y, run.log);
       break;
-    }
     case ViewportClickRoute::PdfAttachInsertPoint:
       // PDFATTACH's insertion point is a plain coordinate, handed to the same entry point the GUI
       // uses. No snapping is applied here for the same reason PICK applies none: a transcript has no
@@ -1114,7 +1099,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // model-space routing), so CLICK cannot reach it. `AddViewportRect` is the same entry point the
     // UI's second click calls.
     if (run.st.activeSpaceIndex < 0 ||
-        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.drawing.paperLayouts.size()) {
       Fail(run, "state", "VIEWPORT needs a paper layout active — use SPACE PAPER or LAYOUT NEW first",
            sourceLine);
       return false;
@@ -1141,7 +1126,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", "CLAYER expects a layer name", sourceLine);
       return false;
     }
-    run.st.currentLayer = name;
+    run.st.drawing.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
   } else if (verb == "VIEWANGLES") {
@@ -1184,7 +1169,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       return false;
     }
     CadLayerRow* row = nullptr;
-    for (CadLayerRow& r : run.st.drawingLayerTable) {
+    for (CadLayerRow& r : run.st.drawing.drawingLayerTable) {
       if (UpperAscii(r.name) == UpperAscii(name)) {
         row = &r;
         break;
@@ -1297,7 +1282,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // `ViewportClickRouteFor` routes it to `Ignore` in model space by design, so CLICK cannot reach
     // it. This calls the same pure `FreezeLayerInViewport` the command ends up calling.
     if (run.st.activeSpaceIndex < 0 ||
-        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.drawing.paperLayouts.size()) {
       Fail(run, "state", "VPFREEZE needs a paper layout active", sourceLine);
       return false;
     }
@@ -1306,7 +1291,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", "VPFREEZE expects a layer name", sourceLine);
       return false;
     }
-    PaperLayout& FL = run.st.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
+    PaperLayout& FL = run.st.drawing.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
     if (run.st.selectedViewportIndex < 0 ||
         static_cast<size_t>(run.st.selectedViewportIndex) >= FL.viewports.size()) {
       Fail(run, "state", "VPFREEZE: no viewport selected — use VIEWPORT or VPSELECT first", sourceLine);
@@ -1318,7 +1303,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // border in the UI, which has no headless equivalent; this is the field that click writes.
     // Needed for issue #100's "consistent when multiple viewports exist" condition.
     if (run.st.activeSpaceIndex < 0 ||
-        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.drawing.paperLayouts.size()) {
       Fail(run, "state", "VPSELECT needs a paper layout active", sourceLine);
       return false;
     }
@@ -1328,7 +1313,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", "VPSELECT expects a viewport index, got: " + rest, sourceLine);
       return false;
     }
-    const PaperLayout& L = run.st.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
+    const PaperLayout& L = run.st.drawing.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
     if (n < 0 || static_cast<size_t>(n) >= L.viewports.size()) {
       Fail(run, "state", "VPSELECT: no viewport " + std::to_string(n) + " on this layout", sourceLine);
       return false;
@@ -1401,9 +1386,9 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     if (what == "SURFACES") {
       run.log.push_back(
           "[dump] surface | style | tris | border | minor | major (segments) | bandtris | arrowsegs (REQ-072)");
-      for (size_t si = 0; si < run.st.cadSurfaces.size(); ++si) {
-        const CadSurface& s = run.st.cadSurfaces[si];
-        const std::uint64_t id = si < run.st.cadSurfaceAttrs.size() ? run.st.cadSurfaceAttrs[si].id : 0;
+      for (size_t si = 0; si < run.st.drawing.cadSurfaces.size(); ++si) {
+        const CadSurface& s = run.st.drawing.cadSurfaces[si];
+        const std::uint64_t id = si < run.st.drawing.cadSurfaceAttrs.size() ? run.st.drawing.cadSurfaceAttrs[si].id : 0;
         const auto it = std::find_if(
             run.st.surfaceDisplayCache.begin(), run.st.surfaceDisplayCache.end(),
             [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
@@ -1435,13 +1420,13 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       return run.failures.empty();
     }
     run.log.push_back("[dump] id | dx=left edge, dy=vertical centre, from point | box w,h | text");
-    for (const SurveyPoint& p : run.st.surveyPoints) {
+    for (const SurveyPoint& p : run.st.drawing.surveyPoints) {
       const int aix = FindSurveyLabelAnnIndex(run.st, p);
       if (aix < 0) {
         run.log.push_back("[dump] " + std::to_string(p.id) + " | (no label)");
         continue;
       }
-      const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
+      const CadAnnotation& a = run.st.drawing.cadAnnotations[static_cast<size_t>(aix)];
       char buf[1024];
       std::snprintf(buf, sizeof buf,
                     "[dump] %d | dx=%+.4f dy=%+.4f | w=%.4f h=%.4f | \"%s\"", p.id,
@@ -1465,11 +1450,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT ANNKIND needs index and kind tag, got: " + arg, sourceLine);
         return false;
       }
-      if (static_cast<size_t>(ix) >= run.st.cadAnnotations.size()) {
+      if (static_cast<size_t>(ix) >= run.st.drawing.cadAnnotations.size()) {
         Fail(run, "state", "EXPECT ANNKIND: annotation index out of range", sourceLine);
         return false;
       }
-      const char* got = AnnotationKindTag(run.st.cadAnnotations[static_cast<size_t>(ix)].kind);
+      const char* got = AnnotationKindTag(run.st.drawing.cadAnnotations[static_cast<size_t>(ix)].kind);
       if (want != got) {
         Fail(run, "expect",
              "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
@@ -1534,41 +1519,41 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       std::string why;
       if (kind == "LINE") {
         const size_t base = static_cast<size_t>(ei) * 6;
-        if (ei < 0 || base + 5 >= run.st.userLinesFlat.size())
+        if (ei < 0 || base + 5 >= run.st.drawing.userLinesFlat.size())
           why = "no line at index " + std::to_string(ei) + " (there are " +
-                std::to_string(run.st.userLinesFlat.size() / 6) + ")";
+                std::to_string(run.st.drawing.userLinesFlat.size() / 6) + ")";
         else
-          verts = {{{static_cast<float>(run.st.userLinesFlat[base]), static_cast<float>(run.st.userLinesFlat[base + 1]), static_cast<float>(run.st.userLinesFlat[base + 2])}},
-                   {{static_cast<float>(run.st.userLinesFlat[base + 3]), static_cast<float>(run.st.userLinesFlat[base + 4]), static_cast<float>(run.st.userLinesFlat[base + 5])}}};
+          verts = {{{static_cast<float>(run.st.drawing.userLinesFlat[base]), static_cast<float>(run.st.drawing.userLinesFlat[base + 1]), static_cast<float>(run.st.drawing.userLinesFlat[base + 2])}},
+                   {{static_cast<float>(run.st.drawing.userLinesFlat[base + 3]), static_cast<float>(run.st.drawing.userLinesFlat[base + 4]), static_cast<float>(run.st.drawing.userLinesFlat[base + 5])}}};
       } else if (kind == "POLYLINE") {
         const size_t n = PolylineCountOf(run.st);
         if (ei < 0 || static_cast<size_t>(ei) >= n)
           why = "no polyline at index " + std::to_string(ei) + " (there are " + std::to_string(n) + ")";
         else {
-          const int b = run.st.userPolylineOffsets[static_cast<size_t>(ei)];
-          const int e = run.st.userPolylineOffsets[static_cast<size_t>(ei) + 1];
+          const int b = run.st.drawing.userPolylineOffsets[static_cast<size_t>(ei)];
+          const int e = run.st.drawing.userPolylineOffsets[static_cast<size_t>(ei) + 1];
           for (int v = b; v < e; ++v) {
             const size_t o = static_cast<size_t>(v) * 3;
-            if (o + 2 < run.st.userPolylineVerts.size())
-              verts.push_back({{static_cast<float>(run.st.userPolylineVerts[o]),
-                                static_cast<float>(run.st.userPolylineVerts[o + 1]),
-                                static_cast<float>(run.st.userPolylineVerts[o + 2])}});
+            if (o + 2 < run.st.drawing.userPolylineVerts.size())
+              verts.push_back({{static_cast<float>(run.st.drawing.userPolylineVerts[o]),
+                                static_cast<float>(run.st.drawing.userPolylineVerts[o + 1]),
+                                static_cast<float>(run.st.drawing.userPolylineVerts[o + 2])}});
           }
         }
       } else if (kind == "CIRCLE") {
         const size_t base = static_cast<size_t>(ei) * 4;
-        if (ei < 0 || base + 3 >= run.st.userCirclesCxCyZR.size())
+        if (ei < 0 || base + 3 >= run.st.drawing.userCirclesCxCyZR.size())
           why = "no circle at index " + std::to_string(ei) + " (there are " +
-                std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")";
+                std::to_string(run.st.drawing.userCirclesCxCyZR.size() / 4) + ")";
         else  // centre + elevation; the radius is not a coordinate
-          verts = {{{static_cast<float>(run.st.userCirclesCxCyZR[base]), static_cast<float>(run.st.userCirclesCxCyZR[base + 1]),
-                     static_cast<float>(run.st.userCirclesCxCyZR[base + 2])}}};
+          verts = {{{static_cast<float>(run.st.drawing.userCirclesCxCyZR[base]), static_cast<float>(run.st.drawing.userCirclesCxCyZR[base + 1]),
+                     static_cast<float>(run.st.drawing.userCirclesCxCyZR[base + 2])}}};
       } else if (kind == "ARC") {
-        if (ei < 0 || static_cast<size_t>(ei) >= run.st.userArcs.size())
+        if (ei < 0 || static_cast<size_t>(ei) >= run.st.drawing.userArcs.size())
           why = "no arc at index " + std::to_string(ei) + " (there are " +
-                std::to_string(run.st.userArcs.size()) + ")";
+                std::to_string(run.st.drawing.userArcs.size()) + ")";
         else {
-          const CadArc& a = run.st.userArcs[static_cast<size_t>(ei)];
+          const CadArc& a = run.st.drawing.userArcs[static_cast<size_t>(ei)];
           verts = {{{static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z)}}};
         }
       } else {
@@ -1633,11 +1618,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       if (!InFloatingModelSpace(run.st) || run.st.floatingViewportLayout < 0 ||
-          static_cast<size_t>(run.st.floatingViewportLayout) >= run.st.paperLayouts.size()) {
+          static_cast<size_t>(run.st.floatingViewportLayout) >= run.st.drawing.paperLayouts.size()) {
         Fail(run, "state", "EXPECT VPFRAME: not in floating model space — use CMD MSPACE first", sourceLine);
         return false;
       }
-      const PaperLayout& FL = run.st.paperLayouts[static_cast<size_t>(run.st.floatingViewportLayout)];
+      const PaperLayout& FL = run.st.drawing.paperLayouts[static_cast<size_t>(run.st.floatingViewportLayout)];
       if (run.st.floatingViewportIndex < 0 ||
           static_cast<size_t>(run.st.floatingViewportIndex) >= FL.viewports.size()) {
         Fail(run, "state", "EXPECT VPFRAME: the floating viewport index is out of range", sourceLine);
@@ -2209,15 +2194,15 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "EXPECT SOLIDPROPS needs <index> <volume> <area> <vertices> <edges> <faces>", sourceLine);
         return false;
       }
-      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
-          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.drawing.cadSolids.size() ||
+          !run.st.drawing.cadSolids[static_cast<size_t>(idx)]) {
         Fail(run, "expect",
              "EXPECT SOLIDPROPS: no solid at index " + std::to_string(idx) + " (there are " +
-                 std::to_string(run.st.cadSolids.size()) + ")",
+                 std::to_string(run.st.drawing.cadSolids.size()) + ")",
              sourceLine);
         return false;
       }
-      const brep::Solid& s = *run.st.cadSolids[static_cast<size_t>(idx)];
+      const brep::Solid& s = *run.st.drawing.cadSolids[static_cast<size_t>(idx)];
       const brep::Problem why = brep::Validate(s);
       if (why != brep::Problem::Ok) {
         Fail(run, "expect",
@@ -2278,7 +2263,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       for (std::size_t i = 0; i + 2 < rubber.size(); i += 3) {
         for (int k = 0; k < 3; ++k) {
           const double c = static_cast<double>(rubber[i + static_cast<std::size_t>(k)]) +
-                           (k == 0 ? run.st.worldDocumentOriginX : (k == 1 ? run.st.worldDocumentOriginY : 0.0));
+                           (k == 0 ? run.st.drawing.worldDocumentOriginX : (k == 1 ? run.st.drawing.worldDocumentOriginY : 0.0));
           got[k] = std::min(got[k], c);
           got[k + 3] = std::max(got[k + 3], c);
         }
@@ -2313,12 +2298,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
-      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
-          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.drawing.cadSolids.size() ||
+          !run.st.drawing.cadSolids[static_cast<size_t>(idx)]) {
         Fail(run, "expect", "EXPECT SOLIDBOUNDS: no solid at index " + std::to_string(idx), sourceLine);
         return false;
       }
-      const brep::Bounds b = brep::ComputeBounds(*run.st.cadSolids[static_cast<size_t>(idx)]);
+      const brep::Bounds b = brep::ComputeBounds(*run.st.drawing.cadSolids[static_cast<size_t>(idx)]);
       if (!b.valid) {
         Fail(run, "expect", "EXPECT SOLIDBOUNDS: the solid has no bounds", sourceLine);
         return false;
@@ -2326,9 +2311,9 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // Storage is local in XY and absolute in Z (ADR-025 D2), so the box is lifted back to world
       // before comparing — otherwise the expected numbers would depend on where the origin happens
       // to sit, which is the very thing this verb exists to check.
-      const double got[6] = {b.mn.x + run.st.worldDocumentOriginX, b.mn.y + run.st.worldDocumentOriginY,
+      const double got[6] = {b.mn.x + run.st.drawing.worldDocumentOriginX, b.mn.y + run.st.drawing.worldDocumentOriginY,
                              b.mn.z,
-                             b.mx.x + run.st.worldDocumentOriginX, b.mx.y + run.st.worldDocumentOriginY,
+                             b.mx.x + run.st.drawing.worldDocumentOriginX, b.mx.y + run.st.drawing.worldDocumentOriginY,
                              b.mx.z};
       const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
       for (int k = 0; k < 6; ++k) {
@@ -2351,12 +2336,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT SOLIDKIND needs <index> <kind name>", sourceLine);
         return false;
       }
-      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
-          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.drawing.cadSolids.size() ||
+          !run.st.drawing.cadSolids[static_cast<size_t>(idx)]) {
         Fail(run, "expect", "EXPECT SOLIDKIND: no solid at index " + std::to_string(idx), sourceLine);
         return false;
       }
-      const std::string got = brep::PrimitiveKindName(run.st.cadSolids[static_cast<size_t>(idx)]->recipe.kind);
+      const std::string got = brep::PrimitiveKindName(run.st.drawing.cadSolids[static_cast<size_t>(idx)]->recipe.kind);
       if (got != wantName) {
         Fail(run, "expect", "EXPECT SOLIDKIND " + std::to_string(idx) + ": is " + got + ", expected " + wantName,
              sourceLine);
@@ -2380,10 +2365,10 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const size_t base = static_cast<size_t>(idx) * 6;
-      if (idx < 0 || base + 5 >= run.st.userLinesFlat.size()) {
+      if (idx < 0 || base + 5 >= run.st.drawing.userLinesFlat.size()) {
         Fail(run, "expect",
              "EXPECT LINEXYZ: no line at index " + std::to_string(idx) + " (there are " +
-                 std::to_string(run.st.userLinesFlat.size() / 6) + ")",
+                 std::to_string(run.st.drawing.userLinesFlat.size() / 6) + ")",
              sourceLine);
         return false;
       }
@@ -2394,12 +2379,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       double gy1 = 0.;
       double gx2 = 0.;
       double gy2 = 0.;
-      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base]),
-                                static_cast<float>(run.st.userLinesFlat[base + 1]), &gx1, &gy1);
-      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base + 3]),
-                                static_cast<float>(run.st.userLinesFlat[base + 4]), &gx2, &gy2);
-      const double got[6] = {gx1, gy1, static_cast<double>(run.st.userLinesFlat[base + 2]),
-                             gx2, gy2, static_cast<double>(run.st.userLinesFlat[base + 5])};
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.drawing.userLinesFlat[base]),
+                                static_cast<float>(run.st.drawing.userLinesFlat[base + 1]), &gx1, &gy1);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.drawing.userLinesFlat[base + 3]),
+                                static_cast<float>(run.st.drawing.userLinesFlat[base + 4]), &gx2, &gy2);
+      const double got[6] = {gx1, gy1, static_cast<double>(run.st.drawing.userLinesFlat[base + 2]),
+                             gx2, gy2, static_cast<double>(run.st.drawing.userLinesFlat[base + 5])};
       const char* names[6] = {"x1", "y1", "z1", "x2", "y2", "z2"};
       for (int k = 0; k < 6; ++k) {
         if (std::fabs(got[k] - want[k]) > 0.01) {
@@ -2424,19 +2409,19 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT POLYBULGE needs <polylineIndex> <vertexIndex> <bulge>", sourceLine);
         return false;
       }
-      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.drawing.userPolylineOffsets.size()) {
         Fail(run, "expect", "EXPECT POLYBULGE: no polyline at index " + std::to_string(pi), sourceLine);
         return false;
       }
-      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+      const int v0 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYBULGE: vertex index out of range for that polyline", sourceLine);
         return false;
       }
       const size_t gv = static_cast<size_t>(v0) + static_cast<size_t>(vi);
-      const double got = gv < run.st.userPolylineVertsBulge.size()
-                             ? static_cast<double>(run.st.userPolylineVertsBulge[gv])
+      const double got = gv < run.st.drawing.userPolylineVertsBulge.size()
+                             ? static_cast<double>(run.st.drawing.userPolylineVertsBulge[gv])
                              : 0.0;
       if (std::fabs(got - want) > 1e-4) {
         char msg[192];
@@ -2456,11 +2441,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
-      if (li < 0 || static_cast<size_t>(li) >= run.st.paperLayouts.size()) {
+      if (li < 0 || static_cast<size_t>(li) >= run.st.drawing.paperLayouts.size()) {
         Fail(run, "expect", "EXPECT PAPERPOLYVERT: no layout at index " + std::to_string(li), sourceLine);
         return false;
       }
-      const PaperLayout& layout = run.st.paperLayouts[static_cast<size_t>(li)];
+      const PaperLayout& layout = run.st.drawing.paperLayouts[static_cast<size_t>(li)];
       if (pi < 0 || static_cast<size_t>(pi) + 1 >= layout.paperPolyOffsets.size()) {
         Fail(run, "expect", "EXPECT PAPERPOLYVERT: no polyline at index " + std::to_string(pi), sourceLine);
         return false;
@@ -2502,25 +2487,25 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT POLYVERT needs <polylineIndex> <vertexIndex> <x> <y> <z>", sourceLine);
         return false;
       }
-      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.drawing.userPolylineOffsets.size()) {
         Fail(run, "expect", "EXPECT POLYVERT: no polyline at index " + std::to_string(pi), sourceLine);
         return false;
       }
-      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+      const int v0 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYVERT: vertex index out of range for that polyline", sourceLine);
         return false;
       }
       const size_t gv = static_cast<size_t>(v0 + vi) * 3;
-      if (gv + 2 >= run.st.userPolylineVerts.size()) {
+      if (gv + 2 >= run.st.drawing.userPolylineVerts.size()) {
         Fail(run, "expect", "EXPECT POLYVERT: vertex storage out of range", sourceLine);
         return false;
       }
       double gx = 0., gy = 0.;
-      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userPolylineVerts[gv]),
-                                static_cast<float>(run.st.userPolylineVerts[gv + 1]), &gx, &gy);
-      const double got[3] = {gx, gy, static_cast<double>(run.st.userPolylineVerts[gv + 2])};
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.drawing.userPolylineVerts[gv]),
+                                static_cast<float>(run.st.drawing.userPolylineVerts[gv + 1]), &gx, &gy);
+      const double got[3] = {gx, gy, static_cast<double>(run.st.drawing.userPolylineVerts[gv + 2])};
       const char* names[3] = {"x", "y", "z"};
       for (int k = 0; k < 3; ++k) {
         if (std::fabs(got[k] - want[k]) > 0.01) {
@@ -2573,16 +2558,16 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT POLYARCS needs <polylineIndex> <count>", sourceLine);
         return false;
       }
-      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.drawing.userPolylineOffsets.size()) {
         Fail(run, "expect", "EXPECT POLYARCS: no polyline at index " + std::to_string(pi), sourceLine);
         return false;
       }
-      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+      const int v0 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.drawing.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       long got = 0;
       for (int vi = v0; vi < v1; ++vi)
-        if (static_cast<size_t>(vi) < run.st.userPolylineVertsBulge.size() &&
-            std::fabs(run.st.userPolylineVertsBulge[static_cast<size_t>(vi)]) > 1e-9)
+        if (static_cast<size_t>(vi) < run.st.drawing.userPolylineVertsBulge.size() &&
+            std::fabs(run.st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]) > 1e-9)
           ++got;
       if (got != want) {
         Fail(run, "expect",
@@ -2607,25 +2592,25 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const size_t base = static_cast<size_t>(idx) * 4;
-      if (idx < 0 || base + 3 >= run.st.userCirclesCxCyZR.size()) {
+      if (idx < 0 || base + 3 >= run.st.drawing.userCirclesCxCyZR.size()) {
         Fail(run, "expect",
              "EXPECT CIRCLEXYZ: no circle at index " + std::to_string(idx) + " (there are " +
-                 std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")",
+                 std::to_string(run.st.drawing.userCirclesCxCyZR.size() / 4) + ")",
              sourceLine);
         return false;
       }
       double gcx = 0.;
       double gcy = 0.;
-      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userCirclesCxCyZR[base]),
-                               static_cast<float>(run.st.userCirclesCxCyZR[base + 1]), &gcx, &gcy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.drawing.userCirclesCxCyZR[base]),
+                               static_cast<float>(run.st.drawing.userCirclesCxCyZR[base + 1]), &gcx, &gcy);
       float nx = 0.f;
       float ny = 0.f;
       float nz = 1.f;
-      CircleNormalAt(run.st.userCircleNormals, static_cast<size_t>(idx), &nx, &ny, &nz);
+      CircleNormalAt(run.st.drawing.userCircleNormals, static_cast<size_t>(idx), &nx, &ny, &nz);
       const double got[7] = {gcx,
                              gcy,
-                             static_cast<double>(run.st.userCirclesCxCyZR[base + 2]),
-                             static_cast<double>(run.st.userCirclesCxCyZR[base + 3]),
+                             static_cast<double>(run.st.drawing.userCirclesCxCyZR[base + 2]),
+                             static_cast<double>(run.st.drawing.userCirclesCxCyZR[base + 3]),
                              static_cast<double>(nx),
                              static_cast<double>(ny),
                              static_cast<double>(nz)};
@@ -2660,14 +2645,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT ARCPOINTS needs <index> <sx> <sy> <sz> <ex> <ey> <ez>", sourceLine);
         return false;
       }
-      if (idx < 0 || static_cast<size_t>(idx) >= run.st.userArcs.size()) {
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.drawing.userArcs.size()) {
         Fail(run, "expect",
              "EXPECT ARCPOINTS: no arc at index " + std::to_string(idx) + " (there are " +
-                 std::to_string(run.st.userArcs.size()) + ")",
+                 std::to_string(run.st.drawing.userArcs.size()) + ")",
              sourceLine);
         return false;
       }
-      const CadArc& a = run.st.userArcs[static_cast<size_t>(idx)];
+      const CadArc& a = run.st.drawing.userArcs[static_cast<size_t>(idx)];
       const ucs::Ucs plane = CurvePlane(a);
       const ray3d::Vec3 s = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(a.startRad));
       const ray3d::Vec3 e =
@@ -2713,11 +2698,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       bool first = true;
       bool widthVaries = false;
       long labels = 0;
-      for (const SurveyPoint& p : run.st.surveyPoints) {
+      for (const SurveyPoint& p : run.st.drawing.surveyPoints) {
         const int aix = FindSurveyLabelAnnIndex(run.st, p);
         if (aix < 0)
           continue;
-        const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
+        const CadAnnotation& a = run.st.drawing.cadAnnotations[static_cast<size_t>(aix)];
         const float dx = a.boxMinX - static_cast<float>(p.easting);
         const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - static_cast<float>(p.northing);
         const float w = a.boxMaxX - a.boxMinX;
@@ -2776,11 +2761,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT PAPERLINE needs <layout> <line> <x0> <y0> <x1> <y1>", sourceLine);
         return false;
       }
-      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || lineIx < 0) {
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.drawing.paperLayouts.size() || lineIx < 0) {
         Fail(run, "expect", "PAPERLINE: layout or line index is out of range", sourceLine);
         return false;
       }
-      const auto& lines = run.st.paperLayouts[static_cast<size_t>(layoutIx)].paperLines;
+      const auto& lines = run.st.drawing.paperLayouts[static_cast<size_t>(layoutIx)].paperLines;
       const size_t base = static_cast<size_t>(lineIx) * 6;
       if (base + 4 >= lines.size()) {
         Fail(run, "expect", "PAPERLINE: line index is out of range", sourceLine);
@@ -2807,11 +2792,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT PAPERPOLYLINE needs <layout> <polyline> <x0> <y0> <x1> <y1>", sourceLine);
         return false;
       }
-      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || polyIx < 0) {
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.drawing.paperLayouts.size() || polyIx < 0) {
         Fail(run, "expect", "PAPERPOLYLINE: layout or polyline index is out of range", sourceLine);
         return false;
       }
-      const auto& layout = run.st.paperLayouts[static_cast<size_t>(layoutIx)];
+      const auto& layout = run.st.drawing.paperLayouts[static_cast<size_t>(layoutIx)];
       const size_t index = static_cast<size_t>(polyIx);
       if (index + 1 >= layout.paperPolyOffsets.size()) {
         Fail(run, "expect", "PAPERPOLYLINE: polyline index is out of range", sourceLine);
@@ -2844,9 +2829,9 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
       long got = -1;
       if (what == "LINES")
-        got = static_cast<long>(run.st.userLinesFlat.size() / 6);
+        got = static_cast<long>(run.st.drawing.userLinesFlat.size() / 6);
       else if (what == "CIRCLES")
-        got = static_cast<long>(run.st.userCirclesCxCyZR.size() / 4);
+        got = static_cast<long>(run.st.drawing.userCirclesCxCyZR.size() / 4);
       else if (what == "POLYLINES")
         got = static_cast<long>(PolylineCountOf(run.st));
       // Paper-space counts, so a transcript can say WHICH SPACE geometry landed in rather than only
@@ -2858,38 +2843,38 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // multi-layout drawing is checkable the same way a single-layout one already was.
       else if (what == "PAPERPOLYLINES") {
         got = 0;
-        for (const PaperLayout& L : run.st.paperLayouts)
+        for (const PaperLayout& L : run.st.drawing.paperLayouts)
           got += static_cast<long>(L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1);
       } else if (what == "PAPERLINES") {
         got = 0;
-        for (const PaperLayout& L : run.st.paperLayouts)
+        for (const PaperLayout& L : run.st.drawing.paperLayouts)
           got += static_cast<long>(L.paperLines.size() / 6);
       }
       // Sum of every layout's paper-space circles/arcs/ellipses (REQ-039 / issue #86), the same
       // model-vs-paper split PAPERPOLYLINES established for issue #84.
       else if (what == "PAPERCIRCLES") {
         got = 0;
-        for (const PaperLayout& L : run.st.paperLayouts)
+        for (const PaperLayout& L : run.st.drawing.paperLayouts)
           got += static_cast<long>(L.paperCircles.size() / 3);
       } else if (what == "PAPERARCS") {
         got = 0;
-        for (const PaperLayout& L : run.st.paperLayouts)
+        for (const PaperLayout& L : run.st.drawing.paperLayouts)
           got += static_cast<long>(L.paperArcs.size());
       } else if (what == "PAPERELLIPSES") {
         got = 0;
-        for (const PaperLayout& L : run.st.paperLayouts)
+        for (const PaperLayout& L : run.st.drawing.paperLayouts)
           got += static_cast<long>(L.paperEllipses.size());
       }
       else if (what == "ARCS")
-        got = static_cast<long>(run.st.userArcs.size());
+        got = static_cast<long>(run.st.drawing.userArcs.size());
       else if (what == "ELLIPSES")
-        got = static_cast<long>(run.st.userEllipses.size());
+        got = static_cast<long>(run.st.drawing.userEllipses.size());
       else if (what == "ANNOTATIONS")
-        got = static_cast<long>(run.st.cadAnnotations.size());
+        got = static_cast<long>(run.st.drawing.cadAnnotations.size());
       else if (what == "TABLES")
-        got = static_cast<long>(run.st.cadTables.size());
+        got = static_cast<long>(run.st.drawing.cadTables.size());
       else if (what == "SURVEYPOINTS")
-        got = static_cast<long>(run.st.surveyPoints.size());
+        got = static_cast<long>(run.st.drawing.surveyPoints.size());
       // Not a geometry count: what the drawing currently considers picked. It is the only way to
       // assert that something is NOT selectable — REQ-084's isolation gate, where the object is
       // still in the drawing and must simply refuse to be picked.
@@ -2938,7 +2923,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
             [&](const SelectedSubObject& s) { return s.kind == want; }));
       }
       else if (what == "SURFACES")
-        got = static_cast<long>(run.st.cadSurfaces.size());
+        got = static_cast<long>(run.st.drawing.cadSurfaces.size());
       // How many of the CURRENT selection are TIN surfaces (REQ-068 / ADR-036 (b)). Distinct from
       // SELECTED on purpose: "1 object is selected" and "the selected object is the surface" are
       // different claims, and a surface pick that silently returned the polyline underneath it would
@@ -2952,7 +2937,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // POPULATED, which is what the selection highlight reads; a highlight that silently drew
       // nothing would otherwise look exactly like a surface that was never selected.
       else if (what == "SURFACEBORDERSEGS") {
-        const std::vector<float>* b = run.st.cadSurfaces.empty() ? nullptr : SurfaceBorderEdges(run.st, 0);
+        const std::vector<float>* b = run.st.drawing.cadSurfaces.empty() ? nullptr : SurfaceBorderEdges(run.st, 0);
         got = b ? static_cast<long>(b->size() / 6) : 0;
       }
       // The rest of surface 0's generated display geometry (REQ-070 / ADR-036 (e)). These are what
@@ -2969,7 +2954,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // nothing is drawn for surfaces at all, which is how "a surface on a frozen layer" and "a
       // style with everything switched off" are told apart from a cache that simply never filled.
       else if (what == "SOLIDS")
-        got = static_cast<long>(run.st.cadSolids.size());
+        got = static_cast<long>(run.st.drawing.cadSolids.size());
       // How many solids the renderer would be handed this frame — the cache and the visibility
       // filter, not the document. A solid on a frozen layer counts in SOLIDS and not in SOLIDBATCHES,
       // which is the only way a transcript can state REQ-084 (d) for a solid.
@@ -2981,10 +2966,10 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // count what layer off/freeze removed. Derived the same way the assembly pass does it.
       else if (what == "SOLIDVISIBLE") {
         got = 0;
-        for (size_t si = 0; si < run.st.cadSolids.size(); ++si) {
+        for (size_t si = 0; si < run.st.drawing.cadSolids.size(); ++si) {
           if (!SolidVisible(run.st, si))
             continue;
-          const CadSolidPtr& sp = run.st.cadSolids[si];
+          const CadSolidPtr& sp = run.st.drawing.cadSolids[si];
           const auto ce = std::find_if(run.st.solidDisplayCache.begin(), run.st.solidDisplayCache.end(),
                                        [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
           if (ce != run.st.solidDisplayCache.end() && !ce->empty())
@@ -3203,13 +3188,13 @@ int RunTranscriptMain(int argc, char** argv) {
       js << "  \"transcript\": \"" << JsonEscape(transcriptPath) << "\",\n";
       js << "  \"pendingDialogAnswers\": " << pending << ",\n";
       js << "  \"entities\": {\n";
-      js << "    \"lines\": " << run.st.userLinesFlat.size() / 6 << ",\n";
-      js << "    \"circles\": " << run.st.userCirclesCxCyZR.size() / 4 << ",\n";
+      js << "    \"lines\": " << run.st.drawing.userLinesFlat.size() / 6 << ",\n";
+      js << "    \"circles\": " << run.st.drawing.userCirclesCxCyZR.size() / 4 << ",\n";
       js << "    \"polylines\": " << PolylineCountOf(run.st) << ",\n";
-      js << "    \"arcs\": " << run.st.userArcs.size() << ",\n";
-      js << "    \"ellipses\": " << run.st.userEllipses.size() << ",\n";
-      js << "    \"annotations\": " << run.st.cadAnnotations.size() << ",\n";
-      js << "    \"surveyPoints\": " << run.st.surveyPoints.size() << "\n";
+      js << "    \"arcs\": " << run.st.drawing.userArcs.size() << ",\n";
+      js << "    \"ellipses\": " << run.st.drawing.userEllipses.size() << ",\n";
+      js << "    \"annotations\": " << run.st.drawing.cadAnnotations.size() << ",\n";
+      js << "    \"surveyPoints\": " << run.st.drawing.surveyPoints.size() << "\n";
       js << "  },\n";
       js << "  \"failures\": [\n";
       for (size_t i = 0; i < run.failures.size(); ++i) {

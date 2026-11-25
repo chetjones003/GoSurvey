@@ -49,7 +49,7 @@ jobs:
   beta-notes-api-smoke:
     if: ${{ inputs.beta_notes_api_smoke == true }}
     name: Beta notes OpenAI API smoke test
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
     permissions:
       contents: read
     steps:
@@ -267,7 +267,7 @@ jobs:
           beta-version: ${{ steps.ver.outputs.betaVersion }}
           # D-2026-11-09-d: only a published channel build reports stable or beta; a feature build reports dev.
           build-channel: ${{ contains('stable beta', steps.ver.outputs.channel) && steps.ver.outputs.channel || 'dev' }}
-          test-parallel: 'auto'
+          test-parallel: '4'
 
       - name: Test release PDB archive validation
         shell: pwsh
@@ -779,7 +779,7 @@ jobs:
       (needs.build.result == 'failure' || needs.package.result == 'failure') &&
       (github.ref_name == 'beta' || github.ref_name == 'master') &&
       inputs.beta_notes_validation != true
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
     permissions:
       actions: read
       contents: read

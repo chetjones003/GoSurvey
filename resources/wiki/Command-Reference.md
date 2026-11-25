@@ -18,6 +18,8 @@ for a compact list inside the program.
 |---|---|---|---|
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | Draw a polyline whose vertices each carry their own elevation | [[Commands/3dpoly]] |
 | `ARC` | — | Draw an arc | [[Commands/arc]] |
+| `CENTERLINE` | — | Draw a centerline between the two selected lines | [[Commands/centerline]] |
+| `CENTERMARK` | — | Add a center mark to the selected circles and arcs | [[Commands/centermark]] |
 | `CIRCLE` | `C` | Draw a circle | [[Commands/circle]] |
 | `ELLIPSE` | `EL` | Draw an ellipse | [[Commands/ellipse]] |
 | `FEATURELINE` | `FL` | Draw a feature line: named 3D linework with per-vertex elevations (REQ-087) | [[Commands/featureline]] |
@@ -29,6 +31,7 @@ for a compact list inside the program.
 | `POINT` | — | Place CAD point markers (`PDMODE` / `PDSIZE`) | [[Commands/point]] |
 | `POLYLINE` | `PL` | Draw a connected polyline | [[Commands/polyline]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | Draw a rectangle (two opposite corners) | [[Commands/rect]] |
+| `REVCLOUD` | — | Revision cloud: click corners round an area, or convert a closed shape | [[Commands/revcloud]] |
 | `SPLINE` | `SPL` | Draw a NURBS spline (Fit or CV) | [[Commands/spline]] |
 
 ### Solids and 3D
@@ -42,11 +45,22 @@ for a compact list inside the program.
 | `INTERSECT` | `IN` | Keep only the volume two selected solids share | [[Commands/intersect]] |
 | `ISOLINES` | — | Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report | [[Commands/isolines]] |
 | `LOFT` | `LFT` | Loft a solid through two or more selected closed polylines or circles, in pick order | [[Commands/loft]] |
+| `MASSPROP` | `MASSPROPERTIES`, `SOLIDMASSPROP`, `MASSP` | Mass properties of every solid: volume, area, centroid, inertia, principal axes | [[Commands/massprop]] |
+| `PIPECATALOG` | `PCAT` | Look up a fitting in the library: PIPECATALOG <part type> <size> [class] | [[Commands/pipecatalog]] |
+| `PIPEFIT` | `PFIT` | Place a catalog fitting on the selected pipe run: PIPEFIT <part type> | [[Commands/pipefit]] |
+| `PIPEJOIN` | `PJOIN` | Join two selected pipe runs of the same size and class | [[Commands/pipejoin]] |
+| `PIPEPALETTE` | `PIPEPAL` | Toggle the Pipe Fittings palette | [[Commands/pipepalette]] |
+| `PIPEPROP` | `PPROP` | Change nominal size and pressure class on selected pipe runs: PIPEPROP <size> [class] | [[Commands/pipeprop]] |
+| `PIPERUN` | `PIPE` | Route a pipe run: size [class], wall thickness, then points | [[Commands/piperun]] |
+| `PIPESPLIT` | `PSPLIT` | Split the selected pipe run at a picked point | [[Commands/pipesplit]] |
+| `PIPESYS` | `PIPENET`, `PIPINGSYSTEM` | Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> | [[Commands/pipesys]] |
 | `POLYSOLID` | `PSOLID` | Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object) | [[Commands/polysolid]] |
 | `PRESSPULL` | `PP` | Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance | [[Commands/presspull]] |
 | `PYRAMID` | `PYR` | Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> <height> | [[Commands/pyramid]] |
 | `REVOLVE` | `REV` | Revolve a selected closed polyline or circle about an axis into a solid | [[Commands/revolve]] |
 | `SECTION` | — | Cross-section of the selected solids by the active UCS plane, as a closed polyline | [[Commands/section]] |
+| `SECTIONCLIP` | `SCLIP`, `CLIP` | Live section clip by the UCS plane: ON / OFF / FLIP / <offset> | [[Commands/sectionclip]] |
+| `SECTIONPLANE` | `SPLANE` | Place the section plane on a solid's flat face | [[Commands/sectionplane]] |
 | `SLICE` | `SL` | Cut selected solids with a plane (three points), keeping one side or both | [[Commands/slice]] |
 | `SOLIDCHECK` | `SCHECK` | Check every solid (or the selection): closed, manifold, oriented, self-intersecting | [[Commands/solidcheck]] |
 | `SOLIDLIST` | `SOLIDS` | List every solid: kind, layer, volume, surface area, topology counts | [[Commands/solidlist]] |
@@ -71,14 +85,18 @@ for a compact list inside the program.
 | `MLEADER` | `ML` | Draw a multileader | [[Commands/mleader]] |
 | `MTEXT` | `MT` | Place multiline text | [[Commands/mtext]] |
 | `TABLE` | — | Insert Table dialog and placement preview; typed style/count prompts in scripts | [[Commands/table]] |
-| `MSTY` | `MLEADERSTYLE`, `MLSTY` | Edit the active multileader style | [[Commands/mleader]] |
+| `MSTY` | `MLEADERSTYLE`, `MLSTY` | Edit the active multileader style | [[Commands/msty]] |
 | `STYLE` | `ST`, `DDSTYLE` | Text style manager: create / edit named text styles | [[Commands/style]] |
+| `TABLESTYLE` | `TSTY` | Drawing table style manager | [[Commands/tablestyle]] |
 | `TEXT` | — | Place single-line text | [[Commands/text]] |
 
 ### Modify
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `3DMOVE` | — | Move objects with the 3D gizmo | [[Commands/3dmove]] |
+| `3DROTATE` | — | Rotate objects with the 3D gizmo | [[Commands/3drotate]] |
+| `3DSCALE` | — | Scale objects with the 3D gizmo | [[Commands/3dscale]] |
 | `ALIGN` | `AL` | Align objects to others | [[Commands/align]] |
 | `ARRAY` | `AR` | Rectangular or polar array of copies | [[Commands/array]] |
 | `BREAK` | `BR` | Split an object at one or two picked points | [[Commands/break]] |
@@ -100,11 +118,13 @@ for a compact list inside the program.
 | `PASTE` | — | Paste from clipboard | [[Commands/paste]] |
 | `PASTEORIG` | `PO` | Paste at original coordinates | [[Commands/pasteorig]] |
 | `CUT` | — | Cut the selection: copy it to the clipboard, then erase it (refused for objects the clipboard cannot carry) | — |
+| `REDO` | — | Redo the last undone change | [[Commands/redo]] |
 | `ROTATE` | `RO` | Rotate objects | [[Commands/rotate]] |
 | `SCALE` | `SC` | Scale objects | [[Commands/scale]] |
 | `STRETCH` | `S` | Crossing/window-select, then move only the vertices inside the box | [[Commands/stretch]] |
 | `TRIM` | `TR` | Trim objects to an edge | [[Commands/trim]] |
 | `TRIMSTATE` | — | TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges | [[Commands/trimstate]] |
+| `UNDO` | — | Undo the last change | [[Commands/undo]] |
 
 ### Selection and visibility
 
@@ -140,7 +160,10 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `CHPROP` | — | Change the color, layer, linetype or lineweight of selected objects | [[Commands/chprop]] |
 | `LAYER` | `LA` | Open the Layer manager | [[Commands/layer]] |
+| `LAYMCUR` | — | Make the layer of a picked object current | [[Commands/laymcur]] |
+| `MATCHPROP` | `MA`, `PAINTER` | Copy one object's layer, color, linetype and lineweight onto others | [[Commands/matchprop]] |
 | `VPFREEZE` | `VPF` | Freeze the picked entities' layers in the current viewport | [[Commands/vpfreeze]] |
 | `VPTHAW` | `VPT` | Thaw the picked entities' layers in the current viewport | [[Commands/vpthaw]] |
 
@@ -170,11 +193,13 @@ for a compact list inside the program.
 | `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
+| `CREATEPROFILEFROMSURFACE` | — | Sample a surface profile along an alignment and place its profile view | [[Commands/createprofilefromsurface]] |
 | `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
 | `CREATESHEETS` | — | Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3) | [[Commands/createsheets]] |
 | `CREATESAMPLELINES` | — | Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>] | [[Commands/createsamplelines]] |
 | `CREATESECTIONSHEETS` | — | Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation> | [[Commands/createsectionsheets]] |
 | `CREATEDESIGNPROFILE` | — | Create an empty design profile on an alignment: CREATEDESIGNPROFILE <alignment>, <profile name> | [[Commands/createdesignprofile]] |
+| `EDITALIGNMENTSTYLE` | — | Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>] | [[Commands/editalignmentstyle]] |
 | `PROFILEPVI` | — | Add or edit a vertical point of a design profile: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] | [[Commands/profilepvi]] |
 | `PROFILEDELPVI` | — | Remove a vertical point from a design profile: PROFILEDELPVI <profile>, <station> | [[Commands/profiledelpvi]] |
 | `PROFILEQUERY` | — | Report a design profile at a station: PROFILEQUERY <profile>, <station> | [[Commands/profilequery]] |
@@ -188,6 +213,7 @@ for a compact list inside the program.
 | `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
 | `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
 | `ALIGNMENTCONTINUITY` | — | Continuity check level: ALIGNMENTCONTINUITY <name>, C0\|C1\|C2 \| LIST | [[Commands/alignmentcontinuity]] |
+| `PROFILEVIEW` | — | Place or move a surface profile view | [[Commands/profileview]] |
 | `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | Reverse alignment direction and stationing: REVERSEALIGNMENT <name> | [[Commands/reversealignment]] |
 | `ALIGNMENTSTATION` | — | Starting station, reference point and station equations: ALIGNMENTSTATION <name>, START\|REFERENCE\|EQ, ... | [[Commands/alignmentstation]] |
 | `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
@@ -198,7 +224,7 @@ for a compact list inside the program.
 | `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT\|CSV[, <path>]] | [[Commands/alignmentreport]] |
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
 | `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| SEGMENT, <entity#> \| CLEAR | [[Commands/alignmentlabel]] |
-| `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE\|GEOMETRY, ... | [[Alignments]] |
+| `ALIGNMENTLABELSET` | — | Alignment label sets | [[Commands/alignmentlabelset]] |
 | `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
 | `ALIGNMENTTABLE` | — | Insert a line, curve, spiral, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SPIRAL\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>] | [[Commands/alignmenttable]] |
 | `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
@@ -210,20 +236,30 @@ for a compact list inside the program.
 | `ALIGNMENTCRITERIA` | — | Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>\|NONE | [[Commands/alignmentcriteria]] |
 | `ALIGNMENTSPEED` | — | Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>\|CLEAR | [[Commands/alignmentspeed]] |
 | `ALIGNMENTCHECK` | — | Check an alignment against its design criteria: ALIGNMENTCHECK <alignment> | [[Commands/alignmentcheck]] |
-| `ALIGNMENTMETA` | — | Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> \| REMOVE, <name> \| LIST | [[Alignments]] |
-| `STATIONFORMAT` | — | How stations are written: STATIONFORMAT [DELIMITER=+\|-\|_\|/\|C\|K\|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] \| DEFAULT | [[Alignments]] |
+| `ALIGNMENTMETA` | — | Alignment metadata | [[Commands/alignmentmeta]] |
+| `STATIONFORMAT` | — | How stations are written | [[Commands/stationformat]] |
+| `VIEWFRAMEDELETE` | — | Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment> | [[Commands/viewframedelete]] |
 
 ### Surfaces and volumes
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
 | `CATCHMENT` | `CATCH` | Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] \| CATCHMENT EXTRACT | [[Commands/catchment]] |
+| `CREATEDATASHORTCUT` | — | Register a project surface source: CREATEDATASHORTCUT <surface> | [[Commands/createdatashortcut]] |
+| `CREATESURFACEREFERENCE` | — | Create a read-only project surface reference | [[Commands/createsurfacereference]] |
 | `DESIGNATEBOUNDARY` | `DBD` | Add a picked closed polyline as a surface boundary (outer/hide/show/clip) | [[Commands/designateboundary]] |
 | `DESIGNATEBREAKLINE` | `DBL` | Add a picked line/polyline as a surface breakline | [[Commands/designatebreakline]] |
 | `DESIGNATECONTOUR` | `DCON` | Add a picked line/polyline as a surface contour source | [[Commands/designatecontour]] |
+| `DRAPE` | — | Drape selected geometry onto a surface: DRAPE <surface>[, LINK] | [[Commands/drape]] |
+| `DRAPELINKS` | — | List entities linked to follow surface rebuilds | [[Commands/drapelinks]] |
 | `EXTRACT` | — | Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>] | [[Commands/extract]] |
 | `FLELEV` | — | Feature line elevations: FLELEV <n> [SET\|GRADEAHEAD\|GRADEBACK\|RAISE\|INSERT\|DELETE …] | [[Commands/flelev]] |
 | `FLELEVEDIT` | — | Open the feature line elevation editor: FLELEVEDIT [<n>] | [[Commands/flelevedit]] |
+| `GRADING` | `GRD` | Side slopes from a feature line out to a surface, giving the daylight line | [[Commands/grading]] |
+| `GRADINGGROUP` | — | Grading group: GRADINGGROUP <name>[, Add/Remove/List] with selected gradings | [[Commands/gradinggroup]] |
+| `GRADINGINFILL` | — | Create a grading infill from selected closed feature lines: GRADINGINFILL <group> | [[Commands/gradinginfill]] |
+| `MOVETOSURFACE` | — | Move selected block references to a surface: MOVETOSURFACE <surface> | [[Commands/movetosurface]] |
+| `PADSOLID` | `PAD` | Build cut and fill solids for a building pad: PADSOLID [<surface>, <pad elevation>] | [[Commands/padsolid]] |
 | `QUICKPROFILE` | `QPROF` | Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>] | [[Commands/quickprofile]] |
 | `SURFACEADDFILE` | `SFADDFILE` | Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]] | [[Commands/surfaceaddfile]] |
 | `SURFACEADDPOINT` | `SFADDPT` | Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>] | [[Commands/surfaceaddpoint]] |
@@ -234,12 +270,19 @@ for a compact list inside the program.
 | `SURFACEDELETE` | `SFDELETE` | Delete a surface: SURFACEDELETE <name> | [[Commands/surfacedelete]] |
 | `SURFACEDELPOINT` | `SFDELPT` | Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>] | [[Commands/surfacedelpoint]] |
 | `SURFACEIMPORTFILE` | `SFIMPORTFILE` | Import a linked point file into the drawing and break the link | [[Commands/surfaceimportfile]] |
+| `SURFACELEGEND` | — | Insert a surface analysis legend table | [[Commands/surfacelegend]] |
 | `SURFACELIST` | `SFLIST` | List every surface and its full definition | [[Commands/surfacelist]] |
 | `SURFACEMOVEPOINT` | `SFMOVEPT` | Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>] | [[Commands/surfacemovepoint]] |
 | `SURFACEREBUILD` | `SFREBUILD` | Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>] | [[Commands/surfacerebuild]] |
 | `SURFACERENAME` | `SFRENAME` | Rename a surface: SURFACERENAME <old>, <new> | [[Commands/surfacerename]] |
 | `SURFACESTATS` | `SFSTATS` | Surface statistics: SURFACESTATS [<name>] | [[Commands/surfacestats]] |
+| `SURFACEVISIBILITY` | `SURFVIS` | Surface line-of-sight or zone-of-visual-influence analysis | [[Commands/surfacevisibility]] |
+| `SURFCROSSBL` | — | List or resolve surface-local breakline crossings | [[Commands/surfcrossbl]] |
 | `SURFDELLINE` | `SFDELLINE` | Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>] | [[Commands/surfdelline]] |
+| `SURFDRAPE` | — | Drape an image onto a surface: SURFDRAPE <surface>, <image-id> | [[Commands/surfdrape]] |
+| `SURFLABEL` | — | Place spot, slope, contour or watershed labels on a surface | [[Commands/surflabel]] |
+| `SURFLODHIGH` | — | Set a surface to full viewport detail: SURFLODHIGH <surface> | [[Commands/surflodhigh]] |
+| `SURFLODLOW` | — | Set a surface to reduced viewport detail: SURFLODLOW <surface> | [[Commands/surflodlow]] |
 | `SURFSTYLE` | `SS` | Surface style editor: contours, triangles, border (REQ-070) | [[Commands/surfstyle]] |
 | `SURFSWAPEDGE` | `SFSWAP` | Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>] | [[Commands/surfswapedge]] |
 | `UNDESIGNATE` | `UNDES` | Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE\|BOUNDARY\|POINTFILE\|CONTOUR>, <n> | [[Commands/undesignate]] |
@@ -256,10 +299,14 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `LAYOUT` | — | Create, copy, rename or delete paper layouts | [[Commands/layout]] |
 | `MSPACE` | `MS` | Edit the model through the selected viewport (floating model space) | [[Commands/mspace]] |
 | `MVIEW` | `RECTVIEWPORT`, `RECTVP` | Rectangular paper-space viewport (two clicks) | [[Commands/mview]] |
+| `PAGESETUP` | — | Open the page setup for the current layout | [[Commands/pagesetup]] |
 | `PLOTSCALE` | `PSCALE` | Set the plot scale | [[Commands/plotscale]] |
 | `PSPACE` | `PS` | Return to paper space from a floating viewport | [[Commands/pspace]] |
+| `VPMATCHSCALE` | — | Apply a named drawing scale to selected viewports: VPMATCHSCALE 1:50 | [[Commands/vpmatchscale]] |
+| `VPSCALE` | — | Set the current viewport's scale: VPSCALE 1:20 | [[Commands/vpscale]] |
 
 ### Blocks and attributes
 
@@ -269,23 +316,39 @@ for a compact list inside the program.
 | `ATTEDIT` | — | Edit attribute values on selected inserts | [[Commands/attedit]] |
 | `ATTEXT` | — | Extract attributes to the command log / file | [[Commands/attext]] |
 | `ATTSYNC` | — | Synchronize attributes from definitions | [[Commands/attsync]] |
+| `BACTION` | — | Bind an action to a parameter: BACTION <kind>, <param>[, ox, oy, dx, dy, thresh] | [[Commands/baction]] |
 | `BCLOSE` | — | Close the block editor | [[Commands/bclose]] |
+| `BCONNECT` | — | Add a connection port (in BEDIT) | [[Commands/bconnect]] |
+| `BCONNECTEDIT` | — | Edit or remove a connection port (in BEDIT) | [[Commands/bconnectedit]] |
+| `BCONNECTMODE` | — | Add, edit or remove a smart connection mode on a port (in BEDIT) | [[Commands/bconnectmode]] |
 | `BEDIT` | — | Open the block editor: BEDIT <name> | [[Commands/bedit]] |
+| `BEDITADD` | — | Add a line to the block being edited: BEDITADD LINE, x1, y1, x2, y2[, visState] | [[Commands/beditadd]] |
+| `BGRIP` | — | Dynamic-block grips on the selected insert | [[Commands/bgrip]] |
 | `BLOCK` | — | Define a block from the selection: BLOCK <name>, <x>, <y>[, CONVERT\|DELETE\|RETAIN] | [[Commands/block]] |
 | `BLOCKFAV` | — | Favorite blocks | [[Commands/blockfav]] |
+| `BLOCKFITTING` | — | Tag the block being edited as a piping fitting (in BEDIT) | [[Commands/blockfitting]] |
 | `BLOCKIMPORT` | — | Import block definitions (.dxf/.dwg/.sat); omit the path to browse | [[Commands/blockimport]] |
 | `BLOCKLIB` | `BLOCKBROWSER` | List the drawing block library with previews | [[Commands/blocklib]] |
 | `BLOCKLIST` | — | List block definitions | [[Commands/blocklist]] |
 | `BLOCKMODEL` | — | Switch to model space | [[Commands/blockmodel]] |
+| `BLOCKNEST` | — | Nest one block inside another: BLOCKNEST <host>, <child> | [[Commands/blocknest]] |
 | `BLOCKPAPER` | — | Switch to the first paper layout | [[Commands/blockpaper]] |
 | `BLOCKRECENT` | — | Recently used blocks | [[Commands/blockrecent]] |
+| `BLOCKREDEF` | `REDEFINE` | Redefine a block from the selection: BLOCKREDEF <name>, <baseX>, <baseY>[, <baseZ>] | [[Commands/blockredef]] |
+| `BLOCKRENAME` | — | Rename a block definition: BLOCKRENAME <old>, <new> | [[Commands/blockrename]] |
 | `BLOCKSEARCH` | — | Search block names | [[Commands/blocksearch]] |
 | `BLOCKSTATS` | — | Definition statistics | [[Commands/blockstats]] |
+| `BLOCKUNITS` | — | Set a block's units: BLOCKUNITS <name>, <units> | [[Commands/blockunits]] |
+| `BPARAM` | — | Add a dynamic-block parameter: BPARAM <name>, <kind>[, <value>] | [[Commands/bparam]] |
 | `BSAVE` | — | Save the block being edited | [[Commands/bsave]] |
 | `BSAVEAS` | — | Save the edited block under a new name | [[Commands/bsaveas]] |
+| `BSETPARAM` | — | Set a parameter on selected references: BSETPARAM <name>, <value> | [[Commands/bsetparam]] |
+| `BSETVIS` | — | Set the visibility state of selected references: BSETVIS <state> | [[Commands/bsetvis]] |
+| `BVISIBILITY` | — | Add a visibility state: BVISIBILITY <state> | [[Commands/bvisibility]] |
 | `COPYCLIP` | — | Copy the selection to the CAD clipboard | [[Commands/copyclip]] |
 | `COPYSEL` | — | Copy selected inserts: COPYSEL dx, dy | [[Commands/copysel]] |
 | `INSERT` | `I` | Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, sz, z]] | [[Commands/insert]] |
+| `LIBEXPORT` | — | Export a fitting block to the library: LIBEXPORT <name>[, <path.dwg>] | [[Commands/libexport]] |
 | `MAKEBLOCK` | — | Create an empty block definition: MAKEBLOCK <name> | [[Commands/makeblock]] |
 | `MIRRORSEL` | — | Mirror selected inserts: MIRRORSEL x0, y0, x1, y1 | [[Commands/mirrorsel]] |
 | `MKLINE` | — | Add a line: MKLINE x0, y0, x1, y1 | [[Commands/mkline]] |
@@ -302,24 +365,48 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `ADDDRAWING` | — | Add Drawing to Project: bring an existing drawing and its points into this project | [[Commands/adddrawing]] |
+| `DRAWINGSETTINGS` | `EDITDRAWINGSETTINGS` | Drawing Settings: units, scale and the drawing's settings | [[Commands/drawingsettings]] |
 | `ELEV` | `UCS` | Elevation new geometry is drawn at (W = world Z 0) | [[Commands/elev]] |
+| `GEOMARKLATLONG` | — | Place a Position Marker at a typed latitude and longitude | [[Commands/geomarklatlong]] |
+| `GEOMARKPOINT` | — | Place a Position Marker at a picked point (geolocated drawing) | [[Commands/geomarkpoint]] |
+| `GEOREORIENTMARKER` | — | Set the geographic marker: a design point, then north | [[Commands/georeorientmarker]] |
 | `HELP` | — | Show command help | — |
+| `INSUNITS` | — | Show or set the drawing unit | [[Commands/insunits]] |
+| `OPENPACK` | — | Open Packed Project: unpack a .gspack into a folder and open it | [[Commands/openpack]] |
 | `OPTIONS` | `OP`, `SETTINGS` | Open the Options dialog | [[Commands/options]] |
+| `PACKPROJECT` | — | Pack Project: write the whole project as one .gspack file | [[Commands/packproject]] |
+| `PROJECTHEALTH` | — | Project Health: linked, missing and unsaved files | [[Commands/projecthealth]] |
+| `PROJECTSETTINGS` | — | Project Settings: the project's coordinate system, units and defaults | [[Commands/projectsettings]] |
+| `TOOLSPACE` | `TS` | Open the Toolspace: TOOLSPACE [PROJECT\|PROSPECTOR\|SETTINGS\|LIST\|CLOSE] | [[Commands/toolspace]] |
+| `TURNOVER` | — | Create Turnover: record which files were handed to whom, and when | [[Commands/turnover]] |
 | `UNITS` | `UN`, `DDUNITS` | Drawing units: display precision & angle format | [[Commands/units]] |
 
 ### Import and reference geometry
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `EXPORTLANDXML` | — | Export points, TIN surfaces and feature lines to LandXML 1.2 | [[Commands/exportlandxml]] |
+| `EXPORTLAS` | — | Export point clouds to a LAS file | [[Commands/exportlas]] |
+| `EXPORTLAZ` | — | Export point clouds to a LAZ file | [[Commands/exportlaz]] |
+| `EXPORTPTS` | — | Export point clouds to a PTS file | [[Commands/exportpts]] |
+| `EXPORTPTX` | — | Export point clouds to a PTX file | [[Commands/exportptx]] |
+| `EXTRACTCENTERLINE` | — | Place a centerline along a scanned pipe, pole or column | [[Commands/extractcenterline]] |
+| `IMAGEATTACH` | — | Attach a model-space image: IMAGEATTACH <path>, x, y, width, height, rotation | [[Commands/imageattach]] |
+| `IMPORTLANDXML` | — | Import points, TIN surfaces and feature lines from LandXML 1.2 | [[Commands/importlandxml]] |
 | `IMPORTMODEL` | `GLTF`, `IMPORT3D` | Import a glTF/GLB 3D model as reference geometry | [[Commands/importmodel]] |
 | `PDFATTACH` | `PA` | Attach a PDF underlay | [[Commands/pdfattach]] |
+| `PDFSPLIT` | — | Save chosen pages of the open PDF as a new PDF | [[Commands/pdfsplit]] |
 | `PDFVIEW` | `PV` | Open a PDF in the built-in viewer (REQ-387) | [[Commands/pdfview]] |
+| `POINTCLOUDATTACH` | `IMPORTPOINTCLOUD` | Import a point cloud (E57, PTS, PTX, LAS or LAZ) as reference geometry | [[Commands/pointcloudattach]] |
 
 ### Diagnostics
 
 | Command | Aliases | Description |
 |---|---|---|
 | `BENCH` | — | REQ-100 frame-budget benchmark: BENCH [segments] \| BENCH SURFACE [points] \| BENCH MESH [triangles] \| BENCH SOLID [count] |
+| `PERFHUD` | `FRAMESTATS` | Toggle the frame-time overlay |
+| `PIPEPERF` | — | Live pipe-routing timing profile |
 
 ---
 
@@ -327,7 +414,11 @@ for a compact list inside the program.
 
 | Command | Aliases | Page |
 |---|---|---|
+| `3DMOVE` | — | [[Commands/3dmove]] |
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | [[Commands/3dpoly]] |
+| `3DROTATE` | — | [[Commands/3drotate]] |
+| `3DSCALE` | — | [[Commands/3dscale]] |
+| `ADDDRAWING` | — | [[Commands/adddrawing]] |
 | `ALIGN` | `AL` | [[Commands/align]] |
 | `ALIGNMENT` | `CREATEALIGNMENT`, `CREATEALIGNMENTLAYOUT` | [[Commands/alignment]] |
 | `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
@@ -335,11 +426,75 @@ for a compact list inside the program.
 | `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
 | `ALIGNMENTCURVESETTINGS` | — | [[Commands/alignmentcurvesettings]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
+| `ALIGNMENTMETA` | — | [[Commands/alignmentmeta]] |
+| `BACTION` | — | [[Commands/baction]] |
+| `BCONNECT` | — | [[Commands/bconnect]] |
+| `BCONNECTEDIT` | — | [[Commands/bconnectedit]] |
+| `BCONNECTMODE` | — | [[Commands/bconnectmode]] |
+| `BEDITADD` | — | [[Commands/beditadd]] |
+| `BGRIP` | — | [[Commands/bgrip]] |
+| `BLOCKFITTING` | — | [[Commands/blockfitting]] |
+| `BLOCKNEST` | — | [[Commands/blocknest]] |
+| `BLOCKREDEF` | `REDEFINE` | [[Commands/blockredef]] |
+| `BLOCKRENAME` | — | [[Commands/blockrename]] |
+| `BLOCKUNITS` | — | [[Commands/blockunits]] |
+| `BPARAM` | — | [[Commands/bparam]] |
+| `BSETPARAM` | — | [[Commands/bsetparam]] |
+| `BSETVIS` | — | [[Commands/bsetvis]] |
+| `BVISIBILITY` | — | [[Commands/bvisibility]] |
+| `CENTERLINE` | — | [[Commands/centerline]] |
+| `CENTERMARK` | — | [[Commands/centermark]] |
+| `CHPROP` | — | [[Commands/chprop]] |
+| `CREATEDATASHORTCUT` | — | [[Commands/createdatashortcut]] |
+| `CREATEPROFILEFROMSURFACE` | — | [[Commands/createprofilefromsurface]] |
+| `CREATESURFACEREFERENCE` | — | [[Commands/createsurfacereference]] |
 | `CREATEVIEWFRAMES` | — | [[Commands/createviewframes]] |
 | `CREATESHEETS` | — | [[Commands/createsheets]] |
 | `CREATESAMPLELINES` | — | [[Commands/createsamplelines]] |
 | `CREATESECTIONSHEETS` | — | [[Commands/createsectionsheets]] |
 | `CREATEDESIGNPROFILE` | — | [[Commands/createdesignprofile]] |
+| `DRAPE` | — | [[Commands/drape]] |
+| `DRAPELINKS` | — | [[Commands/drapelinks]] |
+| `DRAWINGSETTINGS` | `EDITDRAWINGSETTINGS` | [[Commands/drawingsettings]] |
+| `EDITALIGNMENTSTYLE` | — | [[Commands/editalignmentstyle]] |
+| `EXPORTLANDXML` | — | [[Commands/exportlandxml]] |
+| `EXPORTLAS` | — | [[Commands/exportlas]] |
+| `EXPORTLAZ` | — | [[Commands/exportlaz]] |
+| `EXPORTPTS` | — | [[Commands/exportpts]] |
+| `EXPORTPTX` | — | [[Commands/exportptx]] |
+| `EXTRACTCENTERLINE` | — | [[Commands/extractcenterline]] |
+| `GEOMARKLATLONG` | — | [[Commands/geomarklatlong]] |
+| `GEOMARKPOINT` | — | [[Commands/geomarkpoint]] |
+| `GEOREORIENTMARKER` | — | [[Commands/georeorientmarker]] |
+| `GRADING` | `GRD` | [[Commands/grading]] |
+| `GRADINGGROUP` | — | [[Commands/gradinggroup]] |
+| `GRADINGINFILL` | — | [[Commands/gradinginfill]] |
+| `IMAGEATTACH` | — | [[Commands/imageattach]] |
+| `IMPORTLANDXML` | — | [[Commands/importlandxml]] |
+| `INSUNITS` | — | [[Commands/insunits]] |
+| `LAYMCUR` | — | [[Commands/laymcur]] |
+| `LAYOUT` | — | [[Commands/layout]] |
+| `LIBEXPORT` | — | [[Commands/libexport]] |
+| `MASSPROP` | `MASSPROPERTIES`, `SOLIDMASSPROP`, `MASSP` | [[Commands/massprop]] |
+| `MATCHPROP` | `MA`, `PAINTER` | [[Commands/matchprop]] |
+| `MOVETOSURFACE` | — | [[Commands/movetosurface]] |
+| `MSTY` | `MLEADERSTYLE`, `MLSTY` | [[Commands/msty]] |
+| `OPENPACK` | — | [[Commands/openpack]] |
+| `PACKPROJECT` | — | [[Commands/packproject]] |
+| `PADSOLID` | `PAD` | [[Commands/padsolid]] |
+| `PAGESETUP` | — | [[Commands/pagesetup]] |
+| `PDFSPLIT` | — | [[Commands/pdfsplit]] |
+| `PERFHUD` | `FRAMESTATS` | [[Commands/perfhud]] |
+| `PIPECATALOG` | `PCAT` | [[Commands/pipecatalog]] |
+| `PIPEFIT` | `PFIT` | [[Commands/pipefit]] |
+| `PIPEJOIN` | `PJOIN` | [[Commands/pipejoin]] |
+| `PIPEPALETTE` | `PIPEPAL` | [[Commands/pipepalette]] |
+| `PIPEPERF` | — | [[Commands/pipeperf]] |
+| `PIPEPROP` | `PPROP` | [[Commands/pipeprop]] |
+| `PIPERUN` | `PIPE` | [[Commands/piperun]] |
+| `PIPESPLIT` | `PSPLIT` | [[Commands/pipesplit]] |
+| `PIPESYS` | `PIPENET`, `PIPINGSYSTEM` | [[Commands/pipesys]] |
+| `POINTCLOUDATTACH` | `IMPORTPOINTCLOUD` | [[Commands/pointcloudattach]] |
 | `PROFILEPVI` | — | [[Commands/profilepvi]] |
 | `PROFILEDELPVI` | — | [[Commands/profiledelpvi]] |
 | `PROFILEQUERY` | — | [[Commands/profilequery]] |
@@ -356,7 +511,7 @@ for a compact list inside the program.
 | `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
 | `ALIGNMENTINVERSE` | — | [[Commands/alignmentinverse]] |
 | `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
-| `ALIGNMENTLABELSET` | — | [[Alignments]] |
+| `ALIGNMENTLABELSET` | — | [[Commands/alignmentlabelset]] |
 | `ALIGNMENTLABELSTYLE` | — | [[Commands/alignmentlabelstyle]] |
 | `ALIGNMENTLAYOUT` | — | [[Commands/alignmentlayout]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
@@ -481,13 +636,18 @@ for a compact list inside the program.
 | `POLYLINE` | `PL` | [[Commands/polyline]] |
 | `POLYSOLID` | `PSOLID` | [[Commands/polysolid]] |
 | `PRESSPULL` | `PP` | [[Commands/presspull]] |
+| `PROFILEVIEW` | — | [[Commands/profileview]] |
+| `PROJECTHEALTH` | — | [[Commands/projecthealth]] |
+| `PROJECTSETTINGS` | — | [[Commands/projectsettings]] |
 | `PSPACE` | `PS` | [[Commands/pspace]] |
 | `PURGE` | `-PURGE` | [[Commands/purge]] |
 | `PYRAMID` | `PYR` | [[Commands/pyramid]] |
 | `QUICKPROFILE` | `QPROF` | [[Commands/quickprofile]] |
 | `QUICKSELECT` | `QS` | [[Commands/quickselect]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | [[Commands/rect]] |
+| `REDO` | — | [[Commands/redo]] |
 | `REGEN` | `RE` | [[Commands/regen]] |
+| `REVCLOUD` | — | [[Commands/revcloud]] |
 | `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | [[Commands/reversealignment]] |
 | `REVOLVE` | `REV` | [[Commands/revolve]] |
 | `ROTATE` | `RO` | [[Commands/rotate]] |
@@ -495,6 +655,8 @@ for a compact list inside the program.
 | `SCALE` | `SC` | [[Commands/scale]] |
 | `SCALESEL` | — | [[Commands/scalesel]] |
 | `SECTION` | — | [[Commands/section]] |
+| `SECTIONCLIP` | `SCLIP`, `CLIP` | [[Commands/sectionclip]] |
+| `SECTIONPLANE` | `SPLANE` | [[Commands/sectionplane]] |
 | `SELBLOCK` | — | [[Commands/selblock]] |
 | `SELECT` | — | [[Commands/select]] |
 | `SELECTSIMILAR` | `SESIM` | [[Commands/selectsimilar]] |
@@ -504,6 +666,7 @@ for a compact list inside the program.
 | `SOLIDLIST` | `SOLIDS` | [[Commands/solidlist]] |
 | `SPHERE` | `SPH` | [[Commands/sphere]] |
 | `SPLINE` | `SPL` | [[Commands/spline]] |
+| `STATIONFORMAT` | — | [[Commands/stationformat]] |
 | `STRETCH` | `S` | [[Commands/stretch]] |
 | `STYLE` | `ST`, `DDSTYLE` | [[Commands/style]] |
 | `SUBTRACT` | `SU` | [[Commands/subtract]] |
@@ -516,28 +679,40 @@ for a compact list inside the program.
 | `SURFACEDELETE` | `SFDELETE` | [[Commands/surfacedelete]] |
 | `SURFACEDELPOINT` | `SFDELPT` | [[Commands/surfacedelpoint]] |
 | `SURFACEIMPORTFILE` | `SFIMPORTFILE` | [[Commands/surfaceimportfile]] |
+| `SURFACELEGEND` | — | [[Commands/surfacelegend]] |
 | `SURFACELIST` | `SFLIST` | [[Commands/surfacelist]] |
 | `SURFACEMOVEPOINT` | `SFMOVEPT` | [[Commands/surfacemovepoint]] |
 | `SURFACEREBUILD` | `SFREBUILD` | [[Commands/surfacerebuild]] |
 | `SURFACERENAME` | `SFRENAME` | [[Commands/surfacerename]] |
 | `SURFACESTATS` | `SFSTATS` | [[Commands/surfacestats]] |
+| `SURFACEVISIBILITY` | `SURFVIS` | [[Commands/surfacevisibility]] |
+| `SURFCROSSBL` | — | [[Commands/surfcrossbl]] |
 | `SURFDELLINE` | `SFDELLINE` | [[Commands/surfdelline]] |
+| `SURFDRAPE` | — | [[Commands/surfdrape]] |
 | `SURFELEV` | `SE` | [[Commands/surfelev]] |
+| `SURFLABEL` | — | [[Commands/surflabel]] |
+| `SURFLODHIGH` | — | [[Commands/surflodhigh]] |
+| `SURFLODLOW` | — | [[Commands/surflodlow]] |
 | `SURFSTYLE` | `SS` | [[Commands/surfstyle]] |
 | `SURFSWAPEDGE` | `SFSWAP` | [[Commands/surfswapedge]] |
 | `SWEEP` | `SWP` | [[Commands/sweep]] |
+| `TABLESTYLE` | `TSTY` | [[Commands/tablestyle]] |
 | `TEXT` | — | [[Commands/text]] |
+| `TOOLSPACE` | `TS` | [[Commands/toolspace]] |
 | `TORUS` | `TOR` | [[Commands/torus]] |
 | `TRAVERSE` | `TRAV`, `TRAVERSEEDITOR` | [[Commands/traverse]] |
 | `TRIM` | `TR` | [[Commands/trim]] |
 | `TRIMSTATE` | — | [[Commands/trimstate]] |
+| `TURNOVER` | — | [[Commands/turnover]] |
 | `UCS` | — | [[Commands/ucs]] |
 | `UCSFOLLOW` | — | [[Commands/ucsfollow]] |
 | `UNDESIGNATE` | `UNDES` | [[Commands/undesignate]] |
+| `UNDO` | — | [[Commands/undo]] |
 | `UNION` | `UNI` | [[Commands/union]] |
 | `UNISOLATEOBJECTS` | `UNISOLATE` | [[Commands/unisolateobjects]] |
 | `UNITS` | `UN`, `DDUNITS` | [[Commands/units]] |
 | `VIEW` | `V`, `DDVIEW` | [[Commands/view]] |
+| `VIEWFRAMEDELETE` | — | [[Commands/viewframedelete]] |
 | `VIEWPOINTS` | `VWPTS` | [[Commands/viewpoints]] |
 | `VISUALSTYLE` | `VS`, `VSCURRENT` | [[Commands/visualstyle]] |
 | `VOLCSV` | — | [[Commands/volcsv]] |
@@ -547,6 +722,8 @@ for a compact list inside the program.
 | `VOLUMES` | `VOL` | [[Commands/volumes]] |
 | `VOLUMESURFACE` | `VOLSURF` | [[Commands/volumesurface]] |
 | `VPFREEZE` | `VPF` | [[Commands/vpfreeze]] |
+| `VPMATCHSCALE` | — | [[Commands/vpmatchscale]] |
+| `VPSCALE` | — | [[Commands/vpscale]] |
 | `VPTHAW` | `VPT` | [[Commands/vpthaw]] |
 | `WATERDROP` | `WDROP` | [[Commands/waterdrop]] |
 | `WATERSHED` | `WSHED` | [[Commands/watershed]] |
