@@ -4,6 +4,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "CadDimStroke.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -73,7 +74,13 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
       upd(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
       upd(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
       upd(sx1, sy1, sx2, sy2);
-      const float h = CadAnnotationHeightWorld(a, cmd.drawing.modelUnitsPerPlottedInch);
+      const DimensionStyle& dimStyle = CadDimensionStyleForAnnotation(cmd, a);
+      const float dimMup = CadDimModelUnitsPerPlottedInch(
+          a, &dimStyle, cmd.drawing.modelUnitsPerPlottedInch, &cmd.drawing.annotationScales,
+          cmd.currentAnnotationScaleIndex, nullptr, cmd.activeSpaceIndex == kModelSpaceIndex);
+      const float h = CadDimTextHeightWorld(a, &dimStyle, dimMup);  // issue #1676
+      double labelX = a.insX, labelY = a.insY;
+      CadDimModelSpaceLabelPosition(cmd, a, &labelX, &labelY);
       const float charFactor = 0.55f;
       const float tw = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
       const float c = std::cos(a.rotationRad);
@@ -81,8 +88,8 @@ int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, floa
       auto corner = [&](float lx, float ly, float* ox, float* oy) {
         const float rx = lx * c - ly * s;
         const float ry = lx * s + ly * c;
-        *ox = a.insX + rx;
-        *oy = a.insY + ry;
+        *ox = static_cast<float>(labelX) + rx;
+        *oy = static_cast<float>(labelY) + ry;
       };
       float xs[4]{};
       float ys[4]{};

@@ -2112,6 +2112,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
   xf.apply(common->text_midpt.x, common->text_midpt.y, &tmx, &tmy);
   a.insX = static_cast<float>(tmx - st.drawing.worldDocumentOriginX);
   a.insY = static_cast<float>(tmy - st.drawing.worldDocumentOriginY);
+  a.dimTextUserPlaced = true;  // issue #1676: keep the file's text position as drawn
   if (ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR) {
     if (xline1 == nullptr || xline2 == nullptr)
       return false;
@@ -6855,22 +6856,17 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
       tw.Apply(ent, *a);
   };
   const DimensionStyle& style = CadDimensionStyleForAnnotation(st, an);
-  CadDimStrokeParams sp;
-  sp.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
-  sp.arrowSizeInches = style.arrowSizeInches;
-  sp.arrowType = style.arrowType;
-  sp.style = &style;
+  const CadDimStrokeParams sp = CadDimStrokeParamsFor(  // issue #1676
+      an, style, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales, st.currentAnnotationScaleIndex,
+      nullptr, true, st.viewportDimArrowScale);
   CadDimWorldStrokes strokes;
   CadDimBuildWorldStrokes(an, sp, &strokes);
-  const double labelH = std::max(static_cast<double>(an.ovHeight ? an.plottedHeightInches : style.textSizeInches) *
-                                     std::max(static_cast<double>(st.drawing.modelUnitsPerPlottedInch), 1e-6) *
-                                     (StyleFlag(style.props, "annotative") ? 1.0 : StyleNumber(style.props, "overallScale", 1)),
-                                 1e-3);
+  const double labelH = std::max(static_cast<double>(CadDimTextHeightWorld(an, &style, sp.modelUnitsPerPlottedInch)), 1e-3);
   Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
       dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.drawing.worldDocumentOriginX,
       st.drawing.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
   dwg_point_3d textMid{};
-  world(an.insX, an.insY, an.insZ, &textMid);
+  world(strokes.ok ? strokes.labelX : an.insX, strokes.ok ? strokes.labelY : an.insY, an.insZ, &textMid);
   Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
   Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
   Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;

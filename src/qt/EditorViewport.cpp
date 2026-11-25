@@ -557,6 +557,7 @@ bool EditorViewport::CancelGripEdit() {
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
+      ann.dimTextUserPlaced = m_State.dimGripOrigTextUserPlaced;  // issue #1676
       CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
     }
     ClearDimGripInteraction(m_State);
@@ -1485,9 +1486,11 @@ void EditorViewport::paintGL() {
               float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
               if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) {
                 const float offset = ann.dimSignedOffset;
+                double labelX = 0.0, labelY = 0.0;  // the label as drawn (issue #1676)
+                CadDimModelSpaceLabelPosition(m_State, ann, &labelX, &labelY);
                 grips = {{ann.dimExt1X, ann.dimExt1Y, 0}, {ann.dimExt2X, ann.dimExt2Y, 0},
                          {sx1 + nx * offset, sy1 + ny * offset, 0}, {sx2 + nx * offset, sy2 + ny * offset, 0},
-                         {ann.insX, ann.insY, 0}};
+                         {labelX, labelY, 0}};
               }
             }
           }
@@ -1933,8 +1936,10 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, measure = 0.f;
           if (CadDimAnyGeometry(annotation, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measure)) {
             const float offset = annotation.dimSignedOffset;
-            const double gx[] = {annotation.dimExt1X, annotation.dimExt2X, sx1 + nx * offset, sx2 + nx * offset, annotation.insX};
-            const double gy[] = {annotation.dimExt1Y, annotation.dimExt2Y, sy1 + ny * offset, sy2 + ny * offset, annotation.insY};
+            double labelX = 0.0, labelY = 0.0;  // the label as drawn (issue #1676)
+            CadDimModelSpaceLabelPosition(m_State, annotation, &labelX, &labelY);
+            const double gx[] = {annotation.dimExt1X, annotation.dimExt2X, sx1 + nx * offset, sx2 + nx * offset, labelX};
+            const double gy[] = {annotation.dimExt1Y, annotation.dimExt2Y, sy1 + ny * offset, sy2 + ny * offset, labelY};
             int grip = -1; double nearest = 100.0;
             for (int i = 0; i < 5; ++i) { const double d = screenDistanceSq(gx[i], gy[i]); if (d < nearest) { nearest = d; grip = i; } }
             if (grip >= 0 && nearest <= 100.0) {
@@ -1943,7 +1948,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
               m_State.dimGripOrigSignedOffset = annotation.dimSignedOffset;
               m_State.dimGripOrigExt1X = annotation.dimExt1X; m_State.dimGripOrigExt1Y = annotation.dimExt1Y;
               m_State.dimGripOrigExt2X = annotation.dimExt2X; m_State.dimGripOrigExt2Y = annotation.dimExt2Y;
-              m_State.dimGripOrigInsX = annotation.insX; m_State.dimGripOrigInsY = annotation.insY;
+              m_State.dimGripOrigInsX = static_cast<float>(labelX); m_State.dimGripOrigInsY = static_cast<float>(labelY);
+              m_State.dimGripOrigTextUserPlaced = annotation.dimTextUserPlaced;
               m_State.dimGripDragNx = nx; m_State.dimGripDragNy = ny;
               const float dmx = .5f * (sx1 + sx2), dmy = .5f * (sy1 + sy2);
               m_State.dimGripTextAlongN = (annotation.insX - dmx) * nx + (annotation.insY - dmy) * ny;
@@ -2552,7 +2558,10 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         case 2: case 3:
           ann.dimSignedOffset = m_State.dimGripOrigSignedOffset + (x - m_State.dimGripDownWorldX) * m_State.dimGripDragNx + (y - m_State.dimGripDownWorldY) * m_State.dimGripDragNy;
           CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
-        case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
+        case 4:
+          ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY);
+          ann.dimTextUserPlaced = true;  // issue #1676: a dragged label keeps its spot at every scale
+          break;
         default: break;
       }
       CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));

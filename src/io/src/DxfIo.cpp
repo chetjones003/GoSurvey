@@ -4065,11 +4065,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
   // extension rays and no vertex (issue #252). Sharing the module fixes that kind, fixes every kind
   // added later for free, and stops the three output paths disagreeing about what a dimension is.
-  CadDimStrokeParams dxfDimParams;
-  dxfDimParams.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
-  dxfDimParams.arrowSizeInches = st.drawing.activeDimensionStyle.arrowSizeInches;
-  dxfDimParams.arrowScale = 1.f;
-  dxfDimParams.arrowType = st.drawing.activeDimensionStyle.arrowType;
+  // Model space is exported at the current annotation scale with the drawing arrow multiplier (issue #1676).
+  auto dxfDimParamsFor = [&](const CadAnnotation& an, const DimensionStyle& style) {
+    return CadDimStrokeParamsFor(an, style, st.drawing.modelUnitsPerPlottedInch, &st.drawing.annotationScales,
+                                 st.currentAnnotationScaleIndex, nullptr, true, st.viewportDimArrowScale);
+  };
   // An exploded dimension costs one LINE per stroke (strokes.segs already includes the arrowhead
   // outline as Arrow-kind segments - this writer has no filled-triangle entity, and strokes.arrows
   // only repeats those same three edges) plus one TEXT for the label. The count pre-pass and the
@@ -4084,10 +4084,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
       const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
-      dxfDimParams.style = &dimensionStyle;
-      dxfDimParams.arrowType = dimensionStyle.arrowType;
-      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
-      if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
+      if (!CadDimBuildWorldStrokes(an, dxfDimParamsFor(an, dimensionStyle), &strokes))
         continue;
       entityHandleCount += dxfDimEntityCount(strokes);
     } else
@@ -6037,9 +6034,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     } else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
       const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
-      dxfDimParams.style = &dimensionStyle;
-      dxfDimParams.arrowType = dimensionStyle.arrowType;
-      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
+      const CadDimStrokeParams dxfDimParams = dxfDimParamsFor(an, dimensionStyle);
       if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
       auto emitLine = [&](float x0, float y0, float x1, float y1) {
@@ -6086,8 +6081,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.x = std::to_string(static_cast<double>(strokes.labelX));
       rec.y = std::to_string(static_cast<double>(strokes.labelY));
       rec.z = std::to_string(static_cast<double>(an.insZ));  // elevation (REQ-057)
-      rec.height =
-          std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch)));
+      rec.height = std::to_string(static_cast<double>(
+          CadDimTextHeightWorld(an, &dimensionStyle, dxfDimParams.modelUnitsPerPlottedInch)));  // issue #1676
       rec.text = txt;
       rec.rotationDeg =
           std::to_string(static_cast<double>(strokes.labelRotRad) * (180.0 / kPi)); // group 50 is DEGREES

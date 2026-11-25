@@ -106,8 +106,14 @@ code. Values are read-only; use the relevant contextual tools or manager to edit
 
 ### Dimensions
 
-`DIMALIGNED`, `DIMLINEAR`, and `DIMANGULAR` selections show their defining points and text
-placement.
+`DIMALIGNED`, `DIMLINEAR`, and `DIMANGULAR` selections show their label insertion point, text
+content, and per-dimension size overrides:
+
+| Field | Notes |
+|---|---|
+| **Text height** | Optional one-off text height in **model units** (*By style* when blank). Stays that exact size in the drawing at every annotation scale. Clear the field (or enter `0`) to follow the dimension style again |
+| **Arrow size** | Optional one-off arrowhead length in **model units** (*By style* when blank). Wins over the dimension style, annotation scale, Overall scale, and the drawing-wide **Dimension arrow size** multiplier. Clear the field (or enter `0`) to follow the style again |
+| **Model text height** · **Model arrow size** *(Derived)* | Live drawn sizes at the current annotation scale, with any overrides applied |
 
 ### Section plane
 

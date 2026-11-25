@@ -818,9 +818,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     CadAnnotation annotation = state.drawing.cadAnnotations[i];
     if (CadAnnotationIsDimension(annotation)) {
       const auto& style = CadDimensionStyleForAnnotation(state, annotation);
+      // Size (style height, Overall scale, annotation scale, overrides) is resolved below by
+      // CadDimTextHeightWorld, the same rule the arrows use (issue #1676) — not baked in here.
       if (!annotation.ovHeight) annotation.plottedHeightInches = style.textSizeInches;
-      if (!StyleFlag(style.props, "annotative"))
-        annotation.plottedHeightInches *= static_cast<float>(StyleNumber(style.props, "overallScale", 1));
       if (!annotation.ovFont) {
         const auto* textStyle = TextStyles::Find(state.drawing.textStyles, style.textFont);
         annotation.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
@@ -861,12 +861,14 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     painter.setPen(pen); painter.setBrush(Qt::NoBrush);
     double x = annotation.insX, y = annotation.insY, rotation = annotation.rotationRad;
     const bool dimension = CadAnnotationIsDimension(annotation);
+    double dimensionTextWorld = 0.0;
     if (dimension) {
       const DimensionStyle& dimStyle = CadDimensionStyleForAnnotation(state, annotation);
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
-          annotation.annotative || StyleFlag(dimStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
+      parameters.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(  // issue #1676
+          annotation, &dimStyle, state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales,
+          state.currentAnnotationScaleIndex, nullptr, state.activeSpaceIndex == kModelSpaceIndex);
+      dimensionTextWorld = CadDimTextHeightWorld(annotation, &dimStyle, parameters.modelUnitsPerPlottedInch);
       parameters.arrowSizeInches = dimStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = dimStyle.arrowType;
@@ -892,7 +894,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     } else if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext) continue;
     const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
         state.drawing.modelUnitsPerPlottedInch, &state.drawing.annotationScales, state.currentAnnotationScaleIndex);
-    const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
+    const double textWorld = dimension ? dimensionTextWorld : CadAnnotationHeightWorld(annotation, annotationMup);
     if (!(textWorld > 0) || !std::isfinite(textWorld)) continue;
     std::string text = CadAnnotationResolvedText(state, annotation);
     if (annotation.bold) { text.insert(0, "[[b]]"); text.append("[[/b]]"); }
@@ -1049,9 +1051,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         textColor = QColor::fromRgbF(trgb[0], trgb[1], trgb[2]);
       }
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
-          StyleFlag(state.drawing.activeDimensionStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
-          state.drawing.modelUnitsPerPlottedInch, state.drawing.annotationScales, state.currentAnnotationScaleIndex);
+      parameters.modelUnitsPerPlottedInch = CadDimModelUnitsPerPlottedInch(  // issue #1676
+          draft, &state.drawing.activeDimensionStyle, state.drawing.modelUnitsPerPlottedInch,
+          &state.drawing.annotationScales, state.currentAnnotationScaleIndex, nullptr,
+          state.activeSpaceIndex == kModelSpaceIndex);
       parameters.arrowSizeInches = state.drawing.activeDimensionStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = state.drawing.activeDimensionStyle.arrowType;
@@ -1068,7 +1071,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           painter.drawPolygon(QPolygonF{project(arrow.x0, arrow.y0, draft.insZ),
                                         project(arrow.x1, arrow.y1, draft.insZ),
                                         project(arrow.x2, arrow.y2, draft.insZ)});
-        const double textWorld = CadAnnotationHeightWorld(draft, state.drawing.modelUnitsPerPlottedInch);
+        const double textWorld =
+            CadDimTextHeightWorld(draft, &state.drawing.activeDimensionStyle, parameters.modelUnitsPerPlottedInch);
         const QPointF base = project(strokes.labelX, strokes.labelY, draft.insZ);
         const QPointF top = project(strokes.labelX, strokes.labelY + textWorld, draft.insZ);
         QFont font = painter.font();

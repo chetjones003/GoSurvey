@@ -164,6 +164,7 @@
   float dimGripOrigSignedOffset = 0.f;
   double dimGripOrigExt1X = 0.0, dimGripOrigExt1Y = 0.0, dimGripOrigExt2X = 0.0, dimGripOrigExt2Y = 0.0;  // issue #1668
   float dimGripOrigInsX = 0.f, dimGripOrigInsY = 0.f;
+  bool dimGripOrigTextUserPlaced = false;  // issue #1676: CancelGripEdit restores auto-placement
   float dimGripDragNx = 0.f, dimGripDragNy = 0.f;
   /// True after first click on a dim grip until second click commits (or RMB cancels).
   bool dimGripMoveActive = false;

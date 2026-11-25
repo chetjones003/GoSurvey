@@ -236,16 +236,16 @@ defaults:
 | Control | What it sets |
 |---|---|
 | **Pattern** | The hatch pattern, chosen from thumbnails. 83 patterns from the bundled `acadiso.pat` library — `SOLID`, the `ANSI31`–`ANSI38` family, `AR-*` architectural patterns, `EARTH`, `GRAVEL`, `NET`, and the rest |
-| **Colour** | The fill colour |
-| **Transparency** | 0–100% |
+| **Colour** | The fill colour; the button shows a swatch and hex code of the current colour |
+| **Transparency** | Slider plus an exact value box, 0–100%. Solid fills blend with whatever is behind them |
 | **Layer** | Layer for the new hatch |
-| **Angle** | Pattern rotation in degrees |
-| **Scale** | Pattern spacing multiplier |
+| **Angle** | Pattern rotation in degrees: slider (0–359°) plus an exact value box (−360 to 360) |
+| **Scale** | Pattern spacing multiplier: logarithmic slider (0.01–100) plus an exact value box for any scale |
 
 ### Editing hatches after the fact
 
 Select one or more hatches and the same ribbon section returns, titled **Hatch (selected)**. Now
-the controls edit the selected objects **live**, and each change is a single undo step (`Undo: Edit
+the controls edit the selected objects **live**, and each change is a single undo step — a slider drag applies once, when released (`Undo: Edit
 hatch`).
 
 ### Common problems

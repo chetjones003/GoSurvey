@@ -313,6 +313,10 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 /// After vertex / ray / radius edits, re-place label along the angle bisector.
 void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);
+/// Issue #1676: where a dimension's label is drawn in model space at the current annotation scale —
+/// the stored insertion point once the user has placed it, otherwise just beyond the dimension line
+/// at the current text height. Grips and label drags start from here.
+void CadDimModelSpaceLabelPosition(const AppCommandState& st, const CadAnnotation& a, double* x, double* y);
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
@@ -540,6 +544,11 @@ inline bool CadRightClickHoldIsMenu(double heldMs, int thresholdMs) {
 
 
 inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPerPlottedInch) {
+  // Issue #1676: a dimension's model-unit text override is the same size at every scale.
+  if (std::isfinite(a.dimTextHeightModel) && a.dimTextHeightModel > 0.0 &&
+      (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
+       a.kind == CadAnnotation::Kind::DimAngular))
+    return static_cast<float>(a.dimTextHeightModel);
   return a.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
 }
 
