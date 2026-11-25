@@ -49,12 +49,13 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   d.dimExt1Y = ds->e1y;
   d.dimExt2X = ds->e2x;
   d.dimExt2Y = ds->e2y;
-  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
     log.push_back("DIMANGULAR — points are degenerate or collinear.");
     return;
   }
-  if (theta < 1e-5f) {
+  if (theta < 1e-5) {
     log.push_back("DIMANGULAR — angle is zero (ray points coincide with vertex direction).");
     return;
   }
@@ -66,7 +67,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   d.dimSignedOffset = R;
   d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.drawing.activeDimensionStyle.textFont;
-  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
+  d.text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";

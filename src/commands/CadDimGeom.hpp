@@ -40,7 +40,7 @@ inline float CadDimReadableTextRotation(float a) {
 }
 
 inline bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                                  float* ty, float* nx, float* ny, float* measLen) {
+                                  float* ty, float* nx, float* ny, double* measLen) {
   if (!sx1 || !sy1 || !sx2 || !sy2 || !tx || !ty || !nx || !ny || !measLen)
     return false;
   if (a.kind != CadAnnotation::Kind::DimAligned)
@@ -71,12 +71,21 @@ inline bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1
   *ty = static_cast<float>(vy);
   *nx = static_cast<float>(n0x);
   *ny = static_cast<float>(n0y);
+  *measLen = len;
+  return true;
+}
+
+inline bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+                                  float* ty, float* nx, float* ny, float* measLen) {
+  double len = 0.0;
+  if (!measLen || !CadDimAlignedGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, &len))
+    return false;
   *measLen = static_cast<float>(len);
   return true;
 }
 
 inline bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                                 float* ty, float* nx, float* ny, float* measLen) {
+                                 float* ty, float* nx, float* ny, double* measLen) {
   if (!sx1 || !sy1 || !sx2 || !sy2 || !tx || !ty || !nx || !ny || !measLen)
     return false;
   if (a.kind != CadAnnotation::Kind::DimLinear)
@@ -97,7 +106,7 @@ inline bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1,
     *ty = 0.f;
     *nx = 0.f;
     *ny = 1.f;
-    *measLen = static_cast<float>(span);
+    *measLen = span;
   } else {
     const double span = std::fabs(y2 - y1);
     if (span < 1.e-8)
@@ -111,13 +120,22 @@ inline bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1,
     *ty = (y2 >= y1) ? 1.f : -1.f;
     *nx = 1.f;
     *ny = 0.f;
-    *measLen = static_cast<float>(span);
+    *measLen = span;
   }
   return true;
 }
 
+inline bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+                                 float* ty, float* nx, float* ny, float* measLen) {
+  double span = 0.0;
+  if (!measLen || !CadDimLinearGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, &span))
+    return false;
+  *measLen = static_cast<float>(span);
+  return true;
+}
+
 inline bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                              float* ty, float* nx, float* ny, float* measLen) {
+                              float* ty, float* nx, float* ny, double* measLen) {
   if (a.kind == CadAnnotation::Kind::DimAligned)
     return CadDimAlignedGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, measLen);
   if (a.kind == CadAnnotation::Kind::DimLinear)
@@ -125,8 +143,17 @@ inline bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, fl
   return false;
 }
 
+inline bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+                              float* ty, float* nx, float* ny, float* measLen) {
+  double len = 0.0;
+  if (!measLen || !CadDimAnyGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, &len))
+    return false;
+  *measLen = static_cast<float>(len);
+  return true;
+}
+
 inline bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
-                                      float* bisy, float* thetaInterior) {
+                                      float* bisy, double* thetaInterior) {
   if (!a1Out || !a2Out || !sweepOut || !bisx || !bisy || !thetaInterior)
     return false;
   if (a.kind != CadAnnotation::Kind::DimAngular)
@@ -169,6 +196,15 @@ inline bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, floa
   *sweepOut = static_cast<float>(sweep);
   *bisx = static_cast<float>(bx);
   *bisy = static_cast<float>(by);
-  *thetaInterior = static_cast<float>(theta);
+  *thetaInterior = theta;
   return theta > 1.e-7;
+}
+
+inline bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
+                                      float* bisy, float* thetaInterior) {
+  double theta = 0.0;
+  if (!thetaInterior || !CadDimAngularComputeFrame(a, a1Out, a2Out, sweepOut, bisx, bisy, &theta))
+    return false;
+  *thetaInterior = static_cast<float>(theta);
+  return true;
 }

@@ -6876,7 +6876,7 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
   Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
   Dwg_DIMENSION_common* common = nullptr;
   if (an.kind == CadAnnotation::Kind::DimAligned) {
-    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0; double meas = 0.0;
     if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
       dwg_point_3d p1{}, p2{};
       world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
@@ -6889,11 +6889,11 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
         common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
         common->def_pt.y = dp.y;
         common->def_pt.z = dp.z;
-        common->act_measurement = static_cast<double>(meas);
+        common->act_measurement = meas;
       }
     }
   } else if (an.kind == CadAnnotation::Kind::DimLinear) {
-    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0; double meas = 0.0;
     if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
       dwg_point_3d p1{}, p2{}, pd{};
       world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
@@ -6906,11 +6906,11 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
         common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
         common->text_midpt.x = textMid.x;
         common->text_midpt.y = textMid.y;
-        common->act_measurement = static_cast<double>(meas);
+        common->act_measurement = meas;
       }
     }
   } else if (an.kind == CadAnnotation::Kind::DimAngular) {
-    float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
+    float a1 = 0, a2 = 0, sweep = 0, bisx = 0, bisy = 0; double theta = 0.0;
     if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
       const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
       dwg_point_3d center{}, x1{}, x2{};
@@ -6925,7 +6925,7 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
         common->def_pt.x = center.x + static_cast<double>(bisx) * R;
         common->def_pt.y = center.y + static_cast<double>(bisy) * R;
         common->def_pt.z = center.z;
-        common->act_measurement = static_cast<double>(theta);
+        common->act_measurement = theta;
       }
     }
   }

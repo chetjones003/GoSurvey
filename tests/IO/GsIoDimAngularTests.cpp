@@ -15,6 +15,7 @@
 
 #include "CadCommands.hpp"
 #include "CadDimGeom.hpp"
+#include "CadField.hpp"
 #include "GsAnnotationJson.hpp"
 #include "GsIo.hpp"
 #include "GsIoTestSupport.hpp"
@@ -131,10 +132,11 @@ TEST_CASE("DIMANGULAR at state-plane-sized coordinates measures and saves exactl
   a.dimExt2Y = vy + std::sin(a2);
   a.dimSignedOffset = 0.5f;
 
-  float r1 = 0.f, r2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f, theta = 0.f;
+  float r1 = 0.f, r2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
   REQUIRE(CadDimAngularComputeFrame(a, &r1, &r2, &sweep, &bisx, &bisy, &theta));
-  const double arcSecondsOff = std::fabs(static_cast<double>(theta) * 180.0 / kPi - 62.0) * 3600.0;
-  CHECK(arcSecondsOff < 0.05);  // was ~67" in float
+  const double arcSecondsOff = std::fabs(theta * 180.0 / kPi - 62.0) * 3600.0;
+  CHECK(arcSecondsOff < 1e-5);  // was ~67" in float, ~0.01" when theta narrowed to float
 
   AppCommandState st;
   st.drawing.cadAnnotations.push_back(a);
@@ -158,4 +160,75 @@ TEST_CASE("DIMANGULAR at state-plane-sized coordinates measures and saves exactl
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
+}
+
+// PR #1675 review finding: a 1,000,000.025 span narrows to 1,000,000.0 in float, losing precision
+// visible at hundredth-foot display precision. Linear (horizontal & vertical) and aligned geometry,
+// measurement refresh, and resolved display text must all preserve full double precision.
+TEST_CASE("DIMLINEAR and DIMALIGNED keep double measurement precision at large spans (issue #1668)",
+          "[payload][dimangular]") {
+  AppCommandState st;
+  st.drawing.activeDimensionStyle.name = "Standard";
+  st.drawing.activeDimensionStyle.unitPrecision = 3;
+  st.drawing.dimensionStyles = {st.drawing.activeDimensionStyle};
+  const AngleDisplaySettings angle{};
+
+  float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0;
+
+  // Horizontal DIMLINEAR: 1,000,000.025 span at large offset.
+  CadAnnotation linH;
+  linH.kind = CadAnnotation::Kind::DimLinear;
+  linH.dimensionStyleName = "Standard";
+  linH.dimLinearVertical = false;
+  linH.dimExt1X = 500000.0;
+  linH.dimExt1Y = 100000.0;
+  linH.dimExt2X = 1500000.025;
+  linH.dimExt2Y = 100000.0;
+  linH.dimSignedOffset = 10.f;
+  double measH = 0.0;
+  REQUIRE(CadDimLinearGeometry(linH, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measH));
+  CHECK(measH == Catch::Approx(1000000.025).margin(1e-9));
+  CadDimRefreshMeasurementText(&linH, st.drawing.activeDimensionStyle, angle);
+  CHECK(linH.text == "1000000.025");
+  CHECK(CadAnnotationResolvedText(st, linH) == "1000000.025");
+
+  // Vertical DIMLINEAR: 1,000,000.025 span.
+  CadAnnotation linV;
+  linV.kind = CadAnnotation::Kind::DimLinear;
+  linV.dimensionStyleName = "Standard";
+  linV.dimLinearVertical = true;
+  linV.dimExt1X = 200000.0;
+  linV.dimExt1Y = 500000.0;
+  linV.dimExt2X = 200000.0;
+  linV.dimExt2Y = 1500000.025;
+  linV.dimSignedOffset = 10.f;
+  double measV = 0.0;
+  REQUIRE(CadDimLinearGeometry(linV, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measV));
+  CHECK(measV == Catch::Approx(1000000.025).margin(1e-9));
+  CadDimRefreshMeasurementText(&linV, st.drawing.activeDimensionStyle, angle);
+  CHECK(linV.text == "1000000.025");
+  CHECK(CadAnnotationResolvedText(st, linV) == "1000000.025");
+
+  // Diagonal DIMALIGNED (3-4-5 triangle scaled to 1,000,000.025 hypotenuse).
+  CadAnnotation aligned;
+  aligned.kind = CadAnnotation::Kind::DimAligned;
+  aligned.dimensionStyleName = "Standard";
+  aligned.dimExt1X = 100000.0;
+  aligned.dimExt1Y = 200000.0;
+  aligned.dimExt2X = 100000.0 + 600000.015;
+  aligned.dimExt2Y = 200000.0 + 800000.020;
+  aligned.dimSignedOffset = 10.f;
+  double measA = 0.0;
+  REQUIRE(CadDimAlignedGeometry(aligned, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measA));
+  CHECK(measA == Catch::Approx(1000000.025).margin(1e-9));
+  CadDimRefreshMeasurementText(&aligned, st.drawing.activeDimensionStyle, angle);
+  CHECK(aligned.text == "1000000.025");
+  CHECK(CadAnnotationResolvedText(st, aligned) == "1000000.025");
+
+  // Hundredth-foot display precision (2 decimals) preserves the fractional hundredths (float yielded .00).
+  st.drawing.activeDimensionStyle.unitPrecision = 2;
+  st.drawing.dimensionStyles = {st.drawing.activeDimensionStyle};
+  CadDimRefreshMeasurementText(&linH, st.drawing.activeDimensionStyle, angle);
+  CHECK(linH.text == "1000000.02");  // 1000000.025 exact rounds half-to-even in %.2f
+  CHECK(CadAnnotationResolvedText(st, aligned) == "1000000.03");
 }

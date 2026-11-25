@@ -275,17 +275,19 @@ void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& styl
   if (!ann || !ann->dimensionTextOverride.empty())
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
-    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f;
+    double ml = 0.0;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
     // REQ-459 (issue #804): the value uses the dimension style's unit scale, format and precision, the same
     // formatting the commit path uses, so moving a dimension never changes its number.
-    ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), style);
+    ann->text = DimensionStyles::FormatLinearDim(ml, style);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
-    float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+    float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+    double theta = 0.0;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
       return;
-    ann->text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), angle);
+    ann->text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), angle);
   }
 }
 
@@ -322,7 +324,8 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimExt1Y = ds->e1y;
   d.dimExt2X = ds->e2x;
   d.dimExt2Y = ds->e2y;
-  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, bisx = 0.f, bisy = 0.f;
+  double theta = 0.0;
   if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta))
     return false;
   const float leg = std::min(std::hypot(d.dimExt1X - vx, d.dimExt1Y - vy), std::hypot(d.dimExt2X - vx, d.dimExt2Y - vy));
@@ -332,7 +335,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimSignedOffset = R;
   d.plottedHeightInches = std::max(st.drawing.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.drawing.activeDimensionStyle.textFont;
-  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
+  d.text = FormatSweptAngle(theta * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.drawing.modelUnitsPerPlottedInch);
   *out = std::move(d);
   return true;

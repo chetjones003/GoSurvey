@@ -477,7 +477,8 @@ CadFieldContext CadFieldContextFromState(const AppCommandState& st) {
 
 std::string CadAnnotationResolvedText(const AppCommandState& st, const CadAnnotation& ann) {
   if ((ann.kind == CadAnnotation::Kind::DimLinear || ann.kind == CadAnnotation::Kind::DimAligned) && !ann.dimensionStyleName.empty()) {
-    float x1=0, y1=0, x2=0, y2=0, tx=0, ty=0, nx=0, ny=0, measured=0;
+    float x1=0, y1=0, x2=0, y2=0, tx=0, ty=0, nx=0, ny=0;
+    double measured = 0.0;  // issue #1668: keep measurement in double for display precision
     if (CadDimAnyGeometry(ann, &x1, &y1, &x2, &y2, &tx, &ty, &nx, &ny, &measured))
       {
         const std::string number = DimensionStyles::FormatLinearDim(measured, CadDimensionStyleForAnnotation(st, ann));
