@@ -39,6 +39,6 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          $args = @('-Repo', $env:GITHUB_REPOSITORY)
-          if ($env:DRY_RUN -eq 'true') { $args += '-DryRun' }
-          ./tools/prune-actions-storage.ps1 @args
+          # Hashtable splat: an array splat passes '-Repo' as a literal value to a script.
+          $pruneArgs = @{ Repo = $env:GITHUB_REPOSITORY; DryRun = ($env:DRY_RUN -eq 'true') }
+          ./tools/prune-actions-storage.ps1 @pruneArgs
