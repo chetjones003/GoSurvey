@@ -28,10 +28,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        # No sparse checkout: these self-hosted runners reuse workspaces, and a non-cone
+        # sparse checkout stays in .git/config and breaks later full checkouts.
         with:
-          sparse-checkout: tools/prune-actions-storage.ps1
-          # The path is a single file, so cone mode (directories only) must be off.
-          sparse-checkout-cone-mode: false
+          fetch-depth: 1
       - name: Prune runs, caches, artifacts, and releases
         shell: pwsh
         env:
