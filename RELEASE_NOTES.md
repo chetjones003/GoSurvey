@@ -19,6 +19,15 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.8.13
+
+- GoSurvey now autosaves open drawings and offers to recover them in a Drawing Recovery dialog after a crash.
+- New TEXT and MTEXT is annotative by default, and MTEXT rotation, grips, scaling and height now behave consistently.
+- Dimensions share one annotation scaling model and can override their own text and arrow sizes.
+- Rotations and dimension measurements stay exact at large survey coordinates.
+- Fixed UI freezes and large memory spikes while drafting.
+- Hatch slider controls commit drags correctly, no longer overlap, and translucent solid fills draw in the right order.
+
 ## 0.8.9
 
 - Editor interaction improvements include clearer TRIM previews, object-snapped PIPERUN input, more accurate text selection and editing, ORTHO-aware previews, and patterned hatch display.
