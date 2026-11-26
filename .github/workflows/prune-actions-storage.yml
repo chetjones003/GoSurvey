@@ -30,6 +30,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           sparse-checkout: tools/prune-actions-storage.ps1
+          # The path is a single file, so cone mode (directories only) must be off.
+          sparse-checkout-cone-mode: false
       - name: Prune runs, caches, artifacts, and releases
         shell: pwsh
         env:
