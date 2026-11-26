@@ -1,6 +1,7 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
+#include "io/src/DwgIo.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "io/src/GsIo.hpp"
 #include <GoSurvey/Geometry/brep.hpp>
@@ -517,6 +518,43 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
   CadBlockCollectWorldLines(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], EntityAttributes{}, &segs);
   REQUIRE_FALSE(segs.empty());
   CHECK(segs[0].y0 == Catch::Approx(segs[0].y1).margin(0.05f));
+}
+
+TEST_CASE("the drawing-save guard refuses only while BEDIT has replaced the model",
+          "[issue1193][block][bedit][dwgio]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "GUARD";
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.drawing.blockDefs.push_back(def);
+  CHECK(DrawingSaveRefusal(st) == nullptr);  // an ordinary drawing saves
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("GUARD");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  REQUIRE(st.blockEditActive);
+  const char* refusal = DrawingSaveRefusal(st);
+  REQUIRE(refusal != nullptr);
+  const std::string why(refusal);
+  CHECK(why.find("BEDIT") != std::string::npos);  // names the mode
+  CHECK(why.find("replaced the drawing model") != std::string::npos);  // says why
+  CHECK(why.find("BCLOSE") != std::string::npos);  // says how to get back
+
+  // The save seam itself reports the same refusal and writes nothing.
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "gosurvey-issue1193-guard-never-written.dwg";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  log.clear();
+  CHECK_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
+  CHECK_FALSE(std::filesystem::exists(path));
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back() == why);
+
+  std::istringstream bcloseArgs("discard");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bclose", bcloseArgs, log));
+  CHECK_FALSE(st.blockEditActive);
+  CHECK(DrawingSaveRefusal(st) == nullptr);  // leaving BEDIT makes the drawing savable again
 }
 
 TEST_CASE("BEDIT with no name opens the definition picker", "[issue124][block][bedit]") {

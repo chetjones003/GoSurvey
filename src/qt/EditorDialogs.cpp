@@ -1,5 +1,6 @@
 #include "EditorWindow.hpp"
 #include "EditorAutosave.hpp"
+#include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "Project.hpp"
 #include "QtAccent.hpp"
@@ -2618,9 +2619,12 @@ bool EditorWindow::AutosaveTabAtIndex(int index) {
       index >= static_cast<int>(m_State.documents.size()))
     return false;
 
-  const bool isActive = index == m_State.activeDrawingIdx;
-  if (isActive && m_State.blockEditActive)
+  // #1193: while BEDIT has swapped the model store, skip EVERY tab, not just the active one. Switching
+  // tabs mid-session snapshots the swapped-in model into the edited drawing's document, so an
+  // inactive tab can hold block-editor content too. Autosave resumes once the editor closes.
+  if (DrawingSaveRefusal(m_State))
     return false;
+  const bool isActive = index == m_State.activeDrawingIdx;
 
   const auto& tab = m_State.drawingTabs[static_cast<std::size_t>(index)];
   const std::uint32_t currentRev =

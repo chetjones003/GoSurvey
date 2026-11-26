@@ -2330,9 +2330,9 @@ void EditorWindow::OpenDrawing(const QString& path) {
 
 bool EditorWindow::SaveDrawing(bool saveAs) {
   if (m_State.activeDrawingIdx == 0) return true;
-  if (m_State.blockEditActive) {
-    m_Log.push_back(kBeditDrawingSaveRefusal);
-    QMessageBox::warning(this, "Save drawing", QString::fromUtf8(kBeditDrawingSaveRefusal));
+  if (const char* refusal = DrawingSaveRefusal(m_State)) {  // #1193: before any path dialog
+    m_Log.push_back(refusal);
+    QMessageBox::warning(this, "Save drawing", QString::fromUtf8(refusal));
     return false;
   }
   RefreshProjects();

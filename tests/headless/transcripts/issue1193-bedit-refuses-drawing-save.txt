@@ -1,0 +1,61 @@
+# Issue #1193 — while BEDIT has swapped the model store for a block definition (ADR-043), a
+# drawing Save / Save As must be refused: the model arrays hold the definition, not the drawing,
+# so persisting them would overwrite the user's drawing with block-editor content.
+#
+# SAVEAS is the headless drawing-save route (SaveDrawingDocument, the same seam the editor's SAVE,
+# QSAVE and SAVEAS reach). `SAVEAS REFUSED <path>` asserts the save is refused AND that <path> is
+# left exactly as it was. BSAVE / BSAVEAS keep saving block definitions, and once BCLOSE restores
+# the drawing it saves normally — and what it saves is the drawing, not the block.
+
+NEW
+CMD MKLINE 0,0, 10,0
+CMD SELLINE
+CMD BLOCK TREE, 0, 0, CONVERT
+EXPECT LOG "BLOCK — created"
+CMD MKLINE 5,5, 6,6
+CMD MKLINE 7,7, 8,8
+EXPECT LINES 2
+
+# an ordinary save outside BEDIT still works
+SAVEAS %OUT%/drawing.dwg
+
+# inside BEDIT the model holds the definition's single line, not the drawing's two
+CMD BEDIT TREE
+EXPECT LOG "editing"
+EXPECT LINES 1
+
+# Save over the existing drawing is refused and leaves its bytes untouched
+SAVEAS REFUSED %OUT%/drawing.dwg
+# Save As to a new file is refused and creates nothing
+SAVEAS REFUSED %OUT%/never-written.dwg
+# the refusal names the mode, says why, and how to get back to the drawing
+EXPECT LOG "BEDIT is active"
+EXPECT LOG "temporary editor model replaced the drawing model"
+EXPECT LOG "Run BCLOSE to return to the drawing before saving"
+
+# leaving BEDIT restores the drawing, and saving it writes the drawing as it was before BEDIT
+CMD BCLOSE
+EXPECT LOG "BCLOSE — closed"
+EXPECT LINES 2
+SAVEAS %OUT%/after-bclose.dwg
+EXPECT SAMEFILE %OUT%/drawing.dwg %OUT%/after-bclose.dwg
+
+# BSAVE and BSAVEAS keep their block-definition meaning while drawing saves are refused
+CMD BEDIT TREE
+EXPECT LOG "editing"
+CMD MKLINE 0,1, 0,-1
+EXPECT LINES 2
+SAVEAS REFUSED %OUT%/drawing.dwg
+CMD BSAVE
+EXPECT LOG "BSAVE — saved"
+CMD BSAVEAS TREECOPY
+EXPECT LOG "BSAVEAS — copied"
+SAVEAS REFUSED %OUT%/drawing.dwg
+CMD BCLOSE
+EXPECT LOG "BCLOSE — closed"
+EXPECT LINES 2
+
+# the restored drawing saves, and it now carries both definitions
+SAVEAS %OUT%/after-bsave.dwg
+EXPECT DIFFERENTFILE %OUT%/drawing.dwg %OUT%/after-bsave.dwg
+EXPECT FILECONTAINS %OUT%/after-bsave.dwg "TREECOPY"
