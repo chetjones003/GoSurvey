@@ -1,10 +1,11 @@
 // REQ-379 (issue #696 P6) — the drawing-level half of file tracking: the copy / link question, the
 // record written when a project drawing is saved, and what opening it does with that record. Domain
-// only: AppCommandState and real files in a temp folder, no window. (Headless PdfAttach_Build always
-// fails, so re-placing a real PDF is checked in the GUI, not here.)
+// only: AppCommandState and real files in a temp folder, no window.
 
 #include "CadCommands.hpp"
 #include "commands/ProjectFiles.hpp"
+#include "io/src/DwgIo.hpp"
+#include "io/src/GsIo.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -239,12 +240,103 @@ TEST_CASE("req379 saving records the drawing's clouds and PDFs; opening finds th
   CHECK(fs::u8path(other.drawing.cadPointClouds[0]->sourcePath) == cloud);
   CHECK(fs::u8path(other.drawing.cadPointClouds[0]->cloudCachePath) == fs::u8path(cloud.u8string() + ".gscloud"));
   CHECK(other.drawing.cadPointClouds[0]->pointsXyz.size() == 6);  // the preview sample survives the remap
-  // Headless cannot rasterize, so the PDF is reported, not silently dropped; the drawing still opens.
+  REQUIRE(other.drawing.pdfAttachments.size() == 1);
+  const auto& restored = other.drawing.pdfAttachments.front();
+  CHECK(fs::u8path(restored.filePath) == pdf);
+  CHECK(restored.pageIndex == 2);
+  CHECK(restored.insertX == 5.f);
+  CHECK(restored.insertY == 6.f);
+  CHECK(restored.scale == 0.5f);
+  CHECK(restored.needsReload);
+
+  other.drawing.pdfAttachments.front().filePath = "D:\\Jobs\\Smith\\PDFs\\plan.pdf";
+  ApplyProjectFilesOnOpen(other, 7, dwg.u8string(), log, /*hasPdfPlacements=*/true);
+  REQUIRE(other.drawing.pdfAttachments.size() == 1);
+  CHECK(fs::u8path(other.drawing.pdfAttachments.front().filePath) == pdf);
+
+  // New drawings use their own placement list even when the manifest still has older records.
+  other.drawing.pdfAttachments.clear();
+  ApplyProjectFilesOnOpen(other, 7, dwg.u8string(), log, /*hasPdfPlacements=*/true);
   CHECK(other.drawing.pdfAttachments.empty());
-  bool saidPdf = false;
-  for (const std::string& l : log)
-    saidPdf = saidPdf || l.find("plan.pdf") != std::string::npos;
-  CHECK(saidPdf);
+}
+
+TEST_CASE("DWG saves and reopens PDF underlay placements", "[dwg][pdf][issue1554]") {
+  TempDir root("dwg-pdf");
+  const std::string dwg = (root.path / "underlays.dwg").u8string();
+  AppCommandState source;
+  source.drawing.worldDocumentOriginX = 2'000'000.0;
+  source.drawing.worldDocumentOriginY = 3'000'000.0;
+  PdfAttachment pdf;
+  pdf.filePath = (root.path / fs::u8path(u8"plan-é.pdf")).u8string();
+  pdf.pageIndex = 2;
+  pdf.insertX = 1.25f;
+  pdf.insertY = -7.5f;
+  pdf.scale = 0.25f;
+  pdf.rotationDeg = 35.f;
+  pdf.pageWidthPts = 612.f;
+  pdf.pageHeightPts = 792.f;
+  pdf.rasterDpi = 200.f;
+  pdf.layer = "0";
+  pdf.fade = 0.4f;
+  pdf.showBackground = true;
+  pdf.snapEnabled = false;
+  pdf.snapCircles = false;
+  pdf.snapText = false;
+  pdf.glTexId = 42;
+  pdf.texW = 1700;
+  pdf.snapData = std::make_shared<PdfAttachment::SnapData>();
+  source.drawing.pdfAttachments = {pdf};
+  pdf.pageIndex = 4;
+  pdf.insertX = 30.f;
+  source.drawing.pdfAttachments.push_back(pdf);
+
+  std::vector<std::string> log;
+  REQUIRE(SaveDrawingDocument(source, dwg.c_str(), log));
+  AppCommandState reopened;
+  bool hasPdfPlacements = false;
+  REQUIRE(OpenDrawingDocument(reopened, dwg.c_str(), log, &hasPdfPlacements));
+  REQUIRE(hasPdfPlacements);
+  REQUIRE(reopened.drawing.pdfAttachments.size() == 2);
+  const auto& restored = reopened.drawing.pdfAttachments.front();
+  CHECK(restored.filePath == pdf.filePath);
+  CHECK(restored.pageIndex == 2);
+  CHECK(restored.insertX == 1.25f);
+  CHECK(restored.insertY == pdf.insertY);
+  CHECK(restored.scale == pdf.scale);
+  CHECK(restored.rotationDeg == pdf.rotationDeg);
+  CHECK(restored.pageWidthPts == pdf.pageWidthPts);
+  CHECK(restored.pageHeightPts == pdf.pageHeightPts);
+  CHECK(restored.rasterDpi == pdf.rasterDpi);
+  CHECK(restored.layer == pdf.layer);
+  CHECK(restored.fade == pdf.fade);
+  CHECK(restored.showBackground);
+  CHECK_FALSE(restored.snapEnabled);
+  CHECK(restored.snapLines);
+  CHECK_FALSE(restored.snapCircles);
+  CHECK_FALSE(restored.snapText);
+  CHECK(restored.glTexId == 0);
+  CHECK(restored.texW == 0);
+  CHECK_FALSE(restored.snapData);
+  CHECK(restored.needsReload);
+  CHECK(reopened.drawing.pdfAttachments.back().pageIndex == 4);
+  CHECK(reopened.drawing.pdfAttachments.back().insertX == 30.f);
+
+  auto legacy = json::parse(SerializeGoSurveyJson(source));
+  legacy["document"].erase("pdfAttachments");
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, legacy.dump(), log, &hasPdfPlacements));
+  CHECK_FALSE(hasPdfPlacements);
+  CHECK(reopened.drawing.pdfAttachments.empty());
+
+  auto mixed = json::parse(SerializeGoSurveyJson(source));
+  mixed["document"]["pdfAttachments"][0]["page"] = 0x1'0000'0000ULL;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, mixed.dump(), log));
+  REQUIRE(reopened.drawing.pdfAttachments.size() == 1);
+  CHECK(reopened.drawing.pdfAttachments.front().pageIndex == 4);
+
+  const std::string gst = (root.path / "template.gst").u8string();
+  REQUIRE(SaveGoSurveyTemplateFile(source, gst.c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(reopened, gst.c_str(), log));
+  CHECK(reopened.drawing.pdfAttachments.empty());
 }
 
 TEST_CASE("req379 a missing tracked PDF or cloud is reported and the drawing still opens", "[req379]") {

@@ -2296,14 +2296,14 @@ void EditorWindow::OpenDrawing(const QString& path) {
     if (!uid) return;
   }
   const int previous = m_State.activeDrawingIdx;
+  bool hasPdfPlacements = false;
   CreateDrawingFromTemplate(uid);
-  // Decide shared versus detached points from the loaded DWG, never from the
-  // empty tab's initial database view. Otherwise opening could look like deletions.
+  // Decide shared versus detached points from the loaded DWG to avoid treating opens as deletions.
   auto& openingTab = m_State.drawingTabs[m_State.activeDrawingIdx];
   openingTab.pointsMode = AppCommandState::DrawingTab::PointsMode::Unattached;
   openingTab.pointsBaseWorld.clear();
   openingTab.pointsRevision = 0;
-  if (!OpenDrawingDocument(m_State, path.toUtf8().constData(), m_Log)) {
+  if (!OpenDrawingDocument(m_State, path.toUtf8().constData(), m_Log, &hasPdfPlacements)) {
     m_State.drawingTabs.pop_back();
     m_State.documents.pop_back();
     RestoreDocumentFromSnapshot(m_State, previous);
@@ -2313,7 +2313,7 @@ void EditorWindow::OpenDrawing(const QString& path) {
   } else {
     m_State.activeDocFilePath = path.toUtf8().toStdString();
     if (uid) {
-      ApplyProjectFilesOnOpen(m_State, uid, m_State.activeDocFilePath, m_Log);
+      ApplyProjectFilesOnOpen(m_State, uid, m_State.activeDocFilePath, m_Log, hasPdfPlacements);
       RefreshProjectSurfaceReferences(m_State, uid, m_Log);
     }
     m_State.activeDocSavedRevision = m_State.cadGpuRevision;

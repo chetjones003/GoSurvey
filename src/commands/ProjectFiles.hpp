@@ -64,7 +64,7 @@ void SyncProjectFilesOnSave(AppCommandState& st, int tabIdx, const std::string& 
 /// recorded for the drawing, and reports (REQ-201) any tracked file that is missing. The drawing opens
 /// either way. Nothing is marked as changed.
 void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, const std::string& drawingPath,
-                             std::vector<std::string>& log);
+                             std::vector<std::string>& log, bool hasPdfPlacements = false);
 
 /// Clause 4. The project's health, including the open drawings with unsaved changes.
 projfiles::Health ProjectHealthFor(const AppCommandState& st, std::uint32_t projectUid);

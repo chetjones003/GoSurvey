@@ -158,7 +158,9 @@ bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jso
   return true;
 }
 
-bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
+                   bool* hasPdfPlacements) {
+  if (hasPdfPlacements) *hasPdfPlacements = false;
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back("DWG import — no path.");
     return false;
@@ -172,7 +174,7 @@ bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
   std::string json;
   if (TryGoSurveyDwgPayloadFromBytes(bytes, json)) {
     log.push_back(std::string("DWG open — GoSurvey document in ") + pathUtf8);
-    if (!LoadGoSurveyFromJsonUtf8(st, json, log))
+    if (!LoadGoSurveyFromJsonUtf8(st, json, log, hasPdfPlacements))
       return false;
     return true;
   }
@@ -216,12 +218,13 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   return true;
 }
 
-bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
+                         bool* hasPdfPlacements) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back("Open drawing — no path.");
     return false;
   }
-  return ImportDwgFile(st, pathUtf8, log);
+  return ImportDwgFile(st, pathUtf8, log, hasPdfPlacements);
 }
 
 const char* DrawingSaveRefusal(const AppCommandState& st) {

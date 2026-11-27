@@ -29,6 +29,8 @@ struct PdfAttachment {
   unsigned int glTexId = 0;
   int texW = 0;
   int texH = 0;
+  float rasterDpi = 150.f;
+  bool needsReload = false; ///< Placement was loaded from disk and is awaiting viewport resources.
 
   bool snapEnabled = true; ///< Master underlay snap toggle (ribbon Enable Snap).
   bool snapLines   = true;
@@ -165,6 +167,9 @@ bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath
 
 /// Release the GL texture held by an attachment (safe to call on default-init).
 void PdfAttach_ReleaseTexture(PdfAttachment& att);
+
+/// Rebuild a saved placement's runtime resources with the viewport GL context current.
+bool PdfAttach_Reload(PdfAttachment& att);
 
 /// Page dimensions in PDF points from the draft cache (0 on bad index or null cache).
 float PdfDraftCache_PageWidthPts (const PdfDraftCache* cache, int pageIndex);
