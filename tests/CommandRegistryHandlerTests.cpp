@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <set>
 #include <string>
@@ -93,6 +94,15 @@ TEST_CASE("Block commands reject invalid numeric fields before changing the draw
   submit("SELLINE");
   submit("BLOCK Shape, 1, 2, RETAIN, 3");
   REQUIRE(st.drawing.blockDefs.size() == 1);
+  for (const char* command : {"INSERT Shape, 5, 6", "INSERT Shape, 5, 6, 2, 3"}) {
+    CAPTURE(command);
+    submit(command);
+    REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+    CHECK(st.drawing.cadBlockRefs.front().xf.rotZ == 0.0);
+    CHECK_FALSE(std::signbit(st.drawing.cadBlockRefs.front().xf.rotZ));
+    submit("UNDO");
+    REQUIRE(st.drawing.cadBlockRefs.empty());
+  }
   submit("INSERT Shape, 5, 6, 2, 3, 15, 4, 7");
   REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   submit("MKLINE 0,0,1,1");

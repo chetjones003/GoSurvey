@@ -179,7 +179,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     xf.x = x;
     xf.y = y;
     xf.z = z;
-    xf.rotZ = InsertRotZFromCwNorthDeg(rotationDeg);
+    if (f.size() >= 6)
+      xf.rotZ = InsertRotZFromCwNorthDeg(rotationDeg);
     std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", f[0].c_str());
     st.insertBlockExplode = false;
     if (CadBlockPlaceInsert(st, f[0], xf, false, log))
