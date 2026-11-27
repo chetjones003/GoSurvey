@@ -617,9 +617,9 @@ struct CadClipboard {
   double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
   double basePtY = 0.0;
 
-  /// The copied entities, in the shape a drawing holds them (ADR-0010 / #1557 phase 2). Only the
-  /// entity fields are filled by a copy; the rest of \ref DrawingContent stays at its defaults and
-  /// is never read. A copy from paper space stores z = 0 in `userCirclesCxCyZR`, and a paste into
+  /// The copied entities and the definitions their block references depend on, in the shape a
+  /// drawing holds them (ADR-0010 / #1557 phase 2). A copy from paper space stores z = 0 in
+  /// `userCirclesCxCyZR`, and a paste into
   /// paper space drops z: the sheet is 2D (ADR-025 (g)), so Z collapses at that boundary.
   /// `userCircleNormals` (REQ-312) flattens to world +Z at the same boundary. A copy does not carry
   /// `userPolylineVertsNormal` (REQ-325) yet, so a pasted bulged segment on a tilted plane comes back flat.
@@ -638,7 +638,7 @@ struct CadClipboard {
   double      srcOriginX = 0.0, srcOriginY = 0.0;  ///< the source drawing's document origin: world = local + origin
 
   bool empty() const {
-    // Only the entity fields count: the non-entity fields of DrawingContent are never copied. Keep this
+    // Only the entity fields count. Keep this
     // list in step with the entity fields of DrawingContent, or a new kind will look empty.
     return content.userLinesFlat.empty() && content.userCirclesCxCyZR.empty() && content.userArcs.empty() &&
            content.userEllipses.empty() && (content.userPolylineOffsets.size() <= 1) && content.cadSplines.empty() &&

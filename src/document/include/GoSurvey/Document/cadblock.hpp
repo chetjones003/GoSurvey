@@ -997,6 +997,83 @@ inline bool CadBlockNameIsMatchline(std::string_view name) {
   return -1;
 }
 
+/// Capture the definitions reachable from the copied INSERTs, including dynamic source definitions.
+inline void CadBlockCaptureReferencedDefs(const std::vector<CadBlockDefinition>& source,
+                                          const std::vector<CadBlockRef>& refs,
+                                          std::vector<CadBlockDefinition>& captured) {
+  std::vector<int> pending;
+  std::vector<bool> seen(source.size());
+  const auto enqueue = [&](std::string_view name) {
+    if (name.empty())
+      return;
+    const int index = CadBlockFindDef(source, name);
+    if (index >= 0 && !seen[index]) {
+      seen[index] = true;
+      pending.push_back(index);
+    }
+  };
+  for (const CadBlockRef& ref : refs) {
+    enqueue(ref.defName);
+    enqueue(ref.dynamicCanonicalName);
+  }
+  for (size_t i = 0; i < pending.size(); ++i) {
+    const CadBlockDefinition& def = source[pending[i]];
+    captured.push_back(def);
+    for (const CadBlockNested& child : def.content.nested)
+      enqueue(child.defName);
+  }
+}
+
+/// Prepare private copies for insertion. Resolve all names before rewriting any references so
+/// shared dependencies use the same name and generated names cannot shadow a source definition.
+/// Returns the first missing geometry definition, or nullptr on success.
+[[nodiscard]] inline const std::string* CadBlockPreparePaste(
+    const std::vector<CadBlockDefinition>& destination, std::vector<CadBlockDefinition>& defs,
+    std::vector<CadBlockRef>& refs) {
+  for (const CadBlockRef& ref : refs) {
+    if (CadBlockFindDef(defs, ref.defName) < 0)
+      return &ref.defName;
+  }
+  for (const CadBlockDefinition& def : defs) {
+    for (const CadBlockNested& child : def.content.nested) {
+      if (CadBlockFindDef(defs, child.defName) < 0)
+        return &child.defName;
+    }
+  }
+
+  std::vector<std::string> names;
+  for (const CadBlockDefinition& def : defs) {
+    std::string name = def.name;
+    if (CadBlockFindDef(destination, name) >= 0) {
+      for (size_t suffix = 1;; ++suffix) {
+        name = def.name + "_paste" + std::to_string(suffix);
+        if (CadBlockFindDef(destination, name) < 0 && CadBlockFindDef(defs, name) < 0)
+          break;
+      }
+    }
+    names.push_back(std::move(name));
+  }
+
+  const auto remap = [&](std::string& name) {
+    const int index = CadBlockFindDef(defs, name);
+    if (index >= 0)
+      name = names[index];
+  };
+  for (CadBlockRef& ref : refs) {
+    remap(ref.defName);
+    if (!ref.dynamicCanonicalName.empty())
+      remap(ref.dynamicCanonicalName);
+  }
+  for (CadBlockDefinition& def : defs) {
+    def.id = 0;
+    for (CadBlockNested& child : def.content.nested)
+      remap(child.defName);
+  }
+  for (size_t i = 0; i < defs.size(); ++i)
+    defs[i].name = std::move(names[i]);
+  return nullptr;
+}
+
 [[nodiscard]] inline int CadBlockFindConnection(const CadBlockDefinition& def, std::string_view name) {
   for (int i = 0; i < static_cast<int>(def.connections.size()); ++i) {
     if (CadBlockEqCi(def.connections[static_cast<size_t>(i)].name, name))

@@ -1232,9 +1232,17 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
                     " Paste (Ctrl+V) shows the warning, but it pastes the whole clipboard, not only block references.");
       return true;
     }
+    auto defs = st.clipboard.content.blockDefs;
+    auto refs = st.clipboard.content.cadBlockRefs;
+    if (const std::string* missing = CadBlockPreparePaste(st.drawing.blockDefs, defs, refs)) {
+      log.push_back("PASTEBLOCK — missing clipboard definition \"" + *missing + "\".");
+      return true;
+    }
     PushUndoSnapshot(st, "Pasteblock");
-    for (size_t i = 0; i < st.clipboard.content.cadBlockRefs.size(); ++i) {
-      CadBlockRef r = st.clipboard.content.cadBlockRefs[i];
+    for (CadBlockDefinition& def : defs)
+      st.drawing.blockDefs.push_back(std::move(def));
+    for (size_t i = 0; i < refs.size(); ++i) {
+      CadBlockRef& r = refs[i];
       CadBlockTranslate(&r, dx, dy, 0.f);
       // REQ-076: a paste gets new entity ids, so the copied source's id is cleared on both sheet and model.
       EntityAttributes a = i < st.clipboard.content.cadBlockRefAttrs.size() ? st.clipboard.content.cadBlockRefAttrs[i]
