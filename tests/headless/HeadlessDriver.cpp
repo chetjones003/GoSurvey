@@ -432,6 +432,36 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "io", "OPEN failed: " + path, sourceLine);
       return false;
     }
+  } else if (verb == "SAVEAS" && rest.rfind("REFUSED ", 0) == 0) {
+    // SAVEAS REFUSED <path> (#1193): the save must be refused and leave <path> exactly as it was —
+    // absent stays absent, existing bytes stay byte for byte. The run continues, so a transcript can
+    // go on to assert the refusal message and that saving works again once the mode is left.
+    const std::string path = ExpandVars(run, rest.substr(8));
+    auto snapshot = [&path](bool& exists) {
+      std::ifstream f(path, std::ios::binary);
+      exists = static_cast<bool>(f);
+      return exists ? std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>())
+                    : std::string();
+    };
+    bool existedBefore = false;
+    const std::string before = snapshot(existedBefore);
+    if (SaveDrawingDocument(run.st, path.c_str(), run.log)) {
+      Fail(run, "expect", "SAVEAS REFUSED: the save succeeded: " + path, sourceLine);
+      return false;
+    }
+    // Refused for the right reason: the drawing-save guard, not a bad path or a writer error.
+    const char* refusal = DrawingSaveRefusal(run.st);
+    if (refusal == nullptr || run.log.empty() || run.log.back() != refusal) {
+      Fail(run, "expect", "SAVEAS REFUSED: the save failed, but not with the drawing-save refusal: " + path,
+           sourceLine);
+      return false;
+    }
+    bool existsAfter = false;
+    const std::string after = snapshot(existsAfter);
+    if (existsAfter != existedBefore || after != before) {
+      Fail(run, "expect", "SAVEAS REFUSED: the refused save changed " + path, sourceLine);
+      return false;
+    }
   } else if (verb == "SAVEAS") {
     const std::string path = ExpandVars(run, rest);
     if (!SaveDrawingDocument(run.st, path.c_str(), run.log)) {

@@ -71,6 +71,11 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 inline constexpr char kBeditDrawingSaveRefusal[] =
     "BEDIT is active: the temporary editor model replaced the drawing model. Run BCLOSE to return to the drawing before saving.";
+/// Issue #1193: the one guard every drawing Save / Save As route asks before it persists anything.
+/// Null when the active model is the user's drawing; otherwise the refusal to show, naming the mode
+/// whose model-store swap replaced the drawing and how to return to it. A future mode that swaps
+/// the model store (Test Block, #808) adds its arm here so no save route can miss it.
+const char* DrawingSaveRefusal(const AppCommandState& st);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
 /// REQ-378 (#696 P5): copies the DWG at \p srcUtf8 to \p dstUtf8 byte for byte, except that its
