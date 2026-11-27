@@ -99,7 +99,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "block" || tok == "-block") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
+    if (f.size() < 3 || f.size() > 5) {
       log.push_back("BLOCK — usage: BLOCK <name>, <baseX>, <baseY>[, RETAIN|DELETE|CONVERT][, <baseZ>].");
       return true;
     }
@@ -112,12 +112,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     float bx = 0.f, by = 0.f, bz = 0.f;
-    try {
-      bx = std::stof(f[1]);
-      by = std::stof(f[2]);
-      if (f.size() >= 5)
-        bz = std::stof(f[4]);
-    } catch (...) {
+    if (!TryParseF(f[1], bx) || !TryParseF(f[2], by) ||
+        (f.size() == 5 && !TryParseF(f[4], bz))) {
       log.push_back("BLOCK — base point must be numbers.");
       return true;
     }
@@ -162,28 +158,29 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "insert") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
+    if (f.size() < 2) {
       StartInsertBlockCommand(st, log);
       return true;
     }
+    if (f.size() < 3 || f.size() == 4 || f.size() > 8) {
+      log.push_back("INSERT — usage: INSERT <name>, <x>, <y>[, <sx>, <sy>[, <rotation>[, <sz>[, <z>]]]].");
+      return true;
+    }
     CadBlockXform xf;
-    try {
-      xf.x = std::stof(f[1]);
-      xf.y = std::stof(f[2]);
-      if (f.size() >= 5) {
-        xf.sx = std::stof(f[3]);
-        xf.sy = std::stof(f[4]);
-      }
-      if (f.size() >= 6)
-        xf.rotZ = InsertRotZFromCwNorthDeg(std::stof(f[5]));
-      if (f.size() >= 7)
-        xf.sz = std::stof(f[6]);
-      if (f.size() >= 8)
-        xf.z = std::stof(f[7]);
-    } catch (...) {
+    float x = 0.f, y = 0.f, z = 0.f, rotationDeg = 0.f;
+    if (!TryParseF(f[1], x) || !TryParseF(f[2], y) ||
+        (f.size() >= 5 && (!TryParseF(f[3], xf.sx) || !TryParseF(f[4], xf.sy))) ||
+        (f.size() >= 6 && !TryParseF(f[5], rotationDeg)) ||
+        (f.size() >= 7 && !TryParseF(f[6], xf.sz)) ||
+        (f.size() == 8 && !TryParseF(f[7], z))) {
       log.push_back("INSERT — coordinates and scales must be numbers.");
       return true;
     }
+    xf.x = x;
+    xf.y = y;
+    xf.z = z;
+    if (f.size() >= 6)
+      xf.rotZ = InsertRotZFromCwNorthDeg(rotationDeg);
     std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", f[0].c_str());
     st.insertBlockExplode = false;
     if (CadBlockPlaceInsert(st, f[0], xf, false, log))
@@ -994,24 +991,22 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "mkline") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 4) {
+    if (f.size() != 4) {
       log.push_back("MKLINE — usage: MKLINE <x0>, <y0>, <x1>, <y1>.");
       return true;
     }
-    try {
-      const float x0 = std::stof(f[0]);
-      const float y0 = std::stof(f[1]);
-      const float x1 = std::stof(f[2]);
-      const float y1 = std::stof(f[3]);
-      PushUndoSnapshot(st, "Mkline");
-      st.drawing.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
-      st.drawing.userLineAttrs.push_back(NewBlockAttr(st));
-      EnsureEntityIds(st);
-      BumpCadGpuCache(st);
-      log.push_back("MKLINE — added.");
-    } catch (...) {
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+    if (!TryParseF(f[0], x0) || !TryParseF(f[1], y0) ||
+        !TryParseF(f[2], x1) || !TryParseF(f[3], y1)) {
       log.push_back("MKLINE — coordinates must be numbers.");
+      return true;
     }
+    PushUndoSnapshot(st, "Mkline");
+    st.drawing.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
+    st.drawing.userLineAttrs.push_back(NewBlockAttr(st));
+    EnsureEntityIds(st);
+    BumpCadGpuCache(st);
+    log.push_back("MKLINE — added.");
     return true;
   }
 
@@ -1041,41 +1036,36 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "movesel") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
+    if (f.size() != 2) {
       log.push_back("MOVESEL — usage: MOVESEL <dx>, <dy>.");
       return true;
     }
-    try {
-      const float dx = std::stof(f[0]);
-      const float dy = std::stof(f[1]);
-      PushUndoSnapshot(st, "Movesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
-          continue;
-        CadBlockTranslate(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("MOVESEL — done.");
-    } catch (...) {
+    float dx = 0.f, dy = 0.f;
+    if (!TryParseF(f[0], dx) || !TryParseF(f[1], dy)) {
       log.push_back("MOVESEL — offsets must be numbers.");
+      return true;
     }
+    PushUndoSnapshot(st, "Movesel");
+    for (const SelectedEntity& e : st.selection) {
+      if (e.type != SelectedEntity::Type::BlockRef)
+        continue;
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
+        continue;
+      CadBlockTranslate(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
+    }
+    BumpCadGpuCache(st);
+    log.push_back("MOVESEL — done.");
     return true;
   }
 
   if (tok == "copysel") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
+    if (f.size() != 2) {
       log.push_back("COPYSEL — usage: COPYSEL <dx>, <dy>.");
       return true;
     }
-    float dx = 0.f;
-    float dy = 0.f;
-    try {
-      dx = std::stof(f[0]);
-      dy = std::stof(f[1]);
-    } catch (...) {
+    float dx = 0.f, dy = 0.f;
+    if (!TryParseF(f[0], dx) || !TryParseF(f[1], dy)) {
       log.push_back("COPYSEL — offsets must be numbers.");
       return true;
     }
@@ -1108,80 +1098,75 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "rotatesel") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
+    if (f.size() != 3) {
       log.push_back("ROTATESEL — usage: ROTATESEL <baseX>, <baseY>, <deg>.");
       return true;
     }
-    try {
-      const float bx = std::stof(f[0]);
-      const float by = std::stof(f[1]);
-      const float rad = std::stof(f[2]) * 0.01745329252f;
-      PushUndoSnapshot(st, "Rotatesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
-          continue;
-        CadBlockRotateZ(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("ROTATESEL — done.");
-    } catch (...) {
+    float bx = 0.f, by = 0.f, degrees = 0.f;
+    if (!TryParseF(f[0], bx) || !TryParseF(f[1], by) || !TryParseF(f[2], degrees)) {
       log.push_back("ROTATESEL — values must be numbers.");
+      return true;
     }
+    const float rad = degrees * 0.01745329252f;
+    PushUndoSnapshot(st, "Rotatesel");
+    for (const SelectedEntity& e : st.selection) {
+      if (e.type != SelectedEntity::Type::BlockRef)
+        continue;
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
+        continue;
+      CadBlockRotateZ(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
+    }
+    BumpCadGpuCache(st);
+    log.push_back("ROTATESEL — done.");
     return true;
   }
 
   if (tok == "scalesel") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 3) {
+    if (f.size() != 3) {
       log.push_back("SCALESEL — usage: SCALESEL <baseX>, <baseY>, <factor>.");
       return true;
     }
-    try {
-      const float bx = std::stof(f[0]);
-      const float by = std::stof(f[1]);
-      const float sc = std::stof(f[2]);
-      PushUndoSnapshot(st, "Scalesel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
-          continue;
-        CadBlockScaleAbout(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("SCALESEL — done.");
-    } catch (...) {
+    float bx = 0.f, by = 0.f, sc = 0.f;
+    if (!TryParseF(f[0], bx) || !TryParseF(f[1], by) || !TryParseF(f[2], sc)) {
       log.push_back("SCALESEL — values must be numbers.");
+      return true;
     }
+    PushUndoSnapshot(st, "Scalesel");
+    for (const SelectedEntity& e : st.selection) {
+      if (e.type != SelectedEntity::Type::BlockRef)
+        continue;
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
+        continue;
+      CadBlockScaleAbout(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
+    }
+    BumpCadGpuCache(st);
+    log.push_back("SCALESEL — done.");
     return true;
   }
 
   if (tok == "mirrorsel") {
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 4) {
+    if (f.size() != 4) {
       log.push_back("MIRRORSEL — usage: MIRRORSEL <x0>, <y0>, <x1>, <y1>.");
       return true;
     }
-    try {
-      const float x0 = std::stof(f[0]);
-      const float y0 = std::stof(f[1]);
-      const float x1 = std::stof(f[2]);
-      const float y1 = std::stof(f[3]);
-      PushUndoSnapshot(st, "Mirrorsel");
-      for (const SelectedEntity& e : st.selection) {
-        if (e.type != SelectedEntity::Type::BlockRef)
-          continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
-          continue;
-        CadBlockMirror(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], x0, y0, x1, y1);
-      }
-      BumpCadGpuCache(st);
-      log.push_back("MIRRORSEL — done.");
-    } catch (...) {
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+    if (!TryParseF(f[0], x0) || !TryParseF(f[1], y0) ||
+        !TryParseF(f[2], x1) || !TryParseF(f[3], y1)) {
       log.push_back("MIRRORSEL — coordinates must be numbers.");
+      return true;
     }
+    PushUndoSnapshot(st, "Mirrorsel");
+    for (const SelectedEntity& e : st.selection) {
+      if (e.type != SelectedEntity::Type::BlockRef)
+        continue;
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
+        continue;
+      CadBlockMirror(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], x0, y0, x1, y1);
+    }
+    BumpCadGpuCache(st);
+    log.push_back("MIRRORSEL — done.");
     return true;
   }
 
@@ -1203,14 +1188,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const std::vector<std::string> f = SplitCommaRest(args);
     float dx = 0.f;
     float dy = 0.f;
-    if (f.size() >= 2) {
-      try {
-        dx = std::stof(f[0]);
-        dy = std::stof(f[1]);
-      } catch (...) {
-        log.push_back("PASTEBLOCK — offsets must be numbers.");
-        return true;
-      }
+    if (!f.empty() && (f.size() != 2 || !TryParseF(f[0], dx) || !TryParseF(f[1], dy))) {
+      log.push_back("PASTEBLOCK — offsets must be numbers.");
+      return true;
     }
     // Issue #805: Paste Special's menu runs this command from the ribbon, so it takes the same guards as
     // PASTE and PASTEORIG. A stale layout index refuses (as Cut does), and a coordinate-system mismatch refuses

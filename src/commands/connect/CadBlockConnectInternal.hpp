@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
 #include <cctype>
+#include <cmath>
 #include <istream>
 #include <string>
 #include <vector>
@@ -69,7 +70,7 @@ std::vector<std::string> SplitCommaRest(std::istream& in) {
 }
 
 // Parse a float without throwing. Returns false (and leaves out untouched) when
-// the token is not a clean number — callers report a usage error instead of
+// the token is not a complete, finite number — callers report a usage error instead of
 // letting std::invalid_argument/out_of_range escape the command dispatcher.
 bool TryParseF(const std::string& s, float& out) {
   try {
@@ -77,7 +78,7 @@ bool TryParseF(const std::string& s, float& out) {
     const float v = std::stof(s, &used);
     while (used < s.size() && std::isspace(static_cast<unsigned char>(s[used])))
       ++used;
-    if (used != s.size())
+    if (used != s.size() || !std::isfinite(v))
       return false;
     out = v;
     return true;
