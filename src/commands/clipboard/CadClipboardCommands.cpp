@@ -784,6 +784,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
   // the ones already taken so they aren't duplicated.
   CopyEnclosedFilledRegions(cb, st.drawing.cadFilledRegions, st.drawing.cadFilledRegionAttrs, mnX, mnY, mxX, mxY, &directFills);
+  CadBlockCaptureReferencedDefs(st.drawing.blockDefs, cb.content.cadBlockRefs, cb.content.blockDefs);
 
   if (mnX > mxX) {
     cb.basePtX = 0.f;

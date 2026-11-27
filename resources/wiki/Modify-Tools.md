@@ -254,6 +254,9 @@ are reported in the command log.
 | **Paste at Original Coordinates** | — | Right-click ▸ Clipboard ▸ Paste at Original Coordinates | `PASTEORIG`, `PO` |
 | **Paste Special** | — | Home ribbon ▸ Clipboard ▸ Paste Special: Paste Block References, or Paste at Original Coordinates | `PASTEBLOCK`, `PASTEORIG` |
 
+**Paste Block References** imports the definitions used by the copied blocks, including nested
+blocks. GoSurvey gives imported definitions unique names when those names are already in use.
+
 > **Note on Cut** — Cut copies the selection to the clipboard, then erases it, so one Undo brings
 > the objects back. It needs a selection. Cut works only when the clipboard can carry every selected
 > object. Otherwise Cut does nothing, erases nothing, and names the first object it cannot carry: for example a surface, feature line, alignment, mesh, solid, pipe run, point cloud or PDF
