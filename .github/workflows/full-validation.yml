@@ -1,27 +1,14 @@
-# Full validation (REQ-437). Jobs live in a separate workflow for visibility and concurrency;
-# master and beta branch protection require the build status, so this check blocks
-# merge. A validated `docs-only` PR skips the work; approval remains governed by branch rules.
-#
-# Nothing in this workflow publishes
-# anything — that stays in release.yml (REQ-202/ADR-029), which is manual-dispatch only.
-#
-# release.yml remains a separate, manual-dispatch publication pipeline (REQ-202). It uses the
-# release validation keeps its own test prerequisites and CTest coverage.
+# Required PR build (REQ-437). Publication stays in the manual release workflow.
 
 name: full-validation
 
 on:
   pull_request:
     branches: [master, beta]
-    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
 
-# Label and edit events only matter when they change what CI checks: the docs-only and
-# refactor proof labels, or a new base branch. Other label/edit events (status labels,
-# title/body edits) get their own concurrency group so they never cancel a real run, and
-# the `ci-event` job below skips every check. Keep this list in sync with `ci-event`.
 concurrency:
-  group: >-
-    full-validation-${{ github.event.pull_request.number }}${{ ((github.event.action == 'edited' && !github.event.changes.base) || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'), github.event.label.name))) && format('-ignored-{0}', github.run_id) || '' }}
+  group: full-validation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -33,101 +20,11 @@ env:
   NINJA_STATUS: '[%f/%t; %r running; %e s] '
 
 jobs:
-  # Decides whether this PR event can change a check result (see the concurrency comment).
-  # When it cannot, every job below is skipped under a name that is never a required check,
-  # so a skipped run never stands in for the required check of the same name.
-  ci-event:
-    name: policy / CI-relevant event
-    runs-on: ubuntu-latest
-    outputs:
-      relevant: ${{ steps.decide.outputs.relevant }}
-      # Skipped jobs show their name unevaluated, so the raw text must stay readable.
-      name_suffix: ${{ steps.decide.outputs.relevant == 'false' && ' (ignored event)' || '' }}
-    steps:
-      - name: Decide whether this event changes CI results
-        id: decide
-        shell: bash
-        env:
-          IGNORED: >-
-            ${{ (github.event.action == 'edited' && !github.event.changes.base) ||
-              ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
-               !contains(fromJSON('["docs-only", "refactor: move-only", "refactor: split-only"]'),
-                         github.event.label.name)) }}
-          ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
-        run: |
-          relevant=true
-          if [ "$IGNORED" = "true" ]; then relevant=false; fi
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "Event '$ACTION' (label '$LABEL'): CI relevant = $relevant"
-
-  # ---------------------------------------------------------------------------
-  # docs-only classification — fail closed: an API/classification error leaves the output empty,
-  # causing every validation job below to run. Shared with CodeQL via a repository script. Only
-  # the `docs-only` label plus documentation-only paths can skip CI.
-  # ---------------------------------------------------------------------------
-  classify-docs-only:
-    name: full / docs-only policy${{ needs.ci-event.outputs.name_suffix }}
-    needs: [ci-event]
-    if: >-
-      !cancelled() && needs.ci-event.outputs.relevant != 'false'
-    runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
-    outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
-      has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
-    steps:
-      - name: Check out classifier
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Validate docs-only label against changed paths
-        id: classify
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: python .github/scripts/classify_docs_only.py
-
-      - name: Detect changed C/C++ files
-        id: changed-cpp
-        shell: pwsh
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the PR base.' }
-          @'
-          import os
-          import subprocess
-
-          files = subprocess.check_output(
-              ["git", "diff", "--name-only", "--diff-filter=ACMR", os.environ["BASE_SHA"], "HEAD"],
-              text=True,
-          ).splitlines()
-          suffixes = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp", ".inc")
-          changed = any(
-              path.lower().endswith(suffixes) and not path.lower().startswith("third_party/")
-              for path in files
-          )
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"has_cpp_changes={str(changed).lower()}\n")
-          print(f"Changed C/C++ files present: {changed}")
-          '@ | python -
-          if ($LASTEXITCODE -ne 0) { throw 'C/C++ change detection failed.' }
-
-  # Run the full build after a failed classifier, and let a newer commit cancel it.
   build-all-targets:
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-    name: full / build all targets${{ needs.ci-event.outputs.name_suffix }}
-    needs: [ci-event, classify-docs-only]
-    if: >-
-      !cancelled() && needs.ci-event.outputs.relevant != 'false' &&
-      (needs.classify-docs-only.result != 'success' ||
-       needs.classify-docs-only.outputs.docs_only != 'true')
+    name: full / build all targets
     # Fork PRs wait for maintainer approval before using the self-hosted PR pool.
     runs-on: [self-hosted, Windows, X64, gosurvey-pr-build]
     env:
