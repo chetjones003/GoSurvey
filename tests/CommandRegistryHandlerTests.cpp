@@ -77,3 +77,77 @@ TEST_CASE("every registered command leaves a trace when typed bare", "[commands]
   INFO("Commands registered but producing no effect when typed bare (merge-dropped handler?): " << joined);
   CHECK(silentRegressions.empty());
 }
+
+TEST_CASE("Block commands reject invalid numeric fields before changing the drawing", "[commands][issue1658]") {
+  AppCommandState st;
+  st.documents.resize(1);
+  st.activeDrawingIdx = 0;
+  std::vector<std::string> log;
+  const auto submit = [&](std::string command) {
+    log.clear();
+    ProcessCommandLineSubmit(command.data(), static_cast<int>(command.size() + 1), st, log);
+  };
+
+  submit("MKLINE +1e0, 2.5, -3, 4");
+  REQUIRE(st.drawing.lineCount() == 1);
+  submit("SELLINE");
+  submit("BLOCK Shape, 1, 2, RETAIN, 3");
+  REQUIRE(st.drawing.blockDefs.size() == 1);
+  submit("INSERT Shape, 5, 6, 2, 3, 15, 4, 7");
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  submit("MKLINE 0,0,1,1");
+  submit("UNDO");
+  REQUIRE(st.drawing.lineCount() == 1);
+  submit("SELBLOCK");
+  submit("COPYCLIP");
+  REQUIRE(st.clipboard.content.cadBlockRefs.size() == 1);
+
+  const auto lines = st.drawing.userLinesFlat;
+  const auto xf = st.drawing.cadBlockRefs.front().xf;
+  const auto undoDepth = st.documents.front().undoStack.size();
+  const auto redoDepth = st.documents.front().redoStack.size();
+  REQUIRE(undoDepth > 0);
+  REQUIRE(redoDepth > 0);
+
+  // Each marker identifies a numeric field to exercise independently.
+  for (const std::string format : {
+           "MKLINE @,@,@,@", "BLOCK Other,@,@,CONVERT,@", "-BLOCK Other,@,@,CONVERT,@",
+           "INSERT Shape,@,@,@,@,@,@,@", "MOVESEL @,@", "COPYSEL @,@", "ROTATESEL @,@,@",
+           "SCALESEL @,@,@", "MIRRORSEL @,@,@,@", "PASTEBLOCK @,@"}) {
+    for (size_t pos = format.find('@'); pos != std::string::npos; pos = format.find('@', pos + 1)) {
+      for (const std::string invalid : {"nan", "+inf", "-inf", "1junk", "1e100"}) {
+        std::string command = format;
+        for (char& c : command) {
+          if (c == '@')
+            c = '1';
+        }
+        command.replace(pos, 1, invalid);
+        CAPTURE(command);
+        submit(command);
+        REQUIRE_FALSE(log.empty());
+        CHECK(log.back().find("must be numbers") != std::string::npos);
+        CHECK(st.drawing.userLinesFlat == lines);
+        CHECK(st.drawing.blockDefs.size() == 1);
+        REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+        const auto& current = st.drawing.cadBlockRefs.front().xf;
+        CHECK(current.x == xf.x);
+        CHECK(current.y == xf.y);
+        CHECK(current.z == xf.z);
+        CHECK(current.sx == xf.sx);
+        CHECK(current.sy == xf.sy);
+        CHECK(current.sz == xf.sz);
+        CHECK(current.rotZ == xf.rotZ);
+        CHECK(st.documents.front().undoStack.size() == undoDepth);
+        CHECK(st.documents.front().redoStack.size() == redoDepth);
+      }
+    }
+  }
+
+  for (const char* command : {"INSERT Shape, nan", "INSERT Shape, 5, 6, nan", "PASTEBLOCK nan"}) {
+    CAPTURE(command);
+    submit(command);
+    CHECK(st.drawing.cadBlockRefs.size() == 1);
+    CHECK(st.documents.front().undoStack.size() == undoDepth);
+    CHECK(st.documents.front().redoStack.size() == redoDepth);
+  }
+}
