@@ -1878,6 +1878,26 @@ bool PdfAttach_Build(const char* filePath, int pageIndex, float dpi,
   return out.glTexId != 0;
 }
 
+bool PdfAttach_Reload(PdfAttachment& att) {
+  att.needsReload = false;
+  PdfAttachPixelResult pixels;
+  // Use the same supported DPI range and raster/snap pipeline as PDFATTACH.
+  if (!PdfAttach_BuildToBuffer(att.filePath.c_str(), att.pageIndex, std::clamp(att.rasterDpi, 72.f, 300.f),
+                               att.snapLines, att.snapCircles, att.snapText, pixels))
+    return false;
+  PdfAttachment loaded;
+  if (!PdfAttach_FinishBuild(pixels, att.filePath.c_str(), att.pageIndex, loaded))
+    return false;
+  att.glTexId = loaded.glTexId;
+  att.texW = loaded.texW;
+  att.texH = loaded.texH;
+  att.pageWidthPts = loaded.pageWidthPts;
+  att.pageHeightPts = loaded.pageHeightPts;
+  att.snapData = std::move(loaded.snapData);
+  att.snapVisDark = loaded.snapVisDark;
+  return true;
+}
+
 void PdfAttach_ReleaseTexture(PdfAttachment& att) {
   if (att.glTexId) {
     GLuint tid = att.glTexId;

@@ -57,7 +57,8 @@ const DwgConverter& FindDwgConverter(bool forceRescan = false);
 std::string DwgVersionNameFromTag(const std::string& tag6);
 std::string DwgVersionName(const char* pathUtf8);
 
-bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
+                   bool* hasPdfPlacements = nullptr);
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
 /// Append the GoSurvey JSON trailer to an on-disk DWG (LibreDWG bytes only). Used by ExportDwgFile;
@@ -68,7 +69,8 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
 /// REQ-175: Open/Save a drawing path. `.dwg` carries the payload when present. Legacy standalone
 /// `.gs` paths are rejected because issue #264 retired that file format. The payload JSON remains
 /// internal to the DWG trailer and template serializer.
-bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
+                         bool* hasPdfPlacements = nullptr);
 inline constexpr char kBeditDrawingSaveRefusal[] =
     "BEDIT is active: the temporary editor model replaced the drawing model. Run BCLOSE to return to the drawing before saving.";
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);

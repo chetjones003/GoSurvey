@@ -5,6 +5,10 @@
 Attaches a PDF page as a raster underlay you can **snap to**. This is how you trace a recorded
 plat, a utility as-built, or a GIS export without redrawing it first.
 
+GoSurvey saves the PDF reference, selected page, placement, and display and snap settings in the
+DWG. Keep the source PDF available at its saved path when reopening the drawing. For project-managed
+PDFs, GoSurvey can resolve the copy tracked by the project.
+
 ---
 
 ## Attaching a PDF

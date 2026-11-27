@@ -17,7 +17,8 @@ bool LoadGoSurveyTemplateFile(AppCommandState& st, const char* pathUtf8, std::ve
 /// Full GoSurvey document JSON tree held by the REQ-175 DWG trailer. User-facing `.gst` files
 /// use the same schema with drawing content filtered out.
 std::string SerializeGoSurveyJson(const AppCommandState& st);
-bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log);
+bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log,
+                             bool* hasPdfPlacements = nullptr);
 /// REQ-357 / REQ-375: the Drawing Settings object as JSON text (the trailer's `drawingSettings`).
 /// The reader returns false when the text is not a JSON object; absent members keep the defaults.
 std::string DrawingSettingsToJsonText(const DrawingSettings& ds);

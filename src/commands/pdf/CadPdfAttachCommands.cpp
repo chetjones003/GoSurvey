@@ -102,6 +102,7 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     const int nSnapLines   = att.snapData ? static_cast<int>(att.snapData->snapLinesFlat.size())    / 4 : 0;
     const int nSnapCircles = att.snapData ? static_cast<int>(att.snapData->snapCirclesCxCyR.size()) / 3 : 0;
     const int nSnapText    = att.snapData ? static_cast<int>(att.snapData->snapTextPos.size())      / 2 : 0;
+    att.rasterDpi = st.pdfAttachRasterDpi;
     PushUndoSnapshot(st, "PDF attach");
     st.drawing.pdfAttachments.push_back(std::move(att));
     char snapMsg[128];

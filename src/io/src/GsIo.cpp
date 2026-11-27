@@ -1,5 +1,6 @@
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
+#include "GoSurvey/IO/PdfPlacementJson.hpp"
 
 #include "CadCommands.hpp"
 #include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
@@ -2780,6 +2781,7 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["modelImages"] = std::move(images);
   }
+  doc["pdfAttachments"] = PdfAttachmentsToJson(st.drawing.pdfAttachments);
   json fillAttrs = json::array();
   for (const auto& a : st.drawing.cadFilledRegionAttrs) {
     json o;
@@ -3369,6 +3371,9 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
 
 void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std::string>& log) {
   st.drawing.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
+  const auto pdfs = doc.find("pdfAttachments");
+  st.drawing.pdfAttachments = pdfs == doc.end() ? std::vector<PdfAttachment>{}
+      : PdfAttachmentsFromJson(*pdfs, log);
   st.drawing.alignmentStationFormat = alignment::StationFormat{};
   if (doc.contains("stationFormat") && doc["stationFormat"].is_object()) {  // REQ-483.4
     const json& sf = doc["stationFormat"];
@@ -5797,23 +5802,19 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
   try {
     json root = BuildRoot(st);
     json& doc = root["document"];
-    // A .gst carries reusable standards, setup, and vector linework. Keep this list in sync with
-    // BuildRoot whenever a new entity store is added; only non-linework drawing content is removed.
+    // Strip non-linework drawing content from the reusable template.
     for (const char* key : {
              "annotations",
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
              "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "sampleLines", "designProfiles", "surfaceProfiles", "surfaces",
-             "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
+             "surfaceAttrs", "surveyPoints", "modelImages", "pdfAttachments", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
-
     // Captured map tiles are source-drawing imagery, not reusable template settings.
     if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
       doc["drawingSettings"].erase("capturedAreas");
-
-    // Keep named views and named UCS definitions as reusable drawing standards, but do not carry
-    // over the source drawing's current camera, projection, active view, or current UCS.
+    // Keep named views and named UCS definitions as reusable drawing standards.
     if (doc.contains("view") && doc["view"].is_object()) {
       json reusableViews = json::object();
       if (doc["view"].contains("namedViews")) reusableViews["namedViews"] = doc["view"]["namedViews"];
@@ -5822,8 +5823,6 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     } else {
       doc.erase("view");
     }
-
-    // Keep reusable view/settings state and entity ID counters with the retained linework.
     // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
     std::set<std::string> neededBlocks;
     auto collectBlock = [&](const json& value, const char* field) {
@@ -5876,7 +5875,6 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
           layout[key] = json::array();
       }
     }
-
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
@@ -5895,7 +5893,8 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
   }
 }
 
-bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log) {
+bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log,
+                             bool* hasPdfPlacements) {
   json root;
   try {
     root = json::parse(std::string(jsonUtf8));
@@ -5973,6 +5972,7 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
                     " survey-point label(s) whose link did not resolve on load.");
     RepositionAllSurveyPointLabels(st);
     BumpCadGpuCache(st);
+    if (hasPdfPlacements) *hasPdfPlacements = doc.contains("pdfAttachments");
     log.push_back("Opened GoSurvey document.");
     return true;
   } catch (const std::exception& e) {

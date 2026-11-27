@@ -1,7 +1,7 @@
 #include "ProjectFiles.hpp"
 
 #include "io/src/ProjectTurnover.hpp"
-#include "GoSurvey/Pdf/PdfAttach.hpp"
+#include "GoSurvey/IO/PdfPlacementJson.hpp"
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "io/src/DwgIo.hpp"
 #include "io/src/GsIo.hpp"
@@ -52,23 +52,6 @@ std::string DrawingRel(const gsproj::Project& p, const std::string& drawingPath)
   std::error_code ec;
   const fs::path rel = fs::weakly_canonical(f, ec).lexically_relative(fs::weakly_canonical(p.Folder(), ec));
   return rel.generic_u8string();
-}
-
-json PlacementOf(const AppCommandState& st, const PdfAttachment& a) {
-  json j;
-  j["page"] = a.pageIndex;
-  j["x"] = static_cast<double>(a.insertX) + st.drawing.worldDocumentOriginX;  // world: the local origin differs per drawing
-  j["y"] = static_cast<double>(a.insertY) + st.drawing.worldDocumentOriginY;
-  j["scale"] = a.scale;
-  j["rotationDeg"] = a.rotationDeg;
-  j["dpi"] = a.pageWidthPts > 0.f ? static_cast<double>(a.texW) * 72.0 / a.pageWidthPts : 150.0;
-  j["snapLines"] = a.snapLines;
-  j["snapCircles"] = a.snapCircles;
-  j["snapText"] = a.snapText;
-  j["layer"] = a.layer;
-  j["fade"] = a.fade;
-  j["showBackground"] = a.showBackground;
-  return j;
 }
 
 /// A copy of \p pc that reads from \p file (and its `.gscloud` cache beside it).
@@ -371,7 +354,8 @@ void SyncProjectFilesOnSave(AppCommandState& st, int tabIdx, const std::string& 
     if (!image.path.empty()) clouds.push_back({fs::u8path(image.path), {}});
   for (const PdfAttachment& a : st.drawing.pdfAttachments)
     if (!a.filePath.empty())
-      pdfs.push_back({fs::u8path(a.filePath), PlacementOf(st, a).dump()});
+      pdfs.push_back({fs::u8path(a.filePath),
+                      PdfPlacementToJson(a, st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY).dump()});
   if (!projfiles::SyncDrawing(&s->project, rel, clouds, pdfs))
     return;
   std::string err;
@@ -380,14 +364,13 @@ void SyncProjectFilesOnSave(AppCommandState& st, int tabIdx, const std::string& 
 }
 
 void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, const std::string& drawingPath,
-                             std::vector<std::string>& log) {
+                             std::vector<std::string>& log, bool hasPdfPlacements) {
   const Session* s = FindSession(st, projectUid);
   if (s == nullptr)
     return;
   const std::string rel = DrawingRel(s->project, drawingPath);
   if (rel.empty())
     return;
-  std::error_code ec;
 
   // Point clouds: the file the project tracks wins over the path the drawing remembered (that path may
   // be another machine's).
@@ -423,32 +406,30 @@ void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, cons
     image.path = found;
   }
 
-  // PDFs: put each recorded placement back.
+  // Resolve project-owned sources before the viewport rebuilds the underlays.
+  if (hasPdfPlacements) {
+    for (auto& pdf : st.drawing.pdfAttachments) {
+      const std::string found = projfiles::FindAttachedFile(s->project, rel, pdf.filePath);
+      if (!found.empty())
+        pdf.filePath = found;
+    }
+    return;
+  }
+
+  // Older DWGs stored their PDF placements only in the project manifest.
   for (const auto& [file, placementText] : projfiles::PlacementsFor(s->project, rel)) {
-    const json pl = json::parse(placementText, nullptr, false);
-    if (!pl.is_object())
-      continue;
-    const std::string name = fs::u8path(file).filename().u8string();
+    std::error_code ec;
     if (file.empty() || !fs::exists(fs::u8path(file), ec)) {
-      log.push_back("PDF " + name + " is missing from the project; its underlay was not placed.");
+      log.push_back("PDF is missing from the project: " + file);
       continue;
     }
-    PdfAttachment att;
-    const bool ok = PdfAttach_Build(file.c_str(), pl.value("page", 0), pl.value("dpi", 150.f),
-                                    pl.value("snapLines", true), pl.value("snapCircles", true),
-                                    pl.value("snapText", true), att);
-    if (!ok) {
-      log.push_back("PDF " + name + " could not be read; its underlay was not placed.");
-      continue;
-    }
-    att.insertX = static_cast<float>(pl.value("x", 0.0) - st.drawing.worldDocumentOriginX);
-    att.insertY = static_cast<float>(pl.value("y", 0.0) - st.drawing.worldDocumentOriginY);
-    att.scale = pl.value("scale", 1.f);
-    att.rotationDeg = pl.value("rotationDeg", 0.f);
-    att.layer = pl.value("layer", std::string());
-    att.fade = pl.value("fade", 1.f);
-    att.showBackground = pl.value("showBackground", false);
-    st.drawing.pdfAttachments.push_back(std::move(att));
+    const json pl = json::parse(placementText, nullptr, false);
+    auto attachment = PdfPlacementFromJson(pl, file, st.drawing.worldDocumentOriginX,
+                                           st.drawing.worldDocumentOriginY);
+    if (attachment)
+      st.drawing.pdfAttachments.push_back(std::move(*attachment));
+    else
+      log.push_back("Skipped an invalid project PDF underlay placement.");
   }
 }
 
