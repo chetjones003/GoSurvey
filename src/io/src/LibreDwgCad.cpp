@@ -18,7 +18,7 @@
 #include <GoSurvey/Core/ShxFont.hpp>
 #include "CadCoordinateFrame.hpp"
 #include "ViewportZoomScale.hpp"
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include "CadDimStroke.hpp"
 #include "PolylineTiltedArc.hpp"
 #include "DxfColors.hpp"

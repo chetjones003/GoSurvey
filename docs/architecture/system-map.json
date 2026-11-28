@@ -15814,7 +15814,6 @@
         "src/commands/CadCommands_Ucs.cpp",
         "src/commands/CadCoordinateFrame.cpp",
         "src/commands/CadCoordinateFrame.hpp",
-        "src/commands/CadDimGeom.hpp",
         "src/commands/CadDimStroke.hpp",
         "src/commands/CadDynInput.cpp",
         "src/commands/CadDynInput.hpp",

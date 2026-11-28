@@ -7,7 +7,7 @@
 // there; the Helmert solver and the geometry-walk helper are file-local statics.
 
 #include "CadCommands.hpp"
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include "CadDimStroke.hpp"
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
 

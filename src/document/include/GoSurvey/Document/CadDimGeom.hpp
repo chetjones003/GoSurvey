@@ -1,13 +1,15 @@
 #pragma once
 
-#include "CadEntities.hpp"
+// CadAnnotation comes in through cadblock.hpp, as for the rest of Document (ADR-0010).
+#include <GoSurvey/Document/cadblock.hpp>
 #include <GoSurvey/Document/AngleNormalize.hpp>
 
 #include <algorithm>
 #include <cmath>
 
-/// Header-only dimension frame geometry (issue #110). Same math previously lived in CadCommands.cpp;
-/// tests and the paper-viewport overlay need it without linking the command layer.
+/// Header-only dimension frame geometry (issue #110). Document owns it (ADR-0011): an annotation's
+/// box (AnnotationBounds.hpp) is built from it, and tests and the paper-viewport overlay need it
+/// without linking the command layer.
 
 inline bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
                                   float* ty, float* nx, float* ny, double* measLen) {

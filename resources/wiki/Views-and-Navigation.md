@@ -34,6 +34,13 @@ is kept as it is.
 Fits all drawing content — geometry, survey point markers, everything — in the view. The first
 thing to reach for after an import or a large edit.
 
+It counts lines, curves, polylines, text, dimensions, tables, multileaders, block inserts,
+hatches, meshes, solids, pipe runs, Position Markers, survey points, alignments, feature lines,
+surfaces and point clouds. PDF underlays are not counted yet. Text is measured by its box at the
+current drawing scale. In a large drawing, an object far from everything else (often a stray point
+at 0,0 left by an import) is left out of the fit, so one outlier does not shrink the drawing to a
+dot.
+
 ### ZOOMWINDOW (`ZW`)
 
 **Ribbon:** View → Window **Command:** `ZOOMWINDOW`, `ZW`

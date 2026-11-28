@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include "DimensionStyle.hpp"
 #include "PaperSpace.hpp"
 

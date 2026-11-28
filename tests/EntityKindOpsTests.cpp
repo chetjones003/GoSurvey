@@ -453,13 +453,13 @@ std::vector<KindRow> BuildTable() {
         return out;
       }),
       Outcome::Erased,
-      // 2D ComputeWorldExtents samples the swept arc [10..16, 12..18];
-      // 3D ComputeWorldExtents3d (CollectEntityBoxes) uses the full-circle box [cx-r..cx+r, cy-r..cy+r].
-      {true, true, true, {10.0, 16.0, 12.0, 18.0}, {4.0, 16.0, 6.0, 18.0, 3.0, 3.0}},
+      // The swept arc [10..16, 12..18]: ComputeWorldExtents samples it and EntityBounds (behind
+      // ComputeWorldExtents3d) is exact, so both agree. CollectEntityBoxes took the full circle's box
+      // before issue #1700 phase 4.
+      ExactExtents(10.0, 16.0, 12.0, 18.0, 3.0, 3.0),
   });
 
   // 4. Ellipse: centre (16,12,3), major=(3,0), ratio=0.5 (minor=1.5), normal=(0,0,1), full turn.
-  const double kEllRrx = std::hypot(3.0, 1.5);
   rows.push_back(KindRow{
       "Ellipse",
       SelectedEntity::Type::Ellipse,
@@ -506,10 +506,9 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      // 2D ComputeWorldExtents samples the ellipse [13..19, 10.5..13.5];
-      // 3D ComputeWorldExtents3d (CollectEntityBoxes) uses cx±hypot(ma,mb), cy±hypot(ma,mb).
-      {true, true, true, {13.0, 19.0, 10.5, 13.5},
-       {16.0 - kEllRrx, 16.0 + kEllRrx, 12.0 - kEllRrx, 12.0 + kEllRrx, 3.0, 3.0}},
+      // The ellipse [13..19, 10.5..13.5], sampled in 2D and exact in 3D (EntityBounds). Before
+      // issue #1700 phase 4 the 3D box was cx±hypot(ma,mb), cy±hypot(ma,mb).
+      ExactExtents(13.0, 19.0, 10.5, 13.5, 3.0, 3.0),
   });
 
   // 5. Polyline: (10,12,3) -> (15,12,3) -> (20,14,4). First vertex outside stretch box, last two inside.
@@ -1059,8 +1058,9 @@ std::vector<KindRow> BuildTable() {
       }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
-      // Table body extends down from insY: [16..20] x [10..12]; CollectEntityBoxes does not track table insZ (0..0).
-      ExactExtents(16.0, 20.0, 10.0, 12.0, 0.0, 0.0),
+      // Table body extends down from insY: [16..20] x [10..12], at its insertion elevation 3 (EntityBounds;
+      // CollectEntityBoxes dropped it to 0 before issue #1700 phase 4).
+      ExactExtents(16.0, 20.0, 10.0, 12.0, 3.0, 3.0),
   });
 
   // 13. BlockRef: insertion (16,12,3), scale=(1,1,1), rot=(0,0,0), def has line (0,0)->(4,2).
@@ -1201,9 +1201,9 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       BoxMissed(), // Gap: ComputeSelectionFromRect skips cadPipeRuns.
       Outcome::Erased,
-      // Gap: ComputeRobustWorldExtents (2D) misses PipeRun; ComputeWorldExtents3d (and zoomextents fallback) sees it.
-      {false, true, true, {},
-       {10.0 - 0.1875, 20.0 + 0.1875, 12.0 - 0.1875, 12.0 + 0.1875, 3.0 - 0.1875, 4.0 + 0.1875}},
+      // The centreline widened by the pipe's radius, in 2D and 3D (2D missed pipe runs before issue
+      // #1700 phase 4).
+      ExactExtents(10.0 - 0.1875, 20.0 + 0.1875, 12.0 - 0.1875, 12.0 + 0.1875, 3.0 - 0.1875, 4.0 + 0.1875),
   });
 
   // 16. PointCloud: two resident points (16,12,3) and (20,14,4). Display-and-erase only.
@@ -1724,4 +1724,95 @@ TEST_CASE("EntityKindOps phase 0: every entity kind across MOVE, COPY, ROTATE, 3
 
     CheckExtentsOp(row);
   }
+}
+
+TEST_CASE("Robust ZOOM EXTENTS boxes every Document kind through EntityBounds (issue #1700 phase 4)",
+          "[entitykindops][extents][issue1700]") {
+  // Sixteen lines fill [0,10] x [0,10], enough for the robust path's outlier statistic. Before
+  // phase 4 that path never counted inserts, hatches or pipe runs, so ZOOM EXTENTS cut off an
+  // insert drawn beside the linework.
+  AppCommandState st;
+  for (int i = 0; i < 16; ++i) {
+    const double t = static_cast<double>(i) * (10.0 / 15.0);
+    st.drawing.pushLine(CadLineRecord{t, 0.0, 0.0, t, 10.0, 0.0});
+    st.drawing.userLineAttrs.push_back(EntityAttributes{});
+  }
+  CadBlockDefinition def;
+  def.name = "UNITBLK";
+  def.content.pushLine(CadLineRecord{0.0, 0.0, 0.0, 4.0, 2.0, 0.0});
+  def.content.userLineAttrs.push_back(EntityAttributes{});
+  st.drawing.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "UNITBLK";
+  ref.xf.x = 30.0;
+  ref.xf.y = 4.0;
+  ref.xf.z = 6.0;
+  st.drawing.cadBlockRefs.push_back(ref);
+  st.drawing.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CadPipeRun run;
+  run.name = "P1";
+  run.nominalSize = "4in";  // radius 0.1875 ft
+  run.vertsXyz = {2.0, -8.0, -1.0, 8.0, -8.0, -1.0};
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  int skipped = -1;
+  REQUIRE(ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped));
+  CHECK(skipped == 0);
+  CHECK(mnX == Catch::Approx(0.0).margin(1e-6));
+  CHECK(mxX == Catch::Approx(34.0).margin(1e-6));  // the insert's far end
+  CHECK(mnY == Catch::Approx(-8.1875).margin(1e-6));  // the pipe's wall
+  CHECK(mxY == Catch::Approx(10.0).margin(1e-6));
+
+  ray3d::Vec3 bmn{}, bmx{};
+  REQUIRE(ComputeWorldExtents3d(st, &bmn, &bmx, &skipped));
+  CHECK(bmn.x == Catch::Approx(mnX).margin(1e-6));
+  CHECK(bmx.x == Catch::Approx(mxX).margin(1e-6));
+  CHECK(bmn.y == Catch::Approx(mnY).margin(1e-6));
+  CHECK(bmx.y == Catch::Approx(mxY).margin(1e-6));
+  CHECK(bmn.z == Catch::Approx(-1.1875).margin(1e-6));
+  CHECK(bmx.z == Catch::Approx(6.0).margin(1e-6));
+}
+
+TEST_CASE("Robust ZOOM EXTENTS sizes a Position Marker at the current annotation scale", "[entitykindops][extents][issue1700]") {
+  AppCommandState st;
+  for (int i = 0; i < 16; ++i) {
+    const double t = static_cast<double>(i) * (10.0 / 15.0);
+    st.drawing.pushLine(CadLineRecord{t, 0.0, 0.0, t, 10.0, 0.0});
+    st.drawing.userLineAttrs.push_back(EntityAttributes{});
+  }
+  CadPositionMarker pm;
+  pm.x = 20.0;
+  pm.y = 5.0;
+  pm.label.boxMinX = pm.label.boxMaxX = 20.f;  // a label that adds nothing beyond the circle
+  pm.label.boxMinY = pm.label.boxMaxY = 5.f;
+  st.drawing.cadPositionMarkers.push_back(pm);
+  st.drawing.cadPositionMarkerAttrs.push_back(EntityAttributes{});
+  const float r = PositionMarkerRadiusWorld(st);
+  REQUIRE(r > 0.f);
+  CHECK(CadEntityBoundsContext(st).positionMarkerRadius == Catch::Approx(r));
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  int skipped = -1;
+  REQUIRE(ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped));
+  CHECK(skipped == 0);
+  CHECK(mxX == Catch::Approx(20.0 + r).margin(1e-5));
+}
+
+TEST_CASE("The hover pick tolerance re-measures the drawing only when it changes", "[entitykindops][extents][issue1700]") {
+  AppCommandState st;
+  st.objectSnapAperturePx = 0.f;  // leave the drawing-size floor as the whole tolerance
+  for (int i = 0; i < 16; ++i) {
+    const double t = static_cast<double>(i) * (1000.0 / 15.0);
+    st.drawing.pushLine(CadLineRecord{t, 0.0, 0.0, t, 1000.0, 0.0});
+    st.drawing.userLineAttrs.push_back(EntityAttributes{});
+  }
+  const float small = CadOffsetEntityPickTolWorld(st);
+  CHECK(small == Catch::Approx(2.5e-5 * 1000.0).margin(1e-6));
+  for (int i = 0; i < 16; ++i)  // the drawing grows tenfold...
+    st.drawing.pushLine(CadLineRecord{static_cast<double>(i) * (10000.0 / 15.0), 0.0, 0.0, 10000.0, 10000.0, 0.0});
+  st.drawing.userLineAttrs.resize(st.drawing.lineCount());
+  CHECK(CadOffsetEntityPickTolWorld(st) == Catch::Approx(small));  // ...unannounced: the memo stands
+  BumpCadGpuCache(st);
+  CHECK(CadOffsetEntityPickTolWorld(st) == Catch::Approx(2.5e-5 * 10000.0).margin(1e-5));
 }

@@ -1,7 +1,7 @@
 #include "CadField.hpp"
 
 #include "CadCommands.hpp"
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 
 #include <cassert>

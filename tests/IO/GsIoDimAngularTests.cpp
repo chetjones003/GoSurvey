@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include "CadField.hpp"
 #include "CadSnap.hpp"
 #include "GsAnnotationJson.hpp"

@@ -152,7 +152,7 @@ TEST_CASE("Ellipse: AutoCAD 3D rotate, mirrored arc span, and exact bounds", "[d
     e.startRad = 0.4f;
     e.sweepRad = 3.5f;
     REQUIRE(doc::TransformEntity(store, {EntityKind::Ellipse, 0}, General3d()));
-    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::Ellipse, 0});
+    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::Ellipse, 0}, {});
     REQUIRE(b.valid);
     doc::EntityBounds3d sampled;
     for (int i = 0; i <= 4000; ++i)
@@ -354,7 +354,7 @@ TEST_CASE("TABLE follows AutoCAD: ROTATE turns it, MIRROR keeps it readable", "[
     CheckVecNear({m.insX, m.insY, 0.0}, {-21.0, 12.0, 0.0});
     CheckAngleNear(m.rotationRad, 0.0);
     CHECK_FALSE(m.localYFlipped);
-    const doc::EntityBounds3d b = doc::EntityBounds(store, ref);
+    const doc::EntityBounds3d b = doc::EntityBounds(store, ref, {});
     CheckVecNear(b.min, {-21.0, 10.0, 0.0});
     CheckVecNear(b.max, {-16.0, 12.0, 0.0});
   }
@@ -458,7 +458,7 @@ TEST_CASE("Hatch fill follows AutoCAD: pattern turns with ROTATE, keeps its angl
   }
 
   SECTION("Bounds and duplicate") {
-    CheckVecNear(doc::EntityBounds(store, ref).max, {20.0, 15.0, 0.0});
+    CheckVecNear(doc::EntityBounds(store, ref, {}).max, {20.0, 15.0, 0.0});
     REQUIRE(doc::DuplicateEntity(store, ref) == EntityRef{EntityKind::FilledRegion, 1});
     CHECK(store.cadFilledRegions[1].patternName == "ANSI31");
   }
@@ -487,7 +487,7 @@ TEST_CASE("Mesh, solid and pipe run take any similarity transform", "[document][
     CHECK(store.cadMeshes[1] != mirrored);  // replaced, not written through
     const CadMesh& m2 = *store.cadMeshes[1];
     CheckVecNear({m2.normalsXyz[0], m2.normalsXyz[1], m2.normalsXyz[2]}, {1.0, 0.0, 0.0});
-    CheckVecNear(doc::EntityBounds(store, ref).max, {1.0, 1.0, 0.0});
+    CheckVecNear(doc::EntityBounds(store, ref, {}).max, {1.0, 1.0, 0.0});
   }
 
   SECTION("Solid: every vertex is the transform of an original vertex") {
@@ -512,7 +512,7 @@ TEST_CASE("Mesh, solid and pipe run take any similarity transform", "[document][
         CHECK(best < 1e-3 * std::max(1.0, ray3d::Length(want) * 1e-6));
       }
     }
-    const doc::EntityBounds3d b = doc::EntityBounds(store, ref);
+    const doc::EntityBounds3d b = doc::EntityBounds(store, ref, {});
     CheckVecNear(b.min, {32.0, 24.0, 6.0});
     CheckVecNear(b.max, {40.0, 28.0, 10.0});
   }
@@ -528,7 +528,7 @@ TEST_CASE("Mesh, solid and pipe run take any similarity transform", "[document][
     const CadPipeRun& r = store.cadPipeRuns[0];
     CheckVecNear({r.vertsXyz[3], r.vertsXyz[4], r.vertsXyz[5]}, {40.0, 24.0, 8.0});
     CHECK(r.nominalSize == "4in");
-    const doc::EntityBounds3d b = doc::EntityBounds(store, ref);
+    const doc::EntityBounds3d b = doc::EntityBounds(store, ref, {});
     CheckVecNear(b.min, {20.0 - 0.1875, 24.0 - 0.1875, 6.0 - 0.1875});
   }
 }
@@ -678,4 +678,95 @@ TEST_CASE("COPY over every Document kind = DuplicateEntities + TransformEntities
   CHECK(store.cadPipeRuns[1].vertsXyz[2] == Catch::Approx(7.0));
   CHECK(store.userEllipses[1].z == Catch::Approx(7.0));
   CHECK(store.cadAnnotations[0].insX == 1.f);  // the originals stay put
+}
+
+TEST_CASE("EntityBounds boxes annotations, inserts, multileaders and Position Markers", "[document][entitykindops]") {
+  for (EntityKind kind : doc::kDocumentEntityKinds)
+    CHECK(doc::HasEntityBounds(kind));
+
+  CadDrawingEntityStore store;
+  CadAnnotation text = MakeText(16.f, 12.f, 0.f);
+  text.insZ = 3.f;
+  store.cadAnnotations.push_back(text);
+  store.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition def;
+  def.name = "UNITBLK";
+  def.content.pushLine(CadLineRecord{0.0, 0.0, 0.0, 4.0, 2.0, 0.0});
+  def.content.userLineAttrs.push_back(EntityAttributes{});
+  store.blockDefs.push_back(def);
+  CadBlockRef br;
+  br.defName = "UNITBLK";
+  br.xf.x = 16.0;
+  br.xf.y = 12.0;
+  br.xf.z = 3.0;
+  store.cadBlockRefs.push_back(br);
+  store.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  CadMultileader ml;
+  ml.pathXyz = {16.f, 12.f, 0.f, 19.f, 14.f, 0.f};
+  ml.extraLeaderPaths = {{17.f, 10.f, 2.f, 19.f, 14.f, 0.f}};
+  ml.label.insZ = 1.f;
+  ml.label.boxMinX = 19.36f;
+  ml.label.boxMaxX = 20.36f;
+  ml.label.boxMinY = 13.8f;
+  ml.label.boxMaxY = 14.f;
+  store.cadMultileaders.push_back(ml);
+  store.cadMultileaderAttrs.push_back(EntityAttributes{});
+
+  CadPositionMarker pm;
+  pm.x = 5.0;
+  pm.y = 6.0;
+  pm.z = 2.0;
+  pm.label.boxMinX = 5.5f;
+  pm.label.boxMaxX = 8.f;
+  pm.label.boxMinY = 5.8f;
+  pm.label.boxMaxY = 6.2f;
+  store.cadPositionMarkers.push_back(pm);
+  store.cadPositionMarkerAttrs.push_back(EntityAttributes{});
+
+  doc::EntityBoundsContext ctx;
+  ctx.modelUnitsPerPlottedInch = 2.f;
+  ctx.positionMarkerRadius = 1.f;
+
+  SECTION("an annotation takes the hit-testing box at its elevation, sized by the drawing scale") {
+    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::Annotation, 0}, ctx);
+    REQUIRE(b.valid);
+    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+    CadAnnotationRoughBounds(text, 2.f, &mnX, &mnY, &mxX, &mxY);
+    CheckVecNear(b.min, {mnX, mnY, 3.0});
+    CheckVecNear(b.max, {mxX, mxY, 3.0});
+    doc::EntityBoundsContext bigger = ctx;
+    bigger.modelUnitsPerPlottedInch = 4.f;
+    const doc::EntityBounds3d b2 = doc::EntityBounds(store, {EntityKind::Annotation, 0}, bigger);
+    CHECK(b2.max.y - b2.min.y == Catch::Approx(2.0 * (b.max.y - b.min.y)));
+  }
+
+  SECTION("an insert takes its block content at the insertion elevation") {
+    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::BlockRef, 0}, ctx);
+    REQUIRE(b.valid);
+    CheckVecNear(b.min, {16.0, 12.0, 3.0});
+    CheckVecNear(b.max, {20.0, 14.0, 3.0});
+  }
+
+  SECTION("a multileader takes its paths, branches and label over all their elevations") {
+    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::Multileader, 0}, ctx);
+    REQUIRE(b.valid);
+    CheckVecNear(b.min, {16.0, 10.0, 0.0});
+    CheckVecNear(b.max, {20.36, 14.0, 2.0});
+  }
+
+  SECTION("a Position Marker takes its circle, at the context's radius, and its label") {
+    const doc::EntityBounds3d b = doc::EntityBounds(store, {EntityKind::PositionMarker, 0}, ctx);
+    REQUIRE(b.valid);
+    CheckVecNear(b.min, {4.0, 5.0, 2.0});
+    CheckVecNear(b.max, {8.0, 7.0, 2.0});
+  }
+
+  SECTION("an index past the end has no box") {
+    CHECK_FALSE(doc::EntityBounds(store, {EntityKind::Annotation, 1}, ctx).valid);
+    CHECK_FALSE(doc::EntityBounds(store, {EntityKind::BlockRef, 1}, ctx).valid);
+    CHECK_FALSE(doc::EntityBounds(store, {EntityKind::Multileader, 1}, ctx).valid);
+    CHECK_FALSE(doc::EntityBounds(store, {EntityKind::PositionMarker, 1}, ctx).valid);
+  }
 }

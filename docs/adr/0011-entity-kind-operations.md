@@ -144,3 +144,27 @@ above.
   (`BuildCadStretchPreviewScratch`), as the transform preview is.
 - Extents and box collection, with boxes for annotations, inserts, multileaders and Position
   Markers, follow in phase 4b.
+
+## Amendment (2026-11-28): extents and box collection (issue #1700 phase 4b)
+
+- **`EntityBounds` covers every Document kind.** Annotations, inserts, multileaders and Position
+  Markers get the plan box hit testing already used, at their elevation. Annotations and markers
+  are sized by the drawing, so `EntityBounds` takes an `EntityBoundsContext` (the drawing scale and
+  the marker radius at the current annotation scale). Commands builds it with
+  `CadEntityBoundsContext`. The box helpers and the dimension geometry they need moved to Document
+  (`AnnotationBounds.hpp`, `CadDimGeom.hpp`) unchanged. They still call text-box helpers in the
+  mixed `CadEntities.hpp` (`CadTextAnnotationBounds`, `CadTextEstimatedWidth`), reached through
+  `cadblock.hpp`'s existing, baselined include. Those helpers move with the rest of that file's
+  Document-owned part (ADR-0010).
+- **The hover pick tolerance remembers its drawing-size floor** for one `cadGpuRevision`. It used
+  to run the robust extents on every mouse move, which now boxes every insert.
+- **Box collection goes through `EntityBounds`.** The robust ZOOM EXTENTS (16 entities or more)
+  and the 3D extents of an orbited view box each Document entity with it. They also box the kinds
+  other systems own (survey points, alignments, feature lines, point clouds, surfaces). As a
+  result, inserts, hatches and pipe runs count in plan as well as in 3D. Arcs and ellipses get
+  their exact box instead of the full circle's, and tables keep their elevation.
+- **`ComputeWorldExtents` keeps its own sampling.** The DXF writer's `$EXTMIN`/`$EXTMAX` sweep
+  copies it exactly so that export, import and export settle (REQ-204, issues #111 and #113).
+  Moving it to `EntityBounds` would change that contract, so it would need its own issue.
+- **Window and crossing selection** test each object's own geometry against the window. That is
+  hit testing, so it moves in phase 5.

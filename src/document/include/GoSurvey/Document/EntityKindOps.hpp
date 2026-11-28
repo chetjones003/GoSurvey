@@ -12,6 +12,7 @@
 /// systems' own functions (ADR-0011).
 
 #include <GoSurvey/Document/AngleNormalize.hpp>
+#include <GoSurvey/Document/AnnotationBounds.hpp>
 #include <GoSurvey/Document/EntityRef.hpp>
 #include <GoSurvey/Document/cadblock.hpp>
 #include <GoSurvey/Document/cadpiperun.hpp>
@@ -1451,6 +1452,94 @@ inline bool TransformPositionMarker(CadDrawingEntityStore& store, std::size_t in
   return b;
 }
 
+/// The drawing state that sizes annotations and Position Markers (\ref EntityBounds). Commands
+/// builds it from the drawing and the current annotation scale (`CadEntityBoundsContext`).
+struct EntityBoundsContext {
+  /// The drawing scale, in model units per plotted inch: it sets annotation text height.
+  float modelUnitsPerPlottedInch = 1.f;
+  /// A Position Marker's circle radius in world units; it follows the annotation scale.
+  float positionMarkerRadius = 0.f;
+};
+
+/// The annotation's plan box (\ref CadAnnotationRoughBounds) at its insertion elevation.
+[[nodiscard]] inline EntityBounds3d AnnotationBounds(const CadDrawingEntityStore& store, std::size_t index,
+                                                     const EntityBoundsContext& ctx) {
+  EntityBounds3d b;
+  if (index >= store.cadAnnotations.size())
+    return b;
+  const CadAnnotation& a = store.cadAnnotations[index];
+  float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+  CadAnnotationRoughBounds(a, ctx.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
+  b.expand({mnX, mnY, a.insZ});
+  b.expand({mxX, mxY, a.insZ});
+  return b;
+}
+
+/// The insert's block content in plan (\ref CadBlockWorldAabb) at its insertion elevation, grown by
+/// any solids the block carries, in full 3D.
+[[nodiscard]] inline EntityBounds3d BlockRefBounds(const CadDrawingEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadBlockRefs.size())
+    return b;
+  const CadBlockRef& ref = store.cadBlockRefs[index];
+  float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+  CadBlockWorldAabb(store.blockDefs, ref, &mnX, &mnY, &mxX, &mxY);
+  b.expand({mnX, mnY, ref.xf.z});
+  b.expand({mxX, mxY, ref.xf.z});
+  std::vector<CadBlockWorldSolid> solids;
+  CadBlockCollectWorldSolids(store.blockDefs, ref,
+                             index < store.cadBlockRefAttrs.size() ? store.cadBlockRefAttrs[index] : EntityAttributes{},
+                             &solids);
+  for (const CadBlockWorldSolid& w : solids) {
+    if (!w.solid)
+      continue;
+    const brep::Bounds sb = brep::ComputeBounds(*w.solid);
+    if (!sb.valid)
+      continue;
+    b.expand(sb.mn);
+    b.expand(sb.mx);
+  }
+  return b;
+}
+
+/// The multileader's paths, branches and label (\ref CadMultileaderLocalBox), over the elevations of
+/// its path points and label.
+[[nodiscard]] inline EntityBounds3d MultileaderBounds(const CadDrawingEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadMultileaders.size())
+    return b;
+  const CadMultileader& ml = store.cadMultileaders[index];
+  float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+  CadMultileaderLocalBox(ml, &mnX, &mnY, &mxX, &mxY);
+  double mnZ = ml.label.insZ, mxZ = ml.label.insZ;
+  const auto growZ = [&](const std::vector<float>& path) {
+    for (std::size_t i = 2; i < path.size(); i += 3) {
+      mnZ = std::min(mnZ, static_cast<double>(path[i]));
+      mxZ = std::max(mxZ, static_cast<double>(path[i]));
+    }
+  };
+  growZ(ml.pathXyz);
+  for (const std::vector<float>& branch : ml.extraLeaderPaths)
+    growZ(branch);
+  b.expand({mnX, mnY, mnZ});
+  b.expand({mxX, mxY, mxZ});
+  return b;
+}
+
+/// The marker's circle (radius from \p ctx) and its label (\ref CadPositionMarkerBox), at its elevation.
+[[nodiscard]] inline EntityBounds3d PositionMarkerBounds(const CadDrawingEntityStore& store, std::size_t index,
+                                                         const EntityBoundsContext& ctx) {
+  EntityBounds3d b;
+  if (index >= store.cadPositionMarkers.size())
+    return b;
+  const CadPositionMarker& m = store.cadPositionMarkers[index];
+  float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+  CadPositionMarkerBox(m, ctx.positionMarkerRadius, &mnX, &mnY, &mxX, &mxY);
+  b.expand({mnX, mnY, m.z});
+  b.expand({mxX, mxY, m.z});
+  return b;
+}
+
 [[nodiscard]] inline EntityRef DuplicateEllipse(CadEntityStore& store, std::size_t index) {
   return entityops_detail::DuplicateInVector(store.userEllipses, store.userEllAttrs, index, EntityKind::Ellipse);
 }
@@ -1533,20 +1622,10 @@ inline bool TransformPositionMarker(CadDrawingEntityStore& store, std::size_t in
   return false;
 }
 
-/// True when \ref EntityBounds has an implementation for \p kind. Annotations, block references,
-/// multileaders and Position Markers size themselves from drawing state (text height, the block
-/// definition), so their boxes stay with the extents code until issue #1577 phase 4.
-[[nodiscard]] constexpr bool HasEntityBounds(EntityKind kind) {
-  switch (kind) {
-  case EntityKind::Annotation:
-  case EntityKind::BlockRef:
-  case EntityKind::Multileader:
-  case EntityKind::PositionMarker:
-    return false;
-  default:
-    return HasEntityKindOps(kind);
-  }
-}
+/// True when \ref EntityBounds has an implementation for \p kind: every Document kind (issue #1700
+/// phase 4). Annotations and Position Markers size themselves from the drawing scale, which they
+/// read from an \ref EntityBoundsContext.
+[[nodiscard]] constexpr bool HasEntityBounds(EntityKind kind) { return HasEntityKindOps(kind); }
 
 /// Apply \p xf to a single entity referenced by \p ref. Returns false, leaving the entity unchanged,
 /// if \p xf is invalid, \p ref is out of bounds, or the kind cannot represent the result
@@ -1801,9 +1880,12 @@ template <class T>
 /// 3D bounding box of the entity referenced by \p ref (invalid if out of range or not covered by
 /// \ref HasEntityBounds). Analytic and exact for lines, circles, arcs, ellipses, polylines, points,
 /// hatch fills, meshes and tables; conservative within `kSplineSampleTolerance` (clamped to the
-/// control polygon) for curved splines, and conservative for solids and pipe runs.
+/// control polygon) for curved splines, and conservative for solids and pipe runs. Annotations,
+/// inserts, multileaders and Position Markers get the plan box hit testing uses (text width is
+/// estimated); annotations and markers read their size from \p ctx, which is required so no caller
+/// sizes text at a default scale by accident.
 [[nodiscard]] inline EntityBounds3d EntityBounds(const CadDrawingEntityStore& store,
-                                                 const EntityRef& ref) {
+                                                 const EntityRef& ref, const EntityBoundsContext& ctx) {
   if (!ref.valid())
     return {};
   const std::size_t ix = static_cast<std::size_t>(ref.index);
@@ -1820,8 +1902,15 @@ template <class T>
   case EntityKind::Spline:       return SplineBounds(store, ix);
   case EntityKind::Point:        return PointBounds(store, ix);
   case EntityKind::PipeRun:      return PipeRunBounds(store, ix);
-  default:                       return {};
+  case EntityKind::Annotation:     return AnnotationBounds(store, ix, ctx);
+  case EntityKind::BlockRef:       return BlockRefBounds(store, ix);
+  case EntityKind::Multileader:    return MultileaderBounds(store, ix);
+  case EntityKind::PositionMarker: return PositionMarkerBounds(store, ix, ctx);
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:     return {};
   }
+  return {};
 }
 
 }  // namespace GoSurvey::Document
