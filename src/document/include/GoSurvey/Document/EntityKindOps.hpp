@@ -7,11 +7,14 @@
 /// iteration. Computations run in `double`; float storage fields (normals, arc angles, bulges) are
 /// rounded once on write.
 ///
-/// Phase 1 implements lines, circles, arcs, polylines, splines and CAD points. Remaining Document
-/// kinds follow in Phase 2a.
+/// Covers every kind Document owns. Kinds owned by other systems (feature lines, surfaces, point
+/// clouds, plus survey points, alignments and PDF underlays) are added by Commands through those
+/// systems' own functions (ADR-0011).
 
+#include <GoSurvey/Document/AngleNormalize.hpp>
 #include <GoSurvey/Document/EntityRef.hpp>
 #include <GoSurvey/Document/cadblock.hpp>
+#include <GoSurvey/Document/cadpiperun.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Geometry/spline.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
@@ -23,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -765,47 +769,819 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
 }
 
 // -----------------------------------------------------------------------------------------------
+// Remaining Document kinds (#1577): ellipses, annotations, tables, block references, hatch fills,
+// meshes, solids, pipe runs, multileaders and Position Markers. Each follows AutoCAD 2025, checked
+// with accoreconsole.exe (see tools/autocad-transform-oracle/): text stays readable under MIRROR
+// (MIRRTEXT 0), a hatch pattern keeps its angle under MIRROR (MIRRHATCH 0), and SCALE is uniform in
+// X, Y and Z about the base point.
+// -----------------------------------------------------------------------------------------------
+
+/// What an entity-kind operation needs to know beyond the transform itself.
+struct EntityTransformContext {
+  /// Model units per plotted inch for annotation text. MIRROR re-justifies single-line TEXT around its
+  /// estimated width so it stays readable, the way AutoCAD does with MIRRTEXT 0.
+  double textUnitsPerPlottedInch = 1.0;
+};
+
+namespace entityops_detail {
+
+/// The plan part of a transform that keeps world +Z (`SimilarityTransform::isPlanarZ`).
+///
+/// `angle` is the rotation for a proper motion. For a reflection it is `2*phi`, where `phi` is the
+/// direction of the mirror line, so a direction at angle `a` maps to `angle - a`.
+struct PlanarParts {
+  bool reflected = false;
+  double angle = 0.0;
+  double scale = 1.0;
+};
+
+[[nodiscard]] inline PlanarParts DecomposePlanar(const SimilarityTransform& xf) {
+  return {xf.isReflection(), std::atan2(xf.orthogonal(1, 0), xf.orthogonal(0, 0)), xf.scale()};
+}
+
+/// Where a plan direction at angle \p a points after \p p.
+[[nodiscard]] inline double MapPlanAngle(const PlanarParts& p, double a) {
+  return p.reflected ? p.angle - a : a + p.angle;
+}
+
+/// The angle text reads at after a reflection with MIRRTEXT 0: the mirrored direction turned half a
+/// turn, so the text runs forwards in its mirrored box.
+[[nodiscard]] inline double MirroredReadableAngle(const PlanarParts& p, double a) {
+  return CadAngNormalizeMinusPiToPi(p.angle - a + kPi);
+}
+
+template <class T>
+inline void MapPlanPoint(const SimilarityTransform& xf, T* x, T* y) {
+  const ray3d::Vec3 q = xf.applyPoint({static_cast<double>(*x), static_cast<double>(*y), 0.0});
+  *x = static_cast<T>(q.x);
+  *y = static_cast<T>(q.y);
+}
+
+/// Maps an elevation through a planar-Z transform (Z does not depend on X or Y there).
+template <class T>
+inline void MapPlanZ(const SimilarityTransform& xf, T* z) {
+  *z = static_cast<T>(xf.applyPoint({0.0, 0.0, static_cast<double>(*z)}).z);
+}
+
+template <class T>
+inline void MapPoint3(const SimilarityTransform& xf, T* x, T* y, T* z) {
+  const ray3d::Vec3 q =
+      xf.applyPoint({static_cast<double>(*x), static_cast<double>(*y), static_cast<double>(*z)});
+  *x = static_cast<T>(q.x);
+  *y = static_cast<T>(q.y);
+  *z = static_cast<T>(q.z);
+}
+
+template <class Vec>
+inline void MapXyzTriplets(const SimilarityTransform& xf, Vec& xyz) {
+  for (std::size_t k = 0; k + 2 < xyz.size(); k += 3)
+    MapPoint3(xf, &xyz[k], &xyz[k + 1], &xyz[k + 2]);
+}
+
+/// MTEXT attachment (1..9) with its left and right columns swapped — the attachment a mirrored
+/// MTEXT takes so its frame lands on the mirror image of the old one (AutoCAD: TL becomes TR).
+[[nodiscard]] inline int MirroredMtextAttachment(int attach) {
+  const int k = std::clamp(attach, 1, 9) - 1;
+  const int column = k % 3;
+  return (k - column) + (2 - column) + 1;
+}
+
+/// MTEXT (or an MTEXT label) under a planar transform. The insertion maps, the frame scales, and the
+/// text turns with a rotation. Under a reflection it stays readable: the angle is mirrored and turned
+/// half a turn, and the attachment swaps sides, so the frame lands on the mirror image of the old one.
+inline void TransformMtextFrame(CadAnnotation& a, const SimilarityTransform& xf, const PlanarParts& p) {
+  const float s = static_cast<float>(p.scale);
+  if (!p.reflected) {
+    CadMtextTransform(a, [&](float* x, float* y) { MapPlanPoint(xf, x, y); },
+                      static_cast<float>(p.angle), s);
+    return;
+  }
+  const float w = CadMtextFrameWidth(a) * s;
+  const float h = CadMtextFrameHeight(a) * s;
+  CadMtextSyncInsertion(a);
+  MapPlanPoint(xf, &a.insX, &a.insY);
+  a.rotationRad = static_cast<float>(MirroredReadableAngle(p, static_cast<double>(a.rotationRad)));
+  a.mtextAttach = MirroredMtextAttachment(a.mtextAttach);
+  CadMtextPlaceFrame(a, w, h);
+}
+
+inline void ScalePlottedHeight(float* plottedHeightInches, double s) {
+  if (s != 1.0)
+    *plottedHeightInches = std::max(static_cast<float>(*plottedHeightInches * s), 1.e-6f);
+}
+
+/// A linear dimension's measuring direction after \p xf: AutoCAD turns it with the dimension, so a
+/// quarter turn makes a horizontal dimension vertical. GoSurvey stores only horizontal or vertical,
+/// so the result snaps to whichever the turned direction is closer to.
+[[nodiscard]] inline bool MappedDimLinearVertical(const SimilarityTransform& xf, bool vertical) {
+  const ray3d::Vec3 d = xf.applyUnitDirection(vertical ? ray3d::Vec3{0.0, 1.0, 0.0} : ray3d::Vec3{1.0, 0.0, 0.0});
+  return std::fabs(d.y) > std::fabs(d.x);
+}
+
+inline void TransformDimLinear(CadAnnotation& a, const SimilarityTransform& xf) {
+  const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X);
+  const double cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+  double dmx = cmx, dmy = cmy;
+  if (a.dimLinearVertical)
+    dmx += a.dimSignedOffset;
+  else
+    dmy += a.dimSignedOffset;
+  MapPlanPoint(xf, &a.dimExt1X, &a.dimExt1Y);
+  MapPlanPoint(xf, &a.dimExt2X, &a.dimExt2Y);
+  MapPlanPoint(xf, &dmx, &dmy);
+  MapPlanPoint(xf, &a.insX, &a.insY);
+  a.dimLinearVertical = MappedDimLinearVertical(xf, a.dimLinearVertical);
+  const double ncmx = 0.5 * (a.dimExt1X + a.dimExt2X);
+  const double ncmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+  a.dimSignedOffset = a.dimLinearVertical ? dmx - ncmx : dmy - ncmy;
+  // A linear dimension's text runs along its measuring direction, read upright.
+  a.rotationRad = a.dimLinearVertical ? static_cast<float>(kPi / 2.0) : 0.f;
+}
+
+inline void TransformDimAligned(CadAnnotation& a, const SimilarityTransform& xf, const PlanarParts& p) {
+  MapPlanPoint(xf, &a.dimExt1X, &a.dimExt1Y);
+  MapPlanPoint(xf, &a.dimExt2X, &a.dimExt2Y);
+  MapPlanPoint(xf, &a.insX, &a.insY);
+  // The dimension line sits at offset * (-t.y, t.x) from the chord. A reflection reverses that
+  // normal relative to the mirrored chord, so the offset changes sign to keep the line where the
+  // mirror puts it.
+  a.dimSignedOffset *= p.reflected ? -p.scale : p.scale;
+  const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
+  if (std::hypot(vx, vy) >= 1.e-8)
+    a.rotationRad = CadDimReadableTextRotation(static_cast<float>(std::atan2(vy, vx)));
+}
+
+inline void TransformDimAngular(CadAnnotation& a, const SimilarityTransform& xf, const PlanarParts& p) {
+  MapPlanPoint(xf, &a.dimAngVertexX, &a.dimAngVertexY);
+  MapPlanPoint(xf, &a.dimExt1X, &a.dimExt1Y);
+  MapPlanPoint(xf, &a.dimExt2X, &a.dimExt2Y);
+  MapPlanPoint(xf, &a.insX, &a.insY);
+  a.dimSignedOffset *= p.scale;  // the arc radius
+}
+
+/// Any other annotation kind: the insertion and the four box corners map, and the box is refitted.
+inline void TransformAnnotationBox(CadAnnotation& a, const SimilarityTransform& xf) {
+  float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+  float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+  for (int i = 0; i < 4; ++i)
+    MapPlanPoint(xf, &xs[i], &ys[i]);
+  a.boxMinX = *std::min_element(xs, xs + 4);
+  a.boxMaxX = *std::max_element(xs, xs + 4);
+  a.boxMinY = *std::min_element(ys, ys + 4);
+  a.boxMaxY = *std::max_element(ys, ys + 4);
+  a.insX = a.boxMinX;
+  a.insY = a.boxMinY;
+}
+
+/// Rotation matrix `Rx(rotX) * Ry(rotY) * Rz(rotZ)` of an insert — the order \ref CadBlockXformPoint
+/// applies them in (Z first).
+inline void BlockRotationMatrix(const CadBlockXform& x, double m[3][3]) {
+  const double ca = std::cos(static_cast<double>(x.rotX)), sa = std::sin(static_cast<double>(x.rotX));
+  const double cb = std::cos(static_cast<double>(x.rotY)), sb = std::sin(static_cast<double>(x.rotY));
+  const double cc = std::cos(x.rotZ), sc = std::sin(x.rotZ);
+  m[0][0] = cb * cc;                 m[0][1] = -cb * sc;                m[0][2] = sb;
+  m[1][0] = ca * sc + sa * sb * cc;  m[1][1] = ca * cc - sa * sb * sc;  m[1][2] = -sa * cb;
+  m[2][0] = sa * sc - ca * sb * cc;  m[2][1] = sa * cc + ca * sb * sc;  m[2][2] = ca * cb;
+}
+
+/// Euler angles of a proper rotation \p m in the \ref BlockRotationMatrix convention.
+inline void BlockEulerFromMatrix(const double m[3][3], CadBlockXform* x) {
+  const double sb = std::clamp(m[0][2], -1.0, 1.0);
+  const double b = std::asin(sb);
+  double a = 0.0, c = 0.0;
+  if (std::fabs(sb) < 1.0 - 1e-12) {
+    a = std::atan2(-m[1][2], m[2][2]);
+    c = std::atan2(-m[0][1], m[0][0]);
+  } else {
+    a = std::atan2(m[2][1], m[1][1]);  // gimbal lock: fold the Z turn into X
+  }
+  x->rotX = static_cast<float>(a);
+  x->rotY = static_cast<float>(b);
+  x->rotZ = c;
+}
+
+/// Exact 3D AABB of the elliptical span `C + U cos t + V sin t` for t in [start, start + sweep].
+inline void ExpandBoundsWithEllipse3d(EntityBounds3d& b, const ray3d::Vec3& c, const ray3d::Vec3& u,
+                                      const ray3d::Vec3& v, double start, double sweep) {
+  auto at = [&](double t) {
+    return ray3d::Add(c, ray3d::Add(ray3d::Scale(u, std::cos(t)), ray3d::Scale(v, std::sin(t))));
+  };
+  b.expand(at(start));
+  b.expand(at(start + sweep));
+  const double us[3] = {u.x, u.y, u.z};
+  const double vs[3] = {v.x, v.y, v.z};
+  for (int axis = 0; axis < 3; ++axis) {
+    if (std::hypot(us[axis], vs[axis]) <= 1e-15)
+      continue;
+    const double t0 = std::atan2(vs[axis], us[axis]);
+    if (AngleInSweep(t0, start, sweep))
+      b.expand(at(t0));
+    if (AngleInSweep(t0 + kPi, start, sweep))
+      b.expand(at(t0 + kPi));
+  }
+}
+
+/// World major (`U`) and minor (`V`) semi-axis vectors of \p e: `EllipseWorldPointAt(e, t) = C + U cos t + V sin t`.
+inline void EllipseWorldAxes(const CadEllipse& e, ray3d::Vec3* u, ray3d::Vec3* v) {
+  const ucs::Ucs plane = CurvePlane(e);
+  const double mx = static_cast<double>(e.majVx), my = static_cast<double>(e.majVy);
+  const double r = static_cast<double>(e.ratio);
+  *u = ray3d::Add(ray3d::Scale(plane.xAxis, mx), ray3d::Scale(plane.yAxis, my));
+  *v = ray3d::Add(ray3d::Scale(plane.xAxis, -my * r), ray3d::Scale(plane.yAxis, mx * r));
+}
+
+/// A proper rotation as axis and angle, for kernels that take that form (brep::Rotate).
+inline bool AxisAngleFromRotation(const double m[3][3], ray3d::Vec3* axis, double* angle) {
+  // Shepperd's quaternion extraction: stable at every angle, including half a turn.
+  const double tr = m[0][0] + m[1][1] + m[2][2];
+  double w = 0.0, x = 0.0, y = 0.0, z = 0.0;
+  if (tr > m[0][0] && tr > m[1][1] && tr > m[2][2]) {
+    const double s = 2.0 * std::sqrt(std::max(0.0, 1.0 + tr));
+    w = 0.25 * s;
+    x = (m[2][1] - m[1][2]) / s;
+    y = (m[0][2] - m[2][0]) / s;
+    z = (m[1][0] - m[0][1]) / s;
+  } else if (m[0][0] >= m[1][1] && m[0][0] >= m[2][2]) {
+    const double s = 2.0 * std::sqrt(std::max(0.0, 1.0 + m[0][0] - m[1][1] - m[2][2]));
+    w = (m[2][1] - m[1][2]) / s;
+    x = 0.25 * s;
+    y = (m[0][1] + m[1][0]) / s;
+    z = (m[0][2] + m[2][0]) / s;
+  } else if (m[1][1] >= m[2][2]) {
+    const double s = 2.0 * std::sqrt(std::max(0.0, 1.0 + m[1][1] - m[0][0] - m[2][2]));
+    w = (m[0][2] - m[2][0]) / s;
+    x = (m[0][1] + m[1][0]) / s;
+    y = 0.25 * s;
+    z = (m[1][2] + m[2][1]) / s;
+  } else {
+    const double s = 2.0 * std::sqrt(std::max(0.0, 1.0 + m[2][2] - m[0][0] - m[1][1]));
+    w = (m[1][0] - m[0][1]) / s;
+    x = (m[0][2] + m[2][0]) / s;
+    y = (m[1][2] + m[2][1]) / s;
+    z = 0.25 * s;
+  }
+  const double vlen = std::sqrt(x * x + y * y + z * z);
+  if (!(vlen > 1e-15)) {
+    *axis = {0.0, 0.0, 1.0};
+    *angle = 0.0;
+    return true;
+  }
+  *axis = {x / vlen, y / vlen, z / vlen};
+  *angle = 2.0 * std::atan2(vlen, w);
+  return std::isfinite(*angle);
+}
+
+template <class T>
+[[nodiscard]] inline EntityRef DuplicateInVector(std::vector<T>& items, std::vector<EntityAttributes>& attrs,
+                                                 std::size_t index, EntityKind kind) {
+  const std::size_t n0 = items.size();
+  if (index >= n0)
+    return {};
+  T copy = items[index];
+  PadAttrs(attrs, n0);
+  const EntityAttributes a = DuplicateEntityAttrs(attrs[index]);
+  items.push_back(std::move(copy));
+  attrs.push_back(a);
+  return EntityRef{kind, static_cast<int>(n0)};
+}
+
+}  // namespace entityops_detail
+
+/// True when \p kind can represent the result of \p xf. Check before duplicating, so a COPY never
+/// leaves an untransformed duplicate behind. One case it cannot rule out: the B-rep kernel may still
+/// refuse a solid (\ref TransformSolid returns false), so a duplicate-then-transform caller must
+/// remove a solid copy whose transform failed.
+///
+/// A hatch takes any transform because its boundary is bare points. It stores no plane normal, so
+/// after a tilted rotation its pattern is still laid out in plan, which is the existing ROTATE3D
+/// behaviour and a known gap against AutoCAD.
+///
+/// Annotations, tables and multileaders have no plane normal, so they take only transforms that keep
+/// world +Z (move, plan rotate, scale, mirror across a vertical plane). A Position Marker is a
+/// surveyed position (REQ-359): it only moves. Kinds that other systems own (`FeatureLine`,
+/// `Surface`, `PointCloud`) are not transformed here.
+[[nodiscard]] inline bool SupportsEntityTransform(EntityKind kind, const SimilarityTransform& xf) {
+  if (!xf.valid())
+    return false;
+  switch (kind) {
+  case EntityKind::Annotation:
+  case EntityKind::Table:
+  case EntityKind::Multileader:
+    return xf.isPlanarZ();
+  case EntityKind::PositionMarker:
+    return xf.isTranslationOnly();
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:
+    return false;
+  default:
+    return true;
+  }
+}
+
+/// Ellipse or elliptical arc in any plane. The centre and both axes map; under a reflection the
+/// parametrisation runs backwards, so the span becomes `[-(start + sweep), -start]`.
+inline bool TransformEllipse(CadEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!xf.valid() || index >= store.userEllipses.size())
+    return false;
+  CadEllipse& e = store.userEllipses[index];
+  ray3d::Vec3 u{}, v{};
+  entityops_detail::EllipseWorldAxes(e, &u, &v);
+  const ray3d::Vec3 c = xf.applyPoint({e.cx, e.cy, e.z});
+  const ray3d::Vec3 u2 = xf.applyVector(u);
+  const bool wasFlat = IsFlatNormal(e.nx, e.ny, e.nz);
+  const ray3d::Vec3 n2 = xf.applyUnitDirection(
+      {static_cast<double>(e.nx), static_cast<double>(e.ny), static_cast<double>(e.nz)});
+  e.cx = c.x;
+  e.cy = c.y;
+  e.z = c.z;
+  if (ray3d::Length(n2) > 0.5)
+    entityops_detail::StoreUnitNormal(n2, wasFlat, &e.nx, &e.ny, &e.nz);
+  const ucs::Ucs plane = CurvePlane(e);
+  e.majVx = static_cast<float>(ray3d::Dot(u2, plane.xAxis));
+  e.majVy = static_cast<float>(ray3d::Dot(u2, plane.yAxis));
+  if (xf.isReflection() && !EllipseIsFullTurn(e))
+    e.startRad = -(e.startRad + e.sweepRad);
+  return true;
+}
+
+/// TEXT, MTEXT and dimensions under a transform that keeps world +Z. Returns false otherwise (no
+/// plane normal to tip). The dimension measurement text is not refreshed here: it depends on the
+/// dimension style, which the caller resolves.
+inline bool TransformAnnotation(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf,
+                                const EntityTransformContext& ctx = {}) {
+  if (!SupportsEntityTransform(EntityKind::Annotation, xf) || index >= store.cadAnnotations.size())
+    return false;
+  using entityops_detail::MapPlanPoint;
+  CadAnnotation& a = store.cadAnnotations[index];
+  const entityops_detail::PlanarParts p = entityops_detail::DecomposePlanar(xf);
+  entityops_detail::MapPlanZ(xf, &a.insZ);
+  switch (a.kind) {
+  case CadAnnotation::Kind::Text:
+    if (p.reflected) {
+      // MIRRTEXT 0: mirror the far end of the baseline and run the text forwards from there, so it
+      // reads normally in its mirrored box (AutoCAD moves the insertion the same way).
+      const double h = static_cast<double>(a.plottedHeightInches) * ctx.textUnitsPerPlottedInch;
+      const double w = CadTextEstimatedWidth(a.text, static_cast<float>(h));
+      const double rot = static_cast<double>(a.rotationRad);
+      double fx = a.insX + w * std::cos(rot), fy = a.insY + w * std::sin(rot);
+      MapPlanPoint(xf, &fx, &fy);
+      a.insX = static_cast<float>(fx);
+      a.insY = static_cast<float>(fy);
+      a.rotationRad = static_cast<float>(entityops_detail::MirroredReadableAngle(p, rot));
+    } else {
+      MapPlanPoint(xf, &a.insX, &a.insY);
+      a.rotationRad = static_cast<float>(static_cast<double>(a.rotationRad) + p.angle);
+    }
+    break;
+  case CadAnnotation::Kind::Mtext:
+    entityops_detail::TransformMtextFrame(a, xf, p);
+    break;
+  case CadAnnotation::Kind::DimLinear:
+    entityops_detail::TransformDimLinear(a, xf);
+    break;
+  case CadAnnotation::Kind::DimAligned:
+    entityops_detail::TransformDimAligned(a, xf, p);
+    break;
+  case CadAnnotation::Kind::DimAngular:
+    entityops_detail::TransformDimAngular(a, xf, p);
+    break;
+  default:
+    entityops_detail::TransformAnnotationBox(a, xf);
+    break;
+  }
+  entityops_detail::ScalePlottedHeight(&a.plottedHeightInches, p.scale);
+  return true;
+}
+
+/// TABLE under a transform that keeps world +Z. A reflection keeps the table readable, as AutoCAD
+/// does: the insertion (top-left) moves to the mirror image of the top-right corner and the table
+/// turns to the mirrored, reversed direction, so its box lands on the mirror image of the old box.
+inline bool TransformTable(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!SupportsEntityTransform(EntityKind::Table, xf) || index >= store.cadTables.size())
+    return false;
+  CadTable& t = store.cadTables[index];
+  const entityops_detail::PlanarParts p = entityops_detail::DecomposePlanar(xf);
+  entityops_detail::MapPlanZ(xf, &t.insZ);
+  if (p.reflected) {
+    float trx = 0.f, try_ = 0.f;
+    CadTableLocalToWorld(t, std::max(t.width, 1.e-3f), 0.f, &trx, &try_);
+    entityops_detail::MapPlanPoint(xf, &trx, &try_);
+    t.insX = trx;
+    t.insY = try_;
+    t.rotationRad =
+        static_cast<float>(entityops_detail::MirroredReadableAngle(p, static_cast<double>(t.rotationRad)));
+  } else {
+    entityops_detail::MapPlanPoint(xf, &t.insX, &t.insY);
+    t.rotationRad = static_cast<float>(static_cast<double>(t.rotationRad) + p.angle);
+  }
+  if (p.scale != 1.0) {
+    const float s = static_cast<float>(p.scale);
+    t.width = std::max(t.width * s, 1.e-3f);
+    t.height = std::max(t.height * s, 1.e-3f);
+    t.plottedHeightInches = std::max(t.plottedHeightInches * s, 1.e-6f);
+  }
+  return true;
+}
+
+/// Block reference (INSERT) under any similarity transform. A reflection becomes a negative X scale,
+/// as AutoCAD stores a mirrored insert. A transform that keeps world +Z on an upright insert only
+/// changes the Z rotation, so plan edits never introduce X or Y tilt.
+inline bool TransformBlockRef(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!xf.valid() || index >= store.cadBlockRefs.size())
+    return false;
+  CadBlockXform& x = store.cadBlockRefs[index].xf;
+  entityops_detail::MapPoint3(xf, &x.x, &x.y, &x.z);
+  if (xf.isPlanarZ() && x.rotX == 0.f && x.rotY == 0.f) {
+    const entityops_detail::PlanarParts p = entityops_detail::DecomposePlanar(xf);
+    if (p.reflected) {
+      // M(phi) * Rz(r) = Rz(2*phi + pi - r) * diag(-1, 1).
+      x.sx = -x.sx;
+      x.rotZ = CadAngNormalizeMinusPiToPi(p.angle + entityops_detail::kPi - x.rotZ);
+    } else {
+      x.rotZ += p.angle;
+    }
+  } else {
+    double r[3][3];
+    entityops_detail::BlockRotationMatrix(x, r);
+    double m[3][3];
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j)
+        m[i][j] = xf.orthogonal(i, 0) * r[0][j] + xf.orthogonal(i, 1) * r[1][j] + xf.orthogonal(i, 2) * r[2][j];
+    if (xf.isReflection()) {
+      // Q R = (Q R diag(-1,1,1)) diag(-1,1,1): fold the reflection into the local X scale.
+      for (int i = 0; i < 3; ++i)
+        m[i][0] = -m[i][0];
+      x.sx = -x.sx;
+    }
+    entityops_detail::BlockEulerFromMatrix(m, &x);
+  }
+  if (xf.scale() != 1.0) {
+    const double s = xf.scale();
+    x.sx = static_cast<float>(static_cast<double>(x.sx) * s);
+    x.sy = static_cast<float>(static_cast<double>(x.sy) * s);
+    x.sz = static_cast<float>(static_cast<double>(x.sz) * s);
+  }
+  return true;
+}
+
+/// HATCH fill. Every boundary vertex maps. In plan, the pattern turns with a rotation, keeps its
+/// angle under a mirror (MIRRHATCH 0), and its spacing scales with SCALE.
+inline bool TransformFilledRegion(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!xf.valid() || index >= store.cadFilledRegions.size())
+    return false;
+  CadFilledRegion& fr = store.cadFilledRegions[index];
+  entityops_detail::MapXyzTriplets(xf, fr.vertsXyz);
+  if (xf.isPlanarZ()) {
+    const entityops_detail::PlanarParts p = entityops_detail::DecomposePlanar(xf);
+    if (!p.reflected && p.angle != 0.0)
+      fr.patternAngleDeg = static_cast<float>(static_cast<double>(fr.patternAngleDeg) + p.angle * 180.0 / entityops_detail::kPi);
+  }
+  if (xf.scale() != 1.0)
+    fr.patternScale = static_cast<float>(static_cast<double>(fr.patternScale) * xf.scale());
+  return true;
+}
+
+/// Imported mesh. Replaces the shared payload (meshes are never written through): vertices map,
+/// normals turn, and a reflection reverses each triangle's winding so the faces still point outwards.
+inline bool TransformMesh(CadEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!xf.valid() || index >= store.cadMeshes.size() || !store.cadMeshes[index])
+    return false;
+  auto mesh = std::make_shared<CadMesh>(*store.cadMeshes[index]);
+  entityops_detail::MapXyzTriplets(xf, mesh->vertsXyz);
+  for (std::size_t k = 0; k + 2 < mesh->normalsXyz.size(); k += 3) {
+    const ray3d::Vec3 n = xf.applyUnitDirection({mesh->normalsXyz[k], mesh->normalsXyz[k + 1], mesh->normalsXyz[k + 2]});
+    mesh->normalsXyz[k] = static_cast<float>(n.x);
+    mesh->normalsXyz[k + 1] = static_cast<float>(n.y);
+    mesh->normalsXyz[k + 2] = static_cast<float>(n.z);
+  }
+  if (xf.isReflection()) {
+    for (std::size_t k = 0; k + 2 < mesh->indices.size(); k += 3)
+      std::swap(mesh->indices[k + 1], mesh->indices[k + 2]);
+  }
+  store.cadMeshes[index] = std::move(mesh);
+  return true;
+}
+
+/// B-rep solid. Replaces the solid with the kernel's own scale, mirror, rotate and translate, applied
+/// about the solid's bounds centre so state-plane coordinates keep their precision. Returns false,
+/// leaving the solid unchanged, if the kernel refuses (\p outWhy says why).
+inline bool TransformSolid(CadEntityStore& store, std::size_t index, const SimilarityTransform& xf,
+                           brep::Problem* outWhy = nullptr) {
+  if (!xf.valid() || index >= store.cadSolids.size() || !store.cadSolids[index])
+    return false;
+  brep::Problem why = brep::Problem::Ok;
+  const brep::Solid& src = *store.cadSolids[index];
+  const brep::Bounds bb = brep::ComputeBounds(src);
+  const ray3d::Vec3 c = bb.valid ? ray3d::Vec3{0.5 * (bb.mn.x + bb.mx.x), 0.5 * (bb.mn.y + bb.mx.y), 0.5 * (bb.mn.z + bb.mx.z)}
+                                 : ray3d::Vec3{0.0, 0.0, 0.0};
+  brep::Solid cur = src;
+  brep::Solid next;
+  const auto fail = [&]() {
+    if (outWhy)
+      *outWhy = why;
+    return false;
+  };
+  if (xf.scale() != 1.0) {
+    if (!brep::Scale(cur, c, xf.scale(), &next, &why))
+      return fail();
+    cur = std::move(next);
+  }
+  double q[3][3];
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      q[i][j] = xf.orthogonal(i, j);
+  if (xf.isReflection()) {
+    // Q = R * H(z): mirror across the horizontal plane through c first, then turn by R = Q * H(z).
+    if (!brep::Mirror(cur, c, {0.0, 0.0, 1.0}, &next, &why))
+      return fail();
+    cur = std::move(next);
+    for (int i = 0; i < 3; ++i)
+      q[i][2] = -q[i][2];
+  }
+  ray3d::Vec3 axis{};
+  double angle = 0.0;
+  if (!entityops_detail::AxisAngleFromRotation(q, &axis, &angle))
+    return fail();
+  if (std::fabs(angle) > 1e-15) {
+    if (!brep::Rotate(cur, c, axis, angle, &next, &why))
+      return fail();
+    cur = std::move(next);
+  }
+  const ray3d::Vec3 delta = ray3d::Sub(xf.applyPoint(c), c);
+  if (ray3d::Length(delta) > 0.0)
+    cur = brep::Translate(cur, delta);
+  store.cadSolids[index] = std::make_shared<const brep::Solid>(std::move(cur));
+  return true;
+}
+
+/// Pipe run: the path maps. The pipe size is a catalog part and never scales (D-2026-09-28-f).
+inline bool TransformPipeRun(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!xf.valid() || index >= store.cadPipeRuns.size())
+    return false;
+  entityops_detail::MapXyzTriplets(xf, store.cadPipeRuns[index].vertsXyz);
+  return true;
+}
+
+/// Multileader under a transform that keeps world +Z: every leader path maps, the arrowhead and
+/// label scale, and the MTEXT label follows the MTEXT rules (readable under a mirror).
+inline bool TransformMultileader(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!SupportsEntityTransform(EntityKind::Multileader, xf) || index >= store.cadMultileaders.size())
+    return false;
+  CadMultileader& ml = store.cadMultileaders[index];
+  const entityops_detail::PlanarParts p = entityops_detail::DecomposePlanar(xf);
+  entityops_detail::MapXyzTriplets(xf, ml.pathXyz);
+  for (std::vector<float>& branch : ml.extraLeaderPaths)
+    entityops_detail::MapXyzTriplets(xf, branch);
+  entityops_detail::MapPlanZ(xf, &ml.label.insZ);
+  entityops_detail::TransformMtextFrame(ml.label, xf, p);
+  entityops_detail::ScalePlottedHeight(&ml.label.plottedHeightInches, p.scale);
+  if (p.scale != 1.0) {
+    const float s = static_cast<float>(p.scale);
+    ml.arrowSizeWorld *= s;
+    ml.labelWidthWorld *= s;
+    ml.labelHeightWorld *= s;
+  }
+  return true;
+}
+
+/// Position Marker: moves with its label (REQ-359). Any other transform returns false.
+inline bool TransformPositionMarker(CadDrawingEntityStore& store, std::size_t index, const SimilarityTransform& xf) {
+  if (!SupportsEntityTransform(EntityKind::PositionMarker, xf) || index >= store.cadPositionMarkers.size())
+    return false;
+  CadPositionMarker& m = store.cadPositionMarkers[index];
+  const ray3d::Vec3 p0{m.x, m.y, static_cast<double>(m.z)};
+  const ray3d::Vec3 d = ray3d::Sub(xf.applyPoint(p0), p0);
+  // Add the double displacement to each stored value and round once, so a label at state-plane
+  // coordinates stays with its marker even when the move brings it near the origin.
+  const auto add = [](float* v, double delta) { *v = static_cast<float>(static_cast<double>(*v) + delta); };
+  m.x += d.x;
+  m.y += d.y;
+  add(&m.z, d.z);
+  add(&m.label.insX, d.x);
+  add(&m.label.insY, d.y);
+  add(&m.label.insZ, d.z);
+  add(&m.label.boxMinX, d.x);
+  add(&m.label.boxMaxX, d.x);
+  add(&m.label.boxMinY, d.y);
+  add(&m.label.boxMaxY, d.y);
+  return true;
+}
+
+[[nodiscard]] inline EntityBounds3d EllipseBounds(const CadEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.userEllipses.size())
+    return b;
+  const CadEllipse& e = store.userEllipses[index];
+  ray3d::Vec3 u{}, v{};
+  entityops_detail::EllipseWorldAxes(e, &u, &v);
+  entityops_detail::ExpandBoundsWithEllipse3d(b, {e.cx, e.cy, e.z}, u, v, static_cast<double>(e.startRad),
+                                              static_cast<double>(e.sweepRad));
+  return b;
+}
+
+[[nodiscard]] inline EntityBounds3d FilledRegionBounds(const CadDrawingEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadFilledRegions.size())
+    return b;
+  const std::vector<double>& v = store.cadFilledRegions[index].vertsXyz;
+  for (std::size_t k = 0; k + 2 < v.size(); k += 3)
+    b.expand({v[k], v[k + 1], v[k + 2]});
+  return b;
+}
+
+[[nodiscard]] inline EntityBounds3d MeshBounds(const CadEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadMeshes.size() || !store.cadMeshes[index])
+    return b;
+  const std::vector<float>& v = store.cadMeshes[index]->vertsXyz;
+  for (std::size_t k = 0; k + 2 < v.size(); k += 3)
+    b.expand({v[k], v[k + 1], v[k + 2]});
+  return b;
+}
+
+/// Conservative, like brep::ComputeBounds: never smaller than the solid.
+[[nodiscard]] inline EntityBounds3d SolidBounds(const CadEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadSolids.size() || !store.cadSolids[index])
+    return b;
+  const brep::Bounds bb = brep::ComputeBounds(*store.cadSolids[index]);
+  if (bb.valid) {
+    b.expand(bb.mn);
+    b.expand(bb.mx);
+  }
+  return b;
+}
+
+/// Path box grown by the pipe's outside radius on every axis — conservative at bends.
+[[nodiscard]] inline EntityBounds3d PipeRunBounds(const CadDrawingEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadPipeRuns.size())
+    return b;
+  const CadPipeRun& run = store.cadPipeRuns[index];
+  for (std::size_t k = 0; k + 2 < run.vertsXyz.size(); k += 3)
+    b.expand({run.vertsXyz[k], run.vertsXyz[k + 1], run.vertsXyz[k + 2]});
+  double od = 0.0;
+  if (b.valid && CadPipeNominalOdFeet(run.nominalSize, &od) && od > 0.0) {
+    const double r = 0.5 * od;
+    b.min = ray3d::Sub(b.min, {r, r, r});
+    b.max = ray3d::Add(b.max, {r, r, r});
+  }
+  return b;
+}
+
+/// The table's four corners at its insertion elevation.
+[[nodiscard]] inline EntityBounds3d TableBounds(const CadDrawingEntityStore& store, std::size_t index) {
+  EntityBounds3d b;
+  if (index >= store.cadTables.size())
+    return b;
+  const CadTable& t = store.cadTables[index];
+  const float w = std::max(t.width, 1.e-3f), h = std::max(t.height, 1.e-3f);
+  const float lx[4] = {0.f, w, w, 0.f};
+  const float ly[4] = {0.f, 0.f, h, h};
+  for (int i = 0; i < 4; ++i) {
+    float wx = 0.f, wy = 0.f;
+    CadTableLocalToWorld(t, lx[i], ly[i], &wx, &wy);
+    b.expand({wx, wy, static_cast<double>(t.insZ)});
+  }
+  return b;
+}
+
+[[nodiscard]] inline EntityRef DuplicateEllipse(CadEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.userEllipses, store.userEllAttrs, index, EntityKind::Ellipse);
+}
+
+/// A copied annotation is not any survey point's label (the point keeps its own).
+[[nodiscard]] inline EntityRef DuplicateAnnotation(CadEntityStore& store, std::size_t index) {
+  const EntityRef ref =
+      entityops_detail::DuplicateInVector(store.cadAnnotations, store.cadAnnotationAttrs, index, EntityKind::Annotation);
+  if (ref.valid())
+    store.cadAnnotations[static_cast<std::size_t>(ref.index)].surveyPointLabelForId = -1;
+  return ref;
+}
+
+[[nodiscard]] inline EntityRef DuplicateMesh(CadEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadMeshes, store.cadMeshAttrs, index, EntityKind::Mesh);
+}
+
+[[nodiscard]] inline EntityRef DuplicateSolid(CadEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadSolids, store.cadSolidAttrs, index, EntityKind::Solid);
+}
+
+[[nodiscard]] inline EntityRef DuplicateTable(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadTables, store.cadTableAttrs, index, EntityKind::Table);
+}
+
+[[nodiscard]] inline EntityRef DuplicateBlockRef(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadBlockRefs, store.cadBlockRefAttrs, index, EntityKind::BlockRef);
+}
+
+[[nodiscard]] inline EntityRef DuplicateFilledRegion(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadFilledRegions, store.cadFilledRegionAttrs, index,
+                                             EntityKind::FilledRegion);
+}
+
+/// A copied run joins no piping network: a network is a set the user built (REQ-351).
+[[nodiscard]] inline EntityRef DuplicatePipeRun(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadPipeRuns, store.cadPipeRunAttrs, index, EntityKind::PipeRun);
+}
+
+[[nodiscard]] inline EntityRef DuplicateMultileader(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadMultileaders, store.cadMultileaderAttrs, index,
+                                             EntityKind::Multileader);
+}
+
+[[nodiscard]] inline EntityRef DuplicatePositionMarker(CadDrawingEntityStore& store, std::size_t index) {
+  return entityops_detail::DuplicateInVector(store.cadPositionMarkers, store.cadPositionMarkerAttrs, index,
+                                             EntityKind::PositionMarker);
+}
+
+// -----------------------------------------------------------------------------------------------
 // EntityRef dispatch (uniform entry points over handles)
 // -----------------------------------------------------------------------------------------------
 
-/// True when \p kind has transform, duplicate and bounds implementations in this header.
+/// True when \p kind has transform and duplicate implementations in this header: every kind
+/// Document owns. `FeatureLine`, `Surface` and `PointCloud` belong to other systems.
 [[nodiscard]] constexpr bool HasEntityKindOps(EntityKind kind) {
   switch (kind) {
   case EntityKind::Line:
   case EntityKind::Circle:
   case EntityKind::Arc:
+  case EntityKind::Ellipse:
   case EntityKind::Polyline:
+  case EntityKind::Annotation:
+  case EntityKind::FilledRegion:
+  case EntityKind::Mesh:
+  case EntityKind::Table:
+  case EntityKind::BlockRef:
+  case EntityKind::Solid:
+  case EntityKind::PositionMarker:
+  case EntityKind::Multileader:
   case EntityKind::Spline:
   case EntityKind::Point:
+  case EntityKind::PipeRun:
     return true;
-  default:
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:
     return false;
+  }
+  return false;
+}
+
+/// True when \ref EntityBounds has an implementation for \p kind. Annotations, block references,
+/// multileaders and Position Markers size themselves from drawing state (text height, the block
+/// definition), so their boxes stay with the extents code until issue #1577 phase 4.
+[[nodiscard]] constexpr bool HasEntityBounds(EntityKind kind) {
+  switch (kind) {
+  case EntityKind::Annotation:
+  case EntityKind::BlockRef:
+  case EntityKind::Multileader:
+  case EntityKind::PositionMarker:
+    return false;
+  default:
+    return HasEntityKindOps(kind);
   }
 }
 
-/// Apply \p xf to a single entity referenced by \p ref. Returns false if \p xf is invalid, \p ref
-/// is out of bounds, or \p ref.kind is not yet implemented in this header.
-inline bool TransformEntity(CadDrawingEntityStore& store, const EntityRef& ref,
-                            const SimilarityTransform& xf) {
+/// Apply \p xf to a single entity referenced by \p ref. Returns false, leaving the entity unchanged,
+/// if \p xf is invalid, \p ref is out of bounds, or the kind cannot represent the result
+/// (\ref SupportsEntityTransform).
+inline bool TransformEntity(CadDrawingEntityStore& store, const EntityRef& ref, const SimilarityTransform& xf,
+                            const EntityTransformContext& ctx = {}) {
   if (!ref.valid() || !xf.valid())
     return false;
   const std::size_t ix = static_cast<std::size_t>(ref.index);
   switch (ref.kind) {
-  case EntityKind::Line:     return TransformLine(store, ix, xf);
-  case EntityKind::Circle:   return TransformCircle(store, ix, xf);
-  case EntityKind::Arc:      return TransformArc(store, ix, xf);
-  case EntityKind::Polyline: return TransformPolyline(store, ix, xf);
-  case EntityKind::Spline:   return TransformSpline(store, ix, xf);
-  case EntityKind::Point:    return TransformPoint(store, ix, xf);
-  default:                   return false;
+  case EntityKind::Line:           return TransformLine(store, ix, xf);
+  case EntityKind::Circle:         return TransformCircle(store, ix, xf);
+  case EntityKind::Arc:            return TransformArc(store, ix, xf);
+  case EntityKind::Ellipse:        return TransformEllipse(store, ix, xf);
+  case EntityKind::Polyline:       return TransformPolyline(store, ix, xf);
+  case EntityKind::Annotation:     return TransformAnnotation(store, ix, xf, ctx);
+  case EntityKind::FilledRegion:   return TransformFilledRegion(store, ix, xf);
+  case EntityKind::Mesh:           return TransformMesh(store, ix, xf);
+  case EntityKind::Table:          return TransformTable(store, ix, xf);
+  case EntityKind::BlockRef:       return TransformBlockRef(store, ix, xf);
+  case EntityKind::Solid:          return TransformSolid(store, ix, xf);
+  case EntityKind::PositionMarker: return TransformPositionMarker(store, ix, xf);
+  case EntityKind::Multileader:    return TransformMultileader(store, ix, xf);
+  case EntityKind::Spline:         return TransformSpline(store, ix, xf);
+  case EntityKind::Point:          return TransformPoint(store, ix, xf);
+  case EntityKind::PipeRun:        return TransformPipeRun(store, ix, xf);
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:     return false;
   }
+  return false;
 }
 
 /// Apply \p xf to every unique valid entity in \p refs. Duplicate `(kind, index)` pairs are
 /// ignored so an entity is never transformed twice. Returns the number of transformed entities.
 inline std::size_t TransformEntities(CadDrawingEntityStore& store,
                                      const std::vector<EntityRef>& refs,
-                                     const SimilarityTransform& xf) {
+                                     const SimilarityTransform& xf,
+                                     const EntityTransformContext& ctx = {}) {
   if (!xf.valid())
     return 0;
   std::set<std::pair<std::uint8_t, int>> seen;
@@ -815,7 +1591,7 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
       continue;
     if (!seen.insert({static_cast<std::uint8_t>(ref.kind), ref.index}).second)
       continue;
-    if (TransformEntity(store, ref, xf))
+    if (TransformEntity(store, ref, xf, ctx))
       ++transformed;
   }
   return transformed;
@@ -827,14 +1603,27 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
     return {};
   const std::size_t ix = static_cast<std::size_t>(ref.index);
   switch (ref.kind) {
-  case EntityKind::Line:     return DuplicateLine(store, ix);
-  case EntityKind::Circle:   return DuplicateCircle(store, ix);
-  case EntityKind::Arc:      return DuplicateArc(store, ix);
-  case EntityKind::Polyline: return DuplicatePolyline(store, ix);
-  case EntityKind::Spline:   return DuplicateSpline(store, ix);
-  case EntityKind::Point:    return DuplicatePoint(store, ix);
-  default:                   return {};
+  case EntityKind::Line:           return DuplicateLine(store, ix);
+  case EntityKind::Circle:         return DuplicateCircle(store, ix);
+  case EntityKind::Arc:            return DuplicateArc(store, ix);
+  case EntityKind::Ellipse:        return DuplicateEllipse(store, ix);
+  case EntityKind::Polyline:       return DuplicatePolyline(store, ix);
+  case EntityKind::Annotation:     return DuplicateAnnotation(store, ix);
+  case EntityKind::FilledRegion:   return DuplicateFilledRegion(store, ix);
+  case EntityKind::Mesh:           return DuplicateMesh(store, ix);
+  case EntityKind::Table:          return DuplicateTable(store, ix);
+  case EntityKind::BlockRef:       return DuplicateBlockRef(store, ix);
+  case EntityKind::Solid:          return DuplicateSolid(store, ix);
+  case EntityKind::PositionMarker: return DuplicatePositionMarker(store, ix);
+  case EntityKind::Multileader:    return DuplicateMultileader(store, ix);
+  case EntityKind::Spline:         return DuplicateSpline(store, ix);
+  case EntityKind::Point:          return DuplicatePoint(store, ix);
+  case EntityKind::PipeRun:        return DuplicatePipeRun(store, ix);
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:     return {};
   }
+  return {};
 }
 
 /// Append copies of all unique valid entities in \p refs and return their new handles (in input
@@ -870,22 +1659,29 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
   return copies;
 }
 
-/// 3D bounding box of the entity referenced by \p ref (invalid if out of range or unsupported).
-/// Analytic and exact for lines, circles, arcs, polylines and points; conservative within
-/// `kSplineSampleTolerance` (clamped to the control polygon) for curved splines.
+/// 3D bounding box of the entity referenced by \p ref (invalid if out of range or not covered by
+/// \ref HasEntityBounds). Analytic and exact for lines, circles, arcs, ellipses, polylines, points,
+/// hatch fills, meshes and tables; conservative within `kSplineSampleTolerance` (clamped to the
+/// control polygon) for curved splines, and conservative for solids and pipe runs.
 [[nodiscard]] inline EntityBounds3d EntityBounds(const CadDrawingEntityStore& store,
                                                  const EntityRef& ref) {
   if (!ref.valid())
     return {};
   const std::size_t ix = static_cast<std::size_t>(ref.index);
   switch (ref.kind) {
-  case EntityKind::Line:     return LineBounds(store, ix);
-  case EntityKind::Circle:   return CircleBounds(store, ix);
-  case EntityKind::Arc:      return ArcBounds(store, ix);
-  case EntityKind::Polyline: return PolylineBounds(store, ix);
-  case EntityKind::Spline:   return SplineBounds(store, ix);
-  case EntityKind::Point:    return PointBounds(store, ix);
-  default:                   return {};
+  case EntityKind::Line:         return LineBounds(store, ix);
+  case EntityKind::Circle:       return CircleBounds(store, ix);
+  case EntityKind::Arc:          return ArcBounds(store, ix);
+  case EntityKind::Ellipse:      return EllipseBounds(store, ix);
+  case EntityKind::Polyline:     return PolylineBounds(store, ix);
+  case EntityKind::FilledRegion: return FilledRegionBounds(store, ix);
+  case EntityKind::Mesh:         return MeshBounds(store, ix);
+  case EntityKind::Table:        return TableBounds(store, ix);
+  case EntityKind::Solid:        return SolidBounds(store, ix);
+  case EntityKind::Spline:       return SplineBounds(store, ix);
+  case EntityKind::Point:        return PointBounds(store, ix);
+  case EntityKind::PipeRun:      return PipeRunBounds(store, ix);
+  default:                       return {};
   }
 }
 

@@ -1,6 +1,6 @@
 # ADR-0011: Entity-kind operations apply similarity transforms in Document
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-11-27: AutoCAD parity)
 - **Date:** 2026-11-21
 
 ## Context
@@ -75,3 +75,33 @@ stable-id handle (REQ-076), but they are declared in `CadCommands.hpp`.
 - Kind coverage becomes a declared property that the characterisation test checks, rather than an
   accident of which loops a command author remembered.
 - Document gains a dependency on Geometry's math for transforms. The system map already allows it.
+
+## Amendment (2026-11-27): AutoCAD parity decides kind coverage
+
+The owner set the goal for issue #1577 as one-to-one parity with AutoCAD. That changes three things
+above.
+
+- **Behaviour follows AutoCAD, not today's command loops.** Phase 0's table records the drift, and
+  most of the drift turns out to be GoSurvey refusing or skipping something AutoCAD does. AutoCAD
+  2025 (`accoreconsole.exe`, `tools/autocad-transform-oracle/`) shows:
+  - SCALE scales Z about the base point, in plan view too.
+  - Hatches rotate, rotate-copy, scale (pattern scale too) and mirror. Under MIRROR the pattern
+    keeps its angle (MIRRHATCH 0).
+  - Multileaders rotate, scale and mirror.
+  - Ellipses, text, dimensions, tables and inserts rotate about a tilted axis.
+  - MIRROR keeps text, MTEXT, dimensions and tables readable (MIRRTEXT 0). Their boxes land on the
+    mirror image of the old box.
+  - An insert mirrors to a negative X scale.
+
+  This replaces "behaviour-preserving first" and "follow how the kind behaves under MOVE" as the
+  rule for kinds AutoCAD has. Phases 2a and 2b ship as two PRs: PR 1 adds the per-kind operations
+  for every Document kind, with no command change. PR 2 moves MOVE, COPY, ROTATE, SCALE, MIRROR
+  and ARRAY onto them and changes the phase 0 rows. Each changed row cites the oracle output.
+- **The similarity transform is uniform in all three axes.** The plan-view "elevations untouched"
+  carve-out for SCALE (REQ-329) goes, because AutoCAD has none.
+- **A kind refuses only what its stored data cannot represent, and says why.** Text, MTEXT,
+  dimensions, tables and multileaders store no plane normal, so they refuse rotation about a tilted
+  axis until they gain one. AutoCAD can do it, so that is a known parity gap, tracked as a follow-up.
+  A Position Marker stays move, copy and erase only (REQ-359). Surfaces stay refused (REQ-201).
+  Kinds owned by Civil 3D-style systems (survey points, alignments, feature lines, surfaces) keep
+  their current behaviour.

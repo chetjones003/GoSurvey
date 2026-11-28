@@ -175,6 +175,7 @@ add_executable(GoSurveyTests
   tests/CadPipeRunTests.cpp
   tests/Document/CadBlockTests.cpp
   tests/Document/EntityIdTests.cpp
+  tests/Document/EntityKindOpsAllKindsTests.cpp
   tests/Document/EntityKindOpsUnitTests.cpp
   tests/Document/PaperSpaceTests.cpp
   tests/Document/DrawingSettingsTests.cpp

@@ -516,6 +516,10 @@ class SimilarityTransform {
     return ray3d::Normalize(mulQ(u));
   }
 
+  /// Entry (\p row, \p col) of the orthogonal part `Q` (both in `[0, 2]`). Entity-kind operations read
+  /// it to carry an orientation that is not a point — an insert's Euler angles, a text angle in plan.
+  [[nodiscard]] double orthogonal(int row, int col) const { return q_[row][col]; }
+
   /// Determinant of the orthogonal part `Q`: `+1` for proper motions, `-1` for reflections.
   [[nodiscard]] double orthogonalDeterminant() const {
     return q_[0][0] * (q_[1][1] * q_[2][2] - q_[1][2] * q_[2][1]) -
