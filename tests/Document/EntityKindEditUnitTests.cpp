@@ -293,6 +293,33 @@ TEST_CASE("STRETCH moves a tilted arc whole by its centre, and a flat arc takes 
   CHECK(s.userArcs[2].z == Catch::Approx(0.0));  // one endpoint moved: the arc keeps its elevation
 }
 
+TEST_CASE("STRETCH gives a full-circle arc a pure Z move, and a refused arc refit changes nothing",
+          "[document][entitykindedit]") {
+  CadDrawingEntityStore s;
+  CadArc full;  // a full-circle sweep with its centre inside the window
+  full.cx = 18.0;
+  full.cy = 12.0;
+  full.r = 1.0;
+  full.sweepRad = 6.28318530717958647692f;
+  CadArc sliver = full;  // both endpoints inside, but the sweep is too small to refit
+  sliver.sweepRad = 1e-6f;
+  s.userArcs = {full, sliver};
+  s.userArcAttrs.resize(2);
+  doc::StretchWindow w = OracleWindow();
+  w.delta = {0.0, 0.0, 5.0};
+  REQUIRE(doc::StretchEntity(s, {EntityKind::Arc, 0}, w));
+  CHECK(s.userArcs[0].cx == Catch::Approx(18.0));
+  CHECK(s.userArcs[0].z == Catch::Approx(5.0));
+
+  std::vector<std::string> log;
+  w.delta = {5.0, 3.0, 2.0};
+  CHECK_FALSE(doc::StretchEntity(s, {EntityKind::Arc, 1}, w, &log));
+  CHECK(s.userArcs[1].cx == Catch::Approx(18.0));
+  CHECK(s.userArcs[1].z == Catch::Approx(0.0));
+  REQUIRE(log.size() == 1);
+  CHECK(log[0].find("degenerate sweep") != std::string::npos);
+}
+
 TEST_CASE("STRETCH reports a multileader changed when only an extra branch moves", "[document][entitykindedit]") {
   CadDrawingEntityStore s;
   CadMultileader ml;

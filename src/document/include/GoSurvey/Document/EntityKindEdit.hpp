@@ -210,19 +210,27 @@ inline bool RecomputeArcFromEndpoints(CadArc& arc, float newStartX, float newSta
   return true;  // the sweep is unchanged by design
 }
 
+/// What \ref StretchArc did to an arc.
+enum class ArcStretchResult {
+  Unchanged,   ///< no endpoint inside, or the refit was refused (the reason is logged)
+  Refit,       ///< one endpoint moved and the arc was refit through it
+  MovedWhole,  ///< both endpoints (or a full circle's centre) inside: the arc moved as a whole
+};
+
 /// One arc under STRETCH, in plan: each endpoint inside the window moves by the plan displacement and
 /// the arc is refit through them (\ref RecomputeArcFromEndpoints). A full-circle sweep has no distinct
-/// endpoints and moves whole when its centre is inside, as a circle does. Elevation is not changed.
-inline void StretchArc(CadArc& arc, const std::function<bool(const ray3d::Vec3&)>& contains, float dx, float dy,
-                       std::vector<std::string>* log) {
+/// endpoints and moves whole when its centre is inside, as a circle does. Elevation is not changed;
+/// the caller applies a Z displacement only on \ref ArcStretchResult::MovedWhole.
+inline ArcStretchResult StretchArc(CadArc& arc, const std::function<bool(const ray3d::Vec3&)>& contains, float dx,
+                                   float dy, std::vector<std::string>* log) {
   constexpr float kTwoPi = 6.28318530717958647692f;
   const double z = arc.z;
   if (std::fabs(std::fabs(arc.sweepRad) - kTwoPi) < 1e-4f) {
-    if (contains({static_cast<double>(static_cast<float>(arc.cx)), static_cast<double>(static_cast<float>(arc.cy)), z})) {
-      arc.cx += dx;
-      arc.cy += dy;
-    }
-    return;
+    if (!contains({static_cast<double>(static_cast<float>(arc.cx)), static_cast<double>(static_cast<float>(arc.cy)), z}))
+      return ArcStretchResult::Unchanged;
+    arc.cx += dx;
+    arc.cy += dy;
+    return ArcStretchResult::MovedWhole;
   }
   const float sx = static_cast<float>(arc.cx + arc.r * std::cos(arc.startRad));
   const float sy = static_cast<float>(arc.cy + arc.r * std::sin(arc.startRad));
@@ -232,9 +240,11 @@ inline void StretchArc(CadArc& arc, const std::function<bool(const ray3d::Vec3&)
   const bool startIn = contains({sx, sy, z});
   const bool endIn = contains({ex, ey, z});
   if (!startIn && !endIn)
-    return;  // nothing to move, as in AutoCAD
-  RecomputeArcFromEndpoints(arc, startIn ? sx + dx : sx, startIn ? sy + dy : sy, endIn ? ex + dx : ex,
-                            endIn ? ey + dy : ey, log);
+    return ArcStretchResult::Unchanged;  // nothing to move, as in AutoCAD
+  if (!RecomputeArcFromEndpoints(arc, startIn ? sx + dx : sx, startIn ? sy + dy : sy, endIn ? ex + dx : ex,
+                                 endIn ? ey + dy : ey, log))
+    return ArcStretchResult::Unchanged;
+  return startIn && endIn ? ArcStretchResult::MovedWhole : ArcStretchResult::Refit;
 }
 
 namespace entityedit_detail {
@@ -369,20 +379,12 @@ inline bool StretchEntity(CadDrawingEntityStore& store, const EntityRef& ref, co
     // whole when its centre is inside instead.
     if (!w.planWindow || !IsFlatNormal(a.nx, a.ny, a.nz))
       return w.contains({a.cx, a.cy, a.z}) && TransformEntity(store, ref, move);
-    const CadArc before = a;
-    StretchArc(a, w.contains, static_cast<float>(d.x), static_cast<float>(d.y), log);
-    const double sx = before.cx + before.r * std::cos(before.startRad);
-    const double sy = before.cy + before.r * std::sin(before.startRad);
-    const double ex = before.cx + before.r * std::cos(before.startRad + before.sweepRad);
-    const double ey = before.cy + before.r * std::sin(before.startRad + before.sweepRad);
-    // An arc has one elevation: it takes the Z change only when it moves whole.
-    const bool whole = std::fabs(std::fabs(before.sweepRad) - 6.28318530717958647692f) < 1e-4f
-                           ? a.cx != before.cx || a.cy != before.cy
-                           : w.contains({static_cast<float>(sx), static_cast<float>(sy), before.z}) &&
-                                 w.contains({static_cast<float>(ex), static_cast<float>(ey), before.z});
-    if (whole)
+    // An arc has one elevation: it takes the Z change only when it moves whole, and a refused refit
+    // leaves the whole arc unchanged.
+    const ArcStretchResult r = StretchArc(a, w.contains, static_cast<float>(d.x), static_cast<float>(d.y), log);
+    if (r == ArcStretchResult::MovedWhole)
       a.z += d.z;
-    return a.cx != before.cx || a.cy != before.cy || a.r != before.r || a.startRad != before.startRad;
+    return r != ArcStretchResult::Unchanged;
   }
   case EntityKind::Ellipse: {
     if (ix >= store.userEllipses.size())
