@@ -1663,6 +1663,141 @@ inline std::size_t TransformEntities(CadDrawingEntityStore& store,
   return copies;
 }
 
+namespace entityops_detail {
+
+template <class T>
+[[nodiscard]] inline EntityRef CopyInVector(std::vector<T>& dstItems, std::vector<EntityAttributes>& dstAttrs,
+                                            const std::vector<T>& srcItems,
+                                            const std::vector<EntityAttributes>& srcAttrs, std::size_t index,
+                                            EntityKind kind) {
+  if (index >= srcItems.size())
+    return {};
+  const std::size_t n0 = dstItems.size();
+  PadAttrs(dstAttrs, n0);
+  dstItems.push_back(srcItems[index]);
+  dstAttrs.push_back(index < srcAttrs.size() ? srcAttrs[index] : EntityAttributes{});
+  return EntityRef{kind, static_cast<int>(n0)};
+}
+
+}  // namespace entityops_detail
+
+/// Append to \p dst a copy of the entity \p ref names in \p src, returning its handle in \p dst (or
+/// invalid). The transform preview's scratch store (issue #1700): the preview copies the selection
+/// here, applies the commit's transform with \ref TransformEntity, and draws the result, so it can
+/// never disagree with the commit. Attributes are copied as they are, id included: a scratch copy is
+/// never committed. Kinds other systems own return invalid.
+[[nodiscard]] inline EntityRef CopyEntityInto(CadDrawingEntityStore& dst, const CadDrawingEntityStore& src,
+                                              const EntityRef& ref) {
+  using entityops_detail::CopyInVector;
+  if (!ref.valid())
+    return {};
+  const std::size_t ix = static_cast<std::size_t>(ref.index);
+  switch (ref.kind) {
+  case EntityKind::Line: {
+    if (ix >= src.lineCount())
+      return {};
+    const std::size_t n0 = dst.lineCount();
+    entityops_detail::PadAttrs(dst.userLineAttrs, n0);
+    dst.pushLine(src.line(ix));
+    dst.userLineAttrs.push_back(ix < src.userLineAttrs.size() ? src.userLineAttrs[ix] : EntityAttributes{});
+    return EntityRef{EntityKind::Line, static_cast<int>(n0)};
+  }
+  case EntityKind::Circle: {
+    if (ix >= src.circleCount())
+      return {};
+    const std::size_t n0 = dst.circleCount();
+    float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
+    CircleNormalAt(src.userCircleNormals, ix, &nx, &ny, &nz);
+    entityops_detail::PadAttrs(dst.userCircleAttrs, n0);
+    EnsureCircleNormals(dst.userCircleNormals, n0);
+    dst.pushCircle(src.circle(ix));
+    dst.userCircleAttrs.push_back(ix < src.userCircleAttrs.size() ? src.userCircleAttrs[ix] : EntityAttributes{});
+    PushCircleNormal(dst.userCircleNormals, nx, ny, nz);
+    return EntityRef{EntityKind::Circle, static_cast<int>(n0)};
+  }
+  case EntityKind::Arc:
+    return CopyInVector(dst.userArcs, dst.userArcAttrs, src.userArcs, src.userArcAttrs, ix, EntityKind::Arc);
+  case EntityKind::Ellipse:
+    return CopyInVector(dst.userEllipses, dst.userEllAttrs, src.userEllipses, src.userEllAttrs, ix,
+                        EntityKind::Ellipse);
+  case EntityKind::Polyline: {
+    int v0 = 0, v1 = 0;
+    if (!entityops_detail::ValidPolylineRange(src, ix, &v0, &v1))
+      return {};
+    if (dst.userPolylineOffsets.empty())
+      dst.userPolylineOffsets.push_back(0);
+    const std::size_t vertsBefore = dst.vertexCount();
+    if (dst.userPolylineOffsets.back() != static_cast<int>(vertsBefore))
+      return {};
+    const std::size_t n0 = dst.userPolylineOffsets.size() - 1;
+    // The side-cars are kept parallel to the vertices whenever either store carries them, so a
+    // bulged or tilted segment keeps its curve in the copy.
+    const bool bulges = !src.userPolylineVertsBulge.empty() || !dst.userPolylineVertsBulge.empty();
+    const bool normals = !src.userPolylineVertsNormal.empty() || !dst.userPolylineVertsNormal.empty();
+    if (bulges)
+      dst.userPolylineVertsBulge.resize(vertsBefore, 0.f);
+    if (normals)
+      entityops_detail::SyncPolylineNormalVec(dst.userPolylineVertsNormal, vertsBefore);
+    for (int vi = v0; vi < v1; ++vi) {
+      const std::size_t k = static_cast<std::size_t>(vi);
+      dst.pushVertex(src.vertex(k));
+      if (bulges)
+        dst.userPolylineVertsBulge.push_back(k < src.userPolylineVertsBulge.size() ? src.userPolylineVertsBulge[k]
+                                                                                  : 0.f);
+      if (normals) {
+        const bool has = k * 3 + 2 < src.userPolylineVertsNormal.size();
+        dst.userPolylineVertsNormal.push_back(has ? src.userPolylineVertsNormal[k * 3] : kFlatNormalX);
+        dst.userPolylineVertsNormal.push_back(has ? src.userPolylineVertsNormal[k * 3 + 1] : kFlatNormalY);
+        dst.userPolylineVertsNormal.push_back(has ? src.userPolylineVertsNormal[k * 3 + 2] : kFlatNormalZ);
+      }
+    }
+    if (dst.userPolylineClosed.size() < n0)
+      dst.userPolylineClosed.resize(n0, 0);
+    entityops_detail::PadAttrs(dst.userPolylineAttrs, n0);
+    dst.userPolylineOffsets.push_back(static_cast<int>(vertsBefore) + (v1 - v0));
+    dst.userPolylineClosed.push_back(ix < src.userPolylineClosed.size() ? src.userPolylineClosed[ix]
+                                                                       : std::uint8_t{0});
+    dst.userPolylineAttrs.push_back(ix < src.userPolylineAttrs.size() ? src.userPolylineAttrs[ix]
+                                                                     : EntityAttributes{});
+    return EntityRef{EntityKind::Polyline, static_cast<int>(n0)};
+  }
+  case EntityKind::Annotation:
+    return CopyInVector(dst.cadAnnotations, dst.cadAnnotationAttrs, src.cadAnnotations, src.cadAnnotationAttrs, ix,
+                        EntityKind::Annotation);
+  case EntityKind::FilledRegion:
+    return CopyInVector(dst.cadFilledRegions, dst.cadFilledRegionAttrs, src.cadFilledRegions,
+                        src.cadFilledRegionAttrs, ix, EntityKind::FilledRegion);
+  case EntityKind::Mesh:
+    return CopyInVector(dst.cadMeshes, dst.cadMeshAttrs, src.cadMeshes, src.cadMeshAttrs, ix, EntityKind::Mesh);
+  case EntityKind::Table:
+    return CopyInVector(dst.cadTables, dst.cadTableAttrs, src.cadTables, src.cadTableAttrs, ix, EntityKind::Table);
+  case EntityKind::BlockRef:
+    return CopyInVector(dst.cadBlockRefs, dst.cadBlockRefAttrs, src.cadBlockRefs, src.cadBlockRefAttrs, ix,
+                        EntityKind::BlockRef);
+  case EntityKind::Solid:
+    return CopyInVector(dst.cadSolids, dst.cadSolidAttrs, src.cadSolids, src.cadSolidAttrs, ix, EntityKind::Solid);
+  case EntityKind::PositionMarker:
+    return CopyInVector(dst.cadPositionMarkers, dst.cadPositionMarkerAttrs, src.cadPositionMarkers,
+                        src.cadPositionMarkerAttrs, ix, EntityKind::PositionMarker);
+  case EntityKind::Multileader:
+    return CopyInVector(dst.cadMultileaders, dst.cadMultileaderAttrs, src.cadMultileaders, src.cadMultileaderAttrs,
+                        ix, EntityKind::Multileader);
+  case EntityKind::Spline:
+    return CopyInVector(dst.cadSplines, dst.cadSplineAttrs, src.cadSplines, src.cadSplineAttrs, ix,
+                        EntityKind::Spline);
+  case EntityKind::Point:
+    return CopyInVector(dst.cadPoints, dst.cadPointAttrs, src.cadPoints, src.cadPointAttrs, ix, EntityKind::Point);
+  case EntityKind::PipeRun:
+    return CopyInVector(dst.cadPipeRuns, dst.cadPipeRunAttrs, src.cadPipeRuns, src.cadPipeRunAttrs, ix,
+                        EntityKind::PipeRun);
+  case EntityKind::FeatureLine:
+  case EntityKind::Surface:
+  case EntityKind::PointCloud:
+    return {};
+  }
+  return {};
+}
+
 /// 3D bounding box of the entity referenced by \p ref (invalid if out of range or not covered by
 /// \ref HasEntityBounds). Analytic and exact for lines, circles, arcs, ellipses, polylines, points,
 /// hatch fills, meshes and tables; conservative within `kSplineSampleTolerance` (clamped to the

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <vector>
 
 namespace {
@@ -14,47 +15,6 @@ namespace {
 double LineEndComp(const CadLineRecord& l, int endpoint, int comp) {
   const double v[6] = {l.x0, l.y0, l.z0, l.x1, l.y1, l.z1};
   return v[endpoint * 3 + comp];
-}
-
-template <class T>
-void rotatePreviewPt(double baseX, double baseY, double angleRad, T* inOutX, T* inOutY) {
-  const double c = std::cos(angleRad);
-  const double s = std::sin(angleRad);
-  const double dx = static_cast<double>(*inOutX) - baseX;
-  const double dy = static_cast<double>(*inOutY) - baseY;
-  *inOutX = static_cast<T>(baseX + c * dx - s * dy);
-  *inOutY = static_cast<T>(baseY + s * dx + c * dy);
-}
-
-template <class T>
-void scalePreviewPt(double baseX, double baseY, double scale, T* inOutX, T* inOutY) {
-  *inOutX = static_cast<T>(baseX + scale * (static_cast<double>(*inOutX) - baseX));
-  *inOutY = static_cast<T>(baseY + scale * (static_cast<double>(*inOutY) - baseY));
-}
-
-/// REQ-103 MIRROR. Reflects (*inOutX,*inOutY) across the line through (x0,y0)-(x1,y1). Kept local
-/// to this translation unit rather than shared with CadCommands.cpp's identical
-/// \c ReflectPtAcrossLine — the same reason \c rotatePreviewPt above duplicates
-/// \c RotateAroundBase instead of linking it: this file previews, it does not commit, and the two
-/// must never accidentally share mutable state across a TU boundary.
-template <class T>
-void mirrorPreviewPt(double x0, double y0, double x1, double y1, T* inOutX, T* inOutY) {
-  const double dx = x1 - x0;
-  const double dy = y1 - y0;
-  const double len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12)
-    return;
-  const double t = ((static_cast<double>(*inOutX) - x0) * dx + (static_cast<double>(*inOutY) - y0) * dy) / len2;
-  const double px = x0 + t * dx;
-  const double py = y0 + t * dy;
-  *inOutX = static_cast<T>(2.0 * px - static_cast<double>(*inOutX));
-  *inOutY = static_cast<T>(2.0 * py - static_cast<double>(*inOutY));
-}
-
-/// See \c ReflectAngleAcrossLine in CadCommands.cpp — same formula, same reason for the duplicate.
-float mirrorPreviewAngle(float x0, float y0, float x1, float y1, float angle) {
-  const float phi = std::atan2(y1 - y0, x1 - x0);
-  return 2.f * phi - angle;
 }
 
 // Preview curves must be tessellated the way the renderer tessellates the committed ones, or the preview
@@ -152,10 +112,10 @@ void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllip
 // will apply on commit (`spline::MapPoints`), so the ghost is the spline that will be left behind. Each
 // chord of the tessellation is a segment with its own Z, as a committed polyline's is.
 template <class F>
-void appendSplinePreview(std::vector<float>* out, const AppCommandState& cmd, int index, const F& f) {
-  if (index < 0 || static_cast<size_t>(index) >= cmd.drawing.cadSplines.size())
+void appendSplinePreview(std::vector<float>* out, const DrawingContent& d, int index, const F& f) {
+  if (index < 0 || static_cast<size_t>(index) >= d.cadSplines.size())
     return;
-  CadSpline s = cmd.drawing.cadSplines[static_cast<size_t>(index)];
+  CadSpline s = d.cadSplines[static_cast<size_t>(index)];
   spline::MapPoints(&s, f);
   std::vector<ray3d::Vec3> pts;
   spline::Tessellate(s, kSplineSampleTolerance, &pts);
@@ -172,27 +132,27 @@ void appendSplinePreview(std::vector<float>* out, const AppCommandState& cmd, in
 // Draws a COMMITTED polyline, so it uses each vertex's own Z rather than a caller-supplied flat
 // depth (REQ-057/058). A highlight or hover stroke drawn at a fixed Z would sit on the datum while
 // the polyline itself sat at elevation, showing the object twice in an orbited view.
-void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState& cmd, int pi) {
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
+void appendCommittedPolylineStrip(std::vector<float>* out, const DrawingContent& d, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= d.userPolylineOffsets.size())
     return;
-  const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int v0 = d.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = d.userPolylineOffsets[static_cast<size_t>(pi + 1)];
   const bool closed =
-      static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < d.userPolylineClosed.size() && d.userPolylineClosed[static_cast<size_t>(pi)];
   auto emit = [&](int a, int b) {
     const size_t A = static_cast<size_t>(a), B = static_cast<size_t>(b);
-    const float za = cmd.drawing.vertex(A).z;
+    const float za = d.vertex(A).z;
     // REQ-316 / ADR-047: a curved segment is traced as an arc, not a chord, so the selection /
     // hover highlight follows the shape the renderer drew.
     const float bulge =
-        static_cast<size_t>(a) < cmd.drawing.userPolylineVertsBulge.size() ? cmd.drawing.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
+        static_cast<size_t>(a) < d.userPolylineVertsBulge.size() ? d.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
     if (bulge == 0.f) {
-      out->push_back(cmd.drawing.vertex(A).x);
-      out->push_back(cmd.drawing.vertex(A).y);
+      out->push_back(d.vertex(A).x);
+      out->push_back(d.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.drawing.vertex(B).x);
-      out->push_back(cmd.drawing.vertex(B).y);
-      out->push_back(cmd.drawing.vertex(B).z);
+      out->push_back(d.vertex(B).x);
+      out->push_back(d.vertex(B).y);
+      out->push_back(d.vertex(B).z);
       return;
     }
     // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — the same construction
@@ -201,32 +161,33 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     // of a flat approximation sitting somewhere else entirely (a real report: a joined polyline's
     // tilted arc segment never lit up yellow when the polyline was selected).
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    if (A + 2 < cmd.drawing.userPolylineVertsNormal.size()) {
-      nx = cmd.drawing.userPolylineVertsNormal[A];
-      ny = cmd.drawing.userPolylineVertsNormal[A + 1];
-      nz = cmd.drawing.userPolylineVertsNormal[A + 2];
+    // Three floats per vertex, parallel to the vertices (cadblock.hpp).
+    if (const size_t nk = A * 3; nk + 2 < d.userPolylineVertsNormal.size()) {
+      nx = d.userPolylineVertsNormal[nk];
+      ny = d.userPolylineVertsNormal[nk + 1];
+      nz = d.userPolylineVertsNormal[nk + 2];
     }
     const bool flat = IsFlatNormal(nx, ny, nz);
     ucs::Ucs plane{};
     BulgeArcSpan arc{};
     if (flat) {
-      arc = BulgeArc(cmd.drawing.vertex(A).x, cmd.drawing.vertex(A).y, cmd.drawing.vertex(B).x,
-                     cmd.drawing.vertex(B).y, static_cast<double>(bulge));
-    } else if (ucs::FromNormal(ray3d::Vec3{cmd.drawing.vertex(A).x, cmd.drawing.vertex(A).y, za},
+      arc = BulgeArc(d.vertex(A).x, d.vertex(A).y, d.vertex(B).x,
+                     d.vertex(B).y, static_cast<double>(bulge));
+    } else if (ucs::FromNormal(ray3d::Vec3{d.vertex(A).x, d.vertex(A).y, za},
                                ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
                                            static_cast<double>(nz)},
                                &plane)) {
       const ucs::Point2D p1Local = ucs::WorldToPlane(
-          plane, ray3d::Vec3{cmd.drawing.vertex(B).x, cmd.drawing.vertex(B).y, cmd.drawing.vertex(B).z});
+          plane, ray3d::Vec3{d.vertex(B).x, d.vertex(B).y, d.vertex(B).z});
       arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
     }
     if (!arc.valid) {
-      out->push_back(cmd.drawing.vertex(A).x);
-      out->push_back(cmd.drawing.vertex(A).y);
+      out->push_back(d.vertex(A).x);
+      out->push_back(d.vertex(A).y);
       out->push_back(za);
-      out->push_back(cmd.drawing.vertex(B).x);
-      out->push_back(cmd.drawing.vertex(B).y);
-      out->push_back(cmd.drawing.vertex(B).z);
+      out->push_back(d.vertex(B).x);
+      out->push_back(d.vertex(B).y);
+      out->push_back(d.vertex(B).z);
       return;
     }
     constexpr double kPi = 3.14159265358979323846;
@@ -277,26 +238,26 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
 /// disagrees with what the command actually commits is worse than no preview, because it looks
 /// right. REQ-087.
 template <class Xf>
-void appendFeatureLineStrip(std::vector<float>* out, const AppCommandState& cmd, int fi, Xf&& xf) {
-  if (fi < 0 || static_cast<size_t>(fi + 1) >= cmd.drawing.featureLineOffsets.size())
+void appendFeatureLineStrip(std::vector<float>* out, const DrawingContent& d, int fi, Xf&& xf) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= d.featureLineOffsets.size())
     return;
-  const int v0 = cmd.drawing.featureLineOffsets[static_cast<size_t>(fi)];
-  const int v1 = cmd.drawing.featureLineOffsets[static_cast<size_t>(fi + 1)];
-  if (v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > cmd.drawing.featureLineVerts.size())
+  const int v0 = d.featureLineOffsets[static_cast<size_t>(fi)];
+  const int v1 = d.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > d.featureLineVerts.size())
     return;
-  const bool closed = static_cast<size_t>(fi) < cmd.drawing.featureLineClosed.size() &&
-                      cmd.drawing.featureLineClosed[static_cast<size_t>(fi)];
+  const bool closed = static_cast<size_t>(fi) < d.featureLineClosed.size() &&
+                      d.featureLineClosed[static_cast<size_t>(fi)];
 
   auto emit = [&](int a, int b) {
     const int idx[2] = {a, b};
     for (int k = 0; k < 2; ++k) {
       const size_t base = static_cast<size_t>(idx[k]) * 3;
-      float x = cmd.drawing.featureLineVerts[base];
-      float y = cmd.drawing.featureLineVerts[base + 1];
+      float x = d.featureLineVerts[base];
+      float y = d.featureLineVerts[base + 1];
       xf(&x, &y);
       out->push_back(x);
       out->push_back(y);
-      out->push_back(cmd.drawing.featureLineVerts[base + 2]);
+      out->push_back(d.featureLineVerts[base + 2]);
     }
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
@@ -309,7 +270,7 @@ template <class Xf>
 void appendSelectedFeatureLinePreview(std::vector<float>* out, const AppCommandState& cmd, Xf&& xf) {
   for (const auto& e : cmd.selection)
     if (e.type == SelectedEntity::Type::FeatureLine)
-      appendFeatureLineStrip(out, cmd, e.index, xf);
+      appendFeatureLineStrip(out, cmd.drawing, e.index, xf);
 }
 
 } // namespace
@@ -479,6 +440,9 @@ void BuildBreakRemovalPreview(const AppCommandState& cmd, float curX, float curY
   }
 }
 
+static void AppendTransformPreview(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
+                                   std::vector<float>* prevLines, std::vector<float>* prevCircles);
+
 void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, std::vector<float>* prevLines,
                            std::vector<float>* prevCircles, float orthoHalfHeightWorld, int framebufferHeightPx) {
   prevLines->clear();
@@ -486,7 +450,6 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   g_previewOrthoHalfH = orthoHalfHeightWorld;
   g_previewFbHeightPx = framebufferHeightPx;
   g_previewSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
-  using K = AppCommandState::Kind;
   using MP = stepengine::ModifyPhase;
   using OP = stepengine::OffsetPhase;
   using MirP = stepengine::MirrorPhase;
@@ -527,378 +490,43 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   // BuildBreakRemovalPreview. This one is drawn translucent at ordinary line width, which is right
   // for a ghost of geometry somewhere it is not yet, and useless for material highlighted in place.
 
-  if (const auto* mc = cmd.sessionAs<stepengine::MoveCopySession>()) {
-    if (mc->phase != MP::NeedDestination)
+  // MOVE, COPY, PASTE, ARRAY, SCALE, MIRROR and ROTATE (ADR-0011 / issue #1700): the commit's own
+  // transform applied to a scratch copy of what it would transform, drawn as a wireframe. SCALE's
+  // reference rubber and MIRROR's line belong to the step rather than to the objects, so they are
+  // drawn first.
+  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>();
+      ss && ss->phase == MP::NeedDestination) {
+    using SP = stepengine::ScalePhase;
+    if (ss->scalePhase == SP::Ref_WaitP2) {
+      // Reference/measure rubber: drawn on the work plane, since it marks distances the user is
+      // picking rather than geometry belonging to an object (REQ-058).
+      appendPreviewSegment(prevLines, ss->refP1X, ss->refP1Y, curX, curY, CadCommitElevation(cmd));
       return;
-    const float dx = curX - mc->baseX;
-    const float dy = curY - mc->baseY;
-    for (const auto& e : cmd.selection) {
-      if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.drawing.lineCount())
-          continue;
-        const CadLineRecord seg = cmd.drawing.line(li);
-        for (int i = 0; i < 2; ++i) {
-          prevLines->push_back(LineEndComp(seg, i, 0) + dx);
-          prevLines->push_back(LineEndComp(seg, i, 1) + dy);
-          prevLines->push_back(LineEndComp(seg, i, 2));  // keep the endpoint's elevation
-        }
-      } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.drawing.circleCount())
-          continue;
-        float cnx = kFlatNormalX;
-        float cny = kFlatNormalY;
-        float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
-        appendPreviewCircle(prevLines, prevCircles, cmd.drawing.circle(ci).cx + dx,
-                            cmd.drawing.circle(ci).cy + dy,
-                            cmd.drawing.circle(ci).cz,  // z rides along unchanged
-                            cmd.drawing.circle(ci).r, cnx, cny, cnz);
-      } else if (e.type == SelectedEntity::Type::Arc) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userArcs.size())
-          continue;
-        CadArc a = cmd.drawing.userArcs[k];
-        a.cx += dx;
-        a.cy += dy;
-        appendArcPolylineStrip(prevLines, a.z, a, 48);
-      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z}; });
-      } else if (e.type == SelectedEntity::Type::Ellipse) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userEllipses.size())
-          continue;
-        CadEllipse el = cmd.drawing.userEllipses[k];
-        el.cx += dx;
-        el.cy += dy;
-        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-      } else if (e.type == SelectedEntity::Type::Polyline) {
-        const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-          continue;
-        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-        const bool closed =
-            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-        for (int vi = v0; vi + 1 < v1; ++vi) {
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).x + dx);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).y + dy);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x + dx);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y + dy);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
-        }
-        if (closed && v1 - v0 >= 2) {
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x + dx);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y + dy);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).x + dx);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).y + dy);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
-        }
-      }
     }
-    appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {  // REQ-087
-      *x += dx;
-      *y += dy;
-    });
-    return;
+    if (ss->scalePhase == SP::NewLength_WaitP2)
+      appendPreviewSegment(prevLines, ss->newLenP1X, ss->newLenP1Y, curX, curY, CadCommitElevation(cmd));
   }
-
-  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-an-axis) reuse
-  // the exact per-type walks the Move/Copy block above and the Rotate block below already do —
-  // looped once per grid cell / polar item instead of once, so this is the same coverage
-  // (LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) as every other command's own preview, not a
-  // new abstraction.
-  //
-  // GitHub issue #400 increment 4: both the translate delta and the rotation are computed IN THE
-  // ACTIVE UCS PLANE, mirroring `ArrayCellWorldDelta` / `TransformSelection` at commit — so
-  // the ghost matches what the commit produces under a FRONT/orbited/tilted UCS instead of always
-  // rotating about world Z. The 3D cursor is reconstructed from `curX,curY` plus the work-plane Z
-  // CadUi already resolves every frame (`cmd.uiCursorWorldZ`), so this needs no signature change.
-  if (cmd.active == K::Array) {
-    auto appendTranslatedInstance = [&](float dx, float dy, float dz) {
-      for (const auto& e : cmd.selection) {
-        if (e.type == SelectedEntity::Type::LineSeg) {
-          const size_t li = static_cast<size_t>(e.index);
-          if (li >= cmd.drawing.lineCount())
-            continue;
-          const CadLineRecord seg = cmd.drawing.line(li);
-          for (int i = 0; i < 2; ++i) {
-            prevLines->push_back(LineEndComp(seg, i, 0) + dx);
-            prevLines->push_back(LineEndComp(seg, i, 1) + dy);
-            prevLines->push_back(LineEndComp(seg, i, 2) + dz);
-          }
-        } else if (e.type == SelectedEntity::Type::Circle) {
-          const size_t ci = static_cast<size_t>(e.index);
-          if (ci >= cmd.drawing.circleCount())
-            continue;
-          float cnx = kFlatNormalX;
-          float cny = kFlatNormalY;
-          float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
-          appendPreviewCircle(prevLines, prevCircles, cmd.drawing.circle(ci).cx + dx,
-                              cmd.drawing.circle(ci).cy + dy, cmd.drawing.circle(ci).cz + dz,
-                              cmd.drawing.circle(ci).r, cnx, cny, cnz);
-        } else if (e.type == SelectedEntity::Type::Arc) {
-          const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.drawing.userArcs.size())
-            continue;
-          CadArc a = cmd.drawing.userArcs[k];
-          a.cx += dx;
-          a.cy += dy;
-          a.z += dz;
-          appendArcPolylineStrip(prevLines, a.z, a, 48);
-        } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-          appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z + dz}; });
-        } else if (e.type == SelectedEntity::Type::Ellipse) {
-          const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.drawing.userEllipses.size())
-            continue;
-          CadEllipse el = cmd.drawing.userEllipses[k];
-          el.cx += dx;
-          el.cy += dy;
-          el.z += dz;
-          appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-        } else if (e.type == SelectedEntity::Type::Polyline) {
-          const int pi = e.index;
-          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-            continue;
-          const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-          const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-          const bool closed = static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() &&
-                              cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-          for (int vi = v0; vi + 1 < v1; ++vi) {
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).x + dx);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).y + dy);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z + dz);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x + dx);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y + dy);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z + dz);
-          }
-          if (closed && v1 - v0 >= 2) {
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x + dx);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y + dy);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z + dz);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).x + dx);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).y + dy);
-            prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z + dz);
-          }
-        }
-      }
-      // FeatureLine's shared preview helper is (x,y)-only, so it cannot show a Z shift. When the
-      // instance delta has a Z component (a rectangular array whose UCS X/Y plane is tilted) the
-      // ghost would sit at the wrong elevation — omit the FeatureLine copies rather than draw them
-      // misplaced. `dz == 0` is exact for the World UCS and any in-plane-rotated UCS.
-      if (dz == 0.f) {
-        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-          *x += dx;
-          *y += dy;
-        });
-      }
-    };
-
-    // GitHub issue #400 increment 4: rotate about an arbitrary 3D axis (the active UCS Z axis
-    // through the picked centre), a port of the per-kind rotation the commit applies.
-    // `axisUnit` parallel to world Z reproduces the old `rotatePreviewPt`/`RotateNormalAboutZ`
-    // path exactly. Ellipse/FeatureLine keep the world-Z-only walk — polar ARRAY refuses them
-    // under a tilted axis at commit (REQ-328 item 2), so the ghost simply omits them there.
-    auto appendRotatedInstance = [&](const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
-                                     float ang) {
-      const double rad = static_cast<double>(ang);
-      const bool axisIsWorldZ =
-          std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 && std::fabs(axisUnit.z) > 1e-9;
-      const auto rp = [&](float x, float y, float z) {
-        return ray3d::RotatePointAboutAxis(ray3d::Vec3{x, y, z}, axisPoint, axisUnit, rad);
-      };
-      const auto rv = [&](float x, float y, float z) {
-        return ray3d::RotateVectorAboutAxis(ray3d::Vec3{x, y, z}, axisUnit, rad);
-      };
-      for (const auto& e : cmd.selection) {
-        if (e.type == SelectedEntity::Type::LineSeg) {
-          const size_t li = static_cast<size_t>(e.index);
-          if (li >= cmd.drawing.lineCount())
-            continue;
-          const CadLineRecord seg = cmd.drawing.line(li);
-          for (int i = 0; i < 2; ++i) {
-            const ray3d::Vec3 p =
-                rp(LineEndComp(seg, i, 0), LineEndComp(seg, i, 1), LineEndComp(seg, i, 2));
-            prevLines->push_back(static_cast<float>(p.x));
-            prevLines->push_back(static_cast<float>(p.y));
-            prevLines->push_back(static_cast<float>(p.z));
-          }
-        } else if (e.type == SelectedEntity::Type::Circle) {
-          const size_t ci = static_cast<size_t>(e.index);
-          if (ci >= cmd.drawing.circleCount())
-            continue;
-          const ray3d::Vec3 c = rp(cmd.drawing.circle(ci).cx, cmd.drawing.circle(ci).cy, cmd.drawing.circle(ci).cz);
-          float cnx = kFlatNormalX;
-          float cny = kFlatNormalY;
-          float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
-          const ray3d::Vec3 n = rv(cnx, cny, cnz);  // the plane turns with the circle (REQ-312/328)
-          appendPreviewCircle(prevLines, prevCircles, static_cast<float>(c.x), static_cast<float>(c.y),
-                              static_cast<float>(c.z), cmd.drawing.circle(ci).r, static_cast<float>(n.x),
-                              static_cast<float>(n.y), static_cast<float>(n.z));
-        } else if (e.type == SelectedEntity::Type::Arc) {
-          const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.drawing.userArcs.size())
-            continue;
-          CadArc a = cmd.drawing.userArcs[k];
-          // The same steps the commit takes (`TransformArc`): rotate the start point
-          // and centre as points, the plane normal as a direction, then re-anchor the sweep onto
-          // where the start point actually landed.
-          const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-          const ray3d::Vec3 startRot =
-              rp(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y), static_cast<float>(startWorld.z));
-          const ray3d::Vec3 c = rp(a.cx, a.cy, a.z);
-          const ray3d::Vec3 n = rv(a.nx, a.ny, a.nz);
-          a.cx = static_cast<float>(c.x);
-          a.cy = static_cast<float>(c.y);
-          a.z = static_cast<float>(c.z);
-          a.nx = static_cast<float>(n.x);
-          a.ny = static_cast<float>(n.y);
-          a.nz = static_cast<float>(n.z);
-          CadReanchorArcStart(&a, startRot);
-          appendArcPolylineStrip(prevLines, a.z, a, 48);
-        } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-          appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return rp(static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)); });
-        } else if (e.type == SelectedEntity::Type::Ellipse) {
-          if (!axisIsWorldZ)
-            continue;  // refused at commit under a tilted axis — omit from the ghost too
-          const size_t k = static_cast<size_t>(e.index);
-          if (k >= cmd.drawing.userEllipses.size())
-            continue;
-          CadEllipse el = cmd.drawing.userEllipses[k];
-          // Same rp/rv the other types use, not a hand-rolled 2D rotation: a CadEllipse is flat in
-          // world XY, and for a world-Z-parallel axis (either sign) rp leaves its Z alone and rv
-          // turns the major-axis vector the correct way — matching the commit and every sibling in
-          // the array (a plain +Z `rotatePreviewPt` would spin backwards under an inverted-Z UCS).
-          const ray3d::Vec3 c = rp(el.cx, el.cy, el.z);
-          const ray3d::Vec3 maj = rv(el.majVx, el.majVy, 0.f);
-          el.cx = static_cast<float>(c.x);
-          el.cy = static_cast<float>(c.y);
-          el.z = static_cast<float>(c.z);
-          el.majVx = static_cast<float>(maj.x);
-          el.majVy = static_cast<float>(maj.y);
-          appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-        } else if (e.type == SelectedEntity::Type::Polyline) {
-          const int pi = e.index;
-          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-            continue;
-          const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-          const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-          const bool closed = static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() &&
-                              cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-          const auto pushVert = [&](int idx) {
-            const ray3d::Vec3 p = rp(cmd.drawing.vertex(static_cast<size_t>(idx)).x,
-                                     cmd.drawing.vertex(static_cast<size_t>(idx)).y,
-                                     cmd.drawing.vertex(static_cast<size_t>(idx)).z);
-            prevLines->push_back(static_cast<float>(p.x));
-            prevLines->push_back(static_cast<float>(p.y));
-            prevLines->push_back(static_cast<float>(p.z));
-          };
-          for (int vi = v0; vi + 1 < v1; ++vi) {
-            pushVert(vi);
-            pushVert(vi + 1);
-          }
-          if (closed && v1 - v0 >= 2) {
-            pushVert(v1 - 1);
-            pushVert(v0);
-          }
-        }
-      }
-      if (axisIsWorldZ) {
-        // FeatureLine's shared preview helper is (x,y)-only; a world-Z rotation leaves x'/y'
-        // independent of z, so it is exact here. Under a tilted axis a FeatureLine is refused at
-        // commit — omit it from the ghost. Rotation about -Z by `ang` is rotation about +Z by
-        // `-ang`, so carry the axis sign into the 2D helper (an inverted-Z UCS otherwise spins the
-        // FeatureLine ghost the wrong way relative to the commit and its siblings).
-        const float zAng = ang * (axisUnit.z < 0.0 ? -1.f : 1.f);
-        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), zAng, x, y);
-        });
-      }
-    };
-
-    const auto* arr = cmd.sessionAs<stepengine::ArraySession>();
-    if (!arr)
-      return;
-    using APh = stepengine::ArrayPhase;
-    if (arr->type == stepengine::ArrayType::Rectangular) {
-      const ucs::Ucs frame =
-          CadWorkPlaneAnchoredAt(cmd, arr->anchorX, arr->anchorY, arr->anchorZ);
-      const ucs::Point2D cursorLocal =
-          ucs::WorldToPlane(frame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
-      int cols = std::max(arr->cols, 1);
-      float colSpacing = arr->colSpacing;
-      int rows = 1;
-      float rowSpacing = 0.f;
-      if (arr->phase == APh::Rect_WaitColumnSpacing) {
-        colSpacing = static_cast<float>(cursorLocal.x);
-      } else if (arr->phase == APh::Rect_WaitRows) {
-      } else if (arr->phase == APh::Rect_WaitRowSpacing) {
-        rows = std::max(arr->rows, 1);
-        rowSpacing = static_cast<float>(cursorLocal.y);
-      } else {
-        return;
-      }
-      constexpr int kMaxArrayPreviewInstances = 1000;
-      int emittedInstances = 0;
-      for (int r = 0; r < rows && emittedInstances < kMaxArrayPreviewInstances; ++r)
-        for (int c = 0; c < cols && emittedInstances < kMaxArrayPreviewInstances; ++c) {
-          if (r == 0 && c == 0)
-            continue;
-          const ray3d::Vec3 d = ucs::UcsVectorToWorld(
-              frame, ray3d::Vec3{static_cast<double>(c) * colSpacing, static_cast<double>(r) * rowSpacing, 0.0});
-          appendTranslatedInstance(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z));
-          ++emittedInstances;
-        }
-      return;
+  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>();
+      ms && (ms->phase == MirP::NeedP2 || ms->phase == MirP::NeedEraseAnswer)) {
+    float x1 = ms->p2X, y1 = ms->p2Y, z1 = ms->p2Z;
+    if (ms->phase == MirP::NeedP2) {
+      // The endpoint CadActiveTransformPreviewPlan reflects across (MirrorSession::onViewportPick).
+      x1 = curX;
+      y1 = curY;
+      z1 = CadCommitElevation(cmd);
+      ApplyOrthoConstrainFromAnchor(cmd, ms->p1X, ms->p1Y, &x1, &y1, cmd.orthoMode, ms->p1Z, z1, &z1);
     }
-
-    if (arr->phase != APh::Polar_WaitAngle && arr->phase != APh::Polar_WaitRotateAnswer)
-      return;
-    constexpr float kPi = 3.14159265358979323846f;
-    constexpr int kMaxArrayPreviewInstances = 1000;
-    const int n = std::max(arr->itemCount, 1);
-    const ray3d::Vec3 axisPoint{arr->centerX, arr->centerY, arr->centerZ};
-    const ucs::Ucs centreFrame =
-        CadWorkPlaneAnchoredAt(cmd, arr->centerX, arr->centerY, arr->centerZ);
-    const ray3d::Vec3 axisUnit = ray3d::Normalize(centreFrame.zAxis);
-    float fillDeg = arr->fillAngleDeg;
-    if (arr->phase == APh::Polar_WaitAngle) {
-      const ucs::Point2D lc = ucs::WorldToPlane(centreFrame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
-      fillDeg = std::atan2(static_cast<float>(lc.y), static_cast<float>(lc.x)) * (180.f / kPi);
-      if (fillDeg < 0.f)
-        fillDeg += 360.f;
-    }
-    const bool fullTurn = std::fabs(std::fmod(fillDeg, 360.f)) < 1e-3f;
-    const float fillRad = fillDeg * (kPi / 180.f);
-    const float step =
-        (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n) : fillRad / static_cast<float>(n - 1));
-    const int previewCount = std::min(n, kMaxArrayPreviewInstances + 1);
-    for (int i = 1; i < previewCount; ++i) {
-      const float ang = step * static_cast<float>(i);
-      if (arr->rotateItems) {
-        appendRotatedInstance(axisPoint, axisUnit, ang);
-      } else {
-        const ray3d::Vec3 a = ray3d::RotatePointAboutAxis(
-            ray3d::Vec3{arr->anchorX, arr->anchorY, arr->anchorZ}, axisPoint, axisUnit,
-            static_cast<double>(ang));
-        appendTranslatedInstance(static_cast<float>(a.x) - arr->anchorX,
-                                 static_cast<float>(a.y) - arr->anchorY,
-                                 static_cast<float>(a.z) - arr->anchorZ);
-      }
-    }
+    // The mirror line itself, so the user sees what they are reflecting across.
+    prevLines->insert(prevLines->end(), {ms->p1X, ms->p1Y, ms->p1Z, x1, y1, z1});
+  }
+  if (CadTransformPreviewPlan plan; CadActiveTransformPreviewPlan(cmd, curX, curY, &plan)) {
+    AppendTransformPreview(cmd, plan, prevLines, prevCircles);
     return;
   }
 
   if (const auto* stSess = cmd.sessionAs<stepengine::StretchSession>();
       stSess && stSess->phase == MP::NeedDestination) {
-    // Mirrors the Move/Copy block above, but each definition point is gated against the captured
-    // box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
+    // A translation, but each definition point is gated against the captured box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
     const float dx = curX - stSess->baseX;
     const float dy = curY - stSess->baseY;
     const float mnX = stSess->rectMnX, mxX = stSess->rectMxX;
@@ -980,315 +608,6 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         *y += dy;
       }
     });
-    return;
-  }
-
-  if (const auto* ps = cmd.sessionAs<stepengine::PasteSession>()) {
-    const float dx = curX - ps->baseX;
-    const float dy = curY - ps->baseY;
-    const CadClipboard& cb = cmd.clipboard;
-    // Lines
-    for (size_t i = 0; i < cb.content.lineCount(); ++i) {
-      const CadLineRecord ln = cb.content.line(i);
-      prevLines->push_back(ln.x0 + dx);
-      prevLines->push_back(ln.y0 + dy);
-      prevLines->push_back(ln.z0);
-      prevLines->push_back(ln.x1 + dx);
-      prevLines->push_back(ln.y1 + dy);
-      prevLines->push_back(ln.z1);
-    }
-    // Circles
-    for (size_t i = 0; i < cb.content.circleCount(); ++i) {  // cx,cy,z,r
-      float cnx = kFlatNormalX;
-      float cny = kFlatNormalY;
-      float cnz = kFlatNormalZ;
-      CircleNormalAt(cb.content.userCircleNormals, i, &cnx, &cny, &cnz);
-      const CadCircleRecord c = cb.content.circle(i);
-      appendPreviewCircle(prevLines, prevCircles, c.cx + dx, c.cy + dy, c.cz, c.r, cnx, cny, cnz);
-    }
-    // Arcs
-    for (const auto& a : cb.content.userArcs) {
-      CadArc pa = a;
-      pa.cx += dx;
-      pa.cy += dy;
-      appendArcPolylineStrip(prevLines, pa.z, pa, 48);
-    }
-    // Ellipses
-    for (const auto& el : cb.content.userEllipses) {
-      CadEllipse pe = el;
-      pe.cx += dx;
-      pe.cy += dy;
-      appendEllipsePolylineStrip(prevLines, pe.z, pe, 56);
-    }
-    // Polylines
-    const int nPoly = static_cast<int>(cb.content.userPolylineOffsets.size()) - 1;
-    for (int pi = 0; pi < nPoly; ++pi) {
-      const int v0 = cb.content.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cb.content.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-      const bool closed =
-          static_cast<size_t>(pi) < cb.content.userPolylineClosed.size() && cb.content.userPolylineClosed[static_cast<size_t>(pi)];
-      for (int vi = v0; vi + 1 < v1; ++vi) {
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).x + dx);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).y + dy);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(vi)).z);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).x + dx);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).y + dy);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((vi + 1))).z);
-      }
-      if (closed && v1 - v0 >= 2) {
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).x + dx);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).y + dy);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>((v1 - 1))).z);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).x + dx);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).y + dy);
-        prevLines->push_back(cb.content.vertex(static_cast<size_t>(v0)).z);
-      }
-    }
-    return;
-  }
-
-  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>();
-      ss && ss->phase == MP::NeedDestination) {
-    using SP = stepengine::ScalePhase;
-    if (ss->scalePhase == SP::Ref_WaitP2) {
-      prevLines->push_back(ss->refP1X);
-      prevLines->push_back(ss->refP1Y);
-      // Reference/measure rubber: drawn on the work plane, since it marks distances the user is
-      // picking rather than geometry belonging to an object (REQ-058).
-      prevLines->push_back(CadCommitElevation(cmd));
-      prevLines->push_back(curX);
-      prevLines->push_back(curY);
-      prevLines->push_back(CadCommitElevation(cmd));
-      return;
-    }
-    if (ss->scalePhase == SP::NewLength_WaitP2) {
-      prevLines->push_back(ss->newLenP1X);
-      prevLines->push_back(ss->newLenP1Y);
-      prevLines->push_back(CadCommitElevation(cmd));
-      prevLines->push_back(curX);
-      prevLines->push_back(curY);
-      prevLines->push_back(CadCommitElevation(cmd));
-    }
-    float sc = 1.f;
-    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
-      return;
-    const float bx = ss->baseX;
-    const float by = ss->baseY;
-    for (const auto& e : cmd.selection) {
-      if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.drawing.lineCount())
-          continue;
-        const CadLineRecord seg = cmd.drawing.line(li);
-        for (int i = 0; i < 2; ++i) {
-          float x = LineEndComp(seg, i, 0);
-          float y = LineEndComp(seg, i, 1);
-          scalePreviewPt(bx, by, sc, &x, &y);
-          prevLines->push_back(x);
-          prevLines->push_back(y);
-          prevLines->push_back(LineEndComp(seg, i, 2));
-        }
-      } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.drawing.circleCount())
-          continue;
-        float x = cmd.drawing.circle(ci).cx;
-        float y = cmd.drawing.circle(ci).cy;
-        float r = cmd.drawing.circle(ci).r;
-        scalePreviewPt(bx, by, sc, &x, &y);
-        r *= sc;
-        float cnx = kFlatNormalX;
-        float cny = kFlatNormalY;
-        float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
-        appendPreviewCircle(prevLines, prevCircles, x, y,
-                            cmd.drawing.circle(ci).cz,  // SCALE is planar here - z unscaled
-                            r, cnx, cny, cnz);
-      } else if (e.type == SelectedEntity::Type::Arc) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userArcs.size())
-          continue;
-        CadArc a = cmd.drawing.userArcs[k];
-        scalePreviewPt(bx, by, sc, &a.cx, &a.cy);
-        a.r *= sc;
-        appendArcPolylineStrip(prevLines, a.z, a, 48);
-      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; scalePreviewPt(bx, by, sc, &x, &y); return spline::Vec3{x, y, v.z}; });
-      } else if (e.type == SelectedEntity::Type::Ellipse) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userEllipses.size())
-          continue;
-        CadEllipse el = cmd.drawing.userEllipses[k];
-        float mx = el.cx + el.majVx;
-        float my = el.cy + el.majVy;
-        scalePreviewPt(bx, by, sc, &el.cx, &el.cy);
-        scalePreviewPt(bx, by, sc, &mx, &my);
-        el.majVx = mx - el.cx;
-        el.majVy = my - el.cy;
-        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-      } else if (e.type == SelectedEntity::Type::Polyline) {
-        const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-          continue;
-        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-        const bool closed =
-            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-        for (int vi = v0; vi + 1 < v1; ++vi) {
-          float x0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
-          float y0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
-          float x1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
-          float y1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
-          scalePreviewPt(bx, by, sc, &x0, &y0);
-          scalePreviewPt(bx, by, sc, &x1, &y1);
-          prevLines->push_back(x0);
-          prevLines->push_back(y0);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
-          prevLines->push_back(x1);
-          prevLines->push_back(y1);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
-        }
-        if (closed && v1 - v0 >= 2) {
-          float x0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
-          float y0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
-          float x1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
-          float y1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
-          scalePreviewPt(bx, by, sc, &x0, &y0);
-          scalePreviewPt(bx, by, sc, &x1, &y1);
-          prevLines->push_back(x0);
-          prevLines->push_back(y0);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
-          prevLines->push_back(x1);
-          prevLines->push_back(y1);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
-        }
-      }
-    }
-    appendSelectedFeatureLinePreview(  // REQ-087
-        prevLines, cmd, [&](float* x, float* y) { scalePreviewPt(bx, by, sc, x, y); });
-    return;
-  }
-
-  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>()) {
-    if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
-      return;
-    const float x0 = ms->p1X, y0 = ms->p1Y;
-    float x1 = (ms->phase == MirP::NeedP2) ? curX : ms->p2X;
-    float y1 = (ms->phase == MirP::NeedP2) ? curY : ms->p2Y;
-    if (ms->phase == MirP::NeedP2)
-      ApplyOrthoConstrainFromAnchor(cmd, x0, y0, &x1, &y1, cmd.orthoMode, ms->p1Z, cmd.uiCursorWorldZ);
-    // The mirror line itself, so the user sees what they are reflecting across — same rubber-line
-    // convention SCALE uses for its reference/new-length segments above.
-    prevLines->push_back(x0);
-    prevLines->push_back(y0);
-    prevLines->push_back(CadCommitElevation(cmd));
-    prevLines->push_back(x1);
-    prevLines->push_back(y1);
-    prevLines->push_back(CadCommitElevation(cmd));
-
-    for (const auto& e : cmd.selection) {
-      if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.drawing.lineCount())
-          continue;
-        const CadLineRecord seg = cmd.drawing.line(li);
-        for (int i = 0; i < 2; ++i) {
-          float x = LineEndComp(seg, i, 0);
-          float y = LineEndComp(seg, i, 1);
-          mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
-          prevLines->push_back(x);
-          prevLines->push_back(y);
-          prevLines->push_back(LineEndComp(seg, i, 2));
-        }
-      } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.drawing.circleCount())
-          continue;
-        float x = cmd.drawing.circle(ci).cx;
-        float y = cmd.drawing.circle(ci).cy;
-        mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
-        float cnx = kFlatNormalX;
-        float cny = kFlatNormalY;
-        float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
-        ReflectNormalAcrossLine(x0, y0, x1, y1, &cnx, &cny);  // the plane is mirrored too (REQ-312)
-        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.drawing.circle(ci).cz,
-                            cmd.drawing.circle(ci).r,  // radius preserved (isometry)
-                            cnx, cny, cnz);
-      } else if (e.type == SelectedEntity::Type::Arc) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userArcs.size())
-          continue;
-        CadArc a = cmd.drawing.userArcs[k];
-        // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
-        // (as `TransformArc` does at commit) — a reflection reverses handedness.
-        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
-                                                         static_cast<double>(a.sweepRad));
-        float fex = static_cast<float>(farEnd.x);
-        float fey = static_cast<float>(farEnd.y);
-        mirrorPreviewPt(x0, y0, x1, y1, &fex, &fey);
-        farEnd.x = static_cast<double>(fex);
-        farEnd.y = static_cast<double>(fey);
-        const float newStart = mirrorPreviewAngle(x0, y0, x1, y1, a.startRad + a.sweepRad);
-        mirrorPreviewPt(x0, y0, x1, y1, &a.cx, &a.cy);
-        a.startRad = newStart;
-        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);  // REQ-312, as the commit does
-        CadReanchorArcStart(&a, farEnd);
-        appendArcPolylineStrip(prevLines, a.z, a, 48);
-      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; mirrorPreviewPt(x0, y0, x1, y1, &x, &y); return spline::Vec3{x, y, v.z}; });
-      } else if (e.type == SelectedEntity::Type::Ellipse) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userEllipses.size())
-          continue;
-        CadEllipse el = cmd.drawing.userEllipses[k];
-        float mx = el.cx + el.majVx;
-        float my = el.cy + el.majVy;
-        mirrorPreviewPt(x0, y0, x1, y1, &el.cx, &el.cy);
-        mirrorPreviewPt(x0, y0, x1, y1, &mx, &my);
-        el.majVx = mx - el.cx;
-        el.majVy = my - el.cy;
-        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-      } else if (e.type == SelectedEntity::Type::Polyline) {
-        const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-          continue;
-        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-        const bool closed =
-            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-        for (int vi = v0; vi + 1 < v1; ++vi) {
-          float px0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
-          float py0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
-          float px1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
-          float py1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
-          mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
-          mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
-          prevLines->push_back(px0);
-          prevLines->push_back(py0);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
-          prevLines->push_back(px1);
-          prevLines->push_back(py1);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
-        }
-        if (closed && v1 - v0 >= 2) {
-          float px0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
-          float py0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
-          float px1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
-          float py1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
-          mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
-          mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
-          prevLines->push_back(px0);
-          prevLines->push_back(py0);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
-          prevLines->push_back(px1);
-          prevLines->push_back(py1);
-          prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
-        }
-      }
-    }
-    appendSelectedFeatureLinePreview(  // REQ-087
-        prevLines, cmd, [&](float* x, float* y) { mirrorPreviewPt(x0, y0, x1, y1, x, y); });
     return;
   }
 
@@ -1375,107 +694,6 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  const auto* rs = cmd.sessionAs<stepengine::RotateSession>();
-  if (!rs)
-    return;
-
-  float theta = 0.f;
-  if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
-    return;
-
-  const float bx = rs->baseX;
-  const float by = rs->baseY;
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t li = static_cast<size_t>(e.index);
-      if (li >= cmd.drawing.lineCount())
-        continue;
-      const CadLineRecord seg = cmd.drawing.line(li);
-      for (int i = 0; i < 2; ++i) {
-        float x = LineEndComp(seg, i, 0);
-        float y = LineEndComp(seg, i, 1);
-        rotatePreviewPt(bx, by, theta, &x, &y);
-        prevLines->push_back(x);
-        prevLines->push_back(y);
-        prevLines->push_back(LineEndComp(seg, i, 2));
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-      if (ci >= cmd.drawing.circleCount())
-        continue;
-      float x = cmd.drawing.circle(ci).cx;
-      float y = cmd.drawing.circle(ci).cy;
-      rotatePreviewPt(bx, by, theta, &x, &y);
-      float cnx = kFlatNormalX;
-      float cny = kFlatNormalY;
-      float cnz = kFlatNormalZ;
-      CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
-      RotateNormalAboutZ(theta, &cnx, &cny);  // rotation is about the Z axis, and so is the normal's
-      appendPreviewCircle(prevLines, prevCircles, x, y,
-                          cmd.drawing.circle(ci).cz,  // rotation is about the Z axis
-                          cmd.drawing.circle(ci).r, cnx, cny, cnz);
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.drawing.userArcs.size())
-        continue;
-      CadArc a = cmd.drawing.userArcs[k];
-      rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
-      a.startRad += theta;
-      appendArcPolylineStrip(prevLines, a.z, a, 48);
-    } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-      appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; rotatePreviewPt(bx, by, theta, &x, &y); return spline::Vec3{x, y, v.z}; });
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.drawing.userEllipses.size())
-        continue;
-      CadEllipse el = cmd.drawing.userEllipses[k];
-      float mx = el.cx + el.majVx;
-      float my = el.cy + el.majVy;
-      rotatePreviewPt(bx, by, theta, &el.cx, &el.cy);
-      rotatePreviewPt(bx, by, theta, &mx, &my);
-      el.majVx = mx - el.cx;
-      el.majVy = my - el.cy;
-      appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int pi = e.index;
-      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-        continue;
-      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-      const bool closed =
-          static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-      for (int vi = v0; vi + 1 < v1; ++vi) {
-        float x0 = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
-        float y0 = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
-        float x1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).x;
-        float y1 = cmd.drawing.vertex(static_cast<size_t>((vi + 1))).y;
-        rotatePreviewPt(bx, by, theta, &x0, &y0);
-        rotatePreviewPt(bx, by, theta, &x1, &y1);
-        prevLines->push_back(x0);
-        prevLines->push_back(y0);
-        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(vi)).z);
-        prevLines->push_back(x1);
-        prevLines->push_back(y1);
-        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((vi + 1))).z);
-      }
-      if (closed && v1 - v0 >= 2) {
-        float x0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).x;
-        float y0 = cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).y;
-        float x1 = cmd.drawing.vertex(static_cast<size_t>(v0)).x;
-        float y1 = cmd.drawing.vertex(static_cast<size_t>(v0)).y;
-        rotatePreviewPt(bx, by, theta, &x0, &y0);
-        rotatePreviewPt(bx, by, theta, &x1, &y1);
-        prevLines->push_back(x0);
-        prevLines->push_back(y0);
-        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>((v1 - 1))).z);
-        prevLines->push_back(x1);
-        prevLines->push_back(y1);
-        prevLines->push_back(cmd.drawing.vertex(static_cast<size_t>(v0)).z);
-      }
-    }
-  }
-  appendSelectedFeatureLinePreview(  // REQ-087
-      prevLines, cmd, [&](float* x, float* y) { rotatePreviewPt(bx, by, theta, x, y); });
 }
 
 /// Highlight strokes for one entity, each at the entity's OWN elevation (REQ-058). This used to
@@ -1487,14 +705,19 @@ static void AppendFloatLineBatch(const std::vector<float>& batch, std::vector<Li
     out->push_back(static_cast<LineVert>(v));
 }
 
+/// The wireframe of entity \p e of drawing \p d: what the selection highlight traces, and what the
+/// transform preview draws for each scratch copy (issue #1700). \p cmd supplies the display caches
+/// (solid tessellation, surface borders, pipe-run solids), which belong to the live drawing only;
+/// \p blockDefs the block definitions \p d's inserts name.
 template<typename LineVert>
-static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
+static void AppendEntityWireframe(const AppCommandState& cmd, const DrawingContent& d,
+                                  const std::vector<CadBlockDefinition>& blockDefs, const SelectedEntity& e,
                                   std::vector<LineVert>* hlLines, std::vector<float>* hlCircles) {
   if (e.type == SelectedEntity::Type::LineSeg) {
     const size_t li = static_cast<size_t>(e.index);
-    if (li >= cmd.drawing.lineCount())
+    if (li >= d.lineCount())
       return;
-    const CadLineRecord seg = cmd.drawing.line(li);
+    const CadLineRecord seg = d.line(li);
     for (int i = 0; i < 2; ++i) {
       hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 0)));
       hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 1)));
@@ -1505,23 +728,23 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
     const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-    if (ci >= cmd.drawing.circleCount())
+    if (ci >= d.circleCount())
       return;
     // Through the same emitter the previews use, so a selected tilted circle is highlighted on the
     // plane it is drawn on rather than ringed flat beside itself (REQ-312).
     float cnx = kFlatNormalX;
     float cny = kFlatNormalY;
     float cnz = kFlatNormalZ;
-    CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);
+    CircleNormalAt(d.userCircleNormals, ci, &cnx, &cny, &cnz);
     std::vector<float> strip;
-    appendPreviewCircle(&strip, hlCircles, cmd.drawing.circle(ci).cx, cmd.drawing.circle(ci).cy,
-                        cmd.drawing.circle(ci).cz, cmd.drawing.circle(ci).r, cnx, cny, cnz);
+    appendPreviewCircle(&strip, hlCircles, d.circle(ci).cx, d.circle(ci).cy,
+                        d.circle(ci).cz, d.circle(ci).r, cnx, cny, cnz);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Alignment) {  // REQ-480: highlight the exact geometry, sampled for display
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.alignments.size() || cmd.drawing.alignments[k].Empty())
+    if (k >= d.alignments.size() || d.alignments[k].Empty())
       return;
-    const std::vector<alignment::Point2> pts = cmd.drawing.alignments[k].SampleForDisplay(0.01);
+    const std::vector<alignment::Point2> pts = d.alignments[k].SampleForDisplay(0.01);
     for (size_t i = 1; i < pts.size(); ++i) {
       hlLines->push_back(static_cast<float>(pts[i - 1].x));
       hlLines->push_back(static_cast<float>(pts[i - 1].y));
@@ -1532,32 +755,32 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.userArcs.size())
+    if (k >= d.userArcs.size())
       return;
     std::vector<float> strip;
-    appendArcPolylineStrip(&strip, cmd.drawing.userArcs[k].z, cmd.drawing.userArcs[k], 48);  // arc plane, not a flat depth
+    appendArcPolylineStrip(&strip, d.userArcs[k].z, d.userArcs[k], 48);  // arc plane, not a flat depth
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
     std::vector<float> strip;
-    appendSplinePreview(&strip, cmd, e.index, [&](const spline::Vec3& v) { return v; });
+    appendSplinePreview(&strip, d, e.index, [&](const spline::Vec3& v) { return v; });
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Ellipse) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.userEllipses.size())
+    if (k >= d.userEllipses.size())
       return;
     std::vector<float> strip;
-    appendEllipsePolylineStrip(&strip, cmd.drawing.userEllipses[k].z, cmd.drawing.userEllipses[k], 56);
+    appendEllipsePolylineStrip(&strip, d.userEllipses[k].z, d.userEllipses[k], 56);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Polyline) {
     std::vector<float> strip;
-    appendCommittedPolylineStrip(&strip, cmd, e.index);
+    appendCommittedPolylineStrip(&strip, d, e.index);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::FeatureLine) {
     // REQ-087. Without this a selected feature line drew no highlight at all: it would pick, box-
     // select and move correctly while giving the user nothing on screen to confirm what was
     // selected. Identity transform — the highlight traces the committed geometry where it is.
     std::vector<float> strip;
-    appendFeatureLineStrip(&strip, cmd, e.index, [](float*, float*) {});
+    appendFeatureLineStrip(&strip, d, e.index, [](float*, float*) {});
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Surface) {
     // REQ-068 / ADR-036 (b). The highlight traces the surface's BORDER, not its 600k triangle edges.
@@ -1568,6 +791,8 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     //
     // Read from the cache (ADR-036 (e)); computing it here would put the O(n log n) walk back on the
     // per-frame path this function is called from.
+    if (&d != &cmd.drawing)
+      return;
     if (const std::vector<float>* border = SurfaceBorderEdges(cmd, static_cast<size_t>(e.index)))
       AppendFloatLineBatch(*border, hlLines);
   } else if (e.type == SelectedEntity::Type::Solid) {
@@ -1583,9 +808,9 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // into chords there already, and this function is on the per-frame path (the Surface branch
     // above records the same reasoning for the same reason).
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.cadSolids.size() || !cmd.drawing.cadSolids[k])
+    if (k >= d.cadSolids.size() || !d.cadSolids[k])
       return;
-    const CadSolidPtr& sp = cmd.drawing.cadSolids[k];
+    const CadSolidPtr& sp = d.cadSolids[k];
     for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
       if (t.key.lock() != sp)
         continue;
@@ -1597,6 +822,8 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // selected pipe run drew no highlight at all. `e.index` is into `cadPipeRuns`, but the
     // rendered geometry lives in the DERIVED `pipeRunWorldSolids` array — walk that array for the
     // (at most one) solid this run actually built, matching `PickClosestSolidEntity`'s own mapping.
+    if (&d != &cmd.drawing)
+      return;
     for (size_t si = 0; si < cmd.pipeRunWorldSolids.size(); ++si) {
       if (si >= cmd.pipeRunWorldSolidOwnerIndex.size() ||
           cmd.pipeRunWorldSolidOwnerIndex[si] != e.index || !cmd.pipeRunWorldSolids[si])
@@ -1617,14 +844,14 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // ordinary case) and its solids' own edges (from the tessellation cache, same as the Solid
     // branch), so every block ref gets a highlight regardless of what its content is made of.
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.cadBlockRefs.size())
+    if (k >= d.cadBlockRefs.size())
       return;
-    const CadBlockRef& ref = cmd.drawing.cadBlockRefs[k];
+    const CadBlockRef& ref = d.cadBlockRefs[k];
     EntityAttributes dummy{};
-    if (k < cmd.drawing.cadBlockRefAttrs.size())
-      dummy = cmd.drawing.cadBlockRefAttrs[k];
+    if (k < d.cadBlockRefAttrs.size())
+      dummy = d.cadBlockRefAttrs[k];
     std::vector<CadBlockWorldSeg> segs;
-    CadBlockCollectWorldLines(cmd.drawing.blockDefs, ref, dummy, &segs);
+    CadBlockCollectWorldLines(blockDefs, ref, dummy, &segs);
     for (const CadBlockWorldSeg& s : segs) {
       hlLines->push_back(static_cast<LineVert>(s.x0));
       hlLines->push_back(static_cast<LineVert>(s.y0));
@@ -1639,7 +866,7 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // RebuildBlockRefWorldSolids. Walk the edges directly instead — the same chord-count-24-per-arc
     // approach PickClosestCadEntity's own BlockRef case already uses for exactly this reason.
     std::vector<CadBlockWorldSolid> blockSolids;
-    CadBlockCollectWorldSolids(cmd.drawing.blockDefs, ref, dummy, &blockSolids);
+    CadBlockCollectWorldSolids(blockDefs, ref, dummy, &blockSolids);
     for (const CadBlockWorldSolid& ws : blockSolids) {
       if (!ws.solid)
         continue;
@@ -1660,9 +887,9 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     }
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
-    if (k >= cmd.drawing.cadFilledRegions.size())
+    if (k >= d.cadFilledRegions.size())
       return;
-    const CadFilledRegion& fr = cmd.drawing.cadFilledRegions[k];
+    const CadFilledRegion& fr = d.cadFilledRegions[k];
     // Outline every loop (outer + holes) as closed line-segment pairs (GL_LINES) so the selection/hover
     // highlight traces the hatch boundary on top of the fill (REQ-042).
     for (size_t loop = 0; loop < fr.loopStart.size(); ++loop) {
@@ -1684,6 +911,100 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
         hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]));
         hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(b) * 3 + 2]));
       }
+    }
+  }
+}
+
+template<typename LineVert>
+static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
+                                  std::vector<LineVert>* hlLines, std::vector<float>* hlCircles) {
+  AppendEntityWireframe(cmd, cmd.drawing, cmd.drawing.blockDefs, e, hlLines, hlCircles);
+}
+
+namespace {
+
+/// Above this many triangles a mesh's preview is its box rather than every triangle edge: the
+/// preview is redrawn on every cursor move.
+constexpr std::size_t kMaxPreviewMeshTriangles = 20000;
+
+void AppendMappedSeg(std::vector<float>* out, const GoSurvey::Document::SimilarityTransform& xf,
+                     const ray3d::Vec3& a, const ray3d::Vec3& b) {
+  const ray3d::Vec3 p = xf.applyPoint(a);
+  const ray3d::Vec3 q = xf.applyPoint(b);
+  out->insert(out->end(), {static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z),
+                           static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
+}
+
+/// A mesh's triangle edges (or its box, for a large mesh) mapped by \p xf.
+void AppendMeshPreview(std::vector<float>* out, const CadMesh& m, const GoSurvey::Document::SimilarityTransform& xf) {
+  const std::vector<float>& v = m.vertsXyz;
+  const auto vert = [&](std::size_t i) { return ray3d::Vec3{v[i * 3], v[i * 3 + 1], v[i * 3 + 2]}; };
+  const std::size_t nv = v.size() / 3;
+  const std::size_t nt = m.indices.size() / 3;
+  if (nt <= kMaxPreviewMeshTriangles) {
+    for (std::size_t t = 0; t < nt; ++t) {
+      const std::size_t i[3] = {m.indices[t * 3], m.indices[t * 3 + 1], m.indices[t * 3 + 2]};
+      if (i[0] >= nv || i[1] >= nv || i[2] >= nv)
+        continue;
+      for (int k = 0; k < 3; ++k)
+        AppendMappedSeg(out, xf, vert(i[k]), vert(i[(k + 1) % 3]));
+    }
+    return;
+  }
+  GoSurvey::Document::EntityBounds3d b;
+  for (std::size_t i = 0; i < nv; ++i)
+    b.expand(vert(i));
+  if (!b.valid)
+    return;
+  const ray3d::Vec3 c[2] = {b.min, b.max};
+  const auto corner = [&](int k) { return ray3d::Vec3{c[k & 1].x, c[(k >> 1) & 1].y, c[(k >> 2) & 1].z}; };
+  for (int k = 0; k < 8; ++k)
+    for (int bit = 1; bit < 8; bit <<= 1)
+      if ((k & bit) == 0)
+        AppendMappedSeg(out, xf, corner(k), corner(k | bit));
+}
+
+}  // namespace
+
+/// The preview's whole budget, in floats across both buffers (about a million segments). It is
+/// rebuilt on every cursor move, so an ARRAY of a large selection stops adding copies here rather
+/// than stalling the viewport; the copies it does draw are still exactly the commit's.
+constexpr std::size_t kMaxPreviewFloats = 6000000;
+
+static void AppendTransformPreview(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
+                                   std::vector<float>* prevLines, std::vector<float>* prevCircles) {
+  // One instance at a time, so the budget can stop an ARRAY part way.
+  CadTransformPreviewPlan one = plan;
+  CadTransformPreviewScratch scratch;
+  // A solid's or pipe run's display wireframe, read once and moved by each instance's transform.
+  std::map<std::pair<int, int>, std::vector<float>> displayLines;
+  for (const GoSurvey::Document::SimilarityTransform& xf : plan.instances) {
+    if (prevLines->size() + prevCircles->size() > kMaxPreviewFloats)
+      return;
+    one.instances.assign(1, xf);
+    BuildCadTransformPreviewScratch(cmd, one, &scratch);
+    if (!scratch.source)
+      return;
+    for (const SelectedEntity& e : scratch.entities)
+      AppendEntityWireframe(cmd, scratch.drawing, scratch.source->blockDefs, e, prevLines, prevCircles);
+    // Solids, pipe runs and meshes: their existing display geometry, moved by the same transform.
+    for (const CadTransformPreviewScratch::CachedDisplay& c : scratch.cached) {
+      if (c.entity.type == SelectedEntity::Type::Mesh) {
+        const auto& meshes = scratch.source->cadMeshes;
+        const std::size_t k = static_cast<std::size_t>(c.entity.index);
+        if (k < meshes.size() && meshes[k])
+          AppendMeshPreview(prevLines, *meshes[k], c.xf);
+        continue;
+      }
+      auto [it, added] = displayLines.try_emplace({static_cast<int>(c.entity.type), c.entity.index});
+      if (added) {
+        std::vector<float> circles;
+        AppendEntityWireframe(cmd, *scratch.source, scratch.source->blockDefs, c.entity, &it->second, &circles);
+      }
+      const std::vector<float>& lines = it->second;
+      for (std::size_t i = 0; i + 5 < lines.size(); i += 6)
+        AppendMappedSeg(prevLines, c.xf, {lines[i], lines[i + 1], lines[i + 2]},
+                        {lines[i + 3], lines[i + 4], lines[i + 5]});
     }
   }
 }
@@ -2170,74 +1491,10 @@ void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLine
     return;
   outLines->clear();
   outCircles->clear();
-  if (!cmd.gizmoDragActive || std::fabs(cmd.gizmoDragDistance) < 1.e-12)
-    return;
-  // The selection's own highlight linework, translated. Built from `AppendEntityHighlight` rather
-  // than from a second per-type walk: the ghost is then, by construction, a picture of exactly what
-  // the drag is about to move — every type it covers and no type it does not.
-  for (const auto& e : cmd.selection)
-    AppendEntityHighlight(cmd, e, outLines, outCircles);
-  const double d = cmd.gizmoDragDistance;
-  const ray3d::Vec3 u = cmd.gizmoAxisDir;
-  // ROTATE and SCALE move every point about the anchor rather than along the axis. This ghost used
-  // to translate for them too — by an angle, or by a factor, read as a distance — which a single
-  // UCS-Z ring in plan view hid (the slide was along the view direction) and the X/Y rings of
-  // D-2026-09-28-b would have shown as the selection sliding sideways while the user turned it.
-  if (cmd.gizmoOp != CadGizmoOp::Translate) {
-    const ray3d::Vec3 c = cmd.gizmoAnchor;
-    const bool rot = cmd.gizmoOp == CadGizmoOp::Rotate;
-    const auto xf = [&](const ray3d::Vec3& p) {
-      return rot ? ray3d::RotatePointAboutAxis(p, c, u, d)
-                 : ray3d::Add(c, ray3d::Scale(ray3d::Sub(p, c), d));
-    };
-    for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
-      const ray3d::Vec3 p = xf({(*outLines)[i], (*outLines)[i + 1], (*outLines)[i + 2]});
-      (*outLines)[i] = static_cast<float>(p.x);
-      (*outLines)[i + 1] = static_cast<float>(p.y);
-      (*outLines)[i + 2] = static_cast<float>(p.z);
-    }
-    // A circle is carried flat, as (cx, cy, z, r). A scale or a turn about a vertical axis keeps it
-    // flat; a turn about a tilted axis does not, so that one is drawn as chords, turned.
-    std::vector<float> keep;
-    const bool staysFlat = !rot || std::fabs(u.z) > 0.9999;
-    constexpr int kChords = 48;
-    constexpr double kTwoPi = 6.28318530717958647692;
-    for (size_t i = 0; i + 3 < outCircles->size(); i += 4) {
-      const ray3d::Vec3 ctr{(*outCircles)[i], (*outCircles)[i + 1], (*outCircles)[i + 2]};
-      const double r = (*outCircles)[i + 3];
-      if (staysFlat) {
-        const ray3d::Vec3 nc = xf(ctr);
-        keep.insert(keep.end(), {static_cast<float>(nc.x), static_cast<float>(nc.y),
-                                 static_cast<float>(nc.z), static_cast<float>(rot ? r : r * d)});
-        continue;
-      }
-      ray3d::Vec3 prev = xf({ctr.x + r, ctr.y, ctr.z});
-      for (int k = 1; k <= kChords; ++k) {
-        const double th = kTwoPi * static_cast<double>(k) / static_cast<double>(kChords);
-        const ray3d::Vec3 p = xf({ctr.x + r * std::cos(th), ctr.y + r * std::sin(th), ctr.z});
-        outLines->insert(outLines->end(),
-                         {static_cast<float>(prev.x), static_cast<float>(prev.y), static_cast<float>(prev.z),
-                          static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
-        prev = p;
-      }
-    }
-    *outCircles = std::move(keep);
-    return;
-  }
-  // The displacement the commit will apply — an axis distance or a plane offset (D-2026-09-28-c).
-  const ray3d::Vec3 mv = cmd.gizmoDragVec;
-  const float dx = static_cast<float>(mv.x);
-  const float dy = static_cast<float>(mv.y);
-  const float dz = static_cast<float>(mv.z);
-  for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
-    (*outLines)[i] += dx;
-    (*outLines)[i + 1] += dy;
-    (*outLines)[i + 2] += dz;
-  }
-  // Circles are carried as (cx, cy, z, r) rather than as chords, so only the centre moves.
-  for (size_t i = 0; i + 3 < outCircles->size(); i += 4) {
-    (*outCircles)[i] += dx;
-    (*outCircles)[i + 1] += dy;
-    (*outCircles)[i + 2] += dz;
-  }
+  // The transform the drag would commit (CommitGizmoDrag), applied to a scratch copy of the selection
+  // exactly as the typed MOVE, ROTATE and SCALE previews are (issue #1700). The ghost is then, by
+  // construction, the result the release produces, and it leaves out what the commit refuses.
+  CadTransformPreviewPlan plan;
+  if (CadGizmoDragPreviewPlan(cmd, &plan))
+    AppendTransformPreview(cmd, plan, outLines, outCircles);
 }

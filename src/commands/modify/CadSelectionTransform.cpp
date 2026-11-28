@@ -185,30 +185,29 @@ void TransformSelectedFeatureLines(AppCommandState& st, const doc::SimilarityTra
 
 // --- Alignments (Survey) --------------------------------------------------------------------------
 
-void TransformSelectedAlignmentsBy(AppCommandState& st, const doc::SimilarityTransform& xf, bool duplicate) {
+/// A plan transform (\p xf keeps world +Z) applied to one alignment: the plan transform about the
+/// origin, then the translation it leaves — reflect or rotate, scale, move. Alignment azimuths run
+/// clockwise, so a counter-clockwise turn is negated.
+bool TransformAlignment(alignment::Alignment& a, const doc::SimilarityTransform& xf) {
   const ray3d::Vec3 o = xf.applyPoint({0.0, 0.0, 0.0});
   const double angle = PlanAngle(xf);
   const double scale = xf.scale();
-  const bool reflected = xf.isReflection();
-  TransformSelectedAlignments(
-      st,
-      [&](alignment::Alignment& a) {
-        // The plan transform about the origin, then the translation it leaves: reflect or rotate,
-        // scale, move. Alignment azimuths run clockwise, so a counter-clockwise turn is negated.
-        if (reflected) {
-          const double phi = 0.5 * angle;
-          if (!a.Mirror(0.0, 0.0, std::cos(phi), std::sin(phi)))
-            return false;
-        } else if (angle != 0.0) {
-          a.Rotate(0.0, 0.0, -angle);
-        }
-        if (scale != 1.0 && !a.Scale(0.0, 0.0, scale))
-          return false;
-        if (o.x != 0.0 || o.y != 0.0)
-          a.Translate(o.x, o.y);
-        return true;
-      },
-      duplicate);
+  if (xf.isReflection()) {
+    const double phi = 0.5 * angle;
+    if (!a.Mirror(0.0, 0.0, std::cos(phi), std::sin(phi)))
+      return false;
+  } else if (angle != 0.0) {
+    a.Rotate(0.0, 0.0, -angle);
+  }
+  if (scale != 1.0 && !a.Scale(0.0, 0.0, scale))
+    return false;
+  if (o.x != 0.0 || o.y != 0.0)
+    a.Translate(o.x, o.y);
+  return true;
+}
+
+void TransformSelectedAlignmentsBy(AppCommandState& st, const doc::SimilarityTransform& xf, bool duplicate) {
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { return TransformAlignment(a, xf); }, duplicate);
 }
 
 // --- Survey points (Survey; their own selection list) ---------------------------------------------
@@ -239,7 +238,7 @@ double MeasuredTextWidth(const AppCommandState& st, const CadAnnotation& a) {
 }
 
 /// A dimension whose size changed re-measures and re-places its text from its style.
-void RefreshScaledDimension(AppCommandState& st, CadAnnotation& a) {
+void RefreshScaledDimension(const AppCommandState& st, CadAnnotation& a) {
   if (a.kind == CadAnnotation::Kind::DimAngular) {
     CadDimAngularSyncTextPlacement(&a, st.drawing.modelUnitsPerPlottedInch);
     CadDimRefreshMeasurementText(&a, st.drawing.activeDimensionStyle, CadAngleDisplaySettings(st));
@@ -376,4 +375,328 @@ void TransformSelection(AppCommandState& st, const doc::SimilarityTransform& xf,
   }
   if (changed || !st.selection.empty() || !st.selectedSurveyPointIndices.empty())
     BumpCadGpuCache(st);
+}
+
+bool CadSelectionTakesTransform(SelectedEntity::Type type, EntityOp op, const doc::SimilarityTransform& xf) {
+  return JudgeSelected(type, op, xf).reason.empty();
+}
+
+void CadTransformPdfUnderlayPlacement(PdfAttachment& att, const doc::SimilarityTransform& xf) {
+  TransformPdfUnderlay(att, xf);
+}
+
+// --- The commit's transform, shared with the preview (issue #1700 phase 3) ------------------------
+
+ray3d::Vec3 CadRotateAxisUnit(const AppCommandState& st) {
+  // ROTATE turns about an axis parallel to the active UCS Z (REQ-329). In plan view, or under any UCS
+  // merely rotated in plan, that axis is world Z exactly.
+  if (CadWorkPlaneIsWorldXy(st))
+    return {0.0, 0.0, 1.0};
+  const ucs::Ucs u = CadActiveUcsStorage(st);
+  return ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
+}
+
+doc::SimilarityTransform CadMirrorTransform(const AppCommandState& st, float x0, float y0, float z0, float x1,
+                                            float y1, float z1, bool* outLineAlongUcsZ) {
+  if (outLineAlongUcsZ)
+    *outLineAlongUcsZ = false;
+  // The plane that holds the picked line and stands perpendicular to the work plane: a vertical plane
+  // in plan view (REQ-103), a tilted one under a tilted UCS (REQ-329).
+  if (CadWorkPlaneIsWorldXy(st))
+    return doc::SimilarityTransform::ReflectionAcrossLineXY(x0, y0, x1, y1);
+  const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(z0)};
+  const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(z1)};
+  const ucs::Ucs u = CadActiveUcsStorage(st);
+  const ray3d::Vec3 normal = ray3d::Cross(ray3d::Sub(p2, p1), {u.zAxis.x, u.zAxis.y, u.zAxis.z});
+  if (ray3d::Length(normal) < 1e-9) {
+    if (outLineAlongUcsZ)
+      *outLineAlongUcsZ = true;
+    return doc::SimilarityTransform::Invalid();
+  }
+  return doc::SimilarityTransform::ReflectionAcrossPlane(p1, normal);
+}
+
+namespace {
+
+constexpr int kMaxArrayPreviewInstances = 1000;
+
+void AddRectangularArrayPlan(const AppCommandState& cmd, const stepengine::ArraySession& arr, float curX, float curY,
+                             CadTransformPreviewPlan* plan) {
+  using APh = stepengine::ArrayPhase;
+  const ucs::Ucs frame = CadWorkPlaneAnchoredAt(cmd, arr.anchorX, arr.anchorY, arr.anchorZ);
+  const ucs::Point2D cursorLocal = ucs::WorldToPlane(frame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
+  const int cols = std::max(arr.cols, 1);
+  float colSpacing = arr.colSpacing;
+  int rows = 1;
+  float rowSpacing = 0.f;
+  if (arr.phase == APh::Rect_WaitColumnSpacing) {
+    colSpacing = static_cast<float>(cursorLocal.x);
+  } else if (arr.phase == APh::Rect_WaitRowSpacing) {
+    rows = std::max(arr.rows, 1);
+    rowSpacing = static_cast<float>(cursorLocal.y);
+  } else if (arr.phase != APh::Rect_WaitRows) {
+    return;
+  }
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      if (r == 0 && c == 0)
+        continue;
+      if (plan->instances.size() >= static_cast<size_t>(kMaxArrayPreviewInstances))
+        return;
+      // CommitArrayRectangular's own cell offset.
+      float dx = 0.f, dy = 0.f, dz = 0.f;
+      ArrayCellWorldDelta(cmd, arr, static_cast<float>(c) * colSpacing, static_cast<float>(r) * rowSpacing, &dx, &dy,
+                          &dz);
+      plan->instances.push_back(doc::SimilarityTransform::Translation({dx, dy, dz}));
+    }
+}
+
+void AddPolarArrayPlan(const AppCommandState& cmd, const stepengine::ArraySession& arr, float curX, float curY,
+                       CadTransformPreviewPlan* plan) {
+  using APh = stepengine::ArrayPhase;
+  if (arr.phase != APh::Polar_WaitAngle && arr.phase != APh::Polar_WaitRotateAnswer)
+    return;
+  constexpr float kPi = 3.14159265358979323846f;
+  const int n = std::max(arr.itemCount, 1);
+  const ray3d::Vec3 axisPoint{arr.centerX, arr.centerY, arr.centerZ};
+  const ucs::Ucs ucsFrame = CadActiveUcsStorage(cmd);
+  const ray3d::Vec3 axisUnit = ray3d::Normalize(ray3d::Vec3{ucsFrame.zAxis.x, ucsFrame.zAxis.y, ucsFrame.zAxis.z});
+  float fillDeg = arr.fillAngleDeg;
+  if (arr.phase == APh::Polar_WaitAngle) {
+    const ucs::Ucs centreFrame = CadWorkPlaneAnchoredAt(cmd, arr.centerX, arr.centerY, arr.centerZ);
+    const ucs::Point2D lc = ucs::WorldToPlane(centreFrame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
+    fillDeg = std::atan2(static_cast<float>(lc.y), static_cast<float>(lc.x)) * (180.f / kPi);
+    if (fillDeg < 0.f)
+      fillDeg += 360.f;
+  }
+  // CommitArrayPolar's own step and per-item transform.
+  const bool fullTurn = std::fabs(std::fmod(fillDeg, 360.f)) < 1e-3f;
+  const float fillRad = fillDeg * (kPi / 180.f);
+  const float step =
+      (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n) : fillRad / static_cast<float>(n - 1));
+  const int count = std::min(n, kMaxArrayPreviewInstances + 1);
+  const ray3d::Vec3 anchor{arr.anchorX, arr.anchorY, arr.anchorZ};
+  for (int i = 1; i < count; ++i) {
+    const float ang = step * static_cast<float>(i);
+    if (arr.rotateItems) {
+      plan->instances.push_back(doc::SimilarityTransform::RotationAboutAxis(axisPoint, axisUnit, ang));
+    } else {
+      const ray3d::Vec3 rotated = ray3d::RotatePointAboutAxis(anchor, axisPoint, axisUnit, ang);
+      plan->instances.push_back(doc::SimilarityTransform::Translation(ray3d::Sub(rotated, anchor)));
+    }
+  }
+}
+
+/// The selection types a whole-store source (the clipboard) is walked for. Pipe runs are left out:
+/// their display solids exist only for the drawing's own runs.
+constexpr SelectedEntity::Type kStoreSelectionTypes[] = {
+    SelectedEntity::Type::LineSeg,      SelectedEntity::Type::Circle,      SelectedEntity::Type::Arc,
+    SelectedEntity::Type::Ellipse,      SelectedEntity::Type::Polyline,    SelectedEntity::Type::Annotation,
+    SelectedEntity::Type::FilledRegion, SelectedEntity::Type::Mesh,        SelectedEntity::Type::Table,
+    SelectedEntity::Type::BlockRef,     SelectedEntity::Type::Solid,       SelectedEntity::Type::PositionMarker,
+    SelectedEntity::Type::Multileader,  SelectedEntity::Type::Spline,      SelectedEntity::Type::Point};
+
+/// Appends a copy of feature line \p fi of \p src to \p dst with every vertex mapped in X, Y and Z,
+/// as \ref TransformSelectedFeatureLines maps them at commit. Returns its index in \p dst, or -1.
+int CopyFeatureLineTransformed(DrawingContent& dst, const DrawingContent& src, int fi,
+                               const doc::SimilarityTransform& xf) {
+  if (fi < 0 || static_cast<size_t>(fi) + 1 >= src.featureLineOffsets.size())
+    return -1;
+  const int v0 = src.featureLineOffsets[static_cast<size_t>(fi)];
+  const int v1 = src.featureLineOffsets[static_cast<size_t>(fi) + 1];
+  if (v0 < 0 || v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > src.featureLineVerts.size())
+    return -1;
+  if (dst.featureLineOffsets.empty())
+    dst.featureLineOffsets.push_back(0);
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t b = static_cast<size_t>(vi) * 3;
+    const ray3d::Vec3 q =
+        xf.applyPoint({src.featureLineVerts[b], src.featureLineVerts[b + 1], src.featureLineVerts[b + 2]});
+    dst.featureLineVerts.insert(dst.featureLineVerts.end(), {q.x, q.y, q.z});
+  }
+  dst.featureLineOffsets.push_back(dst.featureLineOffsets.back() + (v1 - v0));
+  dst.featureLineClosed.push_back(static_cast<size_t>(fi) < src.featureLineClosed.size()
+                                      ? src.featureLineClosed[static_cast<size_t>(fi)]
+                                      : std::uint8_t{0});
+  return static_cast<int>(dst.featureLineOffsets.size()) - 2;
+}
+
+}  // namespace
+
+bool CadActiveTransformPreviewPlan(const AppCommandState& cmd, float curX, float curY, CadTransformPreviewPlan* plan) {
+  if (!plan)
+    return false;
+  *plan = CadTransformPreviewPlan{};
+  using MP = stepengine::ModifyPhase;
+  using MirP = stepengine::MirrorPhase;
+  using SimT = doc::SimilarityTransform;
+  if (const auto* mc = cmd.sessionAs<stepengine::MoveCopySession>()) {
+    if (mc->phase != MP::NeedDestination)
+      return false;
+    // MoveCopySession::onViewportPick: the destination is the pick, at the commit elevation.
+    plan->op = mc->isCopy ? EntityOp::Copy : EntityOp::Move;
+    plan->instances.push_back(
+        SimT::Translation({curX - mc->baseX, curY - mc->baseY, CadCommitElevation(cmd) - mc->baseZ}));
+    return true;
+  }
+  if (const auto* ps = cmd.sessionAs<stepengine::PasteSession>()) {
+    plan->op = EntityOp::Copy;
+    plan->fromClipboard = true;
+    plan->instances.push_back(SimT::Translation({curX - ps->baseX, curY - ps->baseY, 0.0}));
+    return true;
+  }
+  if (const auto* arr = cmd.sessionAs<stepengine::ArraySession>()) {
+    plan->op = EntityOp::Array;
+    if (arr->type == stepengine::ArrayType::Rectangular)
+      AddRectangularArrayPlan(cmd, *arr, curX, curY, plan);
+    else
+      AddPolarArrayPlan(cmd, *arr, curX, curY, plan);
+    return !plan->instances.empty();
+  }
+  if (const auto* ss = cmd.sessionAs<stepengine::ScaleSession>()) {
+    float sc = 1.f;
+    if (ss->phase != MP::NeedDestination || !CadScalePreviewFactor(cmd, curX, curY, &sc))
+      return false;
+    plan->op = EntityOp::Scale;
+    plan->instances.push_back(SimT::UniformScale({ss->baseX, ss->baseY, ss->baseZ}, sc));
+    return plan->instances.back().valid();
+  }
+  if (const auto* ms = cmd.sessionAs<stepengine::MirrorSession>()) {
+    if (ms->phase != MirP::NeedP2 && ms->phase != MirP::NeedEraseAnswer)
+      return false;
+    float x1 = ms->p2X, y1 = ms->p2Y, z1 = ms->p2Z;
+    if (ms->phase == MirP::NeedP2) {
+      // MirrorSession::onViewportPick: ORTHO locks the line, at the commit elevation.
+      x1 = curX;
+      y1 = curY;
+      z1 = CadCommitElevation(cmd);
+      ApplyOrthoConstrainFromAnchor(cmd, ms->p1X, ms->p1Y, &x1, &y1, cmd.orthoMode, ms->p1Z, z1, &z1);
+    }
+    plan->op = EntityOp::Mirror;
+    plan->instances.push_back(CadMirrorTransform(cmd, ms->p1X, ms->p1Y, ms->p1Z, x1, y1, z1, nullptr));
+    return plan->instances.back().valid();
+  }
+  if (const auto* rs = cmd.sessionAs<stepengine::RotateSession>()) {
+    double theta = 0.0;
+    if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
+      return false;
+    const SimT xf = SimT::RotationAboutAxis({rs->baseX, rs->baseY, rs->baseZ}, CadRotateAxisUnit(cmd), theta);
+    plan->op = xf.isPlanarZ() ? EntityOp::RotatePlan : EntityOp::Rotate3d;
+    plan->instances.push_back(xf);
+    return xf.valid();
+  }
+  return false;
+}
+
+bool CadGizmoDragPreviewPlan(const AppCommandState& cmd, CadTransformPreviewPlan* plan) {
+  if (!plan)
+    return false;
+  *plan = CadTransformPreviewPlan{};
+  // A face, edge or vertex drag edits a solid, not the selection (BuildSubObjectFaceGhost draws it).
+  if (!cmd.gizmoDragActive || cmd.gizmoDragIsSubObject)
+    return false;
+  using SimT = doc::SimilarityTransform;
+  const double d = cmd.gizmoDragDistance;
+  // CommitGizmoDragImpl: a drag that leaves the operation's neutral value changes nothing.
+  const double neutral = cmd.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;
+  if (std::fabs(d - neutral) < 1.e-12)
+    return false;
+  const ray3d::Vec3 anchor = cmd.gizmoAnchor;
+  if (cmd.gizmoOp == CadGizmoOp::Rotate) {
+    // The Z ring is typed ROTATE (ApplyRotationAboutUcsZ); the X and Y rings turn about their own axis.
+    const ray3d::Vec3 axis = cmd.gizmoDragAxis == 2 ? CadRotateAxisUnit(cmd) : cmd.gizmoAxisDir;
+    const SimT xf = SimT::RotationAboutAxis(anchor, axis, d);
+    plan->op = xf.isPlanarZ() ? EntityOp::RotatePlan : EntityOp::Rotate3d;
+    plan->instances.push_back(xf);
+  } else if (cmd.gizmoOp == CadGizmoOp::Scale) {
+    // ApplyUniformScaleAboutBase takes the base point and the factor as float.
+    plan->op = EntityOp::Scale;
+    plan->instances.push_back(SimT::UniformScale(
+        {static_cast<float>(anchor.x), static_cast<float>(anchor.y), static_cast<float>(anchor.z)},
+        static_cast<float>(d)));
+  } else {
+    // ApplyTranslationToSelection takes the displacement as float.
+    const ray3d::Vec3 mv = cmd.gizmoDragVec;
+    plan->op = EntityOp::Move;
+    plan->instances.push_back(
+        SimT::Translation({static_cast<float>(mv.x), static_cast<float>(mv.y), static_cast<float>(mv.z)}));
+  }
+  return plan->instances.back().valid();
+}
+
+void BuildCadTransformPreviewScratch(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
+                                     CadTransformPreviewScratch* out, std::optional<SelectedEntity::Type> only) {
+  if (!out)
+    return;
+  out->drawing = DrawingContent{};
+  out->entities.clear();
+  out->cached.clear();
+  const DrawingContent& src = plan.fromClipboard ? cmd.clipboard.content : cmd.drawing;
+  out->source = &src;
+
+  std::vector<SelectedEntity> sources;
+  if (plan.fromClipboard) {
+    for (SelectedEntity::Type t : kStoreSelectionTypes) {
+      const std::optional<EntityKind> kind = EntityKindForSelection(t);
+      const size_t n = kind ? doc::EntityCountForKind(src, *kind) : 0;
+      for (size_t i = 0; i < n; ++i)
+        sources.push_back(SelectedEntity{t, static_cast<int>(i)});
+    }
+  } else {
+    std::set<std::pair<int, int>> seen;
+    for (const SelectedEntity& e : cmd.selection)
+      if (seen.insert({static_cast<int>(e.type), e.index}).second)
+        sources.push_back(e);
+  }
+
+  doc::EntityTransformContext ctx;
+  ctx.textUnitsPerPlottedInch = cmd.drawing.modelUnitsPerPlottedInch;
+  ctx.textWidth = [&cmd](const CadAnnotation& a) { return MeasuredTextWidth(cmd, a); };
+
+  for (const doc::SimilarityTransform& xf : plan.instances) {
+    if (!xf.valid())
+      continue;
+    for (const SelectedEntity& e : sources) {
+      if (only && e.type != *only)
+        continue;
+      // What the commit refuses, the preview leaves out (RefuseSelectionForTransform). A paste is a
+      // translation, which every kind takes.
+      if (!plan.fromClipboard && !CadSelectionTakesTransform(e.type, plan.op, xf))
+        continue;
+      if (e.type == SelectedEntity::Type::FeatureLine) {
+        const int fi = CopyFeatureLineTransformed(out->drawing, src, e.index, xf);
+        if (fi >= 0)
+          out->entities.push_back(SelectedEntity{e.type, fi});
+        continue;
+      }
+      if (e.type == SelectedEntity::Type::Alignment) {
+        if (e.index < 0 || static_cast<size_t>(e.index) >= src.alignments.size())
+          continue;
+        alignment::Alignment copy = src.alignments[static_cast<size_t>(e.index)];
+        if (!TransformAlignment(copy, xf))
+          continue;
+        out->drawing.alignments.push_back(std::move(copy));
+        out->entities.push_back(SelectedEntity{e.type, static_cast<int>(out->drawing.alignments.size()) - 1});
+        continue;
+      }
+      const std::optional<EntityKind> kind = EntityKindForSelection(e.type);
+      if (!kind || !doc::HasEntityKindOps(*kind) || e.index < 0 ||
+          static_cast<size_t>(e.index) >= doc::EntityCountForKind(src, *kind))
+        continue;
+      // Solids, pipe runs and meshes keep their display tessellation and move it with the same
+      // transform (ADR-0011): rebuilding a B-rep, a swept pipe or a large mesh per frame is the
+      // commit's work, not the preview's.
+      if (*kind == EntityKind::Solid || *kind == EntityKind::PipeRun || *kind == EntityKind::Mesh) {
+        if (doc::SupportsEntityTransform(*kind, xf))
+          out->cached.push_back({e, xf});
+        continue;
+      }
+      const EntityRef copy = doc::CopyEntityInto(out->drawing, src, EntityRef{*kind, e.index});
+      if (!copy.valid() || !doc::TransformEntity(out->drawing, copy, xf, ctx))
+        continue;
+      if (copy.kind == EntityKind::Annotation && xf.scale() != 1.0)
+        RefreshScaledDimension(cmd, out->drawing.cadAnnotations[static_cast<size_t>(copy.index)]);
+      out->entities.push_back(SelectedEntity{e.type, copy.index});
+    }
+  }
 }

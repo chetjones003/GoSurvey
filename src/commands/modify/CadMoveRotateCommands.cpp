@@ -122,12 +122,8 @@ bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut) {
 void ApplyRotationAboutUcsZ(AppCommandState& st, double bx, double by, double bz, double rad,
                             std::vector<std::string>& log) {
   // ROTATE turns the selection about an axis through the base point parallel to the active UCS Z
-  // (REQ-329). In plan view, or under any UCS merely rotated in plan, that axis is world Z.
-  const ucs::Ucs u = CadActiveUcsStorage(st);
-  const ray3d::Vec3 axisUnit = CadWorkPlaneIsWorldXy(st)
-                                   ? ray3d::Vec3{0.0, 0.0, 1.0}
-                                   : ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
-  ApplyRotationAboutAxis(st, {bx, by, bz}, axisUnit, rad, log);
+  // (REQ-329), the same axis the preview turns about.
+  ApplyRotationAboutAxis(st, {bx, by, bz}, CadRotateAxisUnit(st), rad, log);
 }
 
 void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,

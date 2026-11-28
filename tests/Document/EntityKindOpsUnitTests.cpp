@@ -567,3 +567,58 @@ TEST_CASE("PR-Agent boundary regressions: SIZE_MAX index, near-axis circle bound
     }
   }
 }
+
+TEST_CASE("CopyEntityInto copies one entity into another store", "[document][entitykindops][issue1700]") {
+  CadDrawingEntityStore src;
+  src.pushLine(CadLineRecord{1.0, 2.0, 3.0, 4.0, 5.0, 6.0});
+  src.userLineAttrs.push_back(EntityAttributes{});
+  src.userLineAttrs.back().layer = "L1";
+  src.pushCircle(CadCircleRecord{10.0, 0.0, 2.0, 3.0});
+  src.userCircleAttrs.push_back(EntityAttributes{});
+  PushCircleNormal(src.userCircleNormals, 1.f, 0.f, 0.f);
+  // Two polylines, so the copy reads the second one's own vertex range and side-cars.
+  src.userPolylineOffsets = {0, 2, 5};
+  for (const CadPolyVertex& v : {CadPolyVertex{0, 0, 0}, CadPolyVertex{1, 0, 0}, CadPolyVertex{5, 0, 1},
+                                 CadPolyVertex{6, 1, 1}, CadPolyVertex{7, 0, 1}})
+    src.pushVertex(v);
+  src.userPolylineVertsBulge = {0.f, 0.f, 0.5f, 0.f, 0.f};
+  src.userPolylineVertsNormal = {0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1};
+  src.userPolylineClosed = {0, 1};
+  src.userPolylineAttrs = {EntityAttributes{}, EntityAttributes{}};
+  src.cadSplines.push_back(CadSpline{});
+  src.cadSplineAttrs.push_back(EntityAttributes{});
+
+  CadDrawingEntityStore dst;
+  const EntityRef line = doc::CopyEntityInto(dst, src, {EntityKind::Line, 0});
+  REQUIRE(line.valid());
+  CHECK(dst.lineCount() == 1);
+  CHECK(dst.line(0).z1 == 6.0);
+  CHECK(dst.userLineAttrs.at(0).layer == "L1");
+
+  const EntityRef circle = doc::CopyEntityInto(dst, src, {EntityKind::Circle, 0});
+  REQUIRE(circle.valid());
+  CHECK(dst.circle(0).r == 3.0);
+  REQUIRE(dst.userCircleNormals.size() == 3);
+  CHECK(dst.userCircleNormals[0] == 1.f);  // the plane comes with the circle
+
+  const EntityRef poly = doc::CopyEntityInto(dst, src, {EntityKind::Polyline, 1});
+  REQUIRE(poly.valid());
+  CHECK(poly.index == 0);
+  REQUIRE(dst.userPolylineOffsets == std::vector<int>{0, 3});
+  CHECK(dst.vertex(0).x == 5.0);
+  CHECK(dst.vertex(2).x == 7.0);
+  CHECK(dst.userPolylineVertsBulge == std::vector<float>{0.5f, 0.f, 0.f});
+  REQUIRE(dst.userPolylineVertsNormal.size() == 9);
+  CHECK(dst.userPolylineVertsNormal[1] == 1.f);  // the bulged segment's tilted plane
+  CHECK(dst.userPolylineClosed == std::vector<std::uint8_t>{1});
+
+  // The copy can be transformed like any other entity, and the source is untouched.
+  REQUIRE(doc::TransformEntity(dst, poly, doc::SimilarityTransform::Translation({0.0, 0.0, 10.0})));
+  CHECK(dst.vertex(0).z == 11.0);
+  CHECK(src.vertex(2).z == 1.0);
+
+  CHECK(doc::CopyEntityInto(dst, src, {EntityKind::Spline, 0}).valid());
+  CHECK_FALSE(doc::CopyEntityInto(dst, src, {EntityKind::Arc, 0}).valid());       // out of range
+  CHECK_FALSE(doc::CopyEntityInto(dst, src, {EntityKind::Polyline, 2}).valid());  // out of range
+  CHECK_FALSE(doc::CopyEntityInto(dst, src, {EntityKind::FeatureLine, 0}).valid());  // not Document's
+}

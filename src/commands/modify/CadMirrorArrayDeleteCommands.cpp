@@ -1168,23 +1168,16 @@ void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, fl
   const bool hadSurveySelection =
       !st.selectedSurveyPointIndices.empty() && CadWorkPlaneIsWorldXy(st);
   // MIRROR reflects across the plane that holds the picked line and stands perpendicular to the work
-  // plane: a vertical plane in plan view (REQ-103), a tilted one under a tilted UCS (REQ-329).
-  using GoSurvey::Document::SimilarityTransform;
-  SimilarityTransform xf = SimilarityTransform::Invalid();
-  if (CadWorkPlaneIsWorldXy(st)) {
-    xf = SimilarityTransform::ReflectionAcrossLineXY(x0, y0, x1, y1);
-  } else {
-    const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(z0)};
-    const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(z1)};
-    const ucs::Ucs u = CadActiveUcsStorage(st);
-    const ray3d::Vec3 normal = ray3d::Cross(ray3d::Sub(p2, p1), {u.zAxis.x, u.zAxis.y, u.zAxis.z});
-    if (ray3d::Length(normal) < 1e-9) {
-      log.push_back("MIRROR — the mirror line must lie in the work plane (it is parallel to the UCS Z"
-                    " axis here); pick two points on the plane.");
-      stepengine::EndSession(st);
-      return;
-    }
-    xf = SimilarityTransform::ReflectionAcrossPlane(p1, normal);
+  // plane (CadMirrorTransform, which the preview uses too).
+  bool alongUcsZ = false;
+  const GoSurvey::Document::SimilarityTransform xf = CadMirrorTransform(st, x0, y0, z0, x1, y1, z1, &alongUcsZ);
+  if (alongUcsZ) {
+    log.push_back("MIRROR — the mirror line must lie in the work plane (it is parallel to the UCS Z"
+                  " axis here); pick two points on the plane.");
+    stepengine::EndSession(st);
+    return;
+  }
+  if (!CadWorkPlaneIsWorldXy(st)) {
     if (!st.selectedSurveyPointIndices.empty()) {
       log.push_back("MIRROR — " + std::to_string(st.selectedSurveyPointIndices.size()) +
                     " survey point(s) excluded: reflection across a tilted mirror plane is not supported yet"

@@ -594,20 +594,20 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
                         float viewportHeightPx, const ray3d::Ray* ray = nullptr);
 int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                    float viewportHeightPx);
-void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
-                                      std::vector<CadTable>* out);
 void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex);
 void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log);
 void CancelTableCellEditor(AppCommandState& st);
 void MigrateLegacyAnnotationTables(AppCommandState& st);
 
-/// ROTATE live preview angle (rad) about \ref AppCommandState::rotateBase when cursor drives preview.
-bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad);
+/// ROTATE live preview angle (rad) about the base point: the angle a pick at the cursor would commit
+/// (RotateSession::onViewportPick), measured in the work plane.
+bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, double* outThetaRad);
 /// \c Kind::Scale, \c modifyPhase == NeedDestination — live scale from cursor (see \ref AppCommandState::scalePhase).
 bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale);
 
-/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for the viewport overlay.
-/// New CAD entities: mirror this pattern — GL rubber (\p main.cpp) + \ref CadAnnotationCollectTransformPreviews / UI overlay (\p CadUi.cpp) + grips (\p CadUi.cpp).
+/// The annotations a pick at the cursor would leave under the active MOVE/COPY, PASTE, ARRAY, SCALE,
+/// MIRROR or ROTATE step: ghost text for the viewport overlay, from the same scratch copy the
+/// wireframe preview draws (\ref BuildCadTransformPreviewScratch, issue #1700).
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out);
 

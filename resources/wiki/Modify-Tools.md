@@ -25,8 +25,19 @@ MOVE/COPY: Second point — click or X,Y or @dx,dy from base | ESC cancel
 2. **Base point** — click or type `X,Y`. Snap to a corner or a survey point for an exact move.
 3. **Second point** — click, type `X,Y`, or type `@dx,dy` for an exact displacement from the base.
 
-Text and MTEXT show a live transform preview while choosing the destination, as linework does.
-Selected PDF underlays also preview MOVE, COPY, SCALE and ROTATE.
+**Live preview.** MOVE, COPY, ROTATE, SCALE, MIRROR, ARRAY and the gizmo show a ghost of the
+result while you pick. The ghost is the command's own transform applied to a copy of the
+selection, so it shows what the click will produce: SCALE grows the elevation too, a tilted ROTATE
+or polar ARRAY turns about the UCS Z axis, and anything the command refuses (for example text under
+a tilted rotation) is left out of the ghost. Linework, curves, splines, hatch outlines, block
+inserts, solids, pipe runs, imported models, feature lines and alignments draw as wireframe; TEXT
+and MTEXT draw as ghost text; PDF underlays draw as a faded copy of the page.
+
+Two things the ghost cannot know in advance: a solid the modelling kernel rejects at the click is
+still drawn, and the click then reports it unchanged. A very large ARRAY ghost stops adding copies
+at about a million segments, so the viewport stays responsive; the array itself is complete.
+PASTE shows the clipboard's objects at the cursor too, but text copied from a sheet previews at
+its sheet height and is resized only when it lands in model space.
 
 **Example — shift everything 5 feet east and 2 feet north:**
 

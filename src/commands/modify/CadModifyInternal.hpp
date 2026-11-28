@@ -33,6 +33,16 @@ void TransformSelection(AppCommandState& st, const GoSurvey::Document::Similarit
                         GoSurvey::Document::EntityOp op, const char* commandName, bool duplicate,
                         std::vector<std::string>& log);
 
+/// The direction ROTATE turns about: the active UCS Z, or world Z exactly in plan (REQ-329). Shared
+/// by the commit and the preview (issue #1700).
+ray3d::Vec3 CadRotateAxisUnit(const AppCommandState& st);
+
+/// MIRROR's reflection across the plane through (\p x0..\p z1) perpendicular to the work plane.
+/// Invalid when the two points coincide, or (\p outLineAlongUcsZ) when the line runs along the
+/// tilted UCS Z axis. Shared by the commit and the preview (issue #1700).
+GoSurvey::Document::SimilarityTransform CadMirrorTransform(const AppCommandState& st, float x0, float y0, float z0,
+                                                           float x1, float y1, float z1, bool* outLineAlongUcsZ);
+
 template <class T>
 void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
   const double c = std::cos(rad);
@@ -65,64 +75,6 @@ void ReflectPtAcrossLine(double x0, double y0, double x1, double y1, T* x, T* y)
 /// angle' = 2*phi - angle. A reflection reverses handedness (CCW becomes CW), so reflecting a
 /// center point alone does not tell you which way an arc now sweeps.
 
-
-/// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
-
-static void RotateCadDimLinearAroundBase(double bx, double by, double rad, CadAnnotation* ann) {
-  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
-    return;
-  const double x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
-  const double cmx = 0.5 * (x1 + x2);
-  const double cmy = 0.5 * (y1 + y2);
-  double dmx = cmx;
-  double dmy = cmy;
-  if (!ann->dimLinearVertical)
-    dmy = cmy + ann->dimSignedOffset;
-  else
-    dmx = cmx + ann->dimSignedOffset;
-  RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
-  RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
-  RotateAroundBase(bx, by, rad, &dmx, &dmy);
-  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
-  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
-  if (!ann->dimLinearVertical)
-    ann->dimSignedOffset = dmy - ncmy;
-  else
-    ann->dimSignedOffset = dmx - ncmx;
-  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-}
-
-/// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
-/// \c ann->rotationRad here is the dimension LINE's geometric angle (text runs parallel to what was
-/// measured), not a glyph-flip concern — it is re-derived from the reflected geometry the same way
-/// ROTATE already does, independent of the MIRROR text-stays-upright decision for plain Text/Mtext.
-static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1, CadAnnotation* ann) {
-  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
-    return;
-  const double ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
-  const double cmx = 0.5 * (ex1 + ex2);
-  const double cmy = 0.5 * (ey1 + ey2);
-  double dmx = cmx;
-  double dmy = cmy;
-  if (!ann->dimLinearVertical)
-    dmy = cmy + ann->dimSignedOffset;
-  else
-    dmx = cmx + ann->dimSignedOffset;
-  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt1X, &ann->dimExt1Y);
-  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt2X, &ann->dimExt2Y);
-  ReflectPtAcrossLine(x0, y0, x1, y1, &dmx, &dmy);
-  const double ncmx = 0.5 * (ann->dimExt1X + ann->dimExt2X);
-  const double ncmy = 0.5 * (ann->dimExt1Y + ann->dimExt2Y);
-  if (!ann->dimLinearVertical)
-    ann->dimSignedOffset = dmy - ncmy;
-  else
-    ann->dimSignedOffset = dmx - ncmx;
-  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-}
 
 static double NormalizeAngleRadMinusPiToPi(double a) {
   constexpr double kPi = 3.14159265358979323846;

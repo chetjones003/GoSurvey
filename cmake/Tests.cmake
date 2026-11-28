@@ -182,6 +182,7 @@ add_executable(GoSurveyTests
   tests/DrawingContentTests.cpp
   tests/EntityKindOpsTests.cpp
   tests/SelectionTransformTests.cpp
+  tests/TransformPreviewTests.cpp
   tests/CutClipboardTests.cpp
   # Commands, updates and crash reports
   tests/EditorInteractionTests.cpp

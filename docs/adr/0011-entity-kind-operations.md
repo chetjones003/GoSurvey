@@ -106,3 +106,21 @@ above.
   refused (REQ-201). Survey points and feature lines follow the same uniform transform in X, Y and Z
   as the CAD linework they are drawn on, so a breakline stays on its polyline through SCALE.
   Alignments are horizontal and take only transforms that keep plan view.
+
+## Amendment (2026-11-28): where the preview lives (issue #1700 phase 3)
+
+- **Commands builds the preview's scratch copy.** `CadActiveTransformPreviewPlan` returns the
+  transform(s) a pick at the cursor would commit, built by the same code as the commit (for example
+  `CadRotateAxisUnit` and `CadMirrorTransform`). `BuildCadTransformPreviewScratch` copies the
+  selection into a scratch `DrawingContent` with Document's `CopyEntityInto`, applies the commit's
+  refusal check, and transforms the copies with `TransformEntity`. The gizmo ghost, the text ghost
+  and the PDF ghost use the same plan.
+- **Interaction draws it.** The per-kind wireframe stays in `src/viewport/TransformPreview.cpp`,
+  because it is the selection highlight's drawing: one function now draws both, from the live
+  drawing or from the scratch copy. Renderer was rejected: it would need Commands' selection types
+  and the display caches, and draws only what Interaction hands it.
+- **Solids, pipe runs and meshes are not copied.** Their existing display wireframe (or a mesh's
+  own triangles, or its box above 20,000 triangles) is moved by the same transform. A solid the
+  kernel would reject at commit is therefore still previewed.
+- **The preview has a budget.** About a million segments across all copies; a larger ARRAY ghost
+  stops adding copies there.
