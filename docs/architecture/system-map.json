@@ -222,6 +222,91 @@
       "status": "audited"
     },
     {
+      "path": "src/geometry/src/brep_internal.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_face_edit.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_fillet.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_chamfer.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_query.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_primitives.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_sweep.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_slice.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_section.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_boolean.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_boolean_cylinder.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_boolean_sphere.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_boolean_pipe.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_polysolid.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_validate.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_mass.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep_tessellate.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
       "path": "src/geometry/src/curveintersect.cpp",
       "system": "Geometry",
       "status": "audited"
@@ -1772,8 +1857,8 @@
     {
       "path": "src/geometry/src/brep.cpp",
       "lines": [
-        2433,
-        2438
+        1325,
+        1330
       ],
       "system": "Math",
       "concern": "UCS frame rotation about an axis",
@@ -1793,7 +1878,7 @@
       "symbols": [
         "RotateFrameInPlace"
       ],
-      "note": "Duplicate of brep.cpp:2433. Keep both until the move ticket."
+      "note": "Duplicate of brep.cpp:1325. Keep both until the move ticket."
     },
     {
       "path": "src/geometry/include/GoSurvey/Geometry/curveintersect.hpp",
@@ -2033,10 +2118,10 @@
       "note": "Closed-form inverse of a 3x3 matrix with a singularity test. Pure math in the traverse adjustment."
     },
     {
-      "path": "src/geometry/src/brep.cpp",
+      "path": "src/geometry/src/brep_sweep.cpp",
       "lines": [
-        6425,
-        6430
+        776,
+        781
       ],
       "system": "Math",
       "concern": "Rodrigues rotation of a vector",
@@ -2046,10 +2131,10 @@
       "note": "Same formula as ray3d::RotateVectorAboutAxis, in brep's anonymous namespace. Duplicate."
     },
     {
-      "path": "src/geometry/src/brep.cpp",
+      "path": "src/geometry/src/brep_polysolid.cpp",
       "lines": [
-        16300,
-        16322
+        42,
+        64
       ],
       "system": "Math",
       "concern": "2D vector helpers",
@@ -2062,10 +2147,10 @@
       "note": "P2 scalar multiply, dot, cross and length for the profile sweep. Duplicate of the 2D cross in curveintersect.cpp."
     },
     {
-      "path": "src/geometry/src/brep.cpp",
+      "path": "src/geometry/src/brep_polysolid.cpp",
       "lines": [
-        16338,
-        16340
+        80,
+        82
       ],
       "system": "Math",
       "concern": "angle of a point about a centre",
@@ -2077,8 +2162,8 @@
     {
       "path": "src/geometry/src/brep.cpp",
       "lines": [
-        2551,
-        2556
+        1444,
+        1449
       ],
       "system": "Math",
       "concern": "UCS frame mirror in place",
@@ -2222,10 +2307,10 @@
       "note": "Wraps a float angle into [-pi, pi]. Duplicates the wrap helpers listed in couplings."
     },
     {
-      "path": "src/geometry/src/brep.cpp",
+      "path": "src/geometry/src/brep_polysolid.cpp",
       "lines": [
-        16343,
-        16350
+        85,
+        92
       ],
       "system": "Math",
       "concern": "sweep angle between two angles",
@@ -13882,6 +13967,23 @@
       "currentFiles": [
         "src/geometry/include/GoSurvey/Geometry/brep.hpp",
         "src/geometry/src/brep.cpp",
+        "src/geometry/src/brep_internal.hpp",
+        "src/geometry/src/brep_face_edit.cpp",
+        "src/geometry/src/brep_fillet.cpp",
+        "src/geometry/src/brep_chamfer.cpp",
+        "src/geometry/src/brep_query.cpp",
+        "src/geometry/src/brep_primitives.cpp",
+        "src/geometry/src/brep_sweep.cpp",
+        "src/geometry/src/brep_slice.cpp",
+        "src/geometry/src/brep_section.cpp",
+        "src/geometry/src/brep_boolean.cpp",
+        "src/geometry/src/brep_boolean_cylinder.cpp",
+        "src/geometry/src/brep_boolean_sphere.cpp",
+        "src/geometry/src/brep_boolean_pipe.cpp",
+        "src/geometry/src/brep_polysolid.cpp",
+        "src/geometry/src/brep_validate.cpp",
+        "src/geometry/src/brep_mass.cpp",
+        "src/geometry/src/brep_tessellate.cpp",
         "src/geometry/include/GoSurvey/Geometry/curveintersect.hpp",
         "src/geometry/src/curveintersect.cpp",
         "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
@@ -16294,7 +16396,7 @@
       "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
       "io/UserPrefs.cpp reads and writes AppCommandState settings fields directly, so the IO system depends on Commands state.",
       "Commands uses the public ray3d and ucs primitives from Math. ADR-0007 records Math as an allowed Commands dependency; the moved public headers and baseline now enforce that edge. OrthoConstrain remains a Commands-owned helper.",
-      "RotateFrameInPlace is duplicated with identical bodies in brep.cpp:2433 and AcisSatParser.cpp:541.",
+      "RotateFrameInPlace is duplicated with identical bodies in brep.cpp:1325 and AcisSatParser.cpp:541.",
       "The 2D rotation-about-base helper is copied at least 6 times: RotateAroundBase (CadCommands.cpp:10623), RotatePtForAnnotationPreview (:24425), RotateSurveyCoords (SurveyPoints.cpp:361), RotatePdfInsertAroundBase (EditorViewport.cpp:101), Xf2::apply and Xf::P (IO and ConvertDrawing), and Affine2D. Replace callers with one Math helper; do not move code in this audit.",
       "ucs::PlanViewAngles mirrors Camera's stored orientation by measurement, not by a shared derivation. Renderer may depend on Math, so the camera should call the Math function rather than repeat it.",
       "ucs::OrthographicPresets holds UI display names (Top, Front) and is consumed by the View-tab combo and the ViewCube. ucs::AzimuthAboutWorldZDeg feeds the ViewCube compass. Math owns the frames; the labels and widgets belong to UI and Qt.",
@@ -16302,12 +16404,12 @@
       "ray3d::RayTriangleIntersect is pure Math, but its documented contract (project onto the analytic surface) is a Geometry concern. Its comment cites brep faces.",
       "OrthoConstrain.hpp implements ORTHO (REQ-047). The mode and when it applies are Interaction. Only the lock math is Math.",
       "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655), and ReflectSurveyCoords (SurveyPoints.cpp:373), repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit.",
-      "Duplicate rotation: brep.cpp RotateAbout (6425) is the same Rodrigues formula as ray3d::RotateVectorAboutAxis. Replace with the Math function.",
-      "Angle-wrap helpers are repeated in six places with three different ranges: WrapPi in (-pi, pi] (TraverseLeastSquares.cpp:33), Wrap2Pi in [0, 2pi) (curveintersect.cpp:16), NormalizeTwoPi in (0, 2pi] (HatchBoundary.hpp:33), NormalizeAngleRadMinusPiToPi (CadCommands.cpp:10718), SweepBetween (brep.cpp:16343), and Core NormalizeAngle360 (Core.cpp:16, Core-owned, see auditedEntries.Math.pendingAssignment). Math should own one helper per range, and the callers should pick by range.",
-      "The 2D cross product is repeated: curveisect Cross (curveintersect.cpp:12) and brep Cross2v (brep.cpp:16302). brep also has Dot2, Mul2 and Len2 (16300-16303), which duplicate the same primitives.",
+      "Duplicate rotation: brep_sweep.cpp RotateAbout (776) is the same Rodrigues formula as ray3d::RotateVectorAboutAxis. Replace with the Math function.",
+      "Angle-wrap helpers are repeated in six places with three different ranges: WrapPi in (-pi, pi] (TraverseLeastSquares.cpp:33), Wrap2Pi in [0, 2pi) (curveintersect.cpp:16), NormalizeTwoPi in (0, 2pi] (HatchBoundary.hpp:33), NormalizeAngleRadMinusPiToPi (CadCommands.cpp:10718), SweepBetween (brep_polysolid.cpp:85), and Core NormalizeAngle360 (Core.cpp:16, Core-owned, see auditedEntries.Math.pendingAssignment). Math should own one helper per range, and the callers should pick by range.",
+      "The 2D cross product is repeated: curveisect Cross (curveintersect.cpp:12) and brep Cross2v (brep_polysolid.cpp:44). brep also has Dot2, Mul2 and Len2 (42-45), which duplicate the same primitives.",
       "The 2D rotate-and-scale affine is repeated in geo LocalGridTransform (LocalToGrid, GridToLocal) and in the Math-owned Xf2, Affine2D and Xf sections. One Math 2D affine would serve all of them.",
       "TraverseCalc.cpp repeats the polar-to-rectangular step (slopeDist * sin / cos of an angle) at lines 113-120, 470-471 and 552-553. A generic polar-to-rectangular helper is a candidate for Math.",
-      "MirrorFrameInPlace (brep.cpp:2551) mirrors the same frame fields that RotateFrameInPlace (brep.cpp:2433, AcisSatParser.cpp:541) rotates. The frame transforms should live together in Math.",
+      "MirrorFrameInPlace (brep.cpp:1444) mirrors the same frame fields that RotateFrameInPlace (brep.cpp:1325, AcisSatParser.cpp:541) rotates. The frame transforms should live together in Math.",
       "Qt input transport is coupled directly to command and interaction state: EditorViewport receives Qt mouse/key/wheel events, reads and mutates AppCommandState, and calls Commands/Interaction helpers. Events can own neutral event data and dispatch, but the adapter and behavior must be separated during the move.",
       "Viewport change notification is a raw std::function<void()> (EditorViewport::changed), wired in EditorWindow to ResetDraftingInput() and Refresh(). The callback conflates command-state changes, repaint/refresh, and input reset; a future Events interface must distinguish those causes without taking ownership of UI refresh policy.",
       "Document dirty tracking is revision polling, not a change event: EditorWindow compares m_State.cadGpuRevision with m_State.activeDocSavedRevision for the active drawing, and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; BCLOSE compares cadGpuRevision with blockEditCleanRevision. These counters are Commands/Document-owned and no DocumentChangedEvent publisher contract exists yet.",
