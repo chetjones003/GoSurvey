@@ -1,5 +1,4 @@
 {
-  "src/geometry/src/brep.cpp": 19848,
   "src/io/src/AcisSatParser.cpp": 3189,
   "src/io/src/DxfIo.cpp": 6678,
   "src/io/src/GsIo.cpp": 5999,
