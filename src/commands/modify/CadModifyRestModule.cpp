@@ -61,7 +61,7 @@ StepSubmitResult ArraySession::onBlankEnter(AppCommandState& st, std::vector<std
         log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
       }
     } else {
-      DropArrayUnsupportedFromSelection(st, log);
+      RefuseArrayUnsupportedFromSelection(st, log);
       if (st.selection.empty()) {
         log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
       } else {

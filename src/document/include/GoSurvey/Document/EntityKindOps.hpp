@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <set>
@@ -779,8 +780,11 @@ inline bool TransformPoint(CadDrawingEntityStore& store, std::size_t index,
 /// What an entity-kind operation needs to know beyond the transform itself.
 struct EntityTransformContext {
   /// Model units per plotted inch for annotation text. MIRROR re-justifies single-line TEXT around its
-  /// estimated width so it stays readable, the way AutoCAD does with MIRRTEXT 0.
+  /// width so it stays readable, the way AutoCAD does with MIRRTEXT 0.
   double textUnitsPerPlottedInch = 1.0;
+  /// The drawn width of a TEXT in model units, when the caller can measure it (Commands measures
+  /// with the renderer's font). Empty: the width is estimated from \ref textUnitsPerPlottedInch.
+  std::function<double(const CadAnnotation&)> textWidth;
 };
 
 namespace entityops_detail {
@@ -1122,7 +1126,7 @@ inline bool TransformAnnotation(CadDrawingEntityStore& store, std::size_t index,
       // MIRRTEXT 0: mirror the far end of the baseline and run the text forwards from there, so it
       // reads normally in its mirrored box (AutoCAD moves the insertion the same way).
       const double h = static_cast<double>(a.plottedHeightInches) * ctx.textUnitsPerPlottedInch;
-      const double w = CadTextEstimatedWidth(a.text, static_cast<float>(h));
+      const double w = ctx.textWidth ? ctx.textWidth(a) : CadTextEstimatedWidth(a.text, static_cast<float>(h));
       const double rot = static_cast<double>(a.rotationRad);
       double fx = a.insX + w * std::cos(rot), fy = a.insY + w * std::sin(rot);
       MapPlanPoint(xf, &fx, &fy);

@@ -170,7 +170,7 @@ CLICKUCS 0 0
 CMD 4
 CMD 360
 CMD y
-EXPECT LOG "1 entity(ies) excluded"
+EXPECT LOG "1 annotation(s) excluded"
 EXPECT LOG "4 total instance(s) (polar)"
 EXPECT CIRCLES 4
 CMD UCS

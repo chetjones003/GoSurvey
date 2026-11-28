@@ -151,10 +151,8 @@ struct OpSupport {
       "Rotate about a UCS with an upright Z axis.";
   constexpr std::string_view kPositionMarkerReason =
       "a Position Marker can only be moved, copied or erased.";
-  constexpr std::string_view kMultileaderReason =
-      "a Multileader can only be moved, copied or erased.";
-  constexpr std::string_view kMeshReason =
-      "imported meshes are reference-only geometry and are never edited.";
+  constexpr std::string_view kNoPlaneNormalReason =
+      "it stores no plane normal, so it cannot be tipped out of plan yet. Use a UCS with an upright Z axis.";
   constexpr std::string_view kSurfaceReason =
       "a surface's shape comes from its definition, so moving it would be undone by the next rebuild. "
       "Edit its definition in the Surfaces panel instead.";
@@ -169,20 +167,18 @@ struct OpSupport {
   case EntityKind::Arc:
     return {"arc", "arc(s)", true, true, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::Ellipse:
-    return {"ellipse", "ellipse(s)", true, true, true, true, true, false, true, true, true, true,
-            {}, kTiltedPlaneReason, {}, {}};
+    return {"ellipse", "ellipse(s)", true, true, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::Polyline:
     return {"polyline", "polyline(s)", true, true, true, true, true, true, true, true, true, true,
             {}, {}, {}, {}};
   case EntityKind::Annotation:
     return {"annotation", "annotation(s)", true, true, true, true, true, false, true, true, true, true,
-            {}, kTiltedPlaneReason, {}, {}};
+            {}, kNoPlaneNormalReason, {}, {}};
   case EntityKind::FilledRegion:
-    return {"hatch fill", "hatch fill(s)", true, false, true, true, true, true, true, false, true, true,
-            {}, {}, "mirroring solid fills is not supported yet.", {}};
+    return {"hatch fill", "hatch fill(s)", true, false, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::Mesh:
-    return {"imported model", "imported model(s)", true, true, false, false, false, false, false, false, false, true,
-            kMeshReason, kMeshReason, kMeshReason, kMeshReason};
+    return {"imported model", "imported model(s)", true, true, true, true, true, true, true, true, false, true,
+            {}, {}, {}, "an imported model can only be moved whole. Use MOVE."};
   case EntityKind::FeatureLine:
     return {"feature line", "feature line(s)", false, false, true, true, true, false, true, true, true, true,
             {}, kTiltedPlaneReason, {}, {}};
@@ -191,10 +187,10 @@ struct OpSupport {
             kSurfaceReason, kSurfaceReason, kSurfaceReason, kSurfaceReason};
   case EntityKind::Table:
     return {"table", "table(s)", true, false, true, true, true, false, true, true, true, true,
-            {}, kTiltedPlaneReason, {}, {}};
+            {}, kNoPlaneNormalReason, {}, {}};
   case EntityKind::BlockRef:
-    return {"block reference", "block reference(s)", true, false, true, true, true, false, true, true, false, true,
-            {}, kTiltedPlaneReason, {},
+    return {"block reference", "block reference(s)", true, false, true, true, true, true, true, true, false, true,
+            {}, {}, {},
             "a block reference can only be moved whole; explode or edit the block definition to stretch it."};
   case EntityKind::Solid:
     return {"solid", "solid(s)", true, true, true, true, true, true, true, true, false, true,
@@ -207,16 +203,14 @@ struct OpSupport {
     return {"Position Marker", "Position Marker(s)", true, false, true, true, false, false, false, false, false, true,
             kPositionMarkerReason, kPositionMarkerReason, kPositionMarkerReason, kPositionMarkerReason};
   case EntityKind::Multileader:
-    return {"Multileader", "Multileader(s)", true, false, true, true, false, false, false, false, false, true,
-            kMultileaderReason, kMultileaderReason, kMultileaderReason, kMultileaderReason};
+    return {"Multileader", "Multileader(s)", true, false, true, true, true, false, true, true, false, true,
+            {}, kNoPlaneNormalReason, {}, "stretching a Multileader is not supported yet; move its grips instead."};
   case EntityKind::Spline:
     return {"spline", "spline(s)", true, false, true, true, true, true, true, true, false, true,
             {}, {}, {},
             "splines cannot be stretched with STRETCH; edit control or fit points instead."};
   case EntityKind::Point:
-    return {"point", "point(s)", true, false, true, true, true, true, true, true, false, true,
-            {}, {}, {},
-            "CAD points can only be moved whole. Use MOVE."};
+    return {"point", "point(s)", true, false, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::PipeRun:
     return {"pipe run", "pipe run(s)", true, false, true, true, true, true, true, true, false, true,
             {}, {}, {},

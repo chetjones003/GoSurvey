@@ -83,8 +83,18 @@ TEST_CASE("Capabilities declare refusal reasons for every unsupported op", "[doc
     CHECK(doc::CheckOpSupport(k, doc::EntityOp::Erase).supported);
   }
 
-  // Surface, Mesh and PointCloud are erasable only and state their refusal reason.
-  for (EntityKind k : {EntityKind::Surface, EntityKind::Mesh, EntityKind::PointCloud}) {
+  // AutoCAD parity (issue #1577): ellipses, hatch fills, imported models, inserts, splines, points,
+  // solids and pipe runs take every whole-object transform, including a tilted ROTATE and MIRROR.
+  for (EntityKind k : {EntityKind::Ellipse, EntityKind::FilledRegion, EntityKind::Mesh, EntityKind::BlockRef,
+                       EntityKind::Spline, EntityKind::Point, EntityKind::Solid, EntityKind::PipeRun}) {
+    for (doc::EntityOp op : {doc::EntityOp::Move, doc::EntityOp::Copy, doc::EntityOp::RotatePlan,
+                             doc::EntityOp::Rotate3d, doc::EntityOp::Scale, doc::EntityOp::Mirror,
+                             doc::EntityOp::Array, doc::EntityOp::Erase})
+      CHECK(doc::CheckOpSupport(k, op).supported);
+  }
+
+  // Surface and PointCloud are erasable only and state their refusal reason.
+  for (EntityKind k : {EntityKind::Surface, EntityKind::PointCloud}) {
     CHECK(doc::CheckOpSupport(k, doc::EntityOp::Erase).supported);
     for (doc::EntityOp op : {doc::EntityOp::Move, doc::EntityOp::Copy, doc::EntityOp::RotatePlan,
                              doc::EntityOp::Rotate3d, doc::EntityOp::Scale, doc::EntityOp::Mirror,
@@ -95,32 +105,35 @@ TEST_CASE("Capabilities declare refusal reasons for every unsupported op", "[doc
     }
   }
 
-  // PositionMarker and Multileader move, copy and erase; refuse rotate/scale/mirror/stretch/array.
-  for (EntityKind k : {EntityKind::PositionMarker, EntityKind::Multileader}) {
-    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Move).supported);
-    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Copy).supported);
-    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Erase).supported);
-    for (doc::EntityOp op : {doc::EntityOp::RotatePlan, doc::EntityOp::Rotate3d, doc::EntityOp::Scale,
-                             doc::EntityOp::Mirror, doc::EntityOp::Stretch, doc::EntityOp::Array}) {
-      const doc::OpSupport s = doc::CheckOpSupport(k, op);
-      CHECK_FALSE(s.supported);
-      CHECK_FALSE(s.refusalReason.empty());
-    }
+  // A Position Marker moves, copies and erases only (REQ-359).
+  CHECK(doc::CheckOpSupport(EntityKind::PositionMarker, doc::EntityOp::Move).supported);
+  CHECK(doc::CheckOpSupport(EntityKind::PositionMarker, doc::EntityOp::Copy).supported);
+  CHECK(doc::CheckOpSupport(EntityKind::PositionMarker, doc::EntityOp::Erase).supported);
+  for (doc::EntityOp op : {doc::EntityOp::RotatePlan, doc::EntityOp::Rotate3d, doc::EntityOp::Scale,
+                           doc::EntityOp::Mirror, doc::EntityOp::Stretch, doc::EntityOp::Array}) {
+    const doc::OpSupport s = doc::CheckOpSupport(EntityKind::PositionMarker, op);
+    CHECK_FALSE(s.supported);
+    CHECK_FALSE(s.refusalReason.empty());
   }
 
-  // Solid, PipeRun, Spline, Point support 3D transforms and mirror, but refuse stretch with a reason.
-  for (EntityKind k : {EntityKind::Solid, EntityKind::PipeRun, EntityKind::Spline, EntityKind::Point}) {
-    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Rotate3d).supported);
+  // Kinds with no plane normal rotate, scale and mirror in plan but refuse a tilted ROTATE, by name.
+  for (EntityKind k : {EntityKind::Annotation, EntityKind::Table, EntityKind::Multileader}) {
+    CHECK(doc::CheckOpSupport(k, doc::EntityOp::RotatePlan).supported);
+    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Scale).supported);
     CHECK(doc::CheckOpSupport(k, doc::EntityOp::Mirror).supported);
+    const doc::OpSupport tilt = doc::CheckOpSupport(k, doc::EntityOp::Rotate3d);
+    CHECK_FALSE(tilt.supported);
+    CHECK(tilt.refusalReason.find("plane normal") != std::string_view::npos);
+  }
+
+  // STRETCH moves part of an object; kinds that can only move whole say so.
+  for (EntityKind k : {EntityKind::Solid, EntityKind::PipeRun, EntityKind::Spline, EntityKind::BlockRef,
+                       EntityKind::Mesh, EntityKind::Multileader}) {
     const doc::OpSupport stretch = doc::CheckOpSupport(k, doc::EntityOp::Stretch);
     CHECK_FALSE(stretch.supported);
     CHECK_FALSE(stretch.refusalReason.empty());
   }
-
-  // FilledRegion refuses Mirror with a reason.
-  const doc::OpSupport frMirror = doc::CheckOpSupport(EntityKind::FilledRegion, doc::EntityOp::Mirror);
-  CHECK_FALSE(frMirror.supported);
-  CHECK(frMirror.refusalReason.find("mirroring") != std::string_view::npos);
+  CHECK(doc::CheckOpSupport(EntityKind::Point, doc::EntityOp::Stretch).supported);
 }
 
 TEST_CASE("EntityBounds3d expands points, ignores non-finite values, and merges boxes",

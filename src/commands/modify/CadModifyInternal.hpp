@@ -11,6 +11,27 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <optional>
+#include <GoSurvey/Document/EntityRef.hpp>
+
+// --- One transform path (ADR-0011 / issue #1577), defined in CadSelectionTransform.cpp ------------
+
+/// The Document entity kind a selection entry names, or nullopt for kinds with no EntityKind
+/// (PDF underlays, alignments, the section plane).
+std::optional<EntityKind> EntityKindForSelection(SelectedEntity::Type t);
+
+/// Remove every selected entry that cannot take \p xf under \p op, logging one line per kind
+/// ("<CMD> — N <kinds> excluded: <reason>", REQ-201). Returns how many were removed.
+size_t RefuseSelectionForTransform(AppCommandState& st, GoSurvey::Document::EntityOp op,
+                                   const GoSurvey::Document::SimilarityTransform& xf, const char* commandName,
+                                   std::vector<std::string>& log);
+
+/// Transform the whole selection by \p xf: in place, or (\p duplicate) as copies that leave the
+/// originals selected and unchanged. Refuses what a kind cannot represent first. Survey points move
+/// in place only; COPY-like commands duplicate them through their ID-policy modal.
+void TransformSelection(AppCommandState& st, const GoSurvey::Document::SimilarityTransform& xf,
+                        GoSurvey::Document::EntityOp op, const char* commandName, bool duplicate,
+                        std::vector<std::string>& log);
 
 template <class T>
 void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
@@ -20,13 +41,6 @@ void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
   const double dy = static_cast<double>(*y) - by;
   *x = static_cast<T>(bx + c * dx - s * dy);
   *y = static_cast<T>(by + s * dx + c * dy);
-}
-
-/// MTEXT turns like TEXT: its insertion (attachment) point rotates about the base, the frame keeps its
-/// width/height (so wrapping is unchanged) and rotationRad grows (issue #1667). The insertion is re-read
-/// from the box first, so a caller that already rotated insX/insY is harmless.
-inline void RotateMtextAroundBase(double bx, double by, double rad, CadAnnotation* a) {
-  CadMtextTransform(*a, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); }, static_cast<float>(rad), 1.f);
 }
 
 /// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate
@@ -48,9 +62,8 @@ void ReflectPtAcrossLine(double x0, double y0, double x1, double y1, T* x, T* y)
 }
 
 /// Reflects a direction/angle across the mirror line's own direction angle phi = atan2(dy,dx):
-/// angle' = 2*phi - angle. Used to re-derive an arc's swept range after reflection (see
-/// \c DuplicateCadSelectionReflected) — reflecting a center point alone does not tell you which
-/// way the arc now sweeps, because a reflection reverses handedness (CCW becomes CW).
+/// angle' = 2*phi - angle. A reflection reverses handedness (CCW becomes CW), so reflecting a
+/// center point alone does not tell you which way an arc now sweeps.
 
 
 /// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
@@ -121,58 +134,6 @@ static double NormalizeAngleRadMinusPiToPi(double a) {
   return a;
 }
 
-static void ApplyTranslationToSelectedSurveyPoints(AppCommandState& st, float dx, float dy) {
-  std::vector<int> ix = st.selectedSurveyPointIndices;
-  std::sort(ix.begin(), ix.end());
-  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
-  for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size()) {
-      st.drawing.surveyPoints[static_cast<size_t>(i)].easting += dx;
-      st.drawing.surveyPoints[static_cast<size_t>(i)].northing += dy;
-    }
-  }
-  for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
-      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
-  }
-}
-
-static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, double bx, double by, double rad) {
-  std::vector<int> ix = st.selectedSurveyPointIndices;
-  std::sort(ix.begin(), ix.end());
-  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
-  for (int i : ix) {
-    if (i < 0 || static_cast<size_t>(i) >= st.drawing.surveyPoints.size())
-      continue;
-    double x = st.drawing.surveyPoints[static_cast<size_t>(i)].easting;
-    double y = st.drawing.surveyPoints[static_cast<size_t>(i)].northing;
-    RotateAroundBase(bx, by, rad, &x, &y);
-    st.drawing.surveyPoints[static_cast<size_t>(i)].easting = x;
-    st.drawing.surveyPoints[static_cast<size_t>(i)].northing = y;
-  }
-  for (int i : ix) {
-    if (i >= 0 && static_cast<size_t>(i) < st.drawing.surveyPoints.size())
-      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
-  }
-}
-
-/// REQ-443: every transform command reduces to one point map on a spline, because a B-spline is an
-/// affine combination of its control points - moving, turning, scaling or mirroring those points is
-/// exactly moving, turning, scaling or mirroring the curve (`spline::MapPoints`). Fit points travel
-/// with them, so a transformed fit spline can still be re-derived by a later grip edit.
-///
-/// In place. The caller owns the undo snapshot and the GPU-cache bump, as every transform does.
-template <class F>
-static void MapSelectedSplines(AppCommandState& st, const F& f) {
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Spline || e.index < 0)
-      continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k < st.drawing.cadSplines.size())
-      spline::MapPoints(&st.drawing.cadSplines[k], f);
-  }
-}
-
 /// REQ-443: remove every selected spline and its attributes, highest index first. Both erase paths
 /// (ERASE and MIRROR's erase-source) call it, so a spline cannot be erased by one and left behind by
 /// the other.
@@ -189,44 +150,6 @@ static void EraseSelectedSplines(AppCommandState& st) {
   }
 }
 
-/// REQ-443: append a copy of every selected spline with its points mapped through f, the source
-/// untouched - the duplicate path COPY, ROTATE-copy, MIRROR and ARRAY share. The copy takes the
-/// source's layer and colour but not its id (see DuplicatedEntityAttrs).
-template <class F>
-static void DuplicateSelectedSplines(AppCommandState& st, const F& f) {
-  const size_t n0 = st.drawing.cadSplines.size();
-  std::vector<size_t> sources;
-  for (const auto& e : st.selection)
-    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < n0)
-      sources.push_back(static_cast<size_t>(e.index));
-  if (sources.empty())
-    return;
-  while (st.drawing.cadSplineAttrs.size() < n0)
-    st.drawing.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
-  for (const size_t k : sources) {
-    CadSpline c = st.drawing.cadSplines[k];
-    spline::MapPoints(&c, f);
-    st.drawing.cadSplines.push_back(std::move(c));
-    st.drawing.cadSplineAttrs.push_back(DuplicatedEntityAttrs(st.drawing.cadSplineAttrs[k]));
-  }
-  BumpCadGpuCache(st);
-}
-
-template <class F>
-static void MapSelectedCadPoints(AppCommandState& st, const F& f) {
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Point || e.index < 0)
-      continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.drawing.cadPoints.size())
-      continue;
-    const spline::Vec3 mapped = f(spline::Vec3{st.drawing.cadPoints[k].x, st.drawing.cadPoints[k].y, st.drawing.cadPoints[k].z});
-    st.drawing.cadPoints[k].x = mapped.x;
-    st.drawing.cadPoints[k].y = mapped.y;
-    st.drawing.cadPoints[k].z = mapped.z;
-  }
-}
-
 static void EraseSelectedCadPoints(AppCommandState& st) {
   std::set<int> ix;
   for (const auto& e : st.selection)
@@ -238,28 +161,6 @@ static void EraseSelectedCadPoints(AppCommandState& st) {
     st.drawing.cadPoints.erase(st.drawing.cadPoints.begin() + static_cast<std::ptrdiff_t>(k));
     if (k < st.drawing.cadPointAttrs.size())
       st.drawing.cadPointAttrs.erase(st.drawing.cadPointAttrs.begin() + static_cast<std::ptrdiff_t>(k));
-  }
-}
-
-template <class F>
-static void DuplicateSelectedCadPoints(AppCommandState& st, const F& f) {
-  const size_t n0 = st.drawing.cadPoints.size();
-  std::vector<size_t> sources;
-  for (const auto& e : st.selection)
-    if (e.type == SelectedEntity::Type::Point && e.index >= 0 && static_cast<size_t>(e.index) < n0)
-      sources.push_back(static_cast<size_t>(e.index));
-  if (sources.empty())
-    return;
-  while (st.drawing.cadPointAttrs.size() < n0)
-    st.drawing.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
-  for (const size_t k : sources) {
-    CadPoint c = st.drawing.cadPoints[k];
-    const spline::Vec3 mapped = f(spline::Vec3{c.x, c.y, c.z});
-    c.x = mapped.x;
-    c.y = mapped.y;
-    c.z = mapped.z;
-    st.drawing.cadPoints.push_back(c);
-    st.drawing.cadPointAttrs.push_back(DuplicatedEntityAttrs(st.drawing.cadPointAttrs[k]));
   }
 }
 
@@ -289,20 +190,6 @@ static void ForEachSelectedFeatureLine(const AppCommandState& st, Fn&& fn) {
   }
   for (const std::array<int, 3>& r : ranges)
     fn(r[0], r[1], r[2]);
-}
-
-/// Apply \p xform to the plan position of every vertex of every selected feature line. Elevation is
-/// deliberately not offered: MOVE, ROTATE and SCALE are all plan operations here, matching the
-/// polyline behaviour they sit beside, and a transform that could silently alter Z would break the
-/// surface a feature line feeds (REQ-069) without touching its plan geometry.
-template <class Xf>
-static void TransformSelectedFeatureLinesInPlace(AppCommandState& st, Xf&& xform) {
-  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
-    for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi) * 3;
-      xform(&st.drawing.featureLineVerts[b], &st.drawing.featureLineVerts[b + 1]);
-    }
-  });
 }
 
 /// Append a copy of feature line \p fi, with \p xform applied to each vertex's plan position.
@@ -347,142 +234,6 @@ static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, X
           : MakeNewEntityAttrs(st)));
 }
 
-/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
-/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
-///
-/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
-/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
-/// — a defect that only shows up on the drawing where it happened.
-///
-/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
-/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
-/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
-///
-/// \p duplicate appends the result as a NEW solid carrying the source's attributes (COPY, ROTATE
-/// Copy, MIRROR, polar ARRAY — REQ-351) instead of replacing the source; a refusal then adds nothing.
-template <typename Op>
-static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
-                                    std::vector<std::string>& log, bool duplicate = false) {
-  std::set<int> seen;
-  size_t refused = 0;
-  brep::Problem lastWhy = brep::Problem::Ok;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.drawing.cadSolids.size())
-      continue;
-    if (!seen.insert(e.index).second)
-      continue;
-    const size_t ix = static_cast<size_t>(e.index);
-    const CadSolidPtr sp = st.drawing.cadSolids[ix];  // a copy: a duplicate's push_back may reallocate
-    if (!sp)
-      continue;
-    brep::Solid out;
-    brep::Problem why = brep::Problem::Ok;
-    if (!op(*sp, &out, &why)) {
-      ++refused;
-      lastWhy = why;
-      continue;
-    }
-    if (duplicate) {
-      st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(out)));
-      st.drawing.cadSolidAttrs.push_back(
-          DuplicatedEntityAttrs(ix < st.drawing.cadSolidAttrs.size() ? st.drawing.cadSolidAttrs[ix] : EntityAttributes{}));
-    } else {
-      st.drawing.cadSolids[ix] = std::make_shared<const brep::Solid>(std::move(out));
-    }
-  }
-  // One line naming the LAST reason, not one line per solid. With several solids refused for
-  // different reasons that is lossy, and it is accepted here because the case is close to
-  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
-  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
-  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
-  // net that says something true if it ever fires, not a routine path.
-  if (refused != 0)
-    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
-                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
-}
-
-/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
-/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE. \p duplicate adds the
-/// turned solid as a copy instead (ROTATE Copy, polar ARRAY — REQ-351).
-static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                 const ray3d::Vec3& axisUnit, double angleRad,
-                                 std::vector<std::string>& log, bool duplicate = false,
-                                 const char* commandName = "ROTATE") {
-  if (angleRad == 0.0 && !duplicate)
-    return;
-  const double rad = angleRad;
-  TransformSelectedSolids(
-      st, commandName,
-      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
-        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
-      },
-      log, duplicate);
-}
-
-/// Add the mirror image of every selected solid across the plane through \p planePoint with unit
-/// normal \p planeUnit (REQ-351). Always a duplicate: MIRROR copies first and erases the source
-/// afterwards only if asked (`FinishMirrorCommand`).
-static void MirrorSelectedSolids(AppCommandState& st, const ray3d::Vec3& planePoint,
-                                 const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
-  TransformSelectedSolids(
-      st, "MIRROR",
-      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
-        return brep::Mirror(s, planePoint, planeUnit, out, why);
-      },
-      log, /*duplicate=*/true);
-}
-
-/// Add a copy of every selected solid moved by (dx, dy, dz) — COPY and both ARRAY forms (REQ-351,
-/// widening GitHub issue #400 increment 3's rectangular-ARRAY-only helper). `brep::Translate` cannot
-/// refuse, so there is nothing to report.
-static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
-  std::vector<std::string> unused;
-  TransformSelectedSolids(
-      st, "COPY",
-      [&](const brep::Solid& s, brep::Solid* out, brep::Problem*) {
-        *out = brep::Translate(s, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
-                                              static_cast<double>(dz)});
-        return true;
-      },
-      unused, /*duplicate=*/true);
-}
-
-/// Map every path vertex of every selected pipe run through \p pt, in place or — \p duplicate — as a
-/// new run carrying the source's attributes (REQ-351, D-2026-09-28-f).
-///
-/// A pipe run owns only its path; the swept pipe is re-derived from it whenever the path changes
-/// (`RebuildPipeRunWorldSolids` keys on a hash of the vertices), so moving the vertices IS moving
-/// the pipe. Its size and wall are untouched by every transform — a scaled run is a longer run of the
-/// same pipe, because a 4in pipe is a catalog part (D-2026-09-28-f). A copy joins no piping network:
-/// a network is a named set the user built, and the copy is a new run.
-template <typename PointFn>
-static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool duplicate) {
-  std::set<int> seen;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::PipeRun || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.drawing.cadPipeRuns.size())
-      continue;
-    if (!seen.insert(e.index).second)
-      continue;
-    const size_t ix = static_cast<size_t>(e.index);
-    CadPipeRun run = st.drawing.cadPipeRuns[ix];
-    for (size_t k = 0; k + 2 < run.vertsXyz.size(); k += 3) {
-      const ray3d::Vec3 p = pt(ray3d::Vec3{run.vertsXyz[k], run.vertsXyz[k + 1], run.vertsXyz[k + 2]});
-      run.vertsXyz[k] = p.x;
-      run.vertsXyz[k + 1] = p.y;
-      run.vertsXyz[k + 2] = p.z;
-    }
-    if (duplicate) {
-      st.drawing.cadPipeRuns.push_back(std::move(run));
-      st.drawing.cadPipeRunAttrs.push_back(DuplicatedEntityAttrs(
-          ix < st.drawing.cadPipeRunAttrs.size() ? st.drawing.cadPipeRunAttrs[ix] : EntityAttributes{}));
-    } else {
-      st.drawing.cadPipeRuns[ix] = std::move(run);
-    }
-  }
-}
-
 /// REQ-487.1: map every selected alignment through \p fn (an Alignment transform that returns false to refuse), in place or,
 /// with \p duplicate, as a new INDEPENDENT alignment with a unique name and a fresh id. A linked offset that is moved is
 /// rebuilt from its parent afterwards, so it can never be left displaced from the geometry it is defined by.
@@ -516,837 +267,11 @@ static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool du
   }
 }
 
-static void TranslateSelectedAlignments(AppCommandState& st, double dx, double dy, bool duplicate) {
-  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Translate(dx, dy); return true; }, duplicate);
-}
-
-static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
-  const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
-  TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
-  if (dx != 0.f || dy != 0.f)
-    TranslateSelectedAlignments(st, static_cast<double>(dx), static_cast<double>(dy), duplicate);  // REQ-487.1
-}
-
-static void RotateSelectedAlignments(AppCommandState& st, const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
-                                     double angleRad, bool duplicate) {
-  if (std::fabs(axisUnit.z) < 1.0 - 1e-9)
-    return;  // an alignment is horizontal: only a vertical axis keeps it so
-  const double cw = -angleRad * (axisUnit.z > 0.0 ? 1.0 : -1.0);  // ray3d rotates counter-clockwise; azimuths run clockwise
-  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Rotate(axisPoint.x, axisPoint.y, cw); return true; }, duplicate);
-}
-
-static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                   const ray3d::Vec3& axisUnit, double angleRad, bool duplicate) {
-  const double rad = angleRad;
-  TransformSelectedPipeRuns(
-      st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
-      duplicate);
-  RotateSelectedAlignments(st, axisPoint, axisUnit, rad, duplicate);  // REQ-487.1
-}
-
-/// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
-/// \p planeUnit (REQ-351): each gets a mirrored copy. A pipe is symmetric about its own path, so
-/// reflecting the path is the whole of mirroring a run.
-static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Vec3& planePoint,
-                                            const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
-  MirrorSelectedSolids(st, planePoint, planeUnit, log);  // refuses a degenerate plane by name
-  if (std::fabs(ray3d::Length(planeUnit) - 1.0) > 1e-9)
-    return;
-  TransformSelectedPipeRuns(
-      st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
-      /*duplicate=*/true);
-  if (std::fabs(planeUnit.z) < 1e-9) {  // REQ-487.1: a vertical mirror plane keeps an alignment horizontal
-    const double px = planePoint.x, py = planePoint.y;
-    TransformSelectedAlignments(
-        st, [&](alignment::Alignment& a) { return a.Mirror(px, py, px - planeUnit.y, py + planeUnit.x); }, /*duplicate=*/true);
-  }
-}
-
-// dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
-// byte-identical to before this parameter existed. GitHub issue #400 increment 1 is ARRAY's own
-// UCS-plane rectangular case, the only caller that ever passes a non-zero dz.
-static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy, float dz = 0.f) {
-  // Solids and pipe runs are copied too (REQ-351): COPY, both ARRAY forms and every other caller
-  // used to leave them behind without a word.
-  DuplicateSelectedSolidsTranslated(st, dx, dy, dz);
-  TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/true);
-  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<float> newLines;
-  std::vector<float> newCircles;
-  std::vector<EntityAttributes> newLineAttrs;
-  std::vector<EntityAttributes> newCircleAttrs;
-  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
-  std::vector<CadAnnotation> newAnn;
-  std::vector<EntityAttributes> newAnnAttrs;
-  std::vector<CadTable> newTables;
-  std::vector<EntityAttributes> newTableAttrs;
-  std::vector<CadPositionMarker> newMarkers;  // REQ-359
-  std::vector<EntityAttributes> newMarkerAttrs;
-  std::vector<CadMultileader> newMultileaders;  // REQ-367
-  std::vector<EntityAttributes> newMultileaderAttrs;
-  std::vector<CadBlockRef> newBlockRefs;
-  std::vector<EntityAttributes> newBlockRefAttrs;
-  std::vector<CadArc> newArcs;
-  std::vector<EntityAttributes> newArcAttrs;
-  std::vector<CadEllipse> newEll;
-  std::vector<EntityAttributes> newEllAttrs;
-  std::vector<CadFilledRegion> newFills;
-  std::vector<EntityAttributes> newFillAttrs;
-
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::FilledRegion) {
-      const size_t fk = static_cast<size_t>(e.index);
-      if (fk < st.drawing.cadFilledRegions.size()) {
-        CadFilledRegion fr = st.drawing.cadFilledRegions[fk];
-        hatchgeom::Translate(fr, dx, dy, dz);
-        newFills.push_back(std::move(fr));
-        newFillAttrs.push_back(DuplicatedEntityAttrs(
-            fk < st.drawing.cadFilledRegionAttrs.size() ? st.drawing.cadFilledRegionAttrs[fk] : EntityAttributes{}));
-      }
-    } else if (e.type == SelectedEntity::Type::LineSeg) {
-      size_t li = static_cast<size_t>(e.index);
-      if (li < st.drawing.lineCount()) {
-        const CadLineRecord ln = st.drawing.line(li);
-        for (const double v : {ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1})
-          newLines.push_back(static_cast<float>(v));
-        newLines[newLines.size() - 6] += dx;
-        newLines[newLines.size() - 5] += dy;
-        newLines[newLines.size() - 4] += dz;
-        newLines[newLines.size() - 3] += dx;
-        newLines[newLines.size() - 2] += dy;
-        newLines[newLines.size() - 1] += dz;
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
-          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.drawing.circleCount()) {
-        const CadCircleRecord c = st.drawing.circle(ci);
-        newCircles.push_back(static_cast<float>(c.cx + dx));
-        newCircles.push_back(static_cast<float>(c.cy + dy));
-        newCircles.push_back(static_cast<float>(c.cz + dz));  // z (issue #400: UCS-plane arrays)
-        newCircles.push_back(static_cast<float>(c.r));  // r
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
-          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
-        float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
-        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
-      }
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.cadAnnotations.size()) {
-        CadAnnotation c = st.drawing.cadAnnotations[k];
-        c.surveyPointLabelForId = -1;
-        c.insX += dx;
-        c.insY += dy;
-        c.insZ += dz;  // issue #400: UCS-plane arrays, matching REQ-322 MOVE's own insZ handling
-        if (c.kind == CadAnnotation::Kind::Mtext) {
-          c.boxMinX += dx;
-          c.boxMinY += dy;
-          c.boxMaxX += dx;
-          c.boxMaxY += dy;
-        } else if (c.kind == CadAnnotation::Kind::DimAligned || c.kind == CadAnnotation::Kind::DimLinear) {
-          c.dimExt1X += dx;
-          c.dimExt1Y += dy;
-          c.dimExt2X += dx;
-          c.dimExt2Y += dy;
-        }
-        newAnn.push_back(std::move(c));
-        EntityAttributes a{};
-        if (k < st.drawing.cadAnnotationAttrs.size())
-          a = st.drawing.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Table) {
-      const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.drawing.cadTables.size()) {
-        CadTable c = st.drawing.cadTables[tk];
-        CadTableTranslate(&c, dx, dy);
-        newTables.push_back(std::move(c));
-        EntityAttributes a{};
-        if (tk < st.drawing.cadTableAttrs.size())
-          a = st.drawing.cadTableAttrs[tk];
-        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::PositionMarker) {  // REQ-359: marker + label
-      const size_t mk = static_cast<size_t>(e.index);
-      if (mk < st.drawing.cadPositionMarkers.size()) {
-        CadPositionMarker c = st.drawing.cadPositionMarkers[mk];
-        CadPositionMarkerTranslate(&c, dx, dy, dz);
-        newMarkers.push_back(std::move(c));
-        EntityAttributes a{};
-        if (mk < st.drawing.cadPositionMarkerAttrs.size())
-          a = st.drawing.cadPositionMarkerAttrs[mk];
-        newMarkerAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Multileader) {  // REQ-367: path + label
-      const size_t lk = static_cast<size_t>(e.index);
-      if (lk < st.drawing.cadMultileaders.size()) {
-        CadMultileader c = st.drawing.cadMultileaders[lk];
-        CadMultileaderTranslate(&c, dx, dy, dz);
-        newMultileaders.push_back(std::move(c));
-        EntityAttributes a{};
-        if (lk < st.drawing.cadMultileaderAttrs.size())
-          a = st.drawing.cadMultileaderAttrs[lk];
-        newMultileaderAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.drawing.cadBlockRefs.size()) {
-        CadBlockRef c = st.drawing.cadBlockRefs[bk];
-        CadBlockTranslate(&c, dx, dy, dz);  // issue #400: UCS-plane arrays
-        newBlockRefs.push_back(std::move(c));
-        EntityAttributes a{};
-        if (bk < st.drawing.cadBlockRefAttrs.size())
-          a = st.drawing.cadBlockRefAttrs[bk];
-        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userArcs.size()) {
-        CadArc a = st.drawing.userArcs[k];
-        a.cx += dx;
-        a.cy += dy;
-        a.z += dz;  // issue #400: UCS-plane arrays
-        newArcs.push_back(a);
-        EntityAttributes at{};
-        if (k < st.drawing.userArcAttrs.size())
-          at = st.drawing.userArcAttrs[k];
-        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userEllipses.size()) {
-        CadEllipse el = st.drawing.userEllipses[k];
-        el.cx += dx;
-        el.cy += dy;
-        el.z += dz;  // issue #400: UCS-plane arrays
-        newEll.push_back(el);
-        EntityAttributes at{};
-        if (k < st.drawing.userEllAttrs.size())
-          at = st.drawing.userEllAttrs[k];
-        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-        continue;
-      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-      const int nv = v1 - v0;
-      if (nv < 2)
-        continue;
-      if (st.drawing.userPolylineOffsets.empty())
-        st.drawing.userPolylineOffsets.push_back(0);
-      const int baseVert = st.drawing.userPolylineOffsets.back();
-      for (int vi = v0; vi < v1; ++vi) {
-        st.drawing.pushVertex(CadPolyVertex{st.drawing.vertex(vi).x + dx, st.drawing.vertex(vi).y + dy, st.drawing.vertex(vi).z + dz});  // issue #400
-      }
-      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
-      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
-      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
-      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
-      uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
-        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-      st.drawing.userPolylineClosed.push_back(cl);
-      EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
-    }
-  }
-  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
-                              newCircleNormals.end());
-  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
-  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.drawing.cadPositionMarkers.insert(st.drawing.cadPositionMarkers.end(), newMarkers.begin(), newMarkers.end());
-  st.drawing.cadPositionMarkerAttrs.insert(st.drawing.cadPositionMarkerAttrs.end(), newMarkerAttrs.begin(), newMarkerAttrs.end());
-  st.drawing.cadMultileaders.insert(st.drawing.cadMultileaders.end(), newMultileaders.begin(), newMultileaders.end());
-  st.drawing.cadMultileaderAttrs.insert(st.drawing.cadMultileaderAttrs.end(), newMultileaderAttrs.begin(),
-                                newMultileaderAttrs.end());
-  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
-  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-  st.drawing.cadFilledRegions.insert(st.drawing.cadFilledRegions.end(), newFills.begin(), newFills.end());
-  st.drawing.cadFilledRegionAttrs.insert(st.drawing.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
-
-  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
-    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
-  });
-  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
-    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
-  });
-
-  // Feature lines (REQ-087). Appended after the loop above rather than inside it only for
-  // readability — ForEachSelectedFeatureLine snapshots its ranges, so growing the store mid-walk is
-  // safe either way.
-  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
-    AppendFeatureLineCopy(st, fi, v0, v1, [&](float* x, float* y) {
-      *x += dx;
-      *y += dy;
-    });
-  });
-
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newBlockRefs.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newFills.empty() || !newMarkers.empty() || !newMultileaders.empty() ||
-      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
-      st.drawing.featureLineVerts.size() != featureVertsBefore)
-    BumpCadGpuCache(st);
-}
-
-// Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
-
-static void DuplicateCadSelectionRotated(AppCommandState& st, double bx, double by, double rad,
-                                         std::vector<std::string>& log) {
-  // Solids and pipe runs are copied too (REQ-351), turned about the same vertical axis.
-  const ray3d::Vec3 axisPoint{bx, by, 0.0};
-  RotateSelectedSolids(st, axisPoint, {0.0, 0.0, 1.0}, rad, log, /*duplicate=*/true);
-  RotateSelectedPipeRuns(st, axisPoint, {0.0, 0.0, 1.0}, rad, /*duplicate=*/true);
-  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<double> newLines;
-  std::vector<double> newCircles;
-  std::vector<EntityAttributes> newLineAttrs;
-  std::vector<EntityAttributes> newCircleAttrs;
-  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
-  std::vector<CadAnnotation> newAnn;
-  std::vector<EntityAttributes> newAnnAttrs;
-  std::vector<CadTable> newTables;
-  std::vector<EntityAttributes> newTableAttrs;
-  std::vector<CadBlockRef> newBlockRefs;
-  std::vector<EntityAttributes> newBlockRefAttrs;
-  std::vector<CadArc> newArcs;
-  std::vector<EntityAttributes> newArcAttrs;
-  std::vector<CadEllipse> newEll;
-  std::vector<EntityAttributes> newEllAttrs;
-
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t li = static_cast<size_t>(e.index);
-      if (li < st.drawing.lineCount()) {
-        CadLineRecord ln = st.drawing.line(li);
-        RotateAroundBase(bx, by, rad, &ln.x0, &ln.y0);
-        RotateAroundBase(bx, by, rad, &ln.x1, &ln.y1);
-        newLines.push_back(ln.x0);
-        newLines.push_back(ln.y0);
-        newLines.push_back(ln.z0);
-        newLines.push_back(ln.x1);
-        newLines.push_back(ln.y1);
-        newLines.push_back(ln.z1);
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
-          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.drawing.circleCount()) {
-        CadCircleRecord c = st.drawing.circle(ci);
-        RotateAroundBase(bx, by, rad, &c.cx, &c.cy);
-        newCircles.push_back(c.cx);
-        newCircles.push_back(c.cy);
-        newCircles.push_back(c.cz);  // z — rotation is about the Z axis
-        newCircles.push_back(c.r);
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
-          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
-        float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
-        RotateNormalAboutZ(static_cast<float>(rad), &nnx, &nny);   // REQ-312: the plane turns with the circle
-        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
-      }
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.cadAnnotations.size()) {
-        CadAnnotation c = st.drawing.cadAnnotations[k];
-        c.surveyPointLabelForId = -1;
-        RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
-        if (c.kind == CadAnnotation::Kind::Text) {
-          c.rotationRad = static_cast<float>(static_cast<double>(c.rotationRad) + rad);
-        } else if (c.kind == CadAnnotation::Kind::Mtext) {
-          RotateMtextAroundBase(bx, by, rad, &c);
-        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
-          RotateCadDimLinearAroundBase(bx, by, rad, &c);
-        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
-          RotateAroundBase(bx, by, rad, &c.dimExt1X, &c.dimExt1Y);
-          RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
-          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-        } else {
-          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
-          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
-          float mnX = xs[0];
-          float mxX = xs[0];
-          float mnY = ys[0];
-          float mxY = ys[0];
-          for (int i = 0; i < 4; ++i) {
-            RotateAroundBase(bx, by, rad, &xs[i], &ys[i]);
-            mnX = std::min(mnX, xs[i]);
-            mxX = std::max(mxX, xs[i]);
-            mnY = std::min(mnY, ys[i]);
-            mxY = std::max(mxY, ys[i]);
-          }
-          c.boxMinX = mnX;
-          c.boxMaxX = mxX;
-          c.boxMinY = mnY;
-          c.boxMaxY = mxY;
-          c.insX = mnX;
-          c.insY = mnY;
-        }
-        newAnn.push_back(std::move(c));
-        EntityAttributes a{};
-        if (k < st.drawing.cadAnnotationAttrs.size())
-          a = st.drawing.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Table) {
-      const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.drawing.cadTables.size()) {
-        CadTable c = st.drawing.cadTables[tk];
-        CadTableRotateAround(&c, static_cast<float>(bx), static_cast<float>(by), static_cast<float>(rad));
-        newTables.push_back(std::move(c));
-        EntityAttributes a{};
-        if (tk < st.drawing.cadTableAttrs.size())
-          a = st.drawing.cadTableAttrs[tk];
-        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.drawing.cadBlockRefs.size()) {
-        CadBlockRef c = st.drawing.cadBlockRefs[bk];
-        CadBlockRotateZ(&c, bx, by, rad);
-        newBlockRefs.push_back(std::move(c));
-        EntityAttributes a{};
-        if (bk < st.drawing.cadBlockRefAttrs.size())
-          a = st.drawing.cadBlockRefAttrs[bk];
-        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userArcs.size()) {
-        CadArc a = st.drawing.userArcs[k];
-        // The start point, through the arc's own plane, before the arc moves (REQ-312).
-        ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-        RotateAroundBase(bx, by, rad, &startPt.x, &startPt.y);  // a rotation about Z leaves the point's Z alone
-        RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
-        a.startRad = static_cast<float>(static_cast<double>(a.startRad) + rad);
-        RotateNormalAboutZ(static_cast<float>(rad), &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
-        CadReanchorArcStart(&a, startPt);  // REQ-312: a no-op on a flat arc, where += rad is exact
-        newArcs.push_back(a);
-        EntityAttributes at{};
-        if (k < st.drawing.userArcAttrs.size())
-          at = st.drawing.userArcAttrs[k];
-        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userEllipses.size()) {
-        CadEllipse el = st.drawing.userEllipses[k];
-        double mx = el.cx + static_cast<double>(el.majVx);
-        double my = el.cy + static_cast<double>(el.majVy);
-        RotateAroundBase(bx, by, rad, &el.cx, &el.cy);
-        RotateAroundBase(bx, by, rad, &mx, &my);
-        el.majVx = static_cast<float>(mx - el.cx);
-        el.majVy = static_cast<float>(my - el.cy);
-        newEll.push_back(el);
-        EntityAttributes at{};
-        if (k < st.drawing.userEllAttrs.size())
-          at = st.drawing.userEllAttrs[k];
-        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-        continue;
-      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-      const int nv = v1 - v0;
-      if (nv < 2)
-        continue;
-      if (st.drawing.userPolylineOffsets.empty())
-        st.drawing.userPolylineOffsets.push_back(0);
-      const int baseVert = st.drawing.userPolylineOffsets.back();
-      for (int vi = v0; vi < v1; ++vi) {
-        CadPolyVertex v = st.drawing.vertex(vi);
-        RotateAroundBase(bx, by, rad, &v.x, &v.y);
-        st.drawing.pushVertex(v);
-      }
-      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
-      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
-      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
-      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
-      uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
-        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-      st.drawing.userPolylineClosed.push_back(cl);
-      EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
-    }
-  }
-  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
-                              newCircleNormals.end());
-  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
-  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
-  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-
-  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
-    double x = v.x, y = v.y;
-    RotateAroundBase(bx, by, rad, &x, &y);
-    return spline::Vec3{x, y, v.z};
-  });
-  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
-    double x = v.x, y = v.y;
-    RotateAroundBase(bx, by, rad, &x, &y);
-    return spline::Vec3{x, y, v.z};
-  });
-
-  // Feature lines (REQ-087) — the same append as the translated path, differing only in the point
-  // function, which is exactly why both go through AppendFeatureLineCopy.
-  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
-    AppendFeatureLineCopy(st, fi, v0, v1,
-                          [&](auto* x, auto* y) { RotateAroundBase(bx, by, rad, x, y); });
-  });
-
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newBlockRefs.empty() ||
-      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
-      st.drawing.featureLineVerts.size() != featureVertsBefore)
-    BumpCadGpuCache(st);
-}
-
-/// REQ-328: rotate every selected entity about the LINE through \p axisPoint with unit direction
-/// \p axisUnit by \p angleRad, appending the rotated duplicates the same way
-/// \c DuplicateCadSelectionRotated does (never mutating the source). This is the general primitive
-/// that function's world-Z-only math is a special case of — proven by \c Ray3dTests.cpp's own
-/// regression tests against `RotateAroundBase`.
-///
-/// Line/Circle/Arc/Ellipse/Polyline/FilledRegion/FeatureLine rotate fully in 3D: a bare point
-/// (Line/Polyline/FilledRegion/FeatureLine vertex) has no orientation to preserve, so rotating it is
-/// already completely well-defined; Circle/Arc/Ellipse additionally rotate their stored plane NORMAL
-/// (a direction, via \c RotateVectorAboutAxis) so the plane itself tips with the rotation, and an
-/// Arc re-anchors its start point exactly as the Z-only path already does.
-///
-/// Annotation/Table/BlockRef are refused when \p axisUnit is not parallel to world Z: none of the
-/// three stores a plane normal, so tipping one out of world/UCS XY has no representable result with
-/// today's data model (REQ-328 item 2) — the same class of stated boundary REQ-312 drew for why
-/// arcs/circles needed a normal and annotations did not get one. When the axis IS Z-parallel they
-/// rotate with the exact `RotateAroundBase`-equivalent math the 2D path always used.
-static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                     const ray3d::Vec3& axisUnit, double angleRad,
-                                     std::vector<std::string>& log,
-                                     const char* commandLabel = "ARRAY Polar") {
-  const bool axisIsWorldZParallel = std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 &&
-                                    std::fabs(axisUnit.z) > 1e-9;
-  const double rad = angleRad;
-  const auto rotPt = [&](double x, double y, double z) -> ray3d::Vec3 {
-    return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
-  };
-  const auto rotDir = [&](double x, double y, double z) -> ray3d::Vec3 {
-    return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
-  };
-  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
-    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
-  });
-  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
-    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
-  });
-  // Solids and pipe runs are copied too (REQ-351) — about any axis, since `brep::Rotate` turns
-  // every frame a solid stores and a pipe run is only its path.
-  RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log, /*duplicate=*/true, commandLabel);
-  RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/true);
-
-  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<double> newLines, newCircles;
-  std::vector<float> newCircleNormals;
-  std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
-  std::vector<CadAnnotation> newAnn;
-  std::vector<EntityAttributes> newAnnAttrs;
-  std::vector<CadTable> newTables;
-  std::vector<EntityAttributes> newTableAttrs;
-  std::vector<CadBlockRef> newBlockRefs;
-  std::vector<EntityAttributes> newBlockRefAttrs;
-  std::vector<CadArc> newArcs;
-  std::vector<EntityAttributes> newArcAttrs;
-  std::vector<CadEllipse> newEll;
-  std::vector<EntityAttributes> newEllAttrs;
-  std::vector<CadFilledRegion> newFills;
-  std::vector<EntityAttributes> newFillAttrs;
-  size_t excludedFlatOnly = 0;  // Annotation/Table/BlockRef refused under a tilted axis
-
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t li = static_cast<size_t>(e.index);
-      if (li < st.drawing.lineCount()) {
-        const CadLineRecord ln = st.drawing.line(li);
-        const ray3d::Vec3 p0 = rotPt(ln.x0, ln.y0, ln.z0);
-        const ray3d::Vec3 p1 = rotPt(ln.x1, ln.y1, ln.z1);
-        newLines.push_back(p0.x);
-        newLines.push_back(p0.y);
-        newLines.push_back(p0.z);
-        newLines.push_back(p1.x);
-        newLines.push_back(p1.y);
-        newLines.push_back(p1.z);
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
-          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.drawing.circleCount()) {
-        const CadCircleRecord cc = st.drawing.circle(ci);
-        const ray3d::Vec3 c = rotPt(cc.cx, cc.cy, cc.cz);
-        newCircles.push_back(c.x);
-        newCircles.push_back(c.y);
-        newCircles.push_back(c.z);
-        newCircles.push_back(cc.r);  // r
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
-          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
-        float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
-        const ray3d::Vec3 n = rotDir(nnx, nny, nnz);
-        PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z));
-      }
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userArcs.size()) {
-        CadArc a = st.drawing.userArcs[k];
-        const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-        const ray3d::Vec3 startRot = rotPt(startWorld.x, startWorld.y, startWorld.z);
-        const ray3d::Vec3 c = rotPt(a.cx, a.cy, a.z);
-        const ray3d::Vec3 n = rotDir(a.nx, a.ny, a.nz);
-        a.cx = c.x;
-        a.cy = c.y;
-        a.z = c.z;
-        a.nx = static_cast<float>(n.x);
-        a.ny = static_cast<float>(n.y);
-        a.nz = static_cast<float>(n.z);
-        CadReanchorArcStart(&a, startRot);
-        newArcs.push_back(a);
-        EntityAttributes at{};
-        if (k < st.drawing.userArcAttrs.size())
-          at = st.drawing.userArcAttrs[k];
-        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      // Unlike Circle/Arc (REQ-312), CadEllipse has NO stored plane normal — it is "parallel to XY,
-      // absolute" by construction (CadEntities.hpp). Tipping one out of that plane has no
-      // representable result, the same reason Annotation/Table/BlockRef refuse a tilted axis.
-      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userEllipses.size()) {
-        CadEllipse el = st.drawing.userEllipses[k];
-        const ray3d::Vec3 c = rotPt(el.cx, el.cy, el.z);
-        const ray3d::Vec3 maj = rotDir(el.majVx, el.majVy, 0.0);
-        el.cx = c.x;
-        el.cy = c.y;
-        el.z = c.z;
-        el.majVx = static_cast<float>(maj.x);
-        el.majVy = static_cast<float>(maj.y);
-        newEll.push_back(el);
-        EntityAttributes at{};
-        if (k < st.drawing.userEllAttrs.size())
-          at = st.drawing.userEllAttrs[k];
-        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-        continue;
-      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-      const int nv = v1 - v0;
-      if (nv < 2)
-        continue;
-      if (st.drawing.userPolylineOffsets.empty())
-        st.drawing.userPolylineOffsets.push_back(0);
-      const int baseVert = st.drawing.userPolylineOffsets.back();
-      for (int vi = v0; vi < v1; ++vi) {
-        const CadPolyVertex v = st.drawing.vertex(vi);
-        const ray3d::Vec3 p = rotPt(v.x, v.y, v.z);
-        st.drawing.pushVertex(CadPolyVertex{p.x, p.y, p.z});
-      }
-      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
-      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
-      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
-      uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
-        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-      st.drawing.userPolylineClosed.push_back(cl);
-      EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
-    } else if (e.type == SelectedEntity::Type::FilledRegion) {
-      const size_t fk = static_cast<size_t>(e.index);
-      if (fk < st.drawing.cadFilledRegions.size()) {
-        CadFilledRegion fr = st.drawing.cadFilledRegions[fk];
-        for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
-          const ray3d::Vec3 p = rotPt(fr.vertsXyz[v], fr.vertsXyz[v + 1], fr.vertsXyz[v + 2]);
-          fr.vertsXyz[v] = p.x;
-          fr.vertsXyz[v + 1] = p.y;
-          fr.vertsXyz[v + 2] = p.z;
-        }
-        newFills.push_back(std::move(fr));
-        newFillAttrs.push_back(DuplicatedEntityAttrs(
-            fk < st.drawing.cadFilledRegionAttrs.size() ? st.drawing.cadFilledRegionAttrs[fk] : EntityAttributes{}));
-      }
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.cadAnnotations.size()) {
-        CadAnnotation c = st.drawing.cadAnnotations[k];
-        c.surveyPointLabelForId = -1;
-        const ray3d::Vec3 ins = rotPt(c.insX, c.insY, c.insZ);
-        c.insX = static_cast<float>(ins.x);
-        c.insY = static_cast<float>(ins.y);
-        c.insZ = static_cast<float>(ins.z);
-        if (c.kind == CadAnnotation::Kind::Text) {
-          c.rotationRad = static_cast<float>(static_cast<double>(c.rotationRad) + angleRad);
-        } else if (c.kind == CadAnnotation::Kind::Mtext) {
-          RotateMtextAroundBase(axisPoint.x, axisPoint.y, angleRad, &c);
-        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
-          RotateCadDimLinearAroundBase(axisPoint.x, axisPoint.y, angleRad, &c);
-        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
-          RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &c.dimExt1X, &c.dimExt1Y);
-          RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &c.dimExt2X, &c.dimExt2Y);
-          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-        } else {
-          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
-          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
-          float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
-          for (int i = 0; i < 4; ++i) {
-            RotateAroundBase(axisPoint.x, axisPoint.y, angleRad, &xs[i], &ys[i]);
-            mnX = std::min(mnX, xs[i]); mxX = std::max(mxX, xs[i]);
-            mnY = std::min(mnY, ys[i]); mxY = std::max(mxY, ys[i]);
-          }
-          c.boxMinX = mnX; c.boxMaxX = mxX; c.boxMinY = mnY; c.boxMaxY = mxY;
-          c.insX = mnX; c.insY = mnY;
-        }
-        newAnn.push_back(std::move(c));
-        EntityAttributes a{};
-        if (k < st.drawing.cadAnnotationAttrs.size())
-          a = st.drawing.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
-      const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.drawing.cadTables.size()) {
-        CadTable c = st.drawing.cadTables[tk];
-        CadTableRotateAround(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y),
-                             static_cast<float>(angleRad));
-        newTables.push_back(std::move(c));
-        EntityAttributes a{};
-        if (tk < st.drawing.cadTableAttrs.size())
-          a = st.drawing.cadTableAttrs[tk];
-        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
-      const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.drawing.cadBlockRefs.size()) {
-        CadBlockRef c = st.drawing.cadBlockRefs[bk];
-        CadBlockRotateZ(&c, axisPoint.x, axisPoint.y, angleRad);
-        newBlockRefs.push_back(std::move(c));
-        EntityAttributes a{};
-        if (bk < st.drawing.cadBlockRefAttrs.size())
-          a = st.drawing.cadBlockRefAttrs[bk];
-        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    }
-  }
-  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
-  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
-  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
-  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-  st.drawing.cadFilledRegions.insert(st.drawing.cadFilledRegions.end(), newFills.begin(), newFills.end());
-  st.drawing.cadFilledRegionAttrs.insert(st.drawing.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
-
-  // AppendFeatureLineCopy's xform only sees (x, y) — its own Z rides through untouched (see its
-  // declaration) — which is exactly right for a Z-parallel axis (the general formula's x'/y' never
-  // depend on z there, proven algebraically the same way Ray3dTests' off-origin-Z-axis case is) but
-  // WRONG for a tilted one, where x'/y' genuinely depend on the point's z. Rather than widen that
-  // shared helper's signature for one caller, a tilted axis refuses feature lines too.
-  size_t featureLinesExcluded = 0;
-  if (axisIsWorldZParallel) {
-    ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
-      AppendFeatureLineCopy(st, fi, v0, v1, [&](float* x, float* y) {
-        const ray3d::Vec3 p = rotPt(*x, *y, 0.f);
-        *x = static_cast<float>(p.x);
-        *y = static_cast<float>(p.y);
-      });
-    });
-  } else {
-    ForEachSelectedFeatureLine(st, [&](int /*fi*/, int /*v0*/, int /*v1*/) { ++featureLinesExcluded; });
-  }
-  excludedFlatOnly += featureLinesExcluded;
-
-  if (excludedFlatOnly > 0)
-    log.push_back(std::string(commandLabel) + " — " + std::to_string(excludedFlatOnly) +
-                  " entity(ies) excluded: text/table/block/feature-line/ellipse rotation about a"
-                  " tilted axis is not supported yet (REQ-328) — none of these store a plane normal"
-                  " to tip. Rotate about a UCS with an upright Z axis.");
-
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newBlockRefs.empty() || !newFills.empty() ||
-      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
-      st.drawing.featureLineVerts.size() != featureVertsBefore)
-    BumpCadGpuCache(st);
-}
-
 static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, float dz,
                                     std::vector<std::string>& log) {
   st.pendingSurveyDupIsRotate = false;
-  DuplicateCadSelectionTranslated(st, dx, dy, dz);
+  TransformSelection(st, GoSurvey::Document::SimilarityTransform::Translation({dx, dy, dz}),
+                     GoSurvey::Document::EntityOp::Copy, "COPY", /*duplicate=*/true, log);
   // Stay in COPY — same selection + base, ready for another destination.
   if (!st.selectedSurveyPointIndices.empty()) {
     st.pendingCopyDx = dx;
@@ -1362,36 +287,11 @@ static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, flo
 
 
 
-/// REQ-305 ARRAY. Unlike MIRROR, ARRAY's duplication path (\c DuplicateCadSelectionTranslated /
-/// \c DuplicateCadSelectionRotated) already handles \c FilledRegion, so that type is NOT dropped
-/// here. Drops \c Mesh / \c PdfUnderlay for the same reasons \c DropMirrorUnsupportedFromSelection
-/// does (reference-only / no representable duplicate), calls the existing
-/// \c DropSurfacesFromSelectionForTransform for \c Surface, and — the D-2026-08-25-m decision —
-/// drops survey points: duplicating them needs an ID-conflict policy (the existing COPY/ROTATE-copy
-/// modal), and that modal resolves a single offset/rotation, not N array instances at once, so
-/// survey points are excluded rather than silently mis-duplicated or given a policy they were never
-/// built for.
-///
-/// \c Solid and \c PipeRun are NOT dropped: both ARRAY forms copy them (D-2026-09-07-c for
-/// Rectangular, REQ-351 for Polar).
-static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
-  DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
-  DropPositionMarkersFromSelection(st, "ARRAY", log);  // REQ-359: move/copy/erase only
-  DropMultileadersFromSelection(st, "ARRAY", log);     // REQ-367
-  size_t mesh = 0, pdf = 0;
-  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [&](const SelectedEntity& e) {
-                                      if (e.type == SelectedEntity::Type::Mesh) { ++mesh; return true; }
-                                      if (e.type == SelectedEntity::Type::PdfUnderlay) { ++pdf; return true; }
-                                      return false;
-                                    }),
-                     st.selection.end());
-  if (mesh)
-    log.push_back("ARRAY — " + std::to_string(mesh) + " imported model(s) excluded: imported meshes" +
-                  " are reference-only geometry and are never edited.");
-  if (pdf)
-    log.push_back("ARRAY — " + std::to_string(pdf) + " PDF underlay(s) excluded: an underlay cannot" +
-                  " be duplicated yet.");
+/// REQ-305 ARRAY: refuse what the per-kind declarations say cannot be arrayed (ADR-0011), then drop
+/// survey points, which need an ID-conflict policy for many instances at once (D-2026-08-25-m).
+static void RefuseArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  RefuseSelectionForTransform(st, GoSurvey::Document::EntityOp::Array,
+                              GoSurvey::Document::SimilarityTransform::Identity(), "ARRAY", log);
   if (!st.selectedSurveyPointIndices.empty()) {
     log.push_back("ARRAY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
                   " survey point(s) excluded: arraying survey points needs an ID-conflict policy" +
@@ -1399,8 +299,6 @@ static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<s
     st.selectedSurveyPointIndices.clear();
   }
 }
-
-
 
 static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outCx, float* outCy) {
   if (!outCx || !outCy)
@@ -1827,7 +725,8 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
         ArrayCellWorldDelta(st, *arr, static_cast<float>(c) * colSpacing,
                             static_cast<float>(r) * rowSpacing, &dx, &dy, &dz,
                             static_cast<float>(lv) * levelSpacing);
-        DuplicateCadSelectionTranslated(st, dx, dy, dz);
+        TransformSelection(st, GoSurvey::Document::SimilarityTransform::Translation({dx, dy, dz}),
+                           GoSurvey::Document::EntityOp::Array, "ARRAY", /*duplicate=*/true, log);
       }
     }
   }
@@ -1838,7 +737,7 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
 }
 
 /// Polar commit: \p arrayRotateItems == true rotates every instance about the active UCS Z axis
-/// through the picked centre via \c RotateSelectionAboutAxis (REQ-328) — a genuine 3D rotation, not
+/// through the picked centre via \c TransformSelection (REQ-328, issue #1577) — a genuine 3D rotation, not
 /// just the world-Z-only case, so a tilted UCS (previously refused outright) now works for every
 
 static void ErasePolylineByIndex(AppCommandState& st, int pi) {

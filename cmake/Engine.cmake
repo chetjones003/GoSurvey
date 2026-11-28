@@ -236,6 +236,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/engine/StepEngine.cpp
   src/commands/modify/CadModifyPilotModule.cpp
   src/commands/modify/CadModifyRestModule.cpp
+  src/commands/modify/CadSelectionTransform.cpp
   src/commands/draw/CadDrawModule.cpp
   src/commands/solid/CadSolidModule.cpp
   src/commands/pipe/CadPipeSiteModule.cpp

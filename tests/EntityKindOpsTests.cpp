@@ -4,8 +4,9 @@
 // via a tilted UCS), SCALE, MIRROR, STRETCH, ERASE, and extents via `DispatchByPrimaryForTest`,
 // recording today's exact behaviour — including every kind-coverage gap and silent skip.
 //
-// Phase 2a must keep this entire table green without changing a single row; phase 2b closes the
-// documented gaps one row at a time.
+// Issue #1577 PR 2 moved every transform command onto one path and set each row to AutoCAD 2025's
+// behaviour (ADR-0011 amendment). Rows marked "AutoCAD:" quote tools/autocad-transform-oracle/.
+// SCALE is uniform in X, Y and Z about the base point, as AutoCAD's is.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -327,7 +328,7 @@ EntityProbe ExpectArcRot3d(const EntityProbe& p) {
   return out;
 }
 EntityProbe ExpectArcScale(const EntityProbe& p) {
-  EntityProbe out = MapPts(p, MapScaleXy);
+  EntityProbe out = MapPts(p, MapScale3d);
   out.scalars[0] = p.scalars[0] * kScaleFactor;
   return out;
 }
@@ -338,6 +339,12 @@ EntityProbe ExpectArcMirror(const EntityProbe& p) {
   out.pts[1] = MapMirrorX(p.pts[2]);
   out.pts[2] = MapMirrorX(p.pts[1]);
   return out;
+}
+
+// Multileader row after ROTATE "90" about the origin (see the row for why the label moves this way).
+EntityProbe MultileaderRotated() {
+  return {{{12.0, -16.0, 3.0}, {14.0, -19.0, 3.0}, {13.0, -19.0, 3.0}, {15.0, -21.0, 3.0}, {18.0, -19.0, 3.0}},
+          {0.5, -kHalfPi, 0.1}};
 }
 
 std::vector<KindRow> BuildTable() {
@@ -362,7 +369,7 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),  // AutoCAD: z 3 -> 6, 4 -> 8
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
@@ -399,8 +406,8 @@ std::vector<KindRow> BuildTable() {
         out.scalars[3] = 0.0;
         return out;
       }),
-      Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+      Applied([](const EntityProbe& p) {  // AutoCAD: centre (32,24,6), r 4
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         return out;
       }),
@@ -478,8 +485,24 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
-      Refused(), // Tilted axis rotation refuses Ellipse (no 3D orientation path).
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      // AutoCAD: ROTATE3D Y 90 -> centre (0,12,-16), major (0,0,-3), normal (1,0,0). The probe's second
+      // point is centre + (majVx, majVy) read in the new plane, whose X axis (arbitrary-axis rule for
+      // normal +X) is world +Y and Y axis world +Z: the major (0,0,-3) reads (0,-3).
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = p;
+        out.pts[0] = MapRot3d(p.pts[0]);
+        out.pts[1] = {out.pts[0].x, out.pts[0].y - 3.0, out.pts[0].z};
+        out.scalars[1] = 1.0;
+        out.scalars[2] = 0.0;
+        out.scalars[3] = 0.0;
+        return out;
+      }),
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = p;
+        out.pts[0] = MapScale3d(p.pts[0]);
+        out.pts[1] = {out.pts[0].x + 6.0, out.pts[0].y, out.pts[0].z};
+        return out;
+      }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
@@ -538,9 +561,9 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
-      // Today RotateSelectionInPlaceAboutAxis rotates polyline vertices but leaves vertex normals unchanged.
+      // A straight polyline's vertex normals are never consulted, so a tilted rotation leaves them (0,0,1).
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
@@ -581,14 +604,19 @@ std::vector<KindRow> BuildTable() {
         out.scalars[0] = p.scalars[0] - kHalfPi;
         return out;
       }),
-      Refused(), // Tilted-axis rotation refuses Annotation.
-      Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+      Refused(), // No plane normal to tip (a known gap: AutoCAD ROTATE3D tilts TEXT).
+      Applied([](const EntityProbe& p) {  // AutoCAD: insertion (32,24,6), height x2
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[1] = p.scalars[1] * kScaleFactor;
         return out;
       }),
-      // MIRRTEXT-off: insertion reflects, rotation stays upright.
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
+      // AutoCAD (MIRRTEXT 0): the far end of the baseline mirrors and the text reads forwards from it.
+      // The string is 5.5 wide here (0.55 x h 5 x 2 glyphs), so the insertion lands at -(16 + 5.5).
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = p;
+        out.pts[0] = {-(p.pts[0].x + 5.5), p.pts[0].y, p.pts[0].z};
+        return out;
+      }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Default modelUnitsPerPlottedInch = 50 -> h = 5.0, w = 0.55 * 5.0 * 2 = 5.5. The text stands on its
@@ -632,11 +660,19 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapMtextFrame(p, MapRotPlan, -kHalfPi, 1.0); }),
       Refused(),
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapMtextFrame(p, MapScaleXy, 0.0, kScaleFactor);
+        EntityProbe out = MapMtextFrame(p, MapScale3d, 0.0, kScaleFactor);
         out.scalars[1] = p.scalars[1] * kScaleFactor;
         return out;
       }),
-      Duplicated([](const EntityProbe& p) { return MapMtextFrame(p, MapMirrorX, 0.0, 1.0); }),
+      // AutoCAD: the insertion mirrors and the attachment swaps sides (bottom-left becomes bottom-right),
+      // so the frame lands on the mirror image of the old one, [-20,-16] x [12,15], reading forwards.
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = p;
+        out.pts[0] = MapMirrorX(p.pts[0]);
+        out.pts[1] = {-20.0, 12.0, p.pts[0].z};
+        out.pts[2] = {-16.0, 15.0, p.pts[0].z};
+        return out;
+      }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 3.0),
@@ -684,12 +720,18 @@ std::vector<KindRow> BuildTable() {
       }),
       Refused(),
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         out.scalars[2] = p.scalars[2] * kScaleFactor;
         return out;
       }),
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
+      // The mirrored chord runs (-16,12) -> (-20,12), so its normal points down: the offset changes sign
+      // to keep the dimension line at y = 14, where the mirror puts it.
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapMirrorX);
+        out.scalars[0] = -p.scalars[0];
+        return out;
+      }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Exact CadAnnotationRoughBounds: ext lines [16..20] x [12.048..14.08] union text quad [18..20.75] x [9..14].
@@ -726,33 +768,29 @@ std::vector<KindRow> BuildTable() {
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      // Rotating horizontal DimLinear by -90 deg rotates ins and ext1/ext2, keeps dimLinearVertical=false,
-      // recomputes dimSignedOffset = 0, and leaves rotationRad = 0 (degenerate horizontal span).
+      // AutoCAD: ROTATE -90 turns the dimension to measure vertically (group 50 = 270 deg); its line
+      // passes x = 14, so the offset from the chord at x = 12 stays 2 and the text reads at 90 deg.
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
-        out.scalars[0] = 0.0;
+        out.scalars[1] = 1.0;
+        out.scalars[2] = kHalfPi;
         return out;
       }),
       Duplicated([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
-        out.scalars[0] = 0.0;
+        out.scalars[1] = 1.0;
+        out.scalars[2] = kHalfPi;
         return out;
       }),
       Refused(),
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         out.scalars[3] = p.scalars[3] * kScaleFactor;
         return out;
       }),
-      // Existing quirk recorded for phase 0: DuplicateCadSelectionReflected calls ReflectCadDimLinearAcrossLine
-      // without reflecting insX/insY, so ext1/ext2 reflect while ins stays at (18,14,3).
-      Duplicated([](const EntityProbe& p) {
-        EntityProbe out = p;
-        out.pts[1] = MapMirrorX(p.pts[1]);
-        out.pts[2] = MapMirrorX(p.pts[2]);
-        return out;
-      }),
+      // AutoCAD: MIRROR moves the whole dimension, text included: (18,14) -> (-18,14).
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 20.75, 9.0, 14.08, 3.0, 3.0),
@@ -780,20 +818,24 @@ std::vector<KindRow> BuildTable() {
         return {{{p.insertX, p.insertY, 0.0}}, {p.scale, p.rotationDeg, p.pageWidthPts, p.pageHeightPts}};
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
-      Skipped(), // Gap: COPY silently skips PDF underlays.
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
         out.scalars[1] = p.scalars[1] - 90.0;
         return out;
       }),
-      Skipped(), // Gap: ROTATE-copy silently skips PDF underlays.
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapRotPlan);
+        out.scalars[1] = p.scalars[1] - 90.0;
+        return out;
+      }),
       Refused(),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         return out;
       }),
-      Refused(), // DropMirrorUnsupportedFromSelection refuses PDF underlays.
+      Refused(), // An underlay's placement cannot store a reflection yet (AutoCAD behaviour unconfirmed).
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       // Gap: PDF underlays are absent from ComputeWorldExtents / CollectEntityBoxes / ComputeWorldExtents3d.
@@ -825,11 +867,26 @@ std::vector<KindRow> BuildTable() {
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      Skipped(), // Gap: plain ROTATE silently skips filled regions.
-      Skipped(), // Gap: ROTATE-copy silently skips filled regions.
+      // AutoCAD: ROTATE -90 turns the boundary and the pattern (15 deg -> -75 deg).
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapRotPlan);
+        out.scalars[0] = p.scalars[0] - 90.0;
+        return out;
+      }),
+      Duplicated([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapRotPlan);
+        out.scalars[0] = p.scalars[0] - 90.0;
+        return out;
+      }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      Skipped(), // Gap: plan SCALE silently skips filled regions.
-      Refused(), // DropMirrorUnsupportedFromSelection refuses filled regions.
+      // AutoCAD: SCALE 2 doubles the boundary and the pattern scale (2 -> 4); the angle stays 15 deg.
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapScale3d);
+        out.scalars[1] = p.scalars[1] * kScaleFactor;
+        return out;
+      }),
+      // AutoCAD (MIRRHATCH 0): the boundary mirrors and the pattern keeps its 15 deg angle.
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 3.0),
@@ -855,13 +912,14 @@ std::vector<KindRow> BuildTable() {
           p.pts.push_back({v[k], v[k + 1], v[k + 2]});
         return p;
       },
-      Skipped(), // Gap: reference-only mesh silently skipped by MOVE/COPY/ROTATE/SCALE.
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Refused(),   // DropMirrorUnsupportedFromSelection refuses meshes.
+      // An imported model transforms like any AutoCAD mesh: its vertices map (the payload is replaced).
+      Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       BoxMissed(), // Gap: ComputeSelectionFromRect does not select meshes.
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 15.0, 3.0, 4.0),
@@ -898,12 +956,13 @@ std::vector<KindRow> BuildTable() {
         return p;
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      // COPY uses AppendFeatureLineCopy which only maps XY (dz dropped — recorded here).
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
+      // COPY carries the elevation change, as MOVE does.
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Refused(), // Tilted-axis rotation refuses FeatureLine.
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      // SCALE is uniform for a feature line too, so it stays on the CAD linework it was drawn from.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
@@ -934,9 +993,9 @@ std::vector<KindRow> BuildTable() {
         return p;
       },
       Refused(),
-      Skipped(), // Gap: DuplicateCadSelectionTranslated does not call DropSurfacesFromSelectionForTransform.
+      Refused(), // COPY refuses a surface with the same stated reason as MOVE (REQ-201).
       Refused(),
-      Skipped(), // Gap: DuplicateCadSelectionRotated does not call DropSurfacesFromSelectionForTransform.
+      Refused(),
       Refused(),
       Refused(),
       Refused(),
@@ -970,9 +1029,9 @@ std::vector<KindRow> BuildTable() {
         return {{{t.insX, t.insY, t.insZ}},
                 {t.width, t.height, t.rotationRad, t.localYFlipped ? 1.0 : 0.0, t.plottedHeightInches}};
       },
-      // Note: CadTableTranslate translates XY only (insZ unchanged in MOVE & COPY).
-      Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
-      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
+      // MOVE and COPY carry the table's elevation, as AutoCAD's do.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
+      Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapRotPlan);
         out.scalars[2] = p.scalars[2] - kHalfPi;
@@ -985,17 +1044,17 @@ std::vector<KindRow> BuildTable() {
       }),
       Refused(),
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         out.scalars[1] = p.scalars[1] * kScaleFactor;
         out.scalars[4] = p.scalars[4] * kScaleFactor;
         return out;
       }),
+      // AutoCAD: MIRROR keeps the table readable. The insertion (top-left) goes to the mirror image of
+      // the top-right corner, (-(16 + 4), 12), and the table still runs along +X.
       Duplicated([](const EntityProbe& p) {
-        // Reflecting table (rot=0, width along +X) across Y-axis flips localYFlipped and sets rot=pi.
-        EntityProbe out = MapPts(p, MapMirrorX);
-        out.scalars[2] = kPi;
-        out.scalars[3] = 1.0;
+        EntityProbe out = p;
+        out.pts[0] = {-(p.pts[0].x + 4.0), p.pts[0].y, p.pts[0].z};
         return out;
       }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
@@ -1046,16 +1105,21 @@ std::vector<KindRow> BuildTable() {
         out.scalars[5] = p.scalars[5] - kHalfPi;
         return out;
       }),
-      Refused(),
+      // AutoCAD: ROTATE3D tilts the insert. About +Y by 90 deg that is rotY = 90 deg.
       Applied([](const EntityProbe& p) {
-        EntityProbe out = MapPts(p, MapScaleXy);
+        EntityProbe out = MapPts(p, MapRot3d);
+        out.scalars[4] = kHalfPi;
+        return out;
+      }),
+      Applied([](const EntityProbe& p) {
+        EntityProbe out = MapPts(p, MapScale3d);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         out.scalars[1] = p.scalars[1] * kScaleFactor;
         out.scalars[2] = p.scalars[2] * kScaleFactor;
         return out;
       }),
       Duplicated([](const EntityProbe& p) {
-        // CadBlockMirror across the Y-axis negates sx and keeps sy=1, sz=1, rot=(0,0,0).
+        // AutoCAD: a mirrored insert gets X scale -1; across the Y axis at rotation 0 the rotation stays 0.
         EntityProbe out = MapPts(p, MapMirrorX);
         out.scalars[0] = -1.0;
         out.scalars[1] = 1.0;
@@ -1063,7 +1127,9 @@ std::vector<KindRow> BuildTable() {
         out.scalars[5] = 0.0;
         return out;
       }),
-      Skipped(), // Gap: STRETCH selects BlockRef via crossing box but ApplyStretchToSelection skips it.
+      // Refused by its declared capability, with a reason. AutoCAD moves an insert whose insertion point
+      // is inside the window; that is issue #1577 phase 4.
+      Refused(),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 3.0),
   });
@@ -1096,7 +1162,7 @@ std::vector<KindRow> BuildTable() {
       // Solids scale uniformly in all 3 axes even under plan SCALE (REQ-332).
       Applied([](const EntityProbe& p) { return MapAabb3d(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapAabb3d(p, MapMirrorX); }),
-      Refused(), // DropSolidsFromSelectionForTransform refuses solids under STRETCH.
+      Refused(), // A solid can only be moved whole (its declared capability).
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 5.0),
   });
@@ -1160,14 +1226,16 @@ std::vector<KindRow> BuildTable() {
           p.pts.push_back({v[k], v[k + 1], v[k + 2]});
         return p;
       },
-      Skipped(), // Gap: display-only point cloud is silently skipped by all transforms.
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
-      Skipped(),
+      // Refused with a stated reason rather than skipped (REQ-201). Transforming a cloud needs a placement
+      // in the PointCloud system, a known gap against AutoCAD.
+      Refused(),
+      Refused(),
+      Refused(),
+      Refused(),
+      Refused(),
+      Refused(),
+      Refused(),
+      Refused(),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
@@ -1235,7 +1303,7 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Refused(),
-      Skipped(), // Gap: DuplicateCadSelectionRotated does not call DropPositionMarkersFromSelection.
+      Refused(), // Rotate-copy refuses it with the same reason as ROTATE (REQ-359).
       Refused(),
       Refused(),
       Refused(),
@@ -1254,6 +1322,7 @@ std::vector<KindRow> BuildTable() {
         ml.pathXyz = {16.f, 12.f, 3.f, 19.f, 14.f, 3.f};
         ml.arrowSizeWorld = 0.5f;
         ml.label.kind = CadAnnotation::Kind::Mtext;
+        ml.label.mtextAttach = 7;  // bottom-left: the insertion (19,13) is the box's bottom-left corner
         ml.label.insX = 19.f;
         ml.label.insY = 13.f;
         ml.label.insZ = 3.f;
@@ -1280,11 +1349,20 @@ std::vector<KindRow> BuildTable() {
       },
       Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
-      Refused(),
-      Skipped(), // Gap: DuplicateCadSelectionRotated does not call DropMultileadersFromSelection.
-      Refused(),
-      Refused(),
-      Refused(),
+      // AutoCAD: ROTATE turns the leader and its label: the insertion (19,13) turns to (13,-19).
+      Applied([](const EntityProbe&) { return MultileaderRotated(); }),
+      Duplicated([](const EntityProbe&) { return MultileaderRotated(); }),
+      Refused(), // No plane normal to tip (a known gap: AutoCAD ROTATE3D tilts a multileader).
+      // AutoCAD: SCALE doubles the leader, the arrowhead and the text.
+      Applied([](const EntityProbe&) {
+        return EntityProbe{{{32.0, 24.0, 6.0}, {38.0, 28.0, 6.0}, {38.0, 26.0, 6.0}, {38.0, 26.0, 6.0}, {44.0, 30.0, 6.0}},
+                           {1.0, 0.0, 0.2}};
+      }),
+      // AutoCAD: MIRROR keeps the label readable on the other side of the landing (attachment BL -> BR).
+      Duplicated([](const EntityProbe&) {
+        return EntityProbe{{{-16.0, 12.0, 3.0}, {-19.0, 14.0, 3.0}, {-19.0, 13.0, 3.0}, {-22.0, 13.0, 3.0}, {-19.0, 15.0, 3.0}},
+                           {0.5, 0.0, 0.1}};
+      }),
       Refused(),
       Outcome::Erased,
       ExactExtents(16.0, 22.0, 12.0, 15.0, 3.0, 3.0),
@@ -1313,9 +1391,11 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
-      Skipped(), // Gap: STRETCH selects Spline via crossing box but ApplyStretchToSelection skips it.
+      // Refused by its declared capability, with a reason. AutoCAD STRETCH moves the fit points inside
+      // the window; that is issue #1577 phase 4.
+      Refused(),
       Outcome::Erased,
       ExactExtents(10.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
@@ -1339,9 +1419,9 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
-      Skipped(), // Gap: STRETCH selects Point via crossing box but ApplyStretchToSelection skips it.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),  // AutoCAD: (16,12) -> (21,15)
       Outcome::Erased,
       ExactExtents(16.0, 16.0, 12.0, 12.0, 3.0, 3.0),
   });
@@ -1369,14 +1449,14 @@ std::vector<KindRow> BuildTable() {
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
-      Skipped(), // Gap: tilted-axis RotateSelectedAlignments returns early silently.
+      Refused(), // An alignment is horizontal; a tilted axis is refused by name (REQ-201).
       Applied([](const EntityProbe& p) {
         EntityProbe out = MapPts(p, MapScaleXy);
         out.scalars[0] = p.scalars[0] * kScaleFactor;
         return out;
       }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
-      Skipped(), // Gap: STRETCH selects Alignment via crossing box but ApplyStretchToSelection skips it.
+      Refused(), // STRETCH refuses an alignment by name; edit its PIs instead.
       Outcome::Erased,
       // Exact AlignmentLabelSets::LabelledBounds for (10,12)->(20,12) with default "Standard" label set at scale 50.
       ExactExtents(-35.0, 65.0, -33.0, 74.5, 0.0, 0.0),
@@ -1401,14 +1481,14 @@ std::vector<KindRow> BuildTable() {
         const SurveyPoint& sp = st.drawing.surveyPoints[i];
         return {{{sp.easting, sp.northing, sp.elevation}}, {}};
       },
-      // MOVE translates XY only (elevation unchanged).
-      Applied([](const EntityProbe& p) { return MapPts(p, MapMoveXy); }),
+      // MOVE carries the elevation change, as COPY's duplicate modal already did.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       // COPY opens survey duplicate modal; applying it translates XYZ.
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMove3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapRotPlan); }),
       Refused(), // Tilted-axis ROTATE refuses survey points with an explicit message.
-      Applied([](const EntityProbe& p) { return MapPts(p, MapScaleXy); }),
+      Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),  // uniform, like every kind
       // MIRROR in world XY opens survey duplicate modal; applying it reflects XY.
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),

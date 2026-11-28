@@ -37,308 +37,6 @@
 #include <utility>
 #include <vector>
 
-namespace {
-/// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
-/// rather than silently doing nothing to them: `FilledRegion` (hatches) — already out of scope for
-/// rotate/scale/mirror, requirements.md's REQ-042 fills note; `Mesh` — never edited by any existing
-/// transform (REQ-063, reference-only geometry); `PdfUnderlay` — its stored orientation is a scalar
-/// rotation-degrees/scale pair with no way to represent a reflection (a "flip" field would be new
-/// scope, not this task's). Surfaces are handled separately by the existing
-/// \ref DropSurfacesFromSelectionForTransform, reused as-is.
-static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
-  size_t filled = 0, mesh = 0, pdf = 0;
-  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [&](const SelectedEntity& e) {
-                                      if (e.type == SelectedEntity::Type::FilledRegion) { ++filled; return true; }
-                                      if (e.type == SelectedEntity::Type::Mesh) { ++mesh; return true; }
-                                      if (e.type == SelectedEntity::Type::PdfUnderlay) { ++pdf; return true; }
-                                      return false;
-                                    }),
-                     st.selection.end());
-  if (filled)
-    log.push_back("MIRROR — " + std::to_string(filled) + " hatch fill(s) excluded: mirroring solid" +
-                  " fills is not supported yet.");
-  if (mesh)
-    log.push_back("MIRROR — " + std::to_string(mesh) + " imported model(s) excluded: imported meshes" +
-                  " are reference-only geometry and are never edited.");
-  if (pdf)
-    log.push_back("MIRROR — " + std::to_string(pdf) + " PDF underlay(s) excluded: an underlay's stored" +
-                  " orientation cannot represent a reflection yet.");
-}
-} // namespace
-
-namespace {
-/// REQ-103 MIRROR. Same shape as \c DuplicateCadSelectionRotated — builds new entities reflected
-/// across the line through (x0,y0)-(x1,y1) and appends them, never mutating the source selection in
-/// place. MIRROR's default behavior always duplicates (erase-source, if requested, runs separately
-/// afterward against the original selection — see \c FinishMirrorCommand), unlike ROTATE/SCALE
-/// where duplication is the opt-in "copy" mode.
-static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
-                                           std::vector<std::string>& log) {
-  DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
-  DropMultileadersFromSelection(st, "MIRROR", log);     // REQ-367
-  DropMirrorUnsupportedFromSelection(st, log);
-  // REQ-351: solids and pipe runs are mirrored across the vertical plane that contains the line.
-  {
-    const ray3d::Vec3 dir{static_cast<double>(x1) - x0, static_cast<double>(y1) - y0, 0.0};
-    const double len = ray3d::Length(dir);
-    const ray3d::Vec3 normal = len > 0.0 ? ray3d::Vec3{-dir.y / len, dir.x / len, 0.0} : ray3d::Vec3{};
-    MirrorSelectedSolidsAndPipeRuns(st, {static_cast<double>(x0), static_cast<double>(y0), 0.0}, normal, log);
-    if (len > 0.0) {
-      const ray3d::Vec3 planePoint{static_cast<double>(x0), static_cast<double>(y0), 0.0};
-      DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
-        return ray3d::ReflectPointAcrossPlane(v, planePoint, normal);
-      });
-      DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
-        return ray3d::ReflectPointAcrossPlane(v, planePoint, normal);
-      });
-    }
-  }
-
-  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
-  const size_t featureVertsBefore = st.drawing.featureLineVerts.size();
-  std::vector<float> newLines;
-  std::vector<float> newCircles;
-  std::vector<EntityAttributes> newLineAttrs;
-  std::vector<EntityAttributes> newCircleAttrs;
-  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
-  std::vector<CadAnnotation> newAnn;
-  std::vector<EntityAttributes> newAnnAttrs;
-  std::vector<CadTable> newTables;
-  std::vector<EntityAttributes> newTableAttrs;
-  std::vector<CadBlockRef> newBlockRefs;
-  std::vector<EntityAttributes> newBlockRefAttrs;
-  std::vector<CadArc> newArcs;
-  std::vector<EntityAttributes> newArcAttrs;
-  std::vector<CadEllipse> newEll;
-  std::vector<EntityAttributes> newEllAttrs;
-
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.lineCount()) {
-        float lx0 = static_cast<float>(st.drawing.line(k).x0);
-        float ly0 = static_cast<float>(st.drawing.line(k).y0);
-        float lz0 = static_cast<float>(st.drawing.line(k).z0);
-        float lx1 = static_cast<float>(st.drawing.line(k).x1);
-        float ly1 = static_cast<float>(st.drawing.line(k).y1);
-        float lz1 = static_cast<float>(st.drawing.line(k).z1);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &lx0, &ly0);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &lx1, &ly1);
-        newLines.push_back(lx0);
-        newLines.push_back(ly0);
-        newLines.push_back(lz0);
-        newLines.push_back(lx1);
-        newLines.push_back(ly1);
-        newLines.push_back(lz1);
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
-          a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t k = static_cast<size_t>(e.index) * 4;
-      size_t ci = static_cast<size_t>(e.index);
-      if (ci < st.drawing.circleCount()) {
-        const CadCircleRecord c = st.drawing.circle(ci);
-        float cx = static_cast<float>(c.cx);
-        float cy = static_cast<float>(c.cy);
-        float r = static_cast<float>(c.r);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &cx, &cy);
-        newCircles.push_back(cx);
-        newCircles.push_back(cy);
-        newCircles.push_back(static_cast<float>(c.cz));  // z — reflection is about a vertical plane
-        newCircles.push_back(r);                            // radius is preserved (isometry)
-        EntityAttributes a{};
-        if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
-          a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
-        float nnx = 0.f, nny = 0.f, nnz = 1.f;
-        CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
-        ReflectNormalAcrossLine(x0, y0, x1, y1, &nnx, &nny);   // REQ-312: the plane mirrors too
-        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
-      }
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.cadAnnotations.size()) {
-        CadAnnotation c = st.drawing.cadAnnotations[k];
-        c.surveyPointLabelForId = -1;
-        if (c.kind == CadAnnotation::Kind::Text || c.kind == CadAnnotation::Kind::Mtext) {
-          // MIRRTEXT-off (design decision, D-2026-08-23-j): insertion point reflects, glyphs stay
-          // upright — rotationRad is deliberately left untouched.
-          // MTEXT (issue #1667): its insertion is the attachment point; the frame is rebuilt around it.
-          if (c.kind == CadAnnotation::Kind::Mtext)
-            CadMtextTransform(c, [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); }, 0.f, 1.f);
-          else
-            ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
-        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
-          ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &c);
-        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
-          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
-          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt1X, &c.dimExt1Y);
-          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
-          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-        } else {
-          // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
-          // corners and re-fit — the same weaker path ROTATE takes for these kinds.
-          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
-          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
-          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
-          float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
-          for (int i = 0; i < 4; ++i) {
-            ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
-            mnX = std::min(mnX, xs[i]);
-            mxX = std::max(mxX, xs[i]);
-            mnY = std::min(mnY, ys[i]);
-            mxY = std::max(mxY, ys[i]);
-          }
-          c.boxMinX = mnX;
-          c.boxMaxX = mxX;
-          c.boxMinY = mnY;
-          c.boxMaxY = mxY;
-          c.insX = mnX;
-          c.insY = mnY;
-        }
-        newAnn.push_back(std::move(c));
-        EntityAttributes a{};
-        if (k < st.drawing.cadAnnotationAttrs.size())
-          a = st.drawing.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Table) {
-      const size_t tk = static_cast<size_t>(e.index);
-      if (tk < st.drawing.cadTables.size()) {
-        CadTable c = st.drawing.cadTables[tk];
-        CadTableReflectAcrossLine(&c, x0, y0, x1, y1);
-        newTables.push_back(std::move(c));
-        EntityAttributes a{};
-        if (tk < st.drawing.cadTableAttrs.size())
-          a = st.drawing.cadTableAttrs[tk];
-        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      const size_t bk = static_cast<size_t>(e.index);
-      if (bk < st.drawing.cadBlockRefs.size()) {
-        CadBlockRef c = st.drawing.cadBlockRefs[bk];
-        CadBlockMirror(&c, x0, y0, x1, y1);
-        newBlockRefs.push_back(std::move(c));
-        EntityAttributes a{};
-        if (bk < st.drawing.cadBlockRefAttrs.size())
-          a = st.drawing.cadBlockRefAttrs[bk];
-        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
-      }
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userArcs.size()) {
-        CadArc a = st.drawing.userArcs[k];
-        // A reflection reverses handedness (CCW becomes CW): reflecting the center alone does not
-        // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
-        // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
-        // reflected point set (verified by hand for axis-aligned and symmetric cases; see TASK-094).
-        // Where the far end lands, taken through the arc's OWN plane before anything moves. A
-        // mirror line lies in plan, so it reflects X and Y and leaves Z alone.
-        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
-                                                         static_cast<double>(a.sweepRad));
-        float fex = static_cast<float>(farEnd.x);
-        float fey = static_cast<float>(farEnd.y);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &fex, &fey);
-        farEnd.x = static_cast<double>(fex);
-        farEnd.y = static_cast<double>(fey);
-        const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
-        a.startRad = newStart;
-        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);   // REQ-312: so does the plane
-        CadReanchorArcStart(&a, farEnd);  // REQ-312: a no-op on a flat arc, so newStart stands there
-        newArcs.push_back(a);
-        EntityAttributes at{};
-        if (k < st.drawing.userArcAttrs.size())
-          at = st.drawing.userArcAttrs[k];
-        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k < st.drawing.userEllipses.size()) {
-        CadEllipse el = st.drawing.userEllipses[k];
-        float mx = static_cast<float>(el.cx + el.majVx);
-        float my = static_cast<float>(el.cy + el.majVy);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &el.cx, &el.cy);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &mx, &my);
-        el.majVx = static_cast<float>(mx - el.cx);
-        el.majVy = static_cast<float>(my - el.cy);
-        newEll.push_back(el);
-        EntityAttributes at{};
-        if (k < st.drawing.userEllAttrs.size())
-          at = st.drawing.userEllAttrs[k];
-        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
-      }
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-        continue;
-      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-      const int nv = v1 - v0;
-      if (nv < 2)
-        continue;
-      if (st.drawing.userPolylineOffsets.empty())
-        st.drawing.userPolylineOffsets.push_back(0);
-      const int baseVert = st.drawing.userPolylineOffsets.back();
-      for (int vi = v0; vi < v1; ++vi) {
-        float px = static_cast<float>(st.drawing.vertex(vi).x);
-        float py = static_cast<float>(st.drawing.vertex(vi).y);
-        float pz = static_cast<float>(st.drawing.vertex(vi).z);
-        ReflectPtAcrossLine(x0, y0, x1, y1, &px, &py);
-        st.drawing.pushVertex(CadPolyVertex{px, py, pz});
-      }
-      st.drawing.userPolylineOffsets.push_back(baseVert + nv);
-      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
-      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
-      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
-      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());  // REQ-325 / ADR-053
-      uint8_t cl = 0;
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
-        cl = st.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-      st.drawing.userPolylineClosed.push_back(cl);
-      EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
-    }
-  }
-  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(),
-                              newCircleNormals.end());
-  st.drawing.cadAnnotations.insert(st.drawing.cadAnnotations.end(), newAnn.begin(), newAnn.end());
-  st.drawing.cadAnnotationAttrs.insert(st.drawing.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
-  st.drawing.cadTables.insert(st.drawing.cadTables.end(), newTables.begin(), newTables.end());
-  st.drawing.cadTableAttrs.insert(st.drawing.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
-  st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
-  st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
-  st.drawing.userArcs.insert(st.drawing.userArcs.end(), newArcs.begin(), newArcs.end());
-  st.drawing.userArcAttrs.insert(st.drawing.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
-  st.drawing.userEllipses.insert(st.drawing.userEllipses.end(), newEll.begin(), newEll.end());
-  st.drawing.userEllAttrs.insert(st.drawing.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
-
-  // Feature lines (REQ-087) — same append as the rotated/translated paths, differing only in the
-  // point function, which is exactly why all three go through AppendFeatureLineCopy.
-  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
-    AppendFeatureLineCopy(st, fi, v0, v1,
-                          [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); });
-  });
-
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newBlockRefs.empty() ||
-      st.drawing.userPolylineVerts.size() != polyVertsBefore ||
-      st.drawing.featureLineVerts.size() != featureVertsBefore)
-    BumpCadGpuCache(st);
-}
-} // namespace
 
 /// entity type that primitive supports. \p arrayRotateItems == false needs every copy to KEEP the
 /// source orientation while still landing on the circle: reusing the existing selection-centroid
@@ -390,13 +88,14 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
   PushUndoSnapshot(st, "Array-Polar");
   for (int i = 1; i < n; ++i) {
     const float ang = step * static_cast<float>(i);
+    using GoSurvey::Document::SimilarityTransform;
     if (rotateItems) {
-      RotateSelectionAboutAxis(st, axisPoint, axisUnit, ang, log);
+      TransformSelection(st, SimilarityTransform::RotationAboutAxis(axisPoint, axisUnit, ang),
+                         GoSurvey::Document::EntityOp::Array, "ARRAY Polar", /*duplicate=*/true, log);
     } else {
       const ray3d::Vec3 rotated = ray3d::RotatePointAboutAxis({anchorX, anchorY, anchorZ}, axisPoint, axisUnit, ang);
-      DuplicateCadSelectionTranslated(st, static_cast<float>(rotated.x) - anchorX,
-                                     static_cast<float>(rotated.y) - anchorY,
-                                     static_cast<float>(rotated.z) - anchorZ);
+      TransformSelection(st, SimilarityTransform::Translation(ray3d::Sub(rotated, {anchorX, anchorY, anchorZ})),
+                         GoSurvey::Document::EntityOp::Array, "ARRAY Polar", /*duplicate=*/true, log);
     }
   }
   FinishArrayCommand(st, log, n, "polar");
@@ -1308,12 +1007,26 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 }
 
+/// Erase every selected entry of \p type from \p items and its parallel \p attrs, highest index first.
+template <class T>
+static void EraseSelectedInParallelStores(AppCommandState& st, SelectedEntity::Type type, std::vector<T>& items,
+                                          std::vector<EntityAttributes>& attrs) {
+  std::set<int> ix;
+  for (const auto& e : st.selection)
+    if (e.type == type && e.index >= 0 && static_cast<size_t>(e.index) < items.size())
+      ix.insert(e.index);
+  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
+    items.erase(items.begin() + static_cast<std::ptrdiff_t>(*it));
+    if (static_cast<size_t>(*it) < attrs.size())
+      attrs.erase(attrs.begin() + static_cast<std::ptrdiff_t>(*it));
+  }
+}
+
 /// REQ-103 MIRROR erase-source step. The same per-store erase \c ExecuteDeleteSelection performs,
-/// minus its own \c PushUndoSnapshot — \c FinishMirrorCommand already pushed one snapshot for the
-/// whole mirror(+erase) operation, satisfying REQ-103's "one undo step" condition — and minus the
-/// FilledRegion/Mesh/Surface/PdfUnderlay blocks, which cannot appear here: by the time this runs,
-/// \c st.selection is what survived \c DuplicateCadSelectionReflected's exclusion filtering (those
-/// four kinds already stripped, with a logged reason).
+/// minus its own \c PushUndoSnapshot — \c FinishMirrorTransform already pushed one snapshot for the
+/// whole mirror(+erase) operation, satisfying REQ-103's "one undo step" condition. By the time this
+/// runs, \c st.selection holds only what MIRROR copied: \c RefuseSelectionForTransform removed
+/// every kind that cannot be mirrored, with a logged reason.
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
   const size_t nLines = st.drawing.lineCount();
@@ -1424,6 +1137,12 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   }
   EraseSelectedSplines(st);  // REQ-443
   EraseSelectedCadPoints(st);
+  // Hatch fills, imported models and multileaders mirror too since issue #1577 (AutoCAD parity).
+  EraseSelectedInParallelStores(st, SelectedEntity::Type::FilledRegion, st.drawing.cadFilledRegions,
+                                st.drawing.cadFilledRegionAttrs);
+  EraseSelectedInParallelStores(st, SelectedEntity::Type::Mesh, st.drawing.cadMeshes, st.drawing.cadMeshAttrs);
+  EraseSelectedInParallelStores(st, SelectedEntity::Type::Multileader, st.drawing.cadMultileaders,
+                                st.drawing.cadMultileaderAttrs);
 
   st.selection.clear();
   AbortMtextGripInteraction(st);
@@ -1443,156 +1162,17 @@ static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
   st.selectedSurveyPointIndices.clear();
 }
 
-/// REQ-329 increment 5 (GitHub issue #402): mirror the selection across the PLANE that contains the
-/// picked line and is perpendicular to the active UCS plane (its normal = line direction x UCS Z).
-/// Appends the reflected duplicates the way \c DuplicateCadSelectionReflected does, and leaves
-/// \c st.selection holding the mirrored sources so \c FinishMirrorCommand's erase-source path is
-/// unchanged.
-///
-/// Entity set: Line / Circle (+ plane normal) / Polyline rotate fully in 3D — a bare vertex has no
-/// orientation to preserve, and a circle's normal is a direction. Arc (reflection reverses arc
-/// handedness — its own geometry problem), Ellipse / Annotation / Table / BlockRef / feature line
-/// (no stored plane normal, or a 2D-only duplication helper — the exact boundary REQ-328 item 2
-/// drew) and survey points (the 2D duplicate-ID modal) are REFUSED by name under a tilted mirror
-/// plane. Solids (`brep::Mirror`) and pipe runs (their path) are mirrored across any plane (REQ-351).
-/// Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this — the flat
-/// `DuplicateCadSelectionReflected` runs unchanged.
-static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const ray3d::Vec3& planePt,
-                                                      const ray3d::Vec3& planeUnit,
-                                                      std::vector<std::string>& log) {
-  DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
-  DropMultileadersFromSelection(st, "MIRROR", log);     // REQ-367
-  DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
-  MirrorSelectedSolidsAndPipeRuns(st, planePt, planeUnit, log);  // REQ-351
-  const auto rp = [&](float x, float y, float z) {
-    return ray3d::ReflectPointAcrossPlane({x, y, z}, planePt, planeUnit);
-  };
-  const auto rv = [&](float x, float y, float z) {
-    return ray3d::ReflectVectorAcrossPlane({x, y, z}, planeUnit);
-  };
-  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
-    return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
-  });
-  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
-    return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
-  });
-  const size_t polyVertsBefore = st.drawing.userPolylineVerts.size();
-  std::vector<float> newLines, newCircles, newCircleNormals;
-  std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
-  size_t refused = 0;
-
-  for (const auto& e : st.selection) {
-    switch (e.type) {
-    case SelectedEntity::Type::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k >= st.drawing.lineCount())
-        break;
-      const ray3d::Vec3 p0 = rp(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).z0));
-      const ray3d::Vec3 p1 = rp(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1), static_cast<float>(st.drawing.line(k).z1));
-      for (const ray3d::Vec3& p : {p0, p1}) {
-        newLines.push_back(static_cast<float>(p.x));
-        newLines.push_back(static_cast<float>(p.y));
-        newLines.push_back(static_cast<float>(p.z));
-      }
-      EntityAttributes a{};
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
-        a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
-      newLineAttrs.push_back(DuplicatedEntityAttrs(a));
-      break;
-    }
-    case SelectedEntity::Type::Circle: {
-      const size_t ci = static_cast<size_t>(e.index);
-      if (ci >= st.drawing.circleCount())
-        break;
-      const CadCircleRecord cc = st.drawing.circle(ci);
-      const ray3d::Vec3 c = rp(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
-      newCircles.push_back(static_cast<float>(c.x));
-      newCircles.push_back(static_cast<float>(c.y));
-      newCircles.push_back(static_cast<float>(c.z));
-      newCircles.push_back(static_cast<float>(cc.r));  // radius preserved (an isometry)
-      EntityAttributes a{};
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
-        a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
-      newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
-      float nx = 0.f, ny = 0.f, nz = 1.f;
-      CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
-      const ray3d::Vec3 n = rv(nx, ny, nz);
-      PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y),
-                       static_cast<float>(n.z));
-      break;
-    }
-    case SelectedEntity::Type::Polyline: {
-      const int pi = e.index;
-      if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-        break;
-      const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-      if (v1 - v0 < 2)
-        break;
-      if (st.drawing.userPolylineOffsets.empty())
-        st.drawing.userPolylineOffsets.push_back(0);
-      const int baseVert = st.drawing.userPolylineOffsets.back();
-      for (int vi = v0; vi < v1; ++vi) {
-        const size_t b = static_cast<size_t>(vi);
-        const ray3d::Vec3 p = rp(static_cast<float>(st.drawing.vertex(b).x), static_cast<float>(st.drawing.vertex(b).y), static_cast<float>(st.drawing.vertex(b).z));
-        st.drawing.pushVertex(CadPolyVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
-      }
-      st.drawing.userPolylineOffsets.push_back(baseVert + (v1 - v0));
-      SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
-      SyncPolylineNormal(st.drawing.userPolylineVertsNormal, st.drawing.userPolylineVerts.size());
-      st.drawing.userPolylineClosed.push_back(static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size()
-                                          ? st.drawing.userPolylineClosed[static_cast<size_t>(pi)]
-                                          : static_cast<uint8_t>(0));
-      EntityAttributes at{};
-      if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-        at = st.drawing.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.drawing.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
-      break;
-    }
-    default:
-      break;
-    }
-  }
-  // Types this pass cannot reflect across a tilted plane are removed from the selection (not just
-  // counted) so FinishMirrorCommand's erase-source path leaves them untouched — the same contract
-  // DropMirrorUnsupportedFromSelection keeps for FilledRegion/Mesh/PDF.
-  const size_t beforeErase = st.selection.size();
-  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [](const SelectedEntity& e) {
-                                      return e.type == SelectedEntity::Type::Arc ||
-                                             e.type == SelectedEntity::Type::Ellipse ||
-                                             e.type == SelectedEntity::Type::Annotation ||
-                                             e.type == SelectedEntity::Type::Table ||
-                                             e.type == SelectedEntity::Type::BlockRef ||
-                                             e.type == SelectedEntity::Type::FeatureLine;
-                                    }),
-                     st.selection.end());
-  refused += beforeErase - st.selection.size();
-  refused += st.selectedSurveyPointIndices.size();
-
-  st.drawing.userLinesFlat.insert(st.drawing.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.drawing.userLineAttrs.insert(st.drawing.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
-  st.drawing.userCirclesCxCyZR.insert(st.drawing.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
-  st.drawing.userCircleAttrs.insert(st.drawing.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
-  st.drawing.userCircleNormals.insert(st.drawing.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
-
-  if (refused > 0)
-    log.push_back("MIRROR — " + std::to_string(refused) +
-                  " entity(ies) excluded: arc/ellipse/text/table/block/feature-line/survey-point"
-                  " reflection across a tilted mirror plane is not supported yet (REQ-328) — reflect"
-                  " across a mirror line on a work plane with an upright Z axis.");
-  if (!newLines.empty() || !newCircles.empty() || st.drawing.userPolylineVerts.size() != polyVertsBefore)
-    BumpCadGpuCache(st);
-}
-
 void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, float x1, float y1, float z1,
                            bool eraseSource, std::vector<std::string>& log) {
   PushUndoSnapshot(st, eraseSource ? "Mirror-erase" : "Mirror");
   const bool hadSurveySelection =
       !st.selectedSurveyPointIndices.empty() && CadWorkPlaneIsWorldXy(st);
+  // MIRROR reflects across the plane that holds the picked line and stands perpendicular to the work
+  // plane: a vertical plane in plan view (REQ-103), a tilted one under a tilted UCS (REQ-329).
+  using GoSurvey::Document::SimilarityTransform;
+  SimilarityTransform xf = SimilarityTransform::Invalid();
   if (CadWorkPlaneIsWorldXy(st)) {
-    DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
+    xf = SimilarityTransform::ReflectionAcrossLineXY(x0, y0, x1, y1);
   } else {
     const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(z0)};
     const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(z1)};
@@ -1604,8 +1184,20 @@ void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, fl
       stepengine::EndSession(st);
       return;
     }
-    DuplicateCadSelectionReflectedAcrossPlane(st, p1, ray3d::Normalize(normal), log);
+    xf = SimilarityTransform::ReflectionAcrossPlane(p1, normal);
+    if (!st.selectedSurveyPointIndices.empty()) {
+      log.push_back("MIRROR — " + std::to_string(st.selectedSurveyPointIndices.size()) +
+                    " survey point(s) excluded: reflection across a tilted mirror plane is not supported yet"
+                    " (REQ-328); reflect across a mirror line on a work plane with an upright Z axis.");
+    }
   }
+  if (!xf.valid()) {
+    // Two coincident points define no mirror line. Nothing was copied, so erase-source must not run.
+    log.push_back("MIRROR — the two mirror-line points coincide; pick two distinct points. Nothing changed.");
+    stepengine::EndSession(st);
+    return;
+  }
+  TransformSelection(st, xf, GoSurvey::Document::EntityOp::Mirror, "MIRROR", /*duplicate=*/true, log);
   if (eraseSource && !st.selection.empty())
     EraseMirroredSourceNoUndo(st);
   stepengine::EndSession(st);
@@ -1742,7 +1334,7 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
     }
     return;
   }
-  DropArrayUnsupportedFromSelection(st, log);
+  RefuseArrayUnsupportedFromSelection(st, log);
   const bool haveSel = !st.selection.empty();
   const auto initialPhase =
       haveSel ? stepengine::ArrayPhase::WaitType : stepengine::ArrayPhase::PickSelection;

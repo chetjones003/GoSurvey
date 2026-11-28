@@ -102,6 +102,7 @@ above.
 - **A kind refuses only what its stored data cannot represent, and says why.** Text, MTEXT,
   dimensions, tables and multileaders store no plane normal, so they refuse rotation about a tilted
   axis until they gain one. AutoCAD can do it, so that is a known parity gap, tracked as a follow-up.
-  A Position Marker stays move, copy and erase only (REQ-359). Surfaces stay refused (REQ-201).
-  Kinds owned by Civil 3D-style systems (survey points, alignments, feature lines, surfaces) keep
-  their current behaviour.
+  A Position Marker stays move, copy and erase only (REQ-359). Surfaces and point clouds stay
+  refused (REQ-201). Survey points and feature lines follow the same uniform transform in X, Y and Z
+  as the CAD linework they are drawn on, so a breakline stays on its polyline through SCALE.
+  Alignments are horizontal and take only transforms that keep plan view.

@@ -2,8 +2,8 @@
 # picked mirror line and is perpendicular to the active UCS plane (normal = lineDir x UCS Z), not a
 # world-vertical plane.
 #
-# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, keep the flat
-# `DuplicateCadSelectionReflected` (reflection about a world-vertical plane) byte-for-byte.
+# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, reflect about a
+# world-vertical plane. Both cases are one reflection through `TransformSelection` (issue #1577).
 
 # --- Regression: World UCS, mirror a line across a horizontal line ------------------------------
 NEW
@@ -114,7 +114,7 @@ CLICKUCS 10 0
 CMD
 CMD UCS
 CMD W
-EXPECT LOG "entity(ies) excluded"
+EXPECT LOG "annotation(s) excluded"
 EXPECT LINES 2
 EXPECT LINEXYZ 1 0 0 -5 10 0 -5
 CHECK ALL

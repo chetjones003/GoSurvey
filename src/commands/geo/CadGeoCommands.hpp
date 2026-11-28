@@ -68,7 +68,6 @@ bool SetGeographicMarker(AppCommandState& st, double localX, double localY, doub
 /// A Position Marker's circle radius in drawing units: \ref kPositionMarkerPlottedRadiusIn × scale.
 [[nodiscard]] float PositionMarkerRadiusWorld(const AppCommandState& st);
 /// Moves a marker and its label together.
-void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, double dz);
 /// LOCAL box around marker \p i's circle and label (box select, zoom).
 void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY);
 /// True when (x, y) LOCAL is within \p tolWorld of marker \p i's circle or on its label box.
@@ -84,15 +83,11 @@ int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY
 /// Mark Position ▸ Lat-Long: the same, at a latitude/longitude in the zone's datum.
 int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double longitudeDeg,
                                  std::vector<std::string>& log);
-/// ROTATE / SCALE / MIRROR / STRETCH refuse a Position Marker by name (D-2026-09-29-e): removes every
-/// marker from the selection and logs "<verb> — N Position Marker(s) left unchanged …". Returns N.
-int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
 
 void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz);
 void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY);
 [[nodiscard]] bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld,
                                      double* distSq);
-int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
 
 void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>& log);

@@ -613,7 +613,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   // new abstraction.
   //
   // GitHub issue #400 increment 4: both the translate delta and the rotation are computed IN THE
-  // ACTIVE UCS PLANE, mirroring `ArrayCellWorldDelta` / `RotateSelectionAboutAxis` at commit — so
+  // ACTIVE UCS PLANE, mirroring `ArrayCellWorldDelta` / `TransformSelection` at commit — so
   // the ghost matches what the commit produces under a FRONT/orbited/tilted UCS instead of always
   // rotating about world Z. The 3D cursor is reconstructed from `curX,curY` plus the work-plane Z
   // CadUi already resolves every frame (`cmd.uiCursorWorldZ`), so this needs no signature change.
@@ -700,7 +700,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     };
 
     // GitHub issue #400 increment 4: rotate about an arbitrary 3D axis (the active UCS Z axis
-    // through the picked centre), a direct port of `RotateSelectionAboutAxis`'s per-type walk.
+    // through the picked centre), a port of the per-kind rotation the commit applies.
     // `axisUnit` parallel to world Z reproduces the old `rotatePreviewPt`/`RotateNormalAboutZ`
     // path exactly. Ellipse/FeatureLine keep the world-Z-only walk — polar ARRAY refuses them
     // under a tilted axis at commit (REQ-328 item 2), so the ghost simply omits them there.
@@ -746,7 +746,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           if (k >= cmd.drawing.userArcs.size())
             continue;
           CadArc a = cmd.drawing.userArcs[k];
-          // The same steps the commit takes (`RotateSelectionAboutAxis`): rotate the start point
+          // The same steps the commit takes (`TransformArc`): rotate the start point
           // and centre as points, the plane normal as a direction, then re-anchor the sweep onto
           // where the start point actually landed.
           const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
@@ -1221,7 +1221,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           continue;
         CadArc a = cmd.drawing.userArcs[k];
         // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
-        // (CadCommands.cpp's DuplicateCadSelectionReflected) — a reflection reverses handedness.
+        // (as `TransformArc` does at commit) — a reflection reverses handedness.
         ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
                                                          static_cast<double>(a.sweepRad));
         float fex = static_cast<float>(farEnd.x);

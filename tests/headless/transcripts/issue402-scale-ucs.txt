@@ -1,11 +1,7 @@
 # GitHub issue #402 / REQ-329 increment 3 — SCALE is uniform about the UCS-resolved base point.
 #
-# `ApplyScaleToSelection` already scales X/Y (and every size) about the base. REQ-329 adds: the base
-# point carries its picked elevation, and under a TILTED UCS the elevations scale about the base
-# elevation too (a uniform scale is uniform on every axis).
-#
-# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, keep the pre-REQ-329
-# "elevations untouched" behaviour byte-for-byte.
+# The base point carries its picked elevation, and the elevations scale about it. Since issue #1577
+# that holds in plan view too: SCALE is uniform in X, Y and Z, as AutoCAD's is.
 
 # --- Regression: World UCS, SCALE 2 about the origin --------------------------------------------
 NEW
@@ -22,7 +18,7 @@ ESC
 EXPECT LINEXYZ 0 20 0 0 40 0 0
 CHECK ALL
 
-# --- Regression: World UCS, a line WITH elevation — Z is NOT scaled ------------------------------
+# --- World UCS, a line WITH elevation: Z scales about the base too (AutoCAD parity, #1577) -------
 NEW
 CMD LINE
 CMD 10,0
@@ -39,8 +35,9 @@ CMD SCALE
 CMD 0,0
 CMD 2
 ESC
-# X doubles about the origin; the elevation is untouched (plan-view behaviour, unchanged).
-EXPECT LINEXYZ 0 20 0 5 40 0 5
+# X doubles about the origin, and so does the elevation: AutoCAD's SCALE is uniform in X, Y and Z
+# (a line at z 3 scaled 2 from the origin ends at z 6 - tools/autocad-transform-oracle/).
+EXPECT LINEXYZ 0 20 0 10 40 0 10
 CHECK ALL
 
 # --- Tilted UCS (X 90): a line along the UCS Y axis (world Z) scales its elevation ---------------
@@ -110,7 +107,7 @@ CMD W
 EXPECT LINEXYZ 0 0 0 20 0 0 50
 CHECK ALL
 
-# --- Regression: UCS rotated 30 about Z (Z still world Z) keeps elevations untouched -------------
+# --- UCS rotated 30 about Z (Z still world Z) scales elevations, like plan view -----------------
 NEW
 CMD LINE
 CMD 10,0
@@ -132,6 +129,6 @@ ESC
 CMD UCS
 CMD W
 # The typed base `0,0` still lands at the world origin under the Z-30 UCS, so this doubles about the
-# origin. World-Z-parallel UCS => the Z pass does not run => elevation stays 5, matching plan view.
-EXPECT LINEXYZ 0 20 0 5 40 0 5
+# origin in X, Y and Z: elevation 5 -> 10, the same as plan view (AutoCAD parity, issue #1577).
+EXPECT LINEXYZ 0 20 0 10 40 0 10
 CHECK ALL

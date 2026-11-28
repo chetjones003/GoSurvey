@@ -421,8 +421,9 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
 // --- Native paper-space geometry: selection + edit (REQ-037, ADR-009) ---
 
 
-// ROTATE / SCALE / MIRROR refuse a paper multileader by name, exactly as model space does
-// (DropMultileadersFromSelection): it can only be moved, copied or erased.
+// ROTATE / SCALE / MIRROR refuse a paper multileader by name, as model space
+// used to: it can only be moved, copied or erased. Paper space reuses the model-space operations in
+// issue #1577 phase 6.
 static void DropPaperLeadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log) {
   const size_t before = st.selectedPaperEntities.size();
   st.selectedPaperEntities.erase(

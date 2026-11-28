@@ -99,8 +99,8 @@ EXPECT LOG "PI      2: 50.000, -100.000, elevation 12.000"
 CHECK ALL
 
 # ---------------------------------------------------------------------------------------------
-# T5 — SCALE doubles plan distance and leaves elevation alone. That asymmetry is deliberate and
-# matches the polyline behaviour it sits beside: SCALE is a plan operation here.
+# T5 — SCALE doubles plan distance and elevation alike. SCALE is uniform in X, Y and Z, as AutoCAD's
+# is, and as it is for the polyline beside it (issue #1577), so a breakline stays on its linework.
 # ---------------------------------------------------------------------------------------------
 NEW
 CMD FEATURELINE Grow
@@ -113,7 +113,7 @@ CMD 0,0
 CMD 2
 ESC
 CMD FEATURELINELIST
-EXPECT LOG "PI      2: 200.000, 0.000, elevation 12.000"
+EXPECT LOG "PI      2: 200.000, 0.000, elevation 24.000"
 CHECK ALL
 
 # ---------------------------------------------------------------------------------------------
