@@ -151,10 +151,10 @@ struct SelectedEntity {
     SectionPlane = 16,
     /// Position Marker (REQ-359 item 3, D-2026-09-29-e). Appended so existing type values stay
     /// stable. MOVE / COPY / ERASE act on marker + label together; ROTATE / SCALE / MIRROR /
-    /// STRETCH refuse it by name (\ref DropPositionMarkersFromSelection).
+    /// STRETCH refuse it by name (its declared capabilities, ADR-0011).
     PositionMarker = 17,
     /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
-    /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
+    /// ROTATE / SCALE / MIRROR transform it like AutoCAD does; STRETCH refuses it by name (ADR-0011).
     Multileader = 18,
     /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
     /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /

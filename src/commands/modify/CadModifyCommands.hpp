@@ -119,11 +119,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 /// ACTIVE UCS Z — the complete typed-ROTATE transform, dispatch included (REQ-329 increment 2,
 /// REQ-332 increment 2). The caller owns the undo snapshot.
 ///
-/// Declared here, and extracted out of `FinishRotateCommand`, for REQ-060's reason: typed ROTATE
-/// does not call one function, it CHOOSES between two — `ApplyRotationToSelection` when the UCS Z is
-/// world-Z-parallel and `RotateSelectionInPlaceAboutAxis` when it is tilted. A gizmo that called
-/// only the inner function would agree with the typed command in plan view and diverge from it under
-/// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
+/// Declared here for REQ-060's reason: a gizmo drag and the typed command must agree, so both call
+/// this. It builds one rotation about the UCS Z axis and hands it to `TransformSelection`, the path
+/// every transform command shares (ADR-0011 / issue #1577).
 void ApplyRotationAboutUcsZ(AppCommandState& st, double bx, double by, double bz, double rad,
                             std::vector<std::string>& log);
 
@@ -136,8 +134,7 @@ void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
 ///
-/// Extracted for the same reason as \ref ApplyRotationAboutUcsZ: typed SCALE calls
-/// `ApplyScaleToSelection` and THEN, only under a tilted UCS, `ScaleSelectionZAboutBase`. Both steps
-/// are the command, so both belong behind one name the gizmo can call too.
+/// Uniform in X, Y and Z about the base point, as AutoCAD's SCALE is (issue #1577). Declared for the
+/// same reason as \ref ApplyRotationAboutUcsZ: the scale gizmo calls it too.
 void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
                                 std::vector<std::string>& log);

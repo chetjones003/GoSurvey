@@ -678,21 +678,6 @@ float PositionMarkerRadiusWorld(const AppCommandState& st) {
       st.currentAnnotationScaleIndex), 1.e-6f);
 }
 
-void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, double dz) {
-  m->x += dx;
-  m->y += dy;
-  m->z += static_cast<float>(dz);
-  const float fx = static_cast<float>(dx);
-  const float fy = static_cast<float>(dy);
-  m->label.insX += fx;
-  m->label.insY += fy;
-  m->label.insZ += static_cast<float>(dz);
-  m->label.boxMinX += fx;
-  m->label.boxMaxX += fx;
-  m->label.boxMinY += fy;
-  m->label.boxMaxY += fy;
-}
-
 void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY) {
   MarkerBox(st.drawing.cadPositionMarkers[i], PositionMarkerRadiusWorld(st), mnX, mnY, mxX, mxY);
 }
@@ -800,19 +785,6 @@ int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double
   return ix;
 }
 
-int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log) {
-  const size_t before = st.selection.size();
-  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [](const SelectedEntity& e) {
-                                      return e.type == SelectedEntity::Type::PositionMarker;
-                                    }),
-                     st.selection.end());
-  const int dropped = static_cast<int>(before - st.selection.size());
-  if (dropped > 0)
-    log.push_back(std::string(verb) + " — " + std::to_string(dropped) +
-                  " Position Marker(s) left unchanged: a Position Marker can only be moved, copied or erased.");
-  return dropped;
-}
 
 // ---------------------------------------------------------------------------
 // Multileaders (REQ-367 / issue #619)
@@ -919,19 +891,6 @@ bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWo
   return false;
 }
 
-int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log) {
-  const size_t before = st.selection.size();
-  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [](const SelectedEntity& e) {
-                                      return e.type == SelectedEntity::Type::Multileader;
-                                    }),
-                     st.selection.end());
-  const int dropped = static_cast<int>(before - st.selection.size());
-  if (dropped > 0)
-    log.push_back(std::string(verb) + " — " + std::to_string(dropped) +
-                  " Multileader(s) left unchanged: a Multileader can only be moved, copied or erased.");
-  return dropped;
-}
 
 // ---------------------------------------------------------------------------
 // GEOMARKPOINT / GEOMARKLATLONG / GEOREORIENTMARKER

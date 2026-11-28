@@ -1,10 +1,8 @@
 # GitHub issue #402 / REQ-329 increment 2 — ROTATE turns the selection about an axis through the
-# picked base point PARALLEL TO THE ACTIVE UCS Z (REQ-328's `RotateSelectionAboutAxis` primitive),
-# not always world Z.
+# picked base point PARALLEL TO THE ACTIVE UCS Z, not always world Z.
 #
 # Regression guard: plan view, and any UCS whose Z axis is still world-Z-parallel (rotated in plan),
-# go through the unchanged `ApplyRotationToSelection` / `DuplicateCadSelectionRotated` — byte-identical
-# to before. Only a genuinely TILTED UCS takes the new axis-aware path.
+# turn about world Z. Every case is one rotation through `TransformSelection` (issue #1577).
 
 # --- Regression: World UCS, typed ROTATE 90 about the origin (CW in plan) -------------------------
 NEW
@@ -172,6 +170,6 @@ CMD 90
 ESC
 CMD UCS
 CMD W
-EXPECT LOG "entity(ies) excluded"
+EXPECT LOG "annotation(s) excluded"
 EXPECT LINEXYZ 0 0 0 0 0 0 -10
 CHECK ALL

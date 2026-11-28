@@ -33,21 +33,18 @@ void FinishRotateTransform(AppCommandState& st, double bx, double by, double bz,
   PushUndoSnapshot(st, copyMode ? "Rotate-copy" : "Rotate");
   const bool tilted = !CadWorkPlaneIsWorldXy(st);
   if (copyMode) {
-    if (tilted) {
-      DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-      DropPositionMarkersFromSelection(st, "ROTATE", log);
-      DropMultileadersFromSelection(st, "ROTATE", log);
-      const ucs::Ucs u = CadActiveUcsStorage(st);
-      const ray3d::Vec3 axisUnit =
-          ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
-      RotateSelectionAboutAxis(st, {bx, by, bz}, axisUnit, rad, log, "ROTATE");
-      if (!st.selectedSurveyPointIndices.empty())
-        log.push_back("ROTATE COPY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
-                      " survey point(s) not duplicated: rotation about a tilted axis is not"
-                      " supported yet (REQ-328).");
-    } else {
-      DuplicateCadSelectionRotated(st, bx, by, rad, log);
-    }
+    // Rotate-copy is "duplicate, then rotate" through the same path as ROTATE (ADR-0011).
+    const ucs::Ucs u = CadActiveUcsStorage(st);
+    const ray3d::Vec3 axisUnit =
+        tilted ? ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z}) : ray3d::Vec3{0.0, 0.0, 1.0};
+    const auto xf = GoSurvey::Document::SimilarityTransform::RotationAboutAxis({bx, by, bz}, axisUnit, rad);
+    TransformSelection(st, xf,
+                       xf.isPlanarZ() ? GoSurvey::Document::EntityOp::RotatePlan : GoSurvey::Document::EntityOp::Rotate3d,
+                       "ROTATE", /*duplicate=*/true, log);
+    if (tilted && !st.selectedSurveyPointIndices.empty())
+      log.push_back("ROTATE COPY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
+                    " survey point(s) not duplicated: rotation about a tilted axis is not"
+                    " supported yet (REQ-328).");
     EndSession(st);
     if (!tilted && !st.selectedSurveyPointIndices.empty()) {
       st.pendingSurveyDupIsRotate = true;

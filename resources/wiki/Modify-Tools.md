@@ -117,6 +117,32 @@ SCALE ref: Second point of new length (preview) | ESC cancel
 Pick two points across something whose real length you know, then type that real length. This is
 how you scale a traced or imported drawing to a known dimension.
 
+SCALE is uniform in X, Y **and Z** about the base point, as in AutoCAD. A line at elevation 3 scaled
+by 2 from a base at elevation 0 ends up at elevation 6. Survey points and feature lines scale with
+everything else, so a breakline stays on the linework it was traced from.
+
+---
+
+## What MOVE, COPY, ROTATE, SCALE, MIRROR and ARRAY do to each object
+
+Every one of these commands applies the same move, turn, resize or flip to every selected object,
+the way AutoCAD does. COPY, rotate-copy, MIRROR and ARRAY make the copies first, then transform them.
+
+| Object | Behaviour |
+|---|---|
+| Lines, circles, arcs, ellipses, polylines, splines, points, solids, pipe runs, imported models | Every command, including ROTATE about a tilted UCS axis and MIRROR across a tilted mirror plane |
+| Block references | Every command. A mirrored block gets a negative X scale, as AutoCAD stores it |
+| Hatch fills | Every command. ROTATE turns the pattern with the boundary, SCALE scales the pattern spacing, and MIRROR keeps the pattern angle (AutoCAD's `MIRRHATCH 0`) |
+| TEXT, MTEXT, dimensions, tables | Every command in plan. MIRROR keeps text readable (AutoCAD's `MIRRTEXT 0`): the text lands on the mirror image of where it was and still reads left to right |
+| Multileaders | MOVE, COPY, ROTATE, SCALE and MIRROR. The label stays readable under MIRROR |
+| PDF underlays | MOVE, COPY, ROTATE and SCALE. MIRROR is refused |
+| Position Markers | MOVE and COPY only (they mark a surveyed position) |
+| Surfaces, point clouds | Refused: a surface is rebuilt from its definition, and a point cloud is reference geometry |
+
+Anything a command cannot transform is left alone and named in the command line, for example
+`ROTATE — 1 annotation(s) excluded: it stores no plane normal, so it cannot be tipped out of plan yet.`
+Text, dimensions, tables and multileaders cannot yet be rotated about a tilted UCS axis.
+
 ---
 
 ## OFFSET (`O`)

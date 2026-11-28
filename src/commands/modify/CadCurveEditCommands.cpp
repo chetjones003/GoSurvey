@@ -1878,10 +1878,10 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 /// and moves as a whole only if that point is in-box (matching AutoCAD's own behavior for them).
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log) {
-  DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
-  DropPositionMarkersFromSelection(st, "STRETCH", log);  // REQ-359: move/copy/erase only
-  DropMultileadersFromSelection(st, "STRETCH", log);     // REQ-367
-  DropSolidsFromSelectionForTransform(st, "STRETCH", log);
+  // One check reads every kind's declarations (ADR-0011): a kind STRETCH cannot take is removed and
+  // named, never skipped silently (REQ-201).
+  RefuseSelectionForTransform(st, GoSurvey::Document::EntityOp::Stretch,
+                              GoSurvey::Document::SimilarityTransform::Translation({dx, dy, dz}), "STRETCH", log);
   // REQ-329 increment 4: when the crossing box lives in a tilted work plane's local 2D frame, each
   // candidate vertex is projected the same way (WorldToPlane) before the box test; the displacement
   // carries a Z component. Under the World UCS `rectInUcsPlane` is false and `dz` is 0, so this is
@@ -2034,6 +2034,18 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
       if (dz != 0.f)
         for (size_t i = 2; i < fr.vertsXyz.size(); i += 3)
           fr.vertsXyz[i] += dz;
+    }
+  }
+  // CAD points (REQ-456): a point inside the crossing window moves, as AutoCAD's STRETCH moves it.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Point || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.drawing.cadPoints.size())
+      continue;
+    CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
+    if (inBox(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z))) {
+      p.x += dx;
+      p.y += dy;
+      p.z += dz;
     }
   }
   // Feature lines (REQ-087): per-vertex. Elevation moves only under a tilted UCS (REQ-329

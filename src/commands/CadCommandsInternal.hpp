@@ -528,8 +528,6 @@ namespace CadCmdGeom {
 float DistSqPointSegment(float px, float py, float ax, float ay, float bx, float by);
 float MinDistSqSegSeg(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy);
 } // namespace CadCmdGeom
-void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
-void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName, std::vector<std::string>& log);
 bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, float x1, float y1, float z1,
