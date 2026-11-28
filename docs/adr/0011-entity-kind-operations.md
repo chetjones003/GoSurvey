@@ -124,3 +124,23 @@ above.
   kernel would reject at commit is therefore still previewed.
 - **The preview has a budget.** About a million segments across all copies; a larger ARRAY ghost
   stops adding copies there.
+
+## Amendment (2026-11-28): STRETCH and ERASE (issue #1700 phase 4a)
+
+- **Document owns ERASE and STRETCH** for the kinds it stores, in `EntityKindEdit.hpp`:
+  `EraseEntity` / `EraseEntities` (side-car arrays, attributes and piping-network indices go with
+  the entity) and `StretchEntity` with a `StretchWindow` (an inside test and a displacement).
+  The caller builds the window, because only Commands knows whether it lies in plan or in a
+  tilted work plane.
+- **ERASE and MIRROR's erase-source share one erase path.** What refers to an entity from outside
+  the store (a survey point's label link, an open table-cell editor, the MTEXT editor on a Position
+  Marker) is updated by Commands before Document erases.
+- **STRETCH follows AutoCAD 2025** (`tools/autocad-transform-oracle/`, crossing window
+  [14, 25] x [5, 25], displacement (5, 3)): an insert moves when its insertion point is inside; a
+  spline moves its fit points (or control points) inside and is refit; a multileader moves its
+  leader points inside, and its label with the landing. Solids, pipe runs, meshes and Position
+  Markers still only move whole and STRETCH names them.
+- **The STRETCH preview is the commit on a scratch copy**, built from the same window
+  (`BuildCadStretchPreviewScratch`), as the transform preview is.
+- Extents and box collection, with boxes for annotations, inserts, multileaders and Position
+  Markers, follow in phase 4b.

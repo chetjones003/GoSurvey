@@ -1127,9 +1127,9 @@ std::vector<KindRow> BuildTable() {
         out.scalars[5] = 0.0;
         return out;
       }),
-      // Refused by its declared capability, with a reason. AutoCAD moves an insert whose insertion point
-      // is inside the window; that is issue #1577 phase 4.
-      Refused(),
+      // AutoCAD: an insert whose insertion point is inside the window moves whole (oracle
+      // insert-stretch-in: (16,12) -> (21,15); insert-stretch-out at (13.5,12) stays).
+      Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 20.0, 12.0, 14.0, 3.0, 3.0),
   });
@@ -1363,7 +1363,9 @@ std::vector<KindRow> BuildTable() {
         return EntityProbe{{{-16.0, 12.0, 3.0}, {-19.0, 14.0, 3.0}, {-19.0, 13.0, 3.0}, {-22.0, 13.0, 3.0}, {-19.0, 15.0, 3.0}},
                            {0.5, 0.0, 0.1}};
       }),
-      Refused(),
+      // AutoCAD: each leader point inside the window moves, and the label moves with the landing
+      // (oracle mleader-stretch-all). Both points are inside here, so the whole leader moves.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapStretchWhole); }),
       Outcome::Erased,
       ExactExtents(16.0, 22.0, 12.0, 15.0, 3.0, 3.0),
   });
@@ -1393,9 +1395,9 @@ std::vector<KindRow> BuildTable() {
       Applied([](const EntityProbe& p) { return MapPts(p, MapRot3d); }),
       Applied([](const EntityProbe& p) { return MapPts(p, MapScale3d); }),
       Duplicated([](const EntityProbe& p) { return MapPts(p, MapMirrorX); }),
-      // Refused by its declared capability, with a reason. AutoCAD STRETCH moves the fit points inside
-      // the window; that is issue #1577 phase 4.
-      Refused(),
+      // AutoCAD: STRETCH moves the control points (a CV spline) or fit points inside the window
+      // (oracle spline-stretch). Here (10,12,3) is outside and (20,14,4) inside.
+      Applied([](const EntityProbe& p) { return MapPts(p, MapStretchPoint); }),
       Outcome::Erased,
       ExactExtents(10.0, 20.0, 12.0, 14.0, 3.0, 4.0),
   });
@@ -1702,7 +1704,7 @@ TEST_CASE("EntityKindOps phase 0: every entity kind across MOVE, COPY, ROTATE, 3
       // Right-to-left crossing box [14, 25] x [5, 25].
       SubmitViewportPick(st, kStretchBoxMinX, kStretchBoxMinY, log, /*subtract=*/false, /*windowMode=*/false);
       // Assert crossing-selection outcome immediately before submitting the stretch vector, so
-      // selected-but-skipped kinds (BlockRef, Spline, Point, Alignment, PointCloud) cannot silently
+      // selected-but-refused kinds (Alignment, PointCloud) cannot silently
       // pass if crossing-box selection regresses.
       const size_t pickedCount = st.selection.size() + st.selectedSurveyPointIndices.size();
       if (row.stretch.outcome == Outcome::BoxMissed) {

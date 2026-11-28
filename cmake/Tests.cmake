@@ -177,6 +177,7 @@ add_executable(GoSurveyTests
   tests/Document/EntityIdTests.cpp
   tests/Document/EntityKindOpsAllKindsTests.cpp
   tests/Document/EntityKindOpsUnitTests.cpp
+  tests/Document/EntityKindEditUnitTests.cpp
   tests/Document/PaperSpaceTests.cpp
   tests/Document/DrawingSettingsTests.cpp
   tests/DrawingContentTests.cpp

@@ -189,9 +189,9 @@ struct OpSupport {
     return {"table", "table(s)", true, false, true, true, true, false, true, true, true, true,
             {}, kNoPlaneNormalReason, {}, {}};
   case EntityKind::BlockRef:
-    return {"block reference", "block reference(s)", true, false, true, true, true, true, true, true, false, true,
-            {}, {}, {},
-            "a block reference can only be moved whole; explode or edit the block definition to stretch it."};
+    // STRETCH moves an insert whose insertion point is inside the window, as AutoCAD's does.
+    return {"block reference", "block reference(s)", true, false, true, true, true, true, true, true, true, true,
+            {}, {}, {}, {}};
   case EntityKind::Solid:
     return {"solid", "solid(s)", true, true, true, true, true, true, true, true, false, true,
             {}, {}, {},
@@ -203,12 +203,10 @@ struct OpSupport {
     return {"Position Marker", "Position Marker(s)", true, false, true, true, false, false, false, false, false, true,
             kPositionMarkerReason, kPositionMarkerReason, kPositionMarkerReason, kPositionMarkerReason};
   case EntityKind::Multileader:
-    return {"Multileader", "Multileader(s)", true, false, true, true, true, false, true, true, false, true,
-            {}, kNoPlaneNormalReason, {}, "stretching a Multileader is not supported yet; move its grips instead."};
+    return {"Multileader", "Multileader(s)", true, false, true, true, true, false, true, true, true, true,
+            {}, kNoPlaneNormalReason, {}, {}};
   case EntityKind::Spline:
-    return {"spline", "spline(s)", true, false, true, true, true, true, true, true, false, true,
-            {}, {}, {},
-            "splines cannot be stretched with STRETCH; edit control or fit points instead."};
+    return {"spline", "spline(s)", true, false, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::Point:
     return {"point", "point(s)", true, false, true, true, true, true, true, true, true, true, {}, {}, {}, {}};
   case EntityKind::PipeRun:

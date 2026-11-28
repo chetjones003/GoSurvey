@@ -188,6 +188,13 @@ void BuildCadTransformPreviewScratch(const AppCommandState& cmd, const CadTransf
                                      CadTransformPreviewScratch* out,
                                      std::optional<SelectedEntity::Type> only = std::nullopt);
 
+/// The active STRETCH's result if the cursor at (\p curX, \p curY) were picked as the destination:
+/// the selection copied into \p out and stretched by the commit's own window and per-kind STRETCH
+/// (issue #1700 phase 4). False when no STRETCH is waiting for its destination. Copies the kinds the
+/// wireframe draws; PDF underlays and survey points are not copied.
+bool BuildCadStretchPreviewScratch(const AppCommandState& cmd, float curX, float curY,
+                                   CadTransformPreviewScratch* out);
+
 /// True when the commit would transform a selected entry of type \p type by \p xf under \p op.
 bool CadSelectionTakesTransform(SelectedEntity::Type type, GoSurvey::Document::EntityOp op,
                                 const GoSurvey::Document::SimilarityTransform& xf);

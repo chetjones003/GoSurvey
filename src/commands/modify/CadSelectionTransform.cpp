@@ -700,3 +700,45 @@ void BuildCadTransformPreviewScratch(const AppCommandState& cmd, const CadTransf
     }
   }
 }
+
+bool BuildCadStretchPreviewScratch(const AppCommandState& cmd, float curX, float curY,
+                                   CadTransformPreviewScratch* out) {
+  const auto* ss = cmd.sessionAs<stepengine::StretchSession>();
+  if (!out || !ss || ss->phase != stepengine::ModifyPhase::NeedDestination)
+    return false;
+  out->drawing = DrawingContent{};
+  out->entities.clear();
+  out->cached.clear();
+  out->source = &cmd.drawing;
+  // StretchSession::onViewportPick: the displacement from the base point, with the commit's elevation.
+  const float dx = curX - ss->baseX;
+  const float dy = curY - ss->baseY;
+  const float dz = CadCommitElevation(cmd) - ss->baseZ;
+  const doc::StretchWindow w =
+      CadStretchWindow(cmd, dx, dy, dz, ss->rectMnX, ss->rectMxX, ss->rectMnY, ss->rectMxY, ss->rectInUcsPlane);
+  const doc::SimilarityTransform asIs = doc::SimilarityTransform::Translation({0.0, 0.0, 0.0});
+  std::set<std::pair<int, int>> seen;
+  for (const SelectedEntity& e : cmd.selection) {
+    if (!seen.insert({static_cast<int>(e.type), e.index}).second ||
+        !CadSelectionTakesTransform(e.type, EntityOp::Stretch, doc::SimilarityTransform::Translation({dx, dy, dz})))
+      continue;
+    if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int fi = CopyFeatureLineTransformed(out->drawing, cmd.drawing, e.index, asIs);
+      if (fi >= 0) {
+        CadStretchFeatureLine(out->drawing, fi, w);
+        out->entities.push_back(SelectedEntity{e.type, fi});
+      }
+      continue;
+    }
+    const std::optional<EntityKind> kind = EntityKindForSelection(e.type);
+    if (!kind || !doc::HasEntityStretch(*kind) || e.index < 0 ||
+        static_cast<size_t>(e.index) >= doc::EntityCountForKind(cmd.drawing, *kind))
+      continue;
+    const EntityRef copy = doc::CopyEntityInto(out->drawing, cmd.drawing, EntityRef{*kind, e.index});
+    if (!copy.valid())
+      continue;
+    doc::StretchEntity(out->drawing, copy, w);  // an entity the window misses is drawn where it is
+    out->entities.push_back(SelectedEntity{e.type, copy.index});
+  }
+  return true;
+}

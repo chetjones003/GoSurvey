@@ -13,6 +13,7 @@
 #include <vector>
 #include <optional>
 #include <GoSurvey/Document/EntityRef.hpp>
+#include <GoSurvey/Document/EntityKindEdit.hpp>
 
 // --- One transform path (ADR-0011 / issue #1577), defined in CadSelectionTransform.cpp ------------
 
@@ -42,6 +43,17 @@ ray3d::Vec3 CadRotateAxisUnit(const AppCommandState& st);
 /// tilted UCS Z axis. Shared by the commit and the preview (issue #1700).
 GoSurvey::Document::SimilarityTransform CadMirrorTransform(const AppCommandState& st, float x0, float y0, float z0,
                                                            float x1, float y1, float z1, bool* outLineAlongUcsZ);
+
+// --- STRETCH (REQ-103), defined in CadCurveEditCommands.cpp ---------------------------------------
+
+/// STRETCH's crossing window [\p mnX,\p mxX]x[\p mnY,\p mxY] and displacement. The window is in plan,
+/// or (\p rectInUcsPlane) in the active work plane's own 2D frame. Shared by the commit and the
+/// preview (issue #1700).
+GoSurvey::Document::StretchWindow CadStretchWindow(const AppCommandState& st, float dx, float dy, float dz, float mnX,
+                                                   float mxX, float mnY, float mxY, bool rectInUcsPlane);
+
+/// STRETCH feature line \p fi of \p d: each vertex inside the window moves (REQ-087).
+bool CadStretchFeatureLine(DrawingContent& d, int fi, const GoSurvey::Document::StretchWindow& w);
 
 template <class T>
 void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
@@ -84,36 +96,6 @@ static double NormalizeAngleRadMinusPiToPi(double a) {
   while (a < -kPi)
     a += kTwoPi;
   return a;
-}
-
-/// REQ-443: remove every selected spline and its attributes, highest index first. Both erase paths
-/// (ERASE and MIRROR's erase-source) call it, so a spline cannot be erased by one and left behind by
-/// the other.
-static void EraseSelectedSplines(AppCommandState& st) {
-  std::set<int> ix;
-  for (const auto& e : st.selection)
-    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadSplines.size())
-      ix.insert(e.index);
-  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
-    const size_t k = static_cast<size_t>(*it);
-    st.drawing.cadSplines.erase(st.drawing.cadSplines.begin() + static_cast<std::ptrdiff_t>(k));
-    if (k < st.drawing.cadSplineAttrs.size())
-      st.drawing.cadSplineAttrs.erase(st.drawing.cadSplineAttrs.begin() + static_cast<std::ptrdiff_t>(k));
-  }
-}
-
-static void EraseSelectedCadPoints(AppCommandState& st) {
-  std::set<int> ix;
-  for (const auto& e : st.selection)
-    if (e.type == SelectedEntity::Type::Point && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.drawing.cadPoints.size())
-      ix.insert(e.index);
-  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
-    const size_t k = static_cast<size_t>(*it);
-    st.drawing.cadPoints.erase(st.drawing.cadPoints.begin() + static_cast<std::ptrdiff_t>(k));
-    if (k < st.drawing.cadPointAttrs.size())
-      st.drawing.cadPointAttrs.erase(st.drawing.cadPointAttrs.begin() + static_cast<std::ptrdiff_t>(k));
-  }
 }
 
 /// Visit each selected feature line once as (index, firstVertex, lastVertexExclusive).
@@ -692,47 +674,10 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
 /// through the picked centre via \c TransformSelection (REQ-328, issue #1577) — a genuine 3D rotation, not
 /// just the world-Z-only case, so a tilted UCS (previously refused outright) now works for every
 
+/// Erase polyline \p pi with its side-car data (Document's \ref GoSurvey::Document::ErasePolyline).
 static void ErasePolylineByIndex(AppCommandState& st, int pi) {
-  if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-    return;
-  const int np = static_cast<int>(st.drawing.userPolylineOffsets.size()) - 1;
-  std::vector<int> nvPer(static_cast<size_t>(np));
-  for (int i = 0; i < np; ++i)
-    nvPer[static_cast<size_t>(i)] = st.drawing.userPolylineOffsets[(static_cast<size_t>(i)+ 1)] - st.drawing.userPolylineOffsets[static_cast<size_t>(i)];
-  const int a = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int b = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-  st.drawing.eraseVertexRange(static_cast<size_t>(a), static_cast<size_t>(b));
-  // REQ-316 / ADR-047: the parallel bulge array is per-VERTEX, so its cut span is [a, b) — not the
-  // triplet range the vertex array uses. Same reasoning as EraseFeatureLineByIndex's flag array.
-  if (!st.drawing.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.drawing.userPolylineVertsBulge.size())
-    st.drawing.userPolylineVertsBulge.erase(st.drawing.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
-                                    st.drawing.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
-  // REQ-325 / ADR-053: same per-vertex cut span, 3 floats wide instead of 1.
-  if (!st.drawing.userPolylineVertsNormal.empty() && static_cast<size_t>(b) * 3 <= st.drawing.userPolylineVertsNormal.size())
-    st.drawing.userPolylineVertsNormal.erase(st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(a) * 3,
-                                     st.drawing.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(b) * 3);
-  std::vector<int> newOff;
-  newOff.reserve((static_cast<size_t>(std::max(0, np - 1))+ 1));
-  newOff.push_back(0);
-  int run = 0;
-  for (int i = 0; i < np; ++i) {
-    if (i == pi)
-      continue;
-    run += nvPer[static_cast<size_t>(i)];
-    newOff.push_back(run);
-  }
-  // Erasing the ONLY polyline leaves the seeded 0 with nothing appended after it, and `{0}` is not
-  // how this store spells "no polylines" — an EMPTY table is (CommitPolylineDraft seeds the 0 only
-  // when it has a polyline to describe, and GsIo's reader rejects a single entry outright). Writing
-  // `{0}` produced a internal document payload that saved successfully and could never be reopened: issue #60, REQ-079.
-  // The paper-space sibling ErasePaperPolyline has always done this; this store was the outlier.
-  if (newOff.size() == 1)
-    newOff.clear();
-  st.drawing.userPolylineOffsets = std::move(newOff);
-  if (static_cast<size_t>(pi) < st.drawing.userPolylineClosed.size())
-    st.drawing.userPolylineClosed.erase(st.drawing.userPolylineClosed.begin() + static_cast<std::ptrdiff_t>(pi));
-  if (static_cast<size_t>(pi) < st.drawing.userPolylineAttrs.size())
-    st.drawing.userPolylineAttrs.erase(st.drawing.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
+  if (pi >= 0)
+    GoSurvey::Document::ErasePolyline(st.drawing, static_cast<size_t>(pi));
 }
 
 /// REQ-103 step 8 (EXPLODE) / GitHub issue #390. Replace every Polyline in the current selection with
