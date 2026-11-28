@@ -1191,8 +1191,13 @@ void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, fl
                     " (REQ-328); reflect across a mirror line on a work plane with an upright Z axis.");
     }
   }
-  if (xf.valid())
-    TransformSelection(st, xf, GoSurvey::Document::EntityOp::Mirror, "MIRROR", /*duplicate=*/true, log);
+  if (!xf.valid()) {
+    // Two coincident points define no mirror line. Nothing was copied, so erase-source must not run.
+    log.push_back("MIRROR — the two mirror-line points coincide; pick two distinct points. Nothing changed.");
+    stepengine::EndSession(st);
+    return;
+  }
+  TransformSelection(st, xf, GoSurvey::Document::EntityOp::Mirror, "MIRROR", /*duplicate=*/true, log);
   if (eraseSource && !st.selection.empty())
     EraseMirroredSourceNoUndo(st);
   stepengine::EndSession(st);

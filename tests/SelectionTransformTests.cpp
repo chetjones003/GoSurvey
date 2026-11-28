@@ -14,6 +14,11 @@
 
 #include "CadCommands.hpp"
 
+// MIRROR's commit (CadCommandsInternal.hpp, which holds internal-linkage helpers a test should not
+// pull in). Declared here so the degenerate-line guard can be driven directly.
+void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, float x1, float y1, float z1,
+                           bool eraseSource, std::vector<std::string>& log);
+
 namespace {
 
 void SubmitLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
@@ -88,6 +93,25 @@ TEST_CASE("MIRROR with erase-source removes the originals of every kind it now c
   CHECK(st.drawing.cadFilledRegions[0].vertsXyz[0] == Catch::Approx(-16.0));
   CHECK(st.drawing.cadMultileaders[0].pathXyz[0] == Catch::Approx(-16.f));
   CHECK(st.drawing.cadMeshes[0]->vertsXyz[0] == Catch::Approx(-16.f));
+}
+
+TEST_CASE("MIRROR with coincident mirror points never erases the source", "[issue1577][mirror]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddHatch(st, 16.0);
+  st.drawing.pushLine(CadLineRecord{1.0, 2.0, 0.0, 5.0, 6.0, 0.0});
+  st.drawing.userLineAttrs.push_back(EntityAttributes{});
+  st.selection = {{SelectedEntity::Type::FilledRegion, 0}, {SelectedEntity::Type::LineSeg, 0}};
+
+  // Typed points go through the step engine, which may reject the second point outright; the
+  // direct call covers the commit itself with a degenerate line.
+  FinishMirrorTransform(st, 3.f, 4.f, 0.f, 3.f, 4.f, 0.f, /*eraseSource=*/true, log);
+
+  REQUIRE(st.drawing.cadFilledRegions.size() == 1);
+  REQUIRE(st.drawing.lineCount() == 1);
+  CHECK(st.drawing.cadFilledRegions[0].vertsXyz[0] == Catch::Approx(16.0));
+  CHECK(st.drawing.line(0).x0 == Catch::Approx(1.0));
+  CHECK(CountLogLines(log, "mirror-line points coincide") == 1);
 }
 
 TEST_CASE("A mixed selection transforms what it can and names each refused kind once",
