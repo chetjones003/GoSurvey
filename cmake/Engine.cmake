@@ -62,6 +62,24 @@ gosurvey_library(gosurvey_geometry GoSurvey::Geometry INCLUDE src/geometry/inclu
     src/geometry/src/brep.cpp
     src/geometry/src/nurbs.cpp
   DEPS GoSurvey::Math GoSurvey::Core)
+target_sources(gosurvey_geometry PRIVATE
+    src/geometry/src/brep_face_edit.cpp
+    src/geometry/src/brep_fillet.cpp
+    src/geometry/src/brep_chamfer.cpp
+    src/geometry/src/brep_query.cpp
+    src/geometry/src/brep_primitives.cpp
+    src/geometry/src/brep_sweep.cpp
+    src/geometry/src/brep_slice.cpp
+    src/geometry/src/brep_section.cpp
+    src/geometry/src/brep_boolean.cpp
+    src/geometry/src/brep_boolean_cylinder.cpp
+    src/geometry/src/brep_boolean_sphere.cpp
+    src/geometry/src/brep_boolean_pipe.cpp
+    src/geometry/src/brep_polysolid.cpp
+    src/geometry/src/brep_validate.cpp
+    src/geometry/src/brep_mass.cpp
+    src/geometry/src/brep_tessellate.cpp
+)
 
 # --- Domain -------------------------------------------------------------------------------------
 gosurvey_library(gosurvey_document GoSurvey::Document INCLUDE src/document/include
