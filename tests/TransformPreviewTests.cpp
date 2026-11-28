@@ -364,3 +364,87 @@ TEST_CASE("the ghost of a tilted bulged segment stays on its own plane", "[issue
     CHECK(Dist(v, {13.0, 5.0, 0.0}) == Catch::Approx(1.0).margin(kTol));
   }
 }
+
+TEST_CASE("MOVE's preview draws tables, multileaders, points and Position Markers where the commit puts them",
+          "[issue1700][preview]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  CadTable table;
+  table.insX = 1.f;
+  table.insY = 8.f;
+  table.insZ = 0.5f;
+  table.width = 10.f;
+  table.height = 4.f;
+  table.rotationRad = 0.4f;
+  table.cells = {"A", "B"};
+  st.drawing.cadTables.push_back(table);
+  st.drawing.cadTableAttrs.push_back(EntityAttributes{});
+  CadMultileader ml;
+  ml.pathXyz = {0.f, 0.f, 1.f, 2.f, 1.f, 1.f, 3.f, 1.f, 1.f};
+  ml.extraLeaderPaths = {{1.f, -1.f, 1.f, 3.f, 1.f, 1.f}};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "ML";
+  st.drawing.cadMultileaders.push_back(ml);
+  st.drawing.cadMultileaderAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPoints.push_back(CadPoint{-3.0, 2.0, 2.0});
+  st.drawing.cadPointAttrs.push_back(EntityAttributes{});
+  CadPositionMarker pm;
+  pm.x = 6.0;
+  pm.y = -4.0;
+  pm.z = 1.5f;
+  pm.label.kind = CadAnnotation::Kind::Mtext;
+  pm.label.text = "PM";
+  st.drawing.cadPositionMarkers.push_back(pm);
+  st.drawing.cadPositionMarkerAttrs.push_back(EntityAttributes{});
+  using T = SelectedEntity::Type;
+  st.selection = {{T::Table, 0}, {T::Multileader, 0}, {T::Point, 0}, {T::PositionMarker, 0}};
+  REQUIRE(DispatchByPrimaryForTest("move", st, log));
+  SubmitViewportPick(st, 0.0, 0.0, log);
+  const Picture before = Preview(st, 5.f, 3.f);
+  SubmitViewportPick(st, 5.0, 3.0, log);
+
+  // What the commit left, read from the moved entities themselves.
+  Picture committed;
+  const CadTable& t = st.drawing.cadTables[0];
+  for (int c = 0; c < 4; ++c) {
+    float x = 0.f, y = 0.f;
+    CadTableWorldCorner(t, c, &x, &y);
+    committed.vertices.push_back({x, y, t.insZ});
+  }
+  const CadMultileader& m = st.drawing.cadMultileaders[0];
+  for (size_t i = 0; i + 2 < m.pathXyz.size(); i += 3)
+    committed.vertices.push_back({m.pathXyz[i], m.pathXyz[i + 1], m.pathXyz[i + 2]});
+  for (size_t i = 0; i + 2 < m.extraLeaderPaths[0].size(); i += 3)
+    committed.vertices.push_back(
+        {m.extraLeaderPaths[0][i], m.extraLeaderPaths[0][i + 1], m.extraLeaderPaths[0][i + 2]});
+  CHECK(m.pathXyz[0] == Catch::Approx(5.0));
+  const CadPoint& p = st.drawing.cadPoints[0];
+  const CadPositionMarker& marker = st.drawing.cadPositionMarkers[0];
+  CHECK(p.x == Catch::Approx(2.0));
+  CHECK(marker.x == Catch::Approx(11.0));
+  REQUIRE(Covers(committed, before));
+
+  // The point's cross and the marker's ring and cross are centred on their moved positions.
+  const auto hasVertexNear = [&](double x, double y, double z, double reach) {
+    for (const ray3d::Vec3& v : before.vertices)
+      if (std::fabs(v.z - z) < kTol && std::hypot(v.x - x, v.y - y) < reach)
+        return true;
+    return false;
+  };
+  // A plus sign: one arm along X through the point, one along Y.
+  bool armX = false, armY = false;
+  for (const ray3d::Vec3& v : before.vertices) {
+    armX = armX || (std::fabs(v.y - p.y) < kTol && std::fabs(v.z - p.z) < kTol && std::fabs(v.x - p.x) > kTol);
+    armY = armY || (std::fabs(v.x - p.x) < kTol && std::fabs(v.z - p.z) < kTol && std::fabs(v.y - p.y) > kTol);
+  }
+  CHECK(armX);
+  CHECK(armY);
+  bool ring = false;
+  for (const auto& r : before.rings)
+    ring = ring || (std::fabs(r[0] - marker.x) < kTol && std::fabs(r[1] - marker.y) < kTol &&
+                    std::fabs(r[2] - marker.z) < kTol && r[3] > 0.0);
+  CHECK(ring);
+  // Nothing in the ghost is left at the original positions.
+  CHECK_FALSE(hasVertexNear(-3.0, 2.0, 2.0, 1e-3));
+  CHECK_FALSE(hasVertexNear(0.0, 0.0, 1.0, 1e-3));
+}

@@ -964,6 +964,66 @@ void AppendMeshPreview(std::vector<float>* out, const CadMesh& m, const GoSurvey
         AppendMappedSeg(out, xf, corner(k), corner(k | bit));
 }
 
+void AppendSeg(std::vector<float>* out, double ax, double ay, double az, double bx, double by, double bz) {
+  out->insert(out->end(), {static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(az),
+                           static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)});
+}
+
+/// An XYZ path as segments. Spline-fit leaders are drawn through their path points.
+void AppendPathSegs(std::vector<float>* out, const std::vector<float>& xyz) {
+  for (std::size_t i = 0; i + 5 < xyz.size(); i += 3)
+    AppendSeg(out, xyz[i], xyz[i + 1], xyz[i + 2], xyz[i + 3], xyz[i + 4], xyz[i + 5]);
+}
+
+/// A plus sign of half-size \p h at (x, y, z).
+void AppendCross(std::vector<float>* out, double x, double y, double z, double h) {
+  AppendSeg(out, x - h, y, z, x + h, y, z);
+  AppendSeg(out, x, y - h, z, x, y + h, z);
+}
+
+/// The ghost of the kinds the selection highlight leaves to the annotation overlay (QtAnnotations
+/// highlights them itself): a table's outline, a multileader's leader paths, a CAD point's marker
+/// and a Position Marker's circle and cross, read from the scratch copy \p d. Their text is not
+/// drawn here.
+void AppendOverlayKindPreview(const AppCommandState& cmd, const DrawingContent& d, const SelectedEntity& e,
+                              std::vector<float>* lines, std::vector<float>* circles) {
+  const std::size_t k = static_cast<std::size_t>(e.index);
+  const double plotted = std::max(static_cast<double>(cmd.drawing.modelUnitsPerPlottedInch), 1e-6);
+  if (e.type == SelectedEntity::Type::Table) {
+    if (k >= d.cadTables.size())
+      return;
+    const CadTable& t = d.cadTables[k];
+    float x[4], y[4];
+    for (int c = 0; c < 4; ++c)
+      CadTableWorldCorner(t, c, &x[c], &y[c]);
+    for (int c = 0; c < 4; ++c)
+      AppendSeg(lines, x[c], y[c], t.insZ, x[(c + 1) % 4], y[(c + 1) % 4], t.insZ);
+  } else if (e.type == SelectedEntity::Type::Multileader) {
+    if (k >= d.cadMultileaders.size())
+      return;
+    const CadMultileader& ml = d.cadMultileaders[k];
+    AppendPathSegs(lines, ml.pathXyz);
+    for (const std::vector<float>& path : ml.extraLeaderPaths)
+      AppendPathSegs(lines, path);
+  } else if (e.type == SelectedEntity::Type::Point) {
+    if (k >= d.cadPoints.size())
+      return;
+    const CadPoint& p = d.cadPoints[k];
+    const double h = cmd.drawing.pdSize > 0.0 ? cmd.drawing.pdSize * 0.5 : kPositionMarkerPlottedRadiusIn * plotted;
+    AppendCross(lines, p.x, p.y, p.z, h);
+  } else if (e.type == SelectedEntity::Type::PositionMarker) {
+    if (k >= d.cadPositionMarkers.size())
+      return;
+    const CadPositionMarker& m = d.cadPositionMarkers[k];
+    const double r = kPositionMarkerPlottedRadiusIn * plotted;
+    std::vector<float> strip;
+    appendPreviewCircle(&strip, circles, static_cast<float>(m.x), static_cast<float>(m.y), m.z,
+                        static_cast<float>(r), kFlatNormalX, kFlatNormalY, kFlatNormalZ);
+    lines->insert(lines->end(), strip.begin(), strip.end());
+    AppendCross(lines, m.x, m.y, m.z, r);
+  }
+}
+
 }  // namespace
 
 /// The preview's whole budget, in floats across both buffers (about a million segments). It is
@@ -985,8 +1045,10 @@ static void AppendTransformPreview(const AppCommandState& cmd, const CadTransfor
     BuildCadTransformPreviewScratch(cmd, one, &scratch);
     if (!scratch.source)
       return;
-    for (const SelectedEntity& e : scratch.entities)
+    for (const SelectedEntity& e : scratch.entities) {
       AppendEntityWireframe(cmd, scratch.drawing, scratch.source->blockDefs, e, prevLines, prevCircles);
+      AppendOverlayKindPreview(cmd, scratch.drawing, e, prevLines, prevCircles);
+    }
     // Solids, pipe runs and meshes: their existing display geometry, moved by the same transform.
     for (const CadTransformPreviewScratch::CachedDisplay& c : scratch.cached) {
       if (c.entity.type == SelectedEntity::Type::Mesh) {
