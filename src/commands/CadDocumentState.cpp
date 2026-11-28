@@ -227,6 +227,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.blockFavorites = doc.blockFavorites;
   cmd.nextEntityId = doc.nextEntityId;
   cmd.entityIdSweepRevision = kEntityIdSweepNever;
+  cmd.offsetPickTolGeomRevision = kEntityIdSweepNever;
   cmd.pipeRunWorldSolids.clear();
   cmd.pipeRunWorldSolidAttrs.clear();
   cmd.pipeRunWorldSolidOwnerIndex.clear();
@@ -461,6 +462,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.activeViewName.clear();
   st.nextEntityId = 1;
   st.entityIdSweepRevision = kEntityIdSweepNever;
+  st.offsetPickTolGeomRevision = kEntityIdSweepNever;
   st.currentAnnotationScaleIndex = -1;
   st.currentViewportZoomScaleIndex = -1;
   st.dwgImportedLights.clear();

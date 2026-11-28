@@ -1,6 +1,6 @@
 #pragma once
 
-/// Angle normalisation shared by dimension geometry (Commands' CadDimGeom.hpp) and the Document
+/// Angle normalisation shared by dimension geometry (CadDimGeom.hpp) and the Document
 /// entity-kind operations that re-derive a transformed dimension's text angle (issue #1577).
 
 /// Normalizes an angle to [-pi, pi]. Performs at most 16 full turns.

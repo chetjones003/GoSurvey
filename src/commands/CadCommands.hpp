@@ -9,6 +9,7 @@
 #include "engine/StepEngine.hpp"
 #include "modify/CadModifySessions.hpp"
 #include "DrawingContent.hpp"  // ADR-0010: the fields undo frames and tabs share
+#include <GoSurvey/Document/AnnotationBounds.hpp>  // ADR-0011: annotation, multileader and marker boxes
 #include <GoSurvey/Document/EntityKindEdit.hpp>  // ADR-0011: per-kind erase and stretch
 #include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
@@ -16,7 +17,7 @@
 #include "GoSurvey/Survey/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
 #include "GoSurvey/Survey/AlignmentProfile.hpp"  // REQ-521: design vertical profiles along alignments
 #include "GoSurvey/Survey/AlignmentDesign.hpp"  // REQ-502: check sets
-#include "CadDimGeom.hpp"
+#include <GoSurvey/Document/CadDimGeom.hpp>
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for AppCommandState's textStyles seed (issue #57). Pure and
 // dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
@@ -487,15 +488,6 @@ inline bool CadRightClickHoldIsMenu(double heldMs, int thresholdMs) {
 }
 
 
-inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPerPlottedInch) {
-  // Issue #1676: a dimension's model-unit text override is the same size at every scale.
-  if (std::isfinite(a.dimTextHeightModel) && a.dimTextHeightModel > 0.0 &&
-      (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
-       a.kind == CadAnnotation::Kind::DimAngular))
-    return static_cast<float>(a.dimTextHeightModel);
-  return a.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
-}
-
 /// Visible text footprint using the frontend's font measurement when available.
 /// \p measure false skips the renderer measurement and returns the cheap estimated quad, for rejecting
 /// far-away text before paying for a Qt layout (hover picks run this for every annotation).
@@ -526,9 +518,7 @@ void CadMtextGripPoints(const AppCommandState& st, const CadAnnotation& a, float
 /// rotated MTEXT keeps its rotation and attachment. \p displayFactor comes from CadMtextModelDisplayFactor.
 void CadMtextResizeFromGrip(CadAnnotation& a, float displayFactor, float fixedX, float fixedY, float cursorX,
                             float cursorY);
-/// Axis-aligned rough bounds for hit-testing / zoom (TEXT uses estimated glyph width).
-void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
-                              float* outMxX, float* outMxY);
+// CadAnnotationHeightWorld and CadAnnotationRoughBounds are Document's (AnnotationBounds.hpp).
 
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
 /// \param ray When non-null (an orbited view), each annotation is tested where the camera ray meets
@@ -1969,20 +1959,30 @@ std::string ActiveCommandPromptHint(const AppCommandState& st);
 /// keeps exactly the behaviour it had.** It is deliberately a filter on VISIBILITY, not on entity
 /// kind: the viewport renderer currently draws only lines / polylines / circles / arcs / survey
 /// points, and encoding that gap here would freeze a renderer limitation into the extents math.
+///
+/// Keeps its own per-kind sampling rather than GoSurvey::Document::EntityBounds: the DXF writer's
+/// `$EXTMIN`/`$EXTMAX` sweep (DxfIo.cpp) copies it exactly so that export, import and export settle
+/// (REQ-204, issues #111 and #113). Change the two together or not at all.
 bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY,
                          const Viewport* vpFilter = nullptr);
+/// The drawing state GoSurvey::Document::EntityBounds sizes annotations and Position Markers from:
+/// the drawing scale and the marker radius at the current annotation scale (ADR-0011).
+GoSurvey::Document::EntityBoundsContext CadEntityBoundsContext(const AppCommandState& st);
 /// Robust extents that drop far-outlier entities (DXFs often contain stray geometry at world (0,0) such as
 /// defpoints, block-insert origins, or leftover construction). On success, \p outSkipped is the number of
-/// entities discarded; 0 means the answer equals \ref ComputeWorldExtents.
+/// entities discarded. Below 16 entities the answer is \ref ComputeWorldExtents. From 16 on, each Document
+/// entity is boxed by GoSurvey::Document::EntityBounds (issue #1700 phase 4), which is exact where
+/// \ref ComputeWorldExtents samples (arcs, ellipses, polyline bulges, tilted circles), so with nothing
+/// skipped the two can still differ by that sampling.
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
 
 /// The drawing's TRUE 3D extents, in storage coordinates, for framing an orbited view (GitHub issue
-/// #564 §1, D-2026-09-28-d): every store ZOOM EXTENTS already sweeps, each with its elevation range,
-/// plus filled regions, block references and pipe runs. Far outliers are dropped by the same
-/// plan-centre rule \ref ComputeRobustWorldExtents uses. False when there is nothing to frame.
+/// #564 §1, D-2026-09-28-d): the same per-entity boxes \ref ComputeRobustWorldExtents collects, each
+/// with its elevation range. Far outliers are dropped by the same plan-centre rule. False when there
+/// is nothing to frame.
 bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
                            int* outSkipped);
 

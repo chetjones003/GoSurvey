@@ -42,16 +42,6 @@ bool IsGeoCommand(AppCommandState::Kind k) {
          k == K::DrawingSettingsPick || k == K::GeoCaptureArea;
 }
 
-/// Local-space box of a marker's circle (radius \p r) and label.
-void MarkerBox(const CadPositionMarker& m, float r, float* mnX, float* mnY, float* mxX, float* mxY) {
-  const float cx = static_cast<float>(m.x);
-  const float cy = static_cast<float>(m.y);
-  *mnX = std::min(cx - r, m.label.boxMinX);
-  *mnY = std::min(cy - r, m.label.boxMinY);
-  *mxX = std::max(cx + r, m.label.boxMaxX);
-  *mxY = std::max(cy + r, m.label.boxMaxY);
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -679,7 +669,7 @@ float PositionMarkerRadiusWorld(const AppCommandState& st) {
 }
 
 void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY) {
-  MarkerBox(st.drawing.cadPositionMarkers[i], PositionMarkerRadiusWorld(st), mnX, mnY, mxX, mxY);
+  CadPositionMarkerBox(st.drawing.cadPositionMarkers[i], PositionMarkerRadiusWorld(st), mnX, mnY, mxX, mxY);
 }
 
 bool CadPositionMarkerHit(const AppCommandState& st, size_t i, double x, double y, float tolWorld, double* distSq) {
@@ -834,33 +824,6 @@ void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz
   ml->label.boxMaxX += fx;
   ml->label.boxMinY += fy;
   ml->label.boxMaxY += fy;
-}
-
-void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY) {
-  bool any = false;
-  auto grow = [&](float x, float y) {
-    if (!any) {
-      *mnX = *mxX = x;
-      *mnY = *mxY = y;
-      any = true;
-    } else {
-      *mnX = std::min(*mnX, x);
-      *mnY = std::min(*mnY, y);
-      *mxX = std::max(*mxX, x);
-      *mxY = std::max(*mxY, y);
-    }
-  };
-  for (size_t i = 0; i + 2 < ml.pathXyz.size(); i += 3)
-    grow(ml.pathXyz[i], ml.pathXyz[i + 1]);
-  for (const std::vector<float>& branch : ml.extraLeaderPaths) {
-    for (size_t i = 0; i + 2 < branch.size(); i += 3)
-      grow(branch[i], branch[i + 1]);
-  }
-  grow(ml.label.boxMinX, ml.label.boxMinY);
-  grow(ml.label.boxMaxX, ml.label.boxMaxY);
-  if (!any) {
-    *mnX = *mnY = *mxX = *mxY = 0.f;
-  }
 }
 
 bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld, double* distSq) {

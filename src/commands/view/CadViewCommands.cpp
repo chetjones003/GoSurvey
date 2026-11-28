@@ -374,6 +374,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
+  // Pipe runs (REQ-345): the centreline widened by the pipe's radius, as EntityBounds gives it. DXF
+  // does not carry pipe runs, so the DXF header sweep has nothing here to agree with.
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPipeRunAttrs, ri))
+      continue;
+    const GoSurvey::Document::EntityBounds3d pb =
+        GoSurvey::Document::EntityBounds(st.drawing, EntityRef{EntityKind::PipeRun, static_cast<int>(ri)},
+                                         CadEntityBoundsContext(st));
+    if (!pb.valid)
+      continue;
+    consider(pb.min.x, pb.min.y);
+    consider(pb.max.x, pb.max.y);
+  }
+
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
@@ -397,6 +411,13 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   *outMnY = mnY;
   *outMxY = mxY;
   return true;
+}
+
+GoSurvey::Document::EntityBoundsContext CadEntityBoundsContext(const AppCommandState& st) {
+  GoSurvey::Document::EntityBoundsContext ctx;
+  ctx.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
+  ctx.positionMarkerRadius = PositionMarkerRadiusWorld(st);
+  return ctx;
 }
 
 namespace {
@@ -434,54 +455,44 @@ inline void EntityBoxGrowZ(EntityBox& b, double z, bool first) {
   return v[k];
 }
 
+/// One entity's box for the outlier statistic: its plan centre is the box's centre.
+[[nodiscard]] EntityBox EntityBoxFromBounds(const GoSurvey::Document::EntityBounds3d& eb) {
+  EntityBox b{};
+  b.mnX = eb.min.x;
+  b.mxX = eb.max.x;
+  b.mnY = eb.min.y;
+  b.mxY = eb.max.y;
+  b.mnZ = eb.min.z;
+  b.mxZ = eb.max.z;
+  b.cx = 0.5 * (b.mnX + b.mxX);
+  b.cy = 0.5 * (b.mnY + b.mxY);
+  return b;
+}
+
 // \p vpFilter as on ComputeWorldExtents (REQ-123): both sweeps must agree, or the robust path and
 // the small-drawing path would answer differently for the same viewport.
+//
+// One box per entity. Every Document kind's box is its per-kind EntityBounds (ADR-0011, issue #1700
+// phase 4); the kinds other systems own (survey points, alignments, feature lines, point clouds,
+// surfaces) are boxed here.
 void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, const Viewport* vpFilter) {
-  if (st.drawing.lineStoreWellFormed()) {
-    for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
-      const CadLineRecord ln = st.drawing.line(i);
-      if (EntityHiddenInViewport(vpFilter, st.drawing.userLineAttrs, i))
+  namespace doc = GoSurvey::Document;
+  const doc::EntityBoundsContext ctx = CadEntityBoundsContext(st);
+  doc::ForEachDocumentKind([&](EntityKind kind) {
+    // A corrupt flat store (not a whole number of records) is skipped whole, as it always was.
+    if ((kind == EntityKind::Line && !st.drawing.lineStoreWellFormed()) ||
+        (kind == EntityKind::Circle && !st.drawing.circleStoreWellFormed()))
+      return;
+    const std::vector<EntityAttributes>* attrs = doc::EntityAttrsForKind(st.drawing, kind);
+    const size_t n = doc::EntityCountForKind(st.drawing, kind);
+    for (size_t i = 0; i < n; ++i) {
+      if (attrs && EntityHiddenInViewport(vpFilter, *attrs, i))
         continue;
-      EntityBox b{};
-      b.mnX = std::min(static_cast<double>(ln.x0), static_cast<double>(ln.x1));
-      b.mxX = std::max(static_cast<double>(ln.x0), static_cast<double>(ln.x1));
-      b.mnY = std::min(static_cast<double>(ln.y0), static_cast<double>(ln.y1));
-      b.mxY = std::max(static_cast<double>(ln.y0), static_cast<double>(ln.y1));
-      EntityBoxGrowZ(b, static_cast<double>(ln.z0), true);
-      EntityBoxGrowZ(b, static_cast<double>(ln.z1), false);
-      b.cx = 0.5 * (b.mnX + b.mxX);
-      b.cy = 0.5 * (b.mnY + b.mxY);
-      out.push_back(b);
+      const doc::EntityBounds3d eb = doc::EntityBounds(st.drawing, EntityRef{kind, static_cast<int>(i)}, ctx);
+      if (eb.valid)
+        out.push_back(EntityBoxFromBounds(eb));
     }
-  }
-  if (st.drawing.circleStoreWellFormed()) {
-    for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
-      if (EntityHiddenInViewport(vpFilter, st.drawing.userCircleAttrs, ci))
-        continue;
-      const CadCircleRecord c = st.drawing.circle(ci);
-      const double cx = c.cx;
-      const double cy = c.cy;
-      const double r = std::fabs(c.r);
-      if (r <= 1e-12)
-        continue;
-      EntityBox b{};
-      b.mnX = cx - r;
-      b.mxX = cx + r;
-      b.mnY = cy - r;
-      b.mxY = cy + r;
-      b.cx = cx;
-      b.cy = cy;
-      // A tilted circle (REQ-312) rises and falls by up to its radius; a flat one sits at its Z.
-      const size_t ni = ci * 3;
-      const bool flat = ni + 2 >= st.drawing.userCircleNormals.size() ||
-                        IsFlatNormal(st.drawing.userCircleNormals[ni], st.drawing.userCircleNormals[ni + 1],
-                                     st.drawing.userCircleNormals[ni + 2]);
-      const double cz = c.cz;
-      EntityBoxGrowZ(b, flat ? cz : cz - r, true);
-      EntityBoxGrowZ(b, flat ? cz : cz + r, false);
-      out.push_back(b);
-    }
-  }
+  });
   for (const SurveyPoint& p : st.drawing.surveyPoints) {
     if (LayerHiddenInViewport(vpFilter, p.layer))
       continue;
@@ -490,138 +501,6 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
     EntityBoxGrowZ(b, p.elevation, true);
     out.push_back(b);
-  }
-  for (size_t mi = 0; mi < st.drawing.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPositionMarkerAttrs, mi))
-      continue;
-    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
-    CadPositionMarkerLocalBox(st, mi, &mnX, &mnY, &mxX, &mxY);
-    EntityBox b{};
-    b.mnX = mnX;
-    b.mnY = mnY;
-    b.mxX = mxX;
-    b.mxY = mxY;
-    b.cx = st.drawing.cadPositionMarkers[mi].x;
-    b.cy = st.drawing.cadPositionMarkers[mi].y;
-    EntityBoxGrowZ(b, st.drawing.cadPositionMarkers[mi].z, true);
-    out.push_back(b);
-  }
-  for (size_t li = 0; li < st.drawing.cadMultileaders.size(); ++li) {  // REQ-367: path + label
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMultileaderAttrs, li))
-      continue;
-    const CadMultileader& ml = st.drawing.cadMultileaders[li];
-    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
-    CadMultileaderLocalBox(ml, &mnX, &mnY, &mxX, &mxY);
-    EntityBox b{};
-    b.mnX = mnX;
-    b.mnY = mnY;
-    b.mxX = mxX;
-    b.mxY = mxY;
-    if (ml.pathXyz.size() >= 3) {
-      b.cx = ml.pathXyz[0];
-      b.cy = ml.pathXyz[1];
-      EntityBoxGrowZ(b, ml.pathXyz[2], true);
-    }
-    out.push_back(b);
-  }
-  for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadAnnotationAttrs, ai))
-      continue;
-    const CadAnnotation& a = st.drawing.cadAnnotations[ai];
-    float amnX = 0.f;
-    float amnY = 0.f;
-    float amxX = 0.f;
-    float amxY = 0.f;
-    CadAnnotationRoughBounds(a, st.drawing.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
-    EntityBox b{};
-    b.mnX = static_cast<double>(amnX);
-    b.mxX = static_cast<double>(amxX);
-    b.mnY = static_cast<double>(amnY);
-    b.mxY = static_cast<double>(amxY);
-    EntityBoxGrowZ(b, static_cast<double>(a.insZ), true);
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadTableAttrs, ti))
-      continue;
-    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
-    CadTableWorldAabb(st.drawing.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
-    EntityBox b{};
-    b.mnX = static_cast<double>(tmnX);
-    b.mxX = static_cast<double>(tmxX);
-    b.mnY = static_cast<double>(tmnY);
-    b.mxY = static_cast<double>(tmxY);
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-  for (size_t arcIx = 0; arcIx < st.drawing.userArcs.size(); ++arcIx) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.userArcAttrs, arcIx))
-      continue;
-    const CadArc& a = st.drawing.userArcs[arcIx];
-    const double dr = std::fabs(static_cast<double>(a.r));
-    if (dr <= 1e-12)
-      continue;
-    EntityBox b{};
-    b.mnX = static_cast<double>(a.cx) - dr;
-    b.mxX = static_cast<double>(a.cx) + dr;
-    b.mnY = static_cast<double>(a.cy) - dr;
-    b.mxY = static_cast<double>(a.cy) + dr;
-    b.cx = static_cast<double>(a.cx);
-    b.cy = static_cast<double>(a.cy);
-    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
-    EntityBoxGrowZ(b, arcFlat ? a.z : a.z - dr, true);
-    EntityBoxGrowZ(b, arcFlat ? a.z : a.z + dr, false);
-    out.push_back(b);
-  }
-  for (size_t elIx = 0; elIx < st.drawing.userEllipses.size(); ++elIx) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.userEllAttrs, elIx))
-      continue;
-    const CadEllipse& el = st.drawing.userEllipses[elIx];
-    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
-    if (ma < 1e-12)
-      continue;
-    const double mb = ma * static_cast<double>(el.ratio);
-    const double rrx = std::hypot(ma, mb);
-    EntityBox b{};
-    b.mnX = static_cast<double>(el.cx) - rrx;
-    b.mxX = static_cast<double>(el.cx) + rrx;
-    b.mnY = static_cast<double>(el.cy) - rrx;
-    b.mxY = static_cast<double>(el.cy) + rrx;
-    b.cx = static_cast<double>(el.cx);
-    b.cy = static_cast<double>(el.cy);
-    const bool elFlat = IsFlatNormal(el.nx, el.ny, el.nz);
-    EntityBoxGrowZ(b, elFlat ? el.z : el.z - rrx, true);
-    EntityBoxGrowZ(b, elFlat ? el.z : el.z + rrx, false);
-    out.push_back(b);
-  }
-  {  // REQ-443: a spline's box is its curve's, with its elevation range
-    std::vector<ray3d::Vec3> sp;
-    for (size_t si = 0; si < st.drawing.cadSplines.size(); ++si) {
-      if (EntityHiddenInViewport(vpFilter, st.drawing.cadSplineAttrs, si))
-        continue;
-      spline::Tessellate(st.drawing.cadSplines[si], kSplineSampleTolerance, &sp);
-      if (sp.empty())
-        continue;
-      EntityBox b{};
-      for (size_t i = 0; i < sp.size(); ++i) {
-        EntityBoxGrowZ(b, sp[i].z, i == 0);
-        if (i == 0) {
-          b.mnX = b.mxX = sp[i].x;
-          b.mnY = b.mxY = sp[i].y;
-        } else {
-          b.mnX = std::min(b.mnX, sp[i].x);
-          b.mxX = std::max(b.mxX, sp[i].x);
-          b.mnY = std::min(b.mnY, sp[i].y);
-          b.mxY = std::max(b.mxY, sp[i].y);
-        }
-      }
-      b.cx = 0.5 * (b.mnX + b.mxX);
-      b.cy = 0.5 * (b.mnY + b.mxY);
-      out.push_back(b);
-    }
   }
   for (const alignment::Alignment& al : st.drawing.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
     alignment::Point2 mn{}, mx{};
@@ -637,53 +516,6 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (size_t pi = 0; pi < st.drawing.cadPoints.size(); ++pi) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointAttrs, pi))
-      continue;
-    const CadPoint& p = st.drawing.cadPoints[pi];
-    EntityBox b{};
-    b.mnX = b.mxX = p.x;
-    b.mnY = b.mxY = p.y;
-    b.cx = p.x;
-    b.cy = p.y;
-    EntityBoxGrowZ(b, p.z, true);
-    out.push_back(b);
-  }
-  const auto& PO = st.drawing.userPolylineOffsets;
-  if (PO.size() >= 2) {
-    for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
-      if (EntityHiddenInViewport(vpFilter, st.drawing.userPolylineAttrs, pi))
-        continue;
-      const int v0 = PO[pi];
-      const int v1 = PO[pi + 1];
-      if (v1 <= v0)
-        continue;
-      EntityBox b{};
-      bool any = false;
-      for (int vi = v0; vi < v1; ++vi) {
-        const CadPolyVertex pv = st.drawing.vertex(static_cast<size_t>(vi));
-        const double vx = pv.x;
-        const double vy = pv.y;
-        EntityBoxGrowZ(b, pv.z, !any);
-        if (!any) {
-          b.mnX = b.mxX = vx;
-          b.mnY = b.mxY = vy;
-          any = true;
-        } else {
-          b.mnX = std::min(b.mnX, vx);
-          b.mxX = std::max(b.mxX, vx);
-          b.mnY = std::min(b.mnY, vy);
-          b.mxY = std::max(b.mxY, vy);
-        }
-      }
-      if (!any)
-        continue;
-      b.cx = 0.5 * (b.mnX + b.mxX);
-      b.cy = 0.5 * (b.mnY + b.mxY);
-      out.push_back(b);
-    }
-  }
-
   // Feature lines (REQ-087) — same CSR walk. Without this, ZOOM EXTENTS frames a drawing as though
   // its feature lines were not there, which is the quiet kind of miss ADR-035 (g) warns about.
   const auto& FO = st.drawing.featureLineOffsets;
@@ -724,33 +556,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     }
   }
 
-  // Imported meshes (REQ-063: "meshes are included in zoom-extents and the drawing's bounding
-  // box"). One box per mesh rather than per triangle — the extents pass is an outlier-trimmed
-  // statistic over ENTITIES, and feeding it two million triangles would both swamp that statistic
-  // and make ZE cost a full mesh walk per invocation.
-  for (size_t mi = 0; mi < st.drawing.cadMeshes.size(); ++mi) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadMeshAttrs, mi))
-      continue;
-    const auto& mp = st.drawing.cadMeshes[mi];
-    if (!mp)
-      continue;
-    const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
-    if (!mb.valid)
-      continue;
-    EntityBox b{};
-    b.mnX = static_cast<double>(mb.mnX);
-    b.mxX = static_cast<double>(mb.mxX);
-    b.mnY = static_cast<double>(mb.mnY);
-    b.mxY = static_cast<double>(mb.mxY);
-    b.mnZ = static_cast<double>(mb.mnZ);
-    b.mxZ = static_cast<double>(mb.mxZ);
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-
   // Point clouds (REQ-171), one box per cloud — over the resident points (ADR-060: the full cloud
-  // may not be loaded), for the same "one box per entity, not per vertex" reason meshes get above.
+  // may not be loaded): one box per entity, not per vertex, so one cloud does not swamp the statistic.
   for (size_t pci = 0; pci < st.drawing.cadPointClouds.size(); ++pci) {
     if (EntityHiddenInViewport(vpFilter, st.drawing.cadPointCloudAttrs, pci))
       continue;
@@ -773,30 +580,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     out.push_back(b);
   }
 
-  // B-rep solids (REQ-313), one box per solid — from the analytic bounds, for the reason the
-  // zoom-extents walk gives: a sphere's two stored vertices describe almost none of it.
-  for (size_t soi = 0; soi < st.drawing.cadSolids.size(); ++soi) {
-    if (EntityHiddenInViewport(vpFilter, st.drawing.cadSolidAttrs, soi))
-      continue;
-    const CadSolidPtr& sp = st.drawing.cadSolids[soi];
-    if (!sp)
-      continue;
-    const brep::Bounds bb = brep::ComputeBounds(*sp);
-    if (!bb.valid)
-      continue;
-    EntityBox b{};
-    b.mnX = bb.mn.x;
-    b.mxX = bb.mx.x;
-    b.mnY = bb.mn.y;
-    b.mxY = bb.mx.y;
-    b.mnZ = bb.mn.z;
-    b.mxZ = bb.mx.z;
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-
-  // TIN surfaces (REQ-068), one box per surface — same reasoning as the meshes above.
+  // TIN surfaces (REQ-068), one box per surface, not per vertex: one surface can hold 200k triangles.
   for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
     if (EntityHiddenInViewport(vpFilter, st.drawing.cadSurfaceAttrs, si))
       continue;
@@ -820,86 +604,6 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
   }
 }
 
-/// The boxes only a 3D extent needs (GitHub issue #564 §1, D-2026-09-28-d): filled regions, block
-/// references (their 2D content at the insertion's elevation, plus any solids they carry, in full
-/// 3D) and pipe runs (the centreline widened by the pipe's radius). Kept apart from
-/// \ref CollectEntityBoxes so the plan-view extents — which never counted these in their robust
-/// pass — are unchanged by adding them here.
-void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox>& out) {
-  for (size_t fri = 0; fri < st.drawing.cadFilledRegions.size(); ++fri) {
-    if (EntityHiddenInViewport(nullptr, st.drawing.cadFilledRegionAttrs, fri))
-      continue;
-    const CadFilledRegion& fr = st.drawing.cadFilledRegions[fri];
-    if (fr.vertsXyz.size() < 3)
-      continue;
-    EntityBox b{};
-    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3) {
-      const double x = fr.vertsXyz[i];
-      const double y = fr.vertsXyz[i + 1];
-      b.mnX = i == 0 ? x : std::min(b.mnX, x);
-      b.mxX = i == 0 ? x : std::max(b.mxX, x);
-      b.mnY = i == 0 ? y : std::min(b.mnY, y);
-      b.mxY = i == 0 ? y : std::max(b.mxY, y);
-      EntityBoxGrowZ(b, fr.vertsXyz[i + 2], i == 0);
-    }
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-  for (size_t bi = 0; bi < st.drawing.cadBlockRefs.size(); ++bi) {
-    if (EntityHiddenInViewport(nullptr, st.drawing.cadBlockRefAttrs, bi))
-      continue;
-    float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
-    CadBlockWorldAabb(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
-    EntityBox b{};
-    b.mnX = bmnX;
-    b.mxX = bmxX;
-    b.mnY = bmnY;
-    b.mxY = bmxY;
-    EntityBoxGrowZ(b, st.drawing.cadBlockRefs[bi].xf.z, true);
-    std::vector<CadBlockWorldSolid> ws;
-    CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[bi],
-                               bi < st.drawing.cadBlockRefAttrs.size() ? st.drawing.cadBlockRefAttrs[bi] : EntityAttributes{},
-                               &ws);
-    for (const CadBlockWorldSolid& w : ws) {
-      if (!w.solid)
-        continue;
-      const brep::Bounds sb = brep::ComputeBounds(*w.solid);
-      if (!sb.valid)
-        continue;
-      b.mnX = std::min(b.mnX, sb.mn.x);
-      b.mxX = std::max(b.mxX, sb.mx.x);
-      b.mnY = std::min(b.mnY, sb.mn.y);
-      b.mxY = std::max(b.mxY, sb.mx.y);
-      EntityBoxGrowZ(b, sb.mn.z, false);
-      EntityBoxGrowZ(b, sb.mx.z, false);
-    }
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-  for (const CadPipeRun& r : st.drawing.cadPipeRuns) {
-    if (r.vertsXyz.size() < 3)
-      continue;
-    double odFeet = 0.0;
-    const double rad = CadPipeNominalOdFeet(r.nominalSize, &odFeet) ? 0.5 * odFeet : 0.0;
-    EntityBox b{};
-    for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3) {
-      const double x = r.vertsXyz[i];
-      const double y = r.vertsXyz[i + 1];
-      b.mnX = i == 0 ? x - rad : std::min(b.mnX, x - rad);
-      b.mxX = i == 0 ? x + rad : std::max(b.mxX, x + rad);
-      b.mnY = i == 0 ? y - rad : std::min(b.mnY, y - rad);
-      b.mxY = i == 0 ? y + rad : std::max(b.mxY, y + rad);
-      EntityBoxGrowZ(b, r.vertsXyz[i + 2] - rad, i == 0);
-      EntityBoxGrowZ(b, r.vertsXyz[i + 2] + rad, false);
-    }
-    b.cx = 0.5 * (b.mnX + b.mxX);
-    b.cy = 0.5 * (b.mnY + b.mxY);
-    out.push_back(b);
-  }
-}
-
 } // namespace
 
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
@@ -907,10 +611,6 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
-  ents.reserve(st.drawing.lineCount() + st.drawing.circleCount() + st.drawing.userArcs.size() +
-               st.drawing.userEllipses.size() + st.drawing.cadSplines.size() + st.drawing.cadPoints.size() + st.drawing.cadAnnotations.size() +
-               st.drawing.surveyPoints.size() +
-               (st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.size() - 1));
   CollectEntityBoxes(st, ents, vpFilter);
 
   if (ents.size() < 16)
@@ -987,7 +687,6 @@ bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d
     return false;
   std::vector<EntityBox> ents;
   CollectEntityBoxes(st, ents, nullptr);
-  CollectEntityBoxes3dExtras(st, ents);
   if (ents.empty())
     return false;
 
@@ -1363,9 +1062,9 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back(buf3);
       return;
     } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
-      // Plan view, and nothing in the 2D sweep: a drawing of pipe runs alone (or only what the
-      // 3D sweep adds) still has something to frame — its plan footprint (issue #564 §1). A drawing
-      // the 2D sweep DOES see never reaches here, so its framing is unchanged.
+      // Plan view, and nothing in the 2D sweep: frame whatever the 3D sweep finds, by its plan
+      // footprint (issue #564 §1). Both sweeps now count pipe runs, inserts and hatches (issue #1700
+      // phase 4), so this is a safety net for any kind only the 3D sweep sees.
       ray3d::Vec3 bmn{};
       ray3d::Vec3 bmx{};
       if (!ComputeWorldExtents3d(st, &bmn, &bmx, &skipped)) {

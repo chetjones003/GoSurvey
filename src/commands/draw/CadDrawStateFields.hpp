@@ -190,3 +190,9 @@
   /// the revision cannot reach. A 32-bit sentinel would collide once every 2^32 edits and skip the
   /// sweep for that drawing — rare enough to never be reproduced, and silent when it happened.
   std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
+  /// `CadOffsetEntityPickTolWorld`'s drawing-size floor, remembered for one `cadGpuRevision`. The
+  /// robust extents behind it box every entity, inserts included, which is too slow to repeat on
+  /// every hover (about 30 ms for 5,000 inserts; issue #1700 phase 4). 64-bit for the same reason as
+  /// \ref entityIdSweepRevision; reset with it when the drawing is swapped or cleared.
+  mutable std::uint64_t offsetPickTolGeomRevision = kEntityIdSweepNever;
+  mutable float offsetPickTolGeom = 1e-3f;

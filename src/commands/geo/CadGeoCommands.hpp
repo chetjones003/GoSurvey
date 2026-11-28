@@ -85,7 +85,7 @@ int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double
                                  std::vector<std::string>& log);
 
 void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz);
-void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY);
+// CadMultileaderLocalBox is Document's (AnnotationBounds.hpp).
 [[nodiscard]] bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld,
                                      double* distSq);
 

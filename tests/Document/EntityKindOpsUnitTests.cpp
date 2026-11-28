@@ -390,8 +390,8 @@ TEST_CASE("EntityRef dispatch: COPY = DuplicateEntities + TransformEntities, ded
 
   for (size_t i = 0; i < copies.size(); ++i) {
     const EntityRef origRef{copies[i].kind, 0};
-    const doc::EntityBounds3d origB = doc::EntityBounds(store, origRef);
-    const doc::EntityBounds3d copyB = doc::EntityBounds(store, copies[i]);
+    const doc::EntityBounds3d origB = doc::EntityBounds(store, origRef, {});
+    const doc::EntityBounds3d copyB = doc::EntityBounds(store, copies[i], {});
     REQUIRE(origB.valid);
     REQUIRE(copyB.valid);
     CheckVecNear(copyB.min, origB.min, 1e-4);

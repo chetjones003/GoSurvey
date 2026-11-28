@@ -193,14 +193,19 @@ float CadGizmoHandleLenWorld(const AppCommandState& st) {
 }
 
 float CadOffsetEntityPickTolWorld(const AppCommandState& st) {
-  double mnX = 0.;
-  double mxX = 0.;
-  double mnY = 0.;
-  double mxY = 0.;
-  float geom = 1e-3f;
-  int skipped = 0;
-  if (ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped))
-    geom = std::max(1e-5f, static_cast<float>(2.5e-5 * std::max(mxX - mnX, mxY - mnY)));
+  if (st.offsetPickTolGeomRevision != st.cadGpuRevision) {  // once per drawing change, not per hover
+    double mnX = 0.;
+    double mxX = 0.;
+    double mnY = 0.;
+    double mxY = 0.;
+    float geom = 1e-3f;
+    int skipped = 0;
+    if (ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped))
+      geom = std::max(1e-5f, static_cast<float>(2.5e-5 * std::max(mxX - mnX, mxY - mnY)));
+    st.offsetPickTolGeom = geom;
+    st.offsetPickTolGeomRevision = st.cadGpuRevision;
+  }
+  const float geom = st.offsetPickTolGeom;
   const float px = WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
                                             st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
   return std::max(geom, px * 1.5f);

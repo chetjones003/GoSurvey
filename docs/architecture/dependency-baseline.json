@@ -290,13 +290,6 @@
     },
     {
       "file": "src/io/src/LibreDwgCad.cpp",
-      "include": "CadDimGeom.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/src/LibreDwgCad.cpp includes \"CadDimGeom.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadDimStroke.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
