@@ -560,9 +560,7 @@ void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
     if (e.type == SelectedEntity::Type::Annotation && e.index > static_cast<int>(annIndex))
       --e.index;
   }
-  st.drawing.cadAnnotations.erase(st.drawing.cadAnnotations.begin() + static_cast<std::ptrdiff_t>(annIndex));
-  if (annIndex < st.drawing.cadAnnotationAttrs.size())
-    st.drawing.cadAnnotationAttrs.erase(st.drawing.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(annIndex));
+  GoSurvey::Document::EraseEntity(st.drawing, EntityRef{EntityKind::Annotation, static_cast<int>(annIndex)});
 }
 
 void EraseCadTableAtIndex(AppCommandState& st, size_t tableIndex) {
@@ -582,9 +580,7 @@ void EraseCadTableAtIndex(AppCommandState& st, size_t tableIndex) {
     if (e.type == SelectedEntity::Type::Table && e.index > static_cast<int>(tableIndex))
       --e.index;
   }
-  st.drawing.cadTables.erase(st.drawing.cadTables.begin() + static_cast<std::ptrdiff_t>(tableIndex));
-  if (tableIndex < st.drawing.cadTableAttrs.size())
-    st.drawing.cadTableAttrs.erase(st.drawing.cadTableAttrs.begin() + static_cast<std::ptrdiff_t>(tableIndex));
+  GoSurvey::Document::EraseEntity(st.drawing, EntityRef{EntityKind::Table, static_cast<int>(tableIndex)});
 }
 
 void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log) {
@@ -660,71 +656,106 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
   }
 }
 
-/// Remove every selected solid and pipe run (and a deleted run's place in its piping network).
-/// Shared by ERASE and MIRROR's erase-source (REQ-351), which each push their own one undo
-/// snapshot before calling it.
-static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
-  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
-  // removing the pointer here is that one undo step, exactly as it is for a mesh in ERASE. The
-  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
-  // simply expires and is reaped by the next refresh.
-  std::set<int> solidIx;
-  const size_t nSolid = st.drawing.cadSolids.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
-      solidIx.insert(e.index);
-  }
-  std::vector<int> sov(solidIx.begin(), solidIx.end());
-  std::sort(sov.begin(), sov.end(), std::greater<int>());
-  for (int idx : sov) {
-    st.drawing.cadSolids.erase(st.drawing.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadSolidAttrs.size())
-      st.drawing.cadSolidAttrs.erase(st.drawing.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+/// Remove every selected entity: the one erase path ERASE and MIRROR's erase-source share. The
+/// caller pushes the one undo snapshot first (REQ-063, REQ-103). Document kinds go through
+/// Document's \ref GoSurvey::Document::EraseEntities (ADR-0011); feature lines, alignments, surfaces,
+/// PDF underlays and point clouds belong to other systems and are erased here. Clears the
+/// selection. Returns how many objects were erased.
+static size_t EraseSelectedEntitiesNoUndo(AppCommandState& st) {
+  using T = SelectedEntity::Type;
+  std::vector<EntityRef> refs;
+  std::set<int> flIx, alignIx, surfIx, pdfIx, cloudIx;
+  const auto inRange = [](int i, size_t n) { return i >= 0 && static_cast<size_t>(i) < n; };
+  const size_t nFl = st.drawing.featureLineOffsets.empty() ? 0 : st.drawing.featureLineOffsets.size() - 1;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == T::FeatureLine) {
+      if (inRange(e.index, nFl))
+        flIx.insert(e.index);  // REQ-087
+    } else if (e.type == T::Alignment) {
+      if (inRange(e.index, st.drawing.alignments.size()))
+        alignIx.insert(e.index);  // REQ-480
+    } else if (e.type == T::Surface) {
+      if (inRange(e.index, st.drawing.cadSurfaces.size()))
+        surfIx.insert(e.index);  // REQ-068
+    } else if (e.type == T::PdfUnderlay) {
+      if (inRange(e.index, st.drawing.pdfAttachments.size()))
+        pdfIx.insert(e.index);
+    } else if (e.type == T::PointCloud) {
+      if (inRange(e.index, st.drawing.cadPointClouds.size()))
+        cloudIx.insert(e.index);  // REQ-171
+    } else if (const std::optional<EntityKind> kind = EntityKindForSelection(e.type);
+               kind && GoSurvey::Document::HasEntityErase(*kind) &&
+               inRange(e.index, GoSurvey::Document::EntityCountForKind(st.drawing, *kind))) {
+      refs.push_back(EntityRef{*kind, e.index});
+    }
   }
 
-  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
-  // the caller's one undo snapshot already covers this removal.
-  std::set<int> pipeRunIx;
-  const size_t nPipeRun = st.drawing.cadPipeRuns.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
-      pipeRunIx.insert(e.index);
+  // What refers to a Document entity by index or id, outside the store.
+  std::set<int> tableIx, annIx;
+  bool markers = false;
+  for (const EntityRef& r : refs) {
+    if (r.kind == EntityKind::Table)
+      tableIx.insert(r.index);
+    else if (r.kind == EntityKind::Annotation)
+      annIx.insert(r.index);
+    else if (r.kind == EntityKind::PositionMarker)
+      markers = true;
   }
-  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
-  std::sort(prv.begin(), prv.end(), std::greater<int>());
-  for (int idx : prv) {
-    st.drawing.cadPipeRuns.erase(st.drawing.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadPipeRunAttrs.size())
-      st.drawing.cadPipeRunAttrs.erase(st.drawing.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
-    // deleted run drops out of whichever network held it, and every index above it shifts down by
-    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
-    for (CadPipingSystem& sys : st.drawing.cadPipingSystems) {
-      auto& runs = sys.pipeRunIndices;
-      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
-      for (int& ri : runs) {
-        if (ri > idx)
-          --ri;
-      }
-    }
+  // A survey point's label is linked by stable id (REQ-076), so only the erased label's link clears.
+  for (int i : annIx) {
+    const std::uint64_t id = static_cast<size_t>(i) < st.drawing.cadAnnotationAttrs.size()
+                                 ? st.drawing.cadAnnotationAttrs[static_cast<size_t>(i)].id
+                                 : 0;
+    if (id != 0)
+      for (SurveyPoint& q : st.drawing.surveyPoints)
+        if (q.labelMtextAnnId == id)
+          q.labelMtextAnnId = 0;
   }
-  // Alignments (REQ-480): erased with the solids and pipe runs, so MIRROR's delete-source takes them too. The
-  // caller's one undo snapshot already covers this removal. Offsets of an erased parent become independent.
-  {
-    std::set<int> alignIx;
-    for (const auto& e : st.selection) {
-      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
-          static_cast<size_t>(e.index) < st.drawing.alignments.size())
-        alignIx.insert(e.index);
-    }
-    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
-      st.drawing.alignments.erase(st.drawing.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
-    if (!alignIx.empty()) {
-      std::vector<std::string> quiet;
-      RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
-      BumpCadGpuCache(st);  // the plan drops the erased alignment and its sample lines and frames at once
-    }
+  if (st.tableCellEditorOpen && !tableIx.empty()) {
+    if (tableIx.count(st.tableCellEditorIndex))
+      CancelTableCellEditor(st);
+    else
+      st.tableCellEditorIndex -= static_cast<int>(
+          std::distance(tableIx.begin(), tableIx.lower_bound(st.tableCellEditorIndex)));
   }
+  if (markers && st.mtextRichEditorMarkerIndex >= 0)
+    CloseMtextRichEditorUi(st);  // its target may be gone or renumbered
+
+  size_t n = GoSurvey::Document::EraseEntities(st.drawing, refs);
+
+  // Highest index first throughout, so no removal shifts an index not yet used.
+  for (auto it = flIx.rbegin(); it != flIx.rend(); ++it)
+    EraseFeatureLineByIndex(st, *it);
+  for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
+    st.drawing.alignments.erase(st.drawing.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+  if (!alignIx.empty()) {
+    // Offsets of an erased parent become independent. Callers then check feature-line links
+    // (RefreshFeatureLineLinks), which log.
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsetsOnly(st, quiet);
+  }
+  // One erase path for surfaces. An in-flight rebuild (REQ-069) is keyed on the surface's stable id,
+  // which is never reused, so its result is discarded when it finishes.
+  for (auto it = surfIx.rbegin(); it != surfIx.rend(); ++it)
+    EraseSurfaceAtIndex(st, static_cast<size_t>(*it));
+  for (auto it = pdfIx.rbegin(); it != pdfIx.rend(); ++it) {
+    PdfAttach_ReleaseTexture(st.drawing.pdfAttachments[static_cast<size_t>(*it)]);
+    st.drawing.pdfAttachments.erase(st.drawing.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(*it));
+  }
+  for (auto it = cloudIx.rbegin(); it != cloudIx.rend(); ++it) {
+    const auto at = static_cast<std::ptrdiff_t>(*it);
+    st.drawing.cadPointClouds.erase(st.drawing.cadPointClouds.begin() + at);
+    if (static_cast<size_t>(*it) < st.drawing.cadPointCloudAttrs.size())
+      st.drawing.cadPointCloudAttrs.erase(st.drawing.cadPointCloudAttrs.begin() + at);
+  }
+  n += flIx.size() + alignIx.size() + surfIx.size() + pdfIx.size() + cloudIx.size();
+
+  st.selection.clear();
+  AbortMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
+  if (n > 0)
+    BumpCadGpuCache(st);
+  return n;
 }
 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
@@ -755,247 +786,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
   PushUndoSnapshot(st, "Delete");
   for (auto& [index, candidate] : rebuiltGroups) st.drawing.cadSurfaces[index] = std::move(candidate);
-  std::set<int> lineIx;
-  std::set<int> circIx;
-  std::set<int> annIx;
-  std::set<int> tableIx;
-  std::set<int> blockIx;
-  std::set<int> arcIx;
-  std::set<int> ellIx;
-  std::set<int> polyIx;
-  std::set<int> flIx;  // REQ-087
-  std::set<int> markerIx;  // REQ-359
-  std::set<int> multileaderIx;  // REQ-367
-  const size_t nLines = st.drawing.lineCount();
-  const size_t nCirc = st.drawing.circleCount();
-  const size_t nAnn = st.drawing.cadAnnotations.size();
-  const size_t nArc = st.drawing.userArcs.size();
-  const size_t nEll = st.drawing.userEllipses.size();
-  const size_t nPoly = st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0;
-  const size_t nFl = st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0;
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
-      lineIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && static_cast<size_t>(e.index) < nCirc)
-      circIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
-      annIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadTables.size())
-      tableIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
-      blockIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
-      arcIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
-      ellIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
-      polyIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
-             static_cast<size_t>(e.index) < nFl)
-      flIx.insert(e.index);  // REQ-087
-    else if (e.type == SelectedEntity::Type::PositionMarker && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadPositionMarkers.size())
-      markerIx.insert(e.index);  // REQ-359: the marker and its label are one object
-    else if (e.type == SelectedEntity::Type::Multileader && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadMultileaders.size())
-      multileaderIx.insert(e.index);  // REQ-367: path + label are one object
-  }
-
-  std::vector<int> pv(polyIx.begin(), polyIx.end());
-  std::sort(pv.begin(), pv.end(), std::greater<int>());
-  for (int idx : pv)
-    ErasePolylineByIndex(st, idx);
-
-  // REQ-087. Highest index first, like every other compacting erase here, so an earlier removal
-  // cannot shift an index that has not been used yet.
-  std::vector<int> flv(flIx.begin(), flIx.end());
-  std::sort(flv.begin(), flv.end(), std::greater<int>());
-  for (int idx : flv)
-    EraseFeatureLineByIndex(st, idx);
-
-  std::vector<int> lv(lineIx.begin(), lineIx.end());
-  std::sort(lv.begin(), lv.end(), std::greater<int>());
-  for (int idx : lv) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.lineCount())
-      continue;
-    st.drawing.eraseLine(k);
-    if (static_cast<size_t>(idx) < st.drawing.userLineAttrs.size())
-      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> cv(circIx.begin(), circIx.end());
-  std::sort(cv.begin(), cv.end(), std::greater<int>());
-  for (int idx : cv) {
-    if (static_cast<size_t>(idx) >= st.drawing.circleCount())
-      continue;
-    // One whole record (stride 4) comes out. Removing three floats left the array a non-multiple of
-    // the stride and shifted every later circle by one slot (issue #62); eraseCircle removes all four.
-    st.drawing.eraseCircle(static_cast<size_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.userCircleAttrs.size())
-      st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(idx));
-  }
-
-  std::vector<int> av(annIx.begin(), annIx.end());
-  std::sort(av.begin(), av.end(), std::greater<int>());
-  for (int idx : av)
-    EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
-
-  std::vector<int> tv(tableIx.begin(), tableIx.end());
-  std::sort(tv.begin(), tv.end(), std::greater<int>());
-  for (int idx : tv)
-    EraseCadTableAtIndex(st, static_cast<size_t>(idx));
-
-  std::vector<int> bv(blockIx.begin(), blockIx.end());
-  std::sort(bv.begin(), bv.end(), std::greater<int>());
-  for (int idx : bv) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.cadBlockRefs.size())
-      continue;
-    st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.drawing.cadBlockRefAttrs.size())
-      st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> arv(arcIx.begin(), arcIx.end());
-  std::sort(arv.begin(), arv.end(), std::greater<int>());
-  for (int idx : arv) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.userArcs.size())
-      continue;
-    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.drawing.userArcAttrs.size())
-      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> ev(ellIx.begin(), ellIx.end());
-  std::sort(ev.begin(), ev.end(), std::greater<int>());
-  for (int idx : ev) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.userEllipses.size())
-      continue;
-    st.drawing.userEllipses.erase(st.drawing.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.drawing.userEllAttrs.size())
-      st.drawing.userEllAttrs.erase(st.drawing.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-  EraseSelectedSplines(st);  // REQ-443
-  EraseSelectedCadPoints(st);
-
-  // Filled regions (REQ-042): erase from cadFilledRegions + parallel attrs, highest index first.
-  std::set<int> fillIx;
-  const size_t nFill = st.drawing.cadFilledRegions.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::FilledRegion && e.index >= 0 && static_cast<size_t>(e.index) < nFill)
-      fillIx.insert(e.index);
-  }
-  std::vector<int> fv(fillIx.begin(), fillIx.end());
-  std::sort(fv.begin(), fv.end(), std::greater<int>());
-  for (int idx : fv) {
-    st.drawing.cadFilledRegions.erase(st.drawing.cadFilledRegions.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadFilledRegionAttrs.size())
-      st.drawing.cadFilledRegionAttrs.erase(st.drawing.cadFilledRegionAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  // Imported meshes (REQ-063: "erasing a mesh is undoable in one step" — the caller has already
-  // pushed one snapshot for this whole erase, so removing the pointer here is that one step).
-  std::set<int> meshIx;
-  const size_t nMesh = st.drawing.cadMeshes.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::Mesh && e.index >= 0 && static_cast<size_t>(e.index) < nMesh)
-      meshIx.insert(e.index);
-  }
-  std::vector<int> mv(meshIx.begin(), meshIx.end());
-  std::sort(mv.begin(), mv.end(), std::greater<int>());
-  for (int idx : mv) {
-    st.drawing.cadMeshes.erase(st.drawing.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadMeshAttrs.size())
-      st.drawing.cadMeshAttrs.erase(st.drawing.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  // Point clouds (REQ-171: "erase + undo is one step" — same shape as the mesh erase above).
-  std::set<int> pointCloudIx;
-  const size_t nPointCloud = st.drawing.cadPointClouds.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
-        static_cast<size_t>(e.index) < nPointCloud)
-      pointCloudIx.insert(e.index);
-  }
-  std::vector<int> pcv(pointCloudIx.begin(), pointCloudIx.end());
-  std::sort(pcv.begin(), pcv.end(), std::greater<int>());
-  for (int idx : pcv) {
-    st.drawing.cadPointClouds.erase(st.drawing.cadPointClouds.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadPointCloudAttrs.size())
-      st.drawing.cadPointCloudAttrs.erase(st.drawing.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
-  RefreshFeatureLineLinks(st, log);    // REQ-498.2: a feature line whose alignment was just erased says so here
-
-
-  // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
-  // pushed one snapshot for this whole erase, so removing it here is that one step).
-  //
-  // Goes through EraseSurfaceAtIndex rather than erasing the two vectors inline like the blocks
-  // above, so there is one erase path to keep correct. An in-flight rebuild (REQ-069) needs no
-  // cancellation here: the job is keyed on the surface's stable id (ADR-036 (a)), that id is never
-  // reused (REQ-076), so when the worker finishes `FindSurfaceIndexById` returns -1 and the result is
-  // discarded — REQ-069's own rule, reached without a second mechanism.
-  {
-    std::set<int> surfIx;
-    const size_t nSurf = st.drawing.cadSurfaces.size();
-    for (const auto& e : st.selection) {
-      if (e.type == SelectedEntity::Type::Surface && e.index >= 0 && static_cast<size_t>(e.index) < nSurf)
-        surfIx.insert(e.index);
-    }
-    std::vector<int> sv(surfIx.begin(), surfIx.end());
-    std::sort(sv.begin(), sv.end(), std::greater<int>());
-    for (int idx : sv)
-      EraseSurfaceAtIndex(st, static_cast<size_t>(idx));
-  }
-
-  // PDF underlays: release GL texture and erase from highest index downward.
-  std::set<int> pdfIx;
-  const size_t nPdf = st.drawing.pdfAttachments.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PdfUnderlay && e.index >= 0 &&
-        static_cast<size_t>(e.index) < nPdf)
-      pdfIx.insert(e.index);
-  }
-  std::vector<int> pdfv(pdfIx.begin(), pdfIx.end());
-  std::sort(pdfv.begin(), pdfv.end(), std::greater<int>());
-  for (int idx : pdfv) {
-    PdfAttach_ReleaseTexture(st.drawing.pdfAttachments[static_cast<size_t>(idx)]);
-    st.drawing.pdfAttachments.erase(st.drawing.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  // Position Markers (REQ-359), highest index first so an earlier erase never shifts a later one.
-  for (auto it = markerIx.rbegin(); it != markerIx.rend(); ++it) {
-    const auto at = static_cast<std::ptrdiff_t>(*it);
-    st.drawing.cadPositionMarkers.erase(st.drawing.cadPositionMarkers.begin() + at);
-    if (static_cast<size_t>(*it) < st.drawing.cadPositionMarkerAttrs.size())
-      st.drawing.cadPositionMarkerAttrs.erase(st.drawing.cadPositionMarkerAttrs.begin() + at);
-  }
-  if (!markerIx.empty() && st.mtextRichEditorMarkerIndex >= 0)
-    CloseMtextRichEditorUi(st);  // its target may be gone or renumbered
-
-  for (auto it = multileaderIx.rbegin(); it != multileaderIx.rend(); ++it) {
-    const auto at = static_cast<std::ptrdiff_t>(*it);
-    st.drawing.cadMultileaders.erase(st.drawing.cadMultileaders.begin() + at);
-    if (static_cast<size_t>(*it) < st.drawing.cadMultileaderAttrs.size())
-      st.drawing.cadMultileaderAttrs.erase(st.drawing.cadMultileaderAttrs.begin() + at);
-  }
-
-  const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
-                        polyIx.size() + flIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
-                      multileaderIx.size();
-  st.selection.clear();
-  AbortMtextGripInteraction(st);
-  ClearDimGripInteraction(st);
+  const size_t nDel = EraseSelectedEntitiesNoUndo(st);
+  RefreshFeatureLineLinks(st, log);  // REQ-498.2: a feature line whose alignment was just erased says so here
   if (nDel > 0) {
-    BumpCadGpuCache(st);
     for (const auto& name : rebuiltGroupNames) {
       const int index = FindSurfaceIndex(st, name);
       if (index >= 0) {
@@ -1007,148 +800,12 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 }
 
-/// Erase every selected entry of \p type from \p items and its parallel \p attrs, highest index first.
-template <class T>
-static void EraseSelectedInParallelStores(AppCommandState& st, SelectedEntity::Type type, std::vector<T>& items,
-                                          std::vector<EntityAttributes>& attrs) {
-  std::set<int> ix;
-  for (const auto& e : st.selection)
-    if (e.type == type && e.index >= 0 && static_cast<size_t>(e.index) < items.size())
-      ix.insert(e.index);
-  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
-    items.erase(items.begin() + static_cast<std::ptrdiff_t>(*it));
-    if (static_cast<size_t>(*it) < attrs.size())
-      attrs.erase(attrs.begin() + static_cast<std::ptrdiff_t>(*it));
-  }
-}
-
 /// REQ-103 MIRROR erase-source step. The same per-store erase \c ExecuteDeleteSelection performs,
 /// minus its own \c PushUndoSnapshot — \c FinishMirrorTransform already pushed one snapshot for the
 /// whole mirror(+erase) operation, satisfying REQ-103's "one undo step" condition. By the time this
 /// runs, \c st.selection holds only what MIRROR copied: \c RefuseSelectionForTransform removed
 /// every kind that cannot be mirrored, with a logged reason.
-static void EraseMirroredSourceNoUndo(AppCommandState& st) {
-  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
-  const size_t nLines = st.drawing.lineCount();
-  const size_t nCirc = st.drawing.circleCount();
-  const size_t nAnn = st.drawing.cadAnnotations.size();
-  const size_t nArc = st.drawing.userArcs.size();
-  const size_t nEll = st.drawing.userEllipses.size();
-  const size_t nPoly = st.drawing.userPolylineOffsets.size() > 0 ? st.drawing.userPolylineOffsets.size() - 1 : 0;
-  const size_t nFl = st.drawing.featureLineOffsets.size() > 0 ? st.drawing.featureLineOffsets.size() - 1 : 0;
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
-      lineIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && static_cast<size_t>(e.index) < nCirc)
-      circIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
-      annIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
-      arcIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
-      ellIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
-      polyIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 && static_cast<size_t>(e.index) < nFl)
-      flIx.insert(e.index);
-    // Tables and block references (a pipe fitting is one) are mirrored by the flat path, so
-    // erase-source must remove their originals too (REQ-351).
-    else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadTables.size())
-      tableIx.insert(e.index);
-    else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
-             static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
-      blockIx.insert(e.index);
-  }
-
-  std::vector<int> pv(polyIx.begin(), polyIx.end());
-  std::sort(pv.begin(), pv.end(), std::greater<int>());
-  for (int idx : pv)
-    ErasePolylineByIndex(st, idx);
-
-  std::vector<int> flv(flIx.begin(), flIx.end());
-  std::sort(flv.begin(), flv.end(), std::greater<int>());
-  for (int idx : flv)
-    EraseFeatureLineByIndex(st, idx);
-
-  // REQ-351: MIRROR now mirrors solids and pipe runs, so erase-source must remove their originals.
-  EraseSelectedSolidsAndPipeRuns(st);
-
-  std::vector<int> tv(tableIx.begin(), tableIx.end());
-  std::sort(tv.begin(), tv.end(), std::greater<int>());
-  for (int idx : tv)
-    EraseCadTableAtIndex(st, static_cast<size_t>(idx));
-
-  std::vector<int> bv(blockIx.begin(), blockIx.end());
-  std::sort(bv.begin(), bv.end(), std::greater<int>());
-  for (int idx : bv) {
-    st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.cadBlockRefAttrs.size())
-      st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> lv(lineIx.begin(), lineIx.end());
-  std::sort(lv.begin(), lv.end(), std::greater<int>());
-  for (int idx : lv) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.lineCount())
-      continue;
-    st.drawing.eraseLine(k);
-    if (static_cast<size_t>(idx) < st.drawing.userLineAttrs.size())
-      st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> cv(circIx.begin(), circIx.end());
-  std::sort(cv.begin(), cv.end(), std::greater<int>());
-  for (int idx : cv) {
-    if (static_cast<size_t>(idx) >= st.drawing.circleCount())
-      continue;
-    st.drawing.eraseCircle(static_cast<size_t>(idx));
-    if (static_cast<size_t>(idx) < st.drawing.userCircleAttrs.size())
-      st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(idx));
-  }
-
-  std::vector<int> av(annIx.begin(), annIx.end());
-  std::sort(av.begin(), av.end(), std::greater<int>());
-  for (int idx : av)
-    EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
-
-  std::vector<int> arv(arcIx.begin(), arcIx.end());
-  std::sort(arv.begin(), arv.end(), std::greater<int>());
-  for (int idx : arv) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.userArcs.size())
-      continue;
-    st.drawing.userArcs.erase(st.drawing.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.drawing.userArcAttrs.size())
-      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  std::vector<int> ev(ellIx.begin(), ellIx.end());
-  std::sort(ev.begin(), ev.end(), std::greater<int>());
-  for (int idx : ev) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.drawing.userEllipses.size())
-      continue;
-    st.drawing.userEllipses.erase(st.drawing.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.drawing.userEllAttrs.size())
-      st.drawing.userEllAttrs.erase(st.drawing.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-  EraseSelectedSplines(st);  // REQ-443
-  EraseSelectedCadPoints(st);
-  // Hatch fills, imported models and multileaders mirror too since issue #1577 (AutoCAD parity).
-  EraseSelectedInParallelStores(st, SelectedEntity::Type::FilledRegion, st.drawing.cadFilledRegions,
-                                st.drawing.cadFilledRegionAttrs);
-  EraseSelectedInParallelStores(st, SelectedEntity::Type::Mesh, st.drawing.cadMeshes, st.drawing.cadMeshAttrs);
-  EraseSelectedInParallelStores(st, SelectedEntity::Type::Multileader, st.drawing.cadMultileaders,
-                                st.drawing.cadMultileaderAttrs);
-
-  st.selection.clear();
-  AbortMtextGripInteraction(st);
-  ClearDimGripInteraction(st);
-  BumpCadGpuCache(st);
-}
+static void EraseMirroredSourceNoUndo(AppCommandState& st) { EraseSelectedEntitiesNoUndo(st); }
 
 /// REQ-103 MIRROR erase-source step, survey-point half. Same loop \c DeleteSelectedSurveyPoints
 /// performs, minus its own \c PushUndoSnapshot (see \ref EraseMirroredSourceNoUndo).
@@ -1191,8 +848,10 @@ void FinishMirrorTransform(AppCommandState& st, float x0, float y0, float z0, fl
     return;
   }
   TransformSelection(st, xf, GoSurvey::Document::EntityOp::Mirror, "MIRROR", /*duplicate=*/true, log);
-  if (eraseSource && !st.selection.empty())
+  if (eraseSource && !st.selection.empty()) {
     EraseMirroredSourceNoUndo(st);
+    RefreshFeatureLineLinks(st, log);  // REQ-498.2: as ERASE does, an erased alignment's feature lines say so
+  }
   stepengine::EndSession(st);
   if (hadSurveySelection) {
     st.pendingSurveyDupIsMirror = true;

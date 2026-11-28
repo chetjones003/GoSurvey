@@ -1840,226 +1840,95 @@ bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, con
 // STRETCH (REQ-103 step 5, TASK-098)
 // ============================================================================
 
-// RecomputeArcFromEndpoints now lives inline in CadCommands.hpp (unit-testable without linking
-// this whole TU — see its doc comment there).
-
 void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, float dx, float dy,
                    std::vector<std::string>& log) {
-  constexpr float kTwoPi = 6.28318530717958647692f;
-  if (std::fabs(std::fabs(arc.sweepRad) - kTwoPi) < 1e-4f) {
-    // Full-circle sweep: endpoints coincide, so endpoint math is undefined — follow the Circle
-    // rule instead, same tolerance BREAK's own full-circle guard uses.
-    if (PointInsideClosedRect(static_cast<float>(arc.cx), static_cast<float>(arc.cy), mnX, mxX, mnY, mxY)) {
-      arc.cx += dx;
-      arc.cy += dy;
-    }
-    return;
-  }
-  const float sx = static_cast<float>(arc.cx + arc.r * std::cos(arc.startRad));
-  const float sy = static_cast<float>(arc.cy + arc.r * std::sin(arc.startRad));
-  const float endAng = arc.startRad + arc.sweepRad;
-  const float ex = static_cast<float>(arc.cx + arc.r * std::cos(endAng));
-  const float ey = static_cast<float>(arc.cy + arc.r * std::sin(endAng));
-  const bool startIn = PointInsideClosedRect(sx, sy, mnX, mxX, mnY, mxY);
-  const bool endIn = PointInsideClosedRect(ex, ey, mnX, mxX, mnY, mxY);
-  if (!startIn && !endIn)
-    return;  // selected but nothing to move — a legitimate no-op, matching AutoCAD.
-  const float nsx = startIn ? sx + dx : sx;
-  const float nsy = startIn ? sy + dy : sy;
-  const float nex = endIn ? ex + dx : ex;
-  const float ney = endIn ? ey + dy : ey;
-  RecomputeArcFromEndpoints(arc, nsx, nsy, nex, ney, &log);
+  GoSurvey::Document::StretchArc(
+      arc,
+      [&](const ray3d::Vec3& p) {
+        return PointInsideClosedRect(static_cast<float>(p.x), static_cast<float>(p.y), mnX, mxX, mnY, mxY);
+      },
+      dx, dy, &log);
 }
 
-/// REQ-103 STRETCH, model-space apply. Mirrors \c ApplyTranslationToSelection's per-type loop shape,
-/// but each entity's definition point(s) are tested against [mnX,mxX]x[mnY,mxY] individually — only
-/// in-box points move by (dx,dy). Line/Polyline/FeatureLine vertices are independent (the genuine
-/// stretch effect); Arc goes through \ref StretchOneArc; every other type has one definition point
-/// and moves as a whole only if that point is in-box (matching AutoCAD's own behavior for them).
+GoSurvey::Document::StretchWindow CadStretchWindow(const AppCommandState& st, float dx, float dy, float dz, float mnX,
+                                                   float mxX, float mnY, float mxY, bool rectInUcsPlane) {
+  GoSurvey::Document::StretchWindow w;
+  w.delta = {dx, dy, dz};
+  w.planWindow = !rectInUcsPlane;
+  // Stored coordinates are tested as floats, as the window corners are.
+  if (!rectInUcsPlane) {
+    w.contains = [=](const ray3d::Vec3& p) {
+      return PointInsideClosedRect(static_cast<float>(p.x), static_cast<float>(p.y), mnX, mxX, mnY, mxY);
+    };
+    return w;
+  }
+  // REQ-329 increment 4: the window lives in a tilted work plane's own 2D frame, so each point is
+  // projected into that frame (WorldToPlane) before the test.
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  w.contains = [=](const ray3d::Vec3& p) {
+    const ucs::Point2D q = ucs::WorldToPlane(frame, {static_cast<double>(static_cast<float>(p.x)),
+                                                     static_cast<double>(static_cast<float>(p.y)),
+                                                     static_cast<double>(static_cast<float>(p.z))});
+    return PointInsideClosedRect(static_cast<float>(q.x), static_cast<float>(q.y), mnX, mxX, mnY, mxY);
+  };
+  return w;
+}
+
+bool CadStretchFeatureLine(DrawingContent& d, int fi, const GoSurvey::Document::StretchWindow& w) {
+  if (fi < 0 || static_cast<size_t>(fi) + 1 >= d.featureLineOffsets.size())
+    return false;
+  const int v0 = d.featureLineOffsets[static_cast<size_t>(fi)];
+  const int v1 = d.featureLineOffsets[static_cast<size_t>(fi) + 1];
+  if (v0 < 0 || static_cast<size_t>(v1) * 3 > d.featureLineVerts.size())
+    return false;
+  bool moved = false;
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t b = static_cast<size_t>(vi) * 3;
+    if (!w.contains({d.featureLineVerts[b], d.featureLineVerts[b + 1], d.featureLineVerts[b + 2]}))
+      continue;
+    d.featureLineVerts[b] += static_cast<float>(w.delta.x);
+    d.featureLineVerts[b + 1] += static_cast<float>(w.delta.y);
+    d.featureLineVerts[b + 2] += static_cast<float>(w.delta.z);
+    moved = true;
+  }
+  return moved;
+}
+
+/// REQ-103 STRETCH, model-space apply. Each Document kind stretches through Document's
+/// \ref GoSurvey::Document::StretchEntity (ADR-0011): points inside the window [mnX,mxX]x[mnY,mxY]
+/// move by (dx,dy,dz), and a kind with one definition point moves whole when that point is inside,
+/// as AutoCAD's STRETCH does. PDF underlays, feature lines and survey points belong to other systems
+/// and are stretched here.
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log) {
   // One check reads every kind's declarations (ADR-0011): a kind STRETCH cannot take is removed and
   // named, never skipped silently (REQ-201).
   RefuseSelectionForTransform(st, GoSurvey::Document::EntityOp::Stretch,
                               GoSurvey::Document::SimilarityTransform::Translation({dx, dy, dz}), "STRETCH", log);
-  // REQ-329 increment 4: when the crossing box lives in a tilted work plane's local 2D frame, each
-  // candidate vertex is projected the same way (WorldToPlane) before the box test; the displacement
-  // carries a Z component. Under the World UCS `rectInUcsPlane` is false and `dz` is 0, so this is
-  // the pre-REQ-329 flat test byte-for-byte.
-  const ucs::Ucs stretchFrame = CadActiveUcsStorage(st);
-  auto inBox = [&](float x, float y, float z = 0.f) {
-    if (!rectInUcsPlane)
-      return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY);
-    const ucs::Point2D p = ucs::WorldToPlane(stretchFrame, {static_cast<double>(x), static_cast<double>(y),
-                                                            static_cast<double>(z)});
-    return PointInsideClosedRect(static_cast<float>(p.x), static_cast<float>(p.y), mnX, mxX, mnY, mxY);
-  };
+  const GoSurvey::Document::StretchWindow w = CadStretchWindow(st, dx, dy, dz, mnX, mxX, mnY, mxY, rectInUcsPlane);
 
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::LineSeg)
+  std::set<std::pair<int, int>> seen;  // a selection listed twice must not stretch twice
+  for (const SelectedEntity& e : st.selection) {
+    if (!seen.insert({static_cast<int>(e.type), e.index}).second)
       continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.drawing.lineCount())
-      continue;
-    if (inBox(static_cast<float>(st.drawing.line(k).x0), static_cast<float>(st.drawing.line(k).y0), static_cast<float>(st.drawing.line(k).z0))) {
-      st.drawing.lineComponent(k, CadLineComponent::X0) += dx;
-      st.drawing.lineComponent(k, CadLineComponent::Y0) += dy;
-      st.drawing.lineComponent(k, CadLineComponent::Z0) += dz;
-    }
-    if (inBox(static_cast<float>(st.drawing.line(k).x1), static_cast<float>(st.drawing.line(k).y1), static_cast<float>(st.drawing.line(k).z1))) {
-      st.drawing.lineComponent(k, CadLineComponent::X1) += dx;
-      st.drawing.lineComponent(k, CadLineComponent::Y1) += dy;
-      st.drawing.lineComponent(k, CadLineComponent::Z1) += dz;
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Circle)
-      continue;
-    const size_t ci = static_cast<size_t>(e.index);
-    if (ci >= st.drawing.circleCount())
-      continue;
-    CadCircleRecord cr = st.drawing.circle(ci);
-    if (inBox(static_cast<float>(cr.cx), static_cast<float>(cr.cy), static_cast<float>(cr.cz))) {
-      cr.cx += dx;
-      cr.cy += dy;
-      cr.cz += dz;
-      st.drawing.setCircle(ci, cr);
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Arc)
-      continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.drawing.userArcs.size())
-      continue;
-    if (rectInUcsPlane) {
-      // A tilted arc's endpoint math (`cx + r*cos`) is planar; degrade to a whole-arc move when the
-      // centre is in the box, matching the FilledRegion simplification just below.
-      CadArc& a = st.drawing.userArcs[k];
-      if (inBox(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z))) {
-        a.cx += dx;
-        a.cy += dy;
-        a.z += dz;
+    if (e.type == SelectedEntity::Type::PdfUnderlay) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
+        continue;
+      PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(e.index)];
+      if (w.contains({att.insertX, att.insertY, 0.0})) {  // a PDF underlay carries no elevation
+        att.insertX += dx;
+        att.insertY += dy;
       }
-    } else {
-      StretchOneArc(st.drawing.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+      continue;
     }
+    if (e.type == SelectedEntity::Type::FeatureLine) {
+      CadStretchFeatureLine(st.drawing, e.index, w);  // REQ-087: per vertex
+      continue;
+    }
+    const std::optional<EntityKind> kind = EntityKindForSelection(e.type);
+    if (kind && GoSurvey::Document::HasEntityStretch(*kind))
+      GoSurvey::Document::StretchEntity(st.drawing, {*kind, e.index}, w, &log);
   }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Ellipse)
-      continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.drawing.userEllipses.size())
-      continue;
-    if (inBox(static_cast<float>(st.drawing.userEllipses[k].cx), static_cast<float>(st.drawing.userEllipses[k].cy), static_cast<float>(st.drawing.userEllipses[k].z))) {
-      st.drawing.userEllipses[k].cx += dx;
-      st.drawing.userEllipses[k].cy += dy;
-      st.drawing.userEllipses[k].z += dz;
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Polyline)
-      continue;
-    const int pi = e.index;
-    if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.drawing.userPolylineOffsets.size())
-      continue;
-    const int v0 = st.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.drawing.userPolylineOffsets[(static_cast<size_t>(pi)+ 1)];
-    for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi);
-      if (inBox(static_cast<float>(st.drawing.vertex(b).x), static_cast<float>(st.drawing.vertex(b).y), static_cast<float>(st.drawing.vertex(b).z))) {
-        st.drawing.vertexComponent(b, CadVertexComponent::X) += dx;
-        st.drawing.vertexComponent(b, CadVertexComponent::Y) += dy;
-        st.drawing.vertexComponent(b, CadVertexComponent::Z) += dz;
-      }
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Annotation)
-      continue;
-    const size_t k = static_cast<size_t>(e.index);
-    if (k >= st.drawing.cadAnnotations.size())
-      continue;
-    CadAnnotation& a = st.drawing.cadAnnotations[k];
-    CadMtextSyncInsertion(a);  // issue #1667: an MTEXT stretches with its attachment point
-    if (!inBox(a.insX, a.insY, a.insZ))
-      continue;
-    a.insX += dx;
-    a.insY += dy;
-    a.insZ += dz;
-    if (a.kind == CadAnnotation::Kind::Mtext) {
-      a.boxMinX += dx;
-      a.boxMinY += dy;
-      a.boxMaxX += dx;
-      a.boxMaxY += dy;
-    } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-      a.dimExt1X += dx;
-      a.dimExt1Y += dy;
-      a.dimExt2X += dx;
-      a.dimExt2Y += dy;
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::PdfUnderlay)
-      continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.pdfAttachments.size())
-      continue;
-    PdfAttachment& att = st.drawing.pdfAttachments[static_cast<size_t>(e.index)];
-    if (inBox(att.insertX, att.insertY)) {  // PDF underlay carries no elevation
-      att.insertX += dx;
-      att.insertY += dy;
-    }
-  }
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Table)
-      continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadTables.size())
-      continue;
-    CadTable& t = st.drawing.cadTables[static_cast<size_t>(e.index)];
-    if (inBox(t.insX, t.insY, t.insZ)) {
-      CadTableTranslate(&t, dx, dy);
-      t.insZ += dz;
-    }
-  }
-  // Filled regions (REQ-042): whole-region translate, gated on the first boundary vertex — no
-  // per-vertex boundary stretch (spec-recorded simplification, REQ-103 STRETCH acceptance).
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::FilledRegion)
-      continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadFilledRegions.size())
-      continue;
-    CadFilledRegion& fr = st.drawing.cadFilledRegions[static_cast<size_t>(e.index)];
-    if (fr.vertsXyz.size() >= 3 && inBox(static_cast<float>(fr.vertsXyz[0]), static_cast<float>(fr.vertsXyz[1]), static_cast<float>(fr.vertsXyz[2]))) {
-      hatchgeom::Translate(fr, dx, dy);
-      if (dz != 0.f)
-        for (size_t i = 2; i < fr.vertsXyz.size(); i += 3)
-          fr.vertsXyz[i] += dz;
-    }
-  }
-  // CAD points (REQ-456): a point inside the crossing window moves, as AutoCAD's STRETCH moves it.
-  for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Point || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.drawing.cadPoints.size())
-      continue;
-    CadPoint& p = st.drawing.cadPoints[static_cast<size_t>(e.index)];
-    if (inBox(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z))) {
-      p.x += dx;
-      p.y += dy;
-      p.z += dz;
-    }
-  }
-  // Feature lines (REQ-087): per-vertex. Elevation moves only under a tilted UCS (REQ-329
-  // increment 4) — matching the "plan STRETCH leaves Z alone" restriction the other commands share.
-  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
-    for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi) * 3;
-      if (inBox(static_cast<float>(st.drawing.featureLineVerts[b]), static_cast<float>(st.drawing.featureLineVerts[b + 1]), static_cast<float>(st.drawing.featureLineVerts[b + 2]))) {
-        st.drawing.featureLineVerts[b] += dx;
-        st.drawing.featureLineVerts[b + 1] += dy;
-        st.drawing.featureLineVerts[b + 2] += dz;
-      }
-    }
-  });
   {
     std::vector<int> ix = st.selectedSurveyPointIndices;
     std::sort(ix.begin(), ix.end());
@@ -2068,7 +1937,8 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
       if (i < 0 || static_cast<size_t>(i) >= st.drawing.surveyPoints.size())
         continue;
       SurveyPoint& sp = st.drawing.surveyPoints[static_cast<size_t>(i)];
-      if (inBox(static_cast<float>(sp.easting), static_cast<float>(sp.northing), static_cast<float>(sp.elevation))) {
+      if (w.contains({static_cast<float>(sp.easting), static_cast<float>(sp.northing),
+                      static_cast<float>(sp.elevation)})) {
         sp.easting += dx;
         sp.northing += dy;
         sp.elevation += dz;

@@ -9,6 +9,7 @@
 #include "engine/StepEngine.hpp"
 #include "modify/CadModifySessions.hpp"
 #include "DrawingContent.hpp"  // ADR-0010: the fields undo frames and tabs share
+#include <GoSurvey/Document/EntityKindEdit.hpp>  // ADR-0011: per-kind erase and stretch
 #include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
@@ -324,72 +325,15 @@ void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& styl
 
 // CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
 
-/// REQ-103 STRETCH. Recomputes \p arc's center/radius/startRad so it passes through
-/// (newStartX,newStartY) and (newEndX,newEndY) while preserving the arc's original signed sweep
-/// (included angle + rotational sense) — true AutoCAD-parity arc stretch. Degenerates to a pure
-/// translation when both new endpoints are offset from the originals by the same amount. Returns
-/// false (arc left unchanged, optional \p log gets a stated reason) if the new chord cannot
-/// support the preserved sweep without the radius collapsing toward zero. Not for full-circle-sweep
-/// arcs — callers route those through \ref StretchOneArc's center-only rule instead.
-///
-/// Inline and header-only (pure — only <cmath> and CadArc, both dependency-free, ADR-013) so this,
-/// the one genuinely new piece of geometry in TASK-098, is unit-testable (tests/StretchGeomTests.cpp)
-/// without linking CadCommands.cpp's whole command layer — the same reasoning `KindName` above and
-/// architecture's other pure-math extractions (EntityId.cpp, curveintersect.cpp) already follow.
-///
-/// Hand-derived: given original endpoints P_start = C + r(cos a, sin a), P_end = C + r(cos(a+s),
-/// sin(a+s)) (a=startRad, s=sweepRad), and new (possibly moved) endpoints P_start', P_end', with
-/// V' = P_end' - P_start', M' = midpoint(P_start', P_end'), Rot90CW(x,y) = (y,-x):
-///   C' = M' - (1/2)*cot(s/2)*Rot90CW(V')
-/// preserves s exactly (verified against a worked numeric example before being trusted — see
-/// spec/project.md D-2026-08-24-d and tests/StretchGeomTests.cpp's own pinned cases).
-inline bool RecomputeArcFromEndpoints(CadArc& arc, float newStartX, float newStartY, float newEndX,
-                                      float newEndY, std::vector<std::string>* log) {
-  const float s = arc.sweepRad;
-  const float halfS = 0.5f * s;
-  const float sinHalf = std::sin(halfS);
-  if (std::fabs(sinHalf) < 1e-6f) {
-    if (log)
-      log->push_back("STRETCH — arc endpoint stretch skipped (degenerate sweep); object unchanged.");
-    return false;
-  }
-  const float vx = newEndX - newStartX, vy = newEndY - newStartY;
-  const float chordLen = std::hypot(vx, vy);
-  if (chordLen < 1e-4f) {
-    if (log)
-      log->push_back("STRETCH — arc endpoints would coincide; object left unchanged.");
-    return false;
-  }
-  const float mx = 0.5f * (newStartX + newEndX);
-  const float my = 0.5f * (newStartY + newEndY);
-  const float rvx = vy, rvy = -vx;  // Rot90CW(V')
-  const float cotHalf = std::cos(halfS) / sinHalf;
-  const float cx = mx - 0.5f * cotHalf * rvx;
-  const float cy = my - 0.5f * cotHalf * rvy;
-  const float r = std::hypot(newStartX - cx, newStartY - cy);
-  if (r < 1e-4f) {
-    if (log)
-      log->push_back("STRETCH — arc stretch would collapse its radius; object left unchanged.");
-    return false;
-  }
-  arc.cx = cx;
-  arc.cy = cy;
-  arc.r = r;
-  arc.startRad = std::atan2(newStartY - cy, newStartX - cx);
-  // arc.sweepRad is unchanged by design — the included angle is preserved exactly.
-  return true;
-}
-/// REQ-103 STRETCH, one arc (model or paper — same \c CadArc struct either way). Tests both
-/// endpoints against [mnX,mxX]x[mnY,mxY] independently: 0/2 in-box -> no-op / whole-arc translate
-/// (falls out of \ref RecomputeArcFromEndpoints automatically); exactly 1 in-box -> true partial
-/// stretch. A full-circle-sweep arc is exempt (its two endpoints coincide) and instead moves as a
-/// whole only when its CENTER is in-box, matching the Circle rule. Shared by the model apply, the
-/// paper apply, and the live drag preview — three concrete callers.
+// RecomputeArcFromEndpoints is Document's (EntityKindEdit.hpp, ADR-0011).
+using GoSurvey::Document::RecomputeArcFromEndpoints;
+/// REQ-103 STRETCH, one arc against the plan box [mnX,mxX]x[mnY,mxY]: Document's
+/// GoSurvey::Document::StretchArc with that box. Paper space's STRETCH uses it; model space goes
+/// through GoSurvey::Document::StretchEntity (ADR-0011).
 void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, float dx, float dy,
                    std::vector<std::string>& log);
-/// REQ-103 STRETCH, model-space apply — see the definition's comment (CadCommands.cpp) for the
-/// full per-type rule. Declared here (not just in the .cpp) because the viewport-pick and typed-text
-/// dispatch sites that call it appear earlier in CadCommands.cpp than its own definition.
+/// REQ-103 STRETCH, model-space apply: each selected entity's points inside the window move by
+/// (dx,dy,dz). See the definition (CadCurveEditCommands.cpp) for the per-kind rule.
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log);
 

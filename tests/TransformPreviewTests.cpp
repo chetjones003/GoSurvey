@@ -448,3 +448,139 @@ TEST_CASE("MOVE's preview draws tables, multileaders, points and Position Marker
   CHECK_FALSE(hasVertexNear(-3.0, 2.0, 2.0, 1e-3));
   CHECK_FALSE(hasVertexNear(0.0, 0.0, 1.0, 1e-3));
 }
+
+TEST_CASE("STRETCH's preview is the committed stretch, inserts and splines included", "[issue1700][preview]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddLine(st, CadLineRecord{10.0, 12.0, 0.0, 20.0, 12.0, 0.0});  // one end inside the window
+  AddBulgedPolyline(st);                                            // entirely outside: stays
+  AddBlockWithInsert(st, 16.f, 12.f);                               // insertion inside: moves
+  CadSpline sp;
+  std::string why;
+  REQUIRE(spline::MakeFit({{10, 12, 0}, {15, 14, 0}, {20, 12, 0}}, false, &sp, &why));
+  st.drawing.cadSplines.push_back(sp);
+  st.drawing.cadSplineAttrs.push_back(EntityAttributes{});
+
+  REQUIRE(DispatchByPrimaryForTest("stretch", st, log));
+  // Right-to-left crossing window [14, 25] x [-10, 25].
+  st.selBoxWaitingSecond = true;
+  st.selBoxAnchorX = 25.f;
+  st.selBoxAnchorY = 25.f;
+  st.selBoxAnchorZ = 0.f;
+  SubmitViewportPick(st, 14.0, -10.0, log, /*subtract=*/false, /*windowMode=*/false);
+  using T = SelectedEntity::Type;
+  st.selection = {{T::LineSeg, 0}, {T::Polyline, 0}, {T::BlockRef, 0}, {T::Spline, 0}};
+  SubmitViewportPick(st, 0.0, 0.0, log);
+  const Picture before = Preview(st, 5.f, 3.f);
+  SubmitViewportPick(st, 5.0, 3.0, log);
+
+  CHECK(st.drawing.line(0).x0 == Catch::Approx(10.0));
+  CHECK(st.drawing.line(0).x1 == Catch::Approx(25.0));
+  CHECK(st.drawing.cadBlockRefs[0].xf.x == Catch::Approx(21.0));
+  CHECK(st.drawing.cadSplines[0].fit[1].x == Catch::Approx(20.0));
+  CheckSamePicture(before, Wireframe(st, {{T::LineSeg, 0}, {T::Polyline, 0}, {T::BlockRef, 0}, {T::Spline, 0}}));
+}
+
+TEST_CASE("ERASE removes every selected kind and counts them all", "[issue1700][erase]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddLine(st, CadLineRecord{0.0, 0.0, 0.0, 1.0, 0.0, 0.0});
+  AddBulgedPolyline(st);
+  AddBlockWithInsert(st, 3.f, 3.f);
+  st.drawing.cadPoints.push_back(CadPoint{1.0, 2.0, 0.0});
+  st.drawing.cadPointAttrs.push_back(EntityAttributes{});
+  CadSpline sp;
+  std::string why;
+  REQUIRE(spline::MakeFit({{0, 0, 0}, {1, 1, 0}, {2, 0, 0}}, false, &sp, &why));
+  st.drawing.cadSplines.push_back(sp);
+  st.drawing.cadSplineAttrs.push_back(EntityAttributes{});
+  using T = SelectedEntity::Type;
+  // The insert is listed twice; it is still one object.
+  st.selection = {{T::LineSeg, 0}, {T::Polyline, 0}, {T::BlockRef, 0}, {T::BlockRef, 0}, {T::Point, 0}, {T::Spline, 0}};
+  REQUIRE(DispatchByPrimaryForTest("delete", st, log));
+  CHECK(st.drawing.lineCount() == 0);
+  CHECK(st.drawing.userPolylineOffsets.empty());
+  CHECK(st.drawing.userPolylineVertsBulge.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
+  CHECK(st.drawing.cadPoints.empty());
+  CHECK(st.drawing.cadSplines.empty());
+  CHECK(st.selection.empty());
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back() == "Deleted 5 object(s).");
+}
+
+TEST_CASE("ERASE keeps references from outside the store right", "[issue1700][erase]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  for (int i = 0; i < 3; ++i) {
+    CadTable t;
+    t.insX = static_cast<float>(i * 10);
+    t.cells = {"A", "B"};
+    st.drawing.cadTables.push_back(t);
+    st.drawing.cadTableAttrs.push_back(EntityAttributes{});
+  }
+  CadAnnotation label;
+  label.kind = CadAnnotation::Kind::Mtext;
+  label.text = "P1";
+  st.drawing.cadAnnotations.push_back(label);
+  EntityAttributes labelAttrs;
+  labelAttrs.id = 77;
+  st.drawing.cadAnnotationAttrs.push_back(labelAttrs);
+  SurveyPoint p;
+  p.labelMtextAnnId = 77;
+  st.drawing.surveyPoints.push_back(p);
+  using T = SelectedEntity::Type;
+
+  SECTION("an open cell editor follows its table down when a table before it is erased") {
+    st.tableCellEditorOpen = true;
+    st.tableCellEditorIndex = 2;
+    st.selection = {{T::Table, 0}};
+    REQUIRE(DispatchByPrimaryForTest("delete", st, log));
+    CHECK(st.tableCellEditorOpen);
+    CHECK(st.tableCellEditorIndex == 1);
+    CHECK(st.drawing.cadTables[1].insX == 20.f);
+  }
+  SECTION("an open cell editor closes when its own table is erased") {
+    st.tableCellEditorOpen = true;
+    st.tableCellEditorIndex = 1;
+    st.selection = {{T::Table, 0}, {T::Table, 1}};
+    REQUIRE(DispatchByPrimaryForTest("delete", st, log));
+    CHECK_FALSE(st.tableCellEditorOpen);
+    CHECK(st.drawing.cadTables.size() == 1);
+  }
+  SECTION("erasing a survey point's label clears only that link") {
+    st.selection = {{T::Annotation, 0}};
+    REQUIRE(DispatchByPrimaryForTest("delete", st, log));
+    CHECK(st.drawing.cadAnnotations.empty());
+    CHECK(st.drawing.surveyPoints[0].labelMtextAnnId == 0);
+  }
+}
+
+TEST_CASE("MIRROR's erase-source removes the originals of every kind it mirrored", "[issue1700][erase]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  CadSpline sp;
+  std::string why;
+  REQUIRE(spline::MakeFit({{2, 0, 0}, {3, 1, 0}, {4, 0, 0}}, false, &sp, &why));
+  st.drawing.cadSplines.push_back(sp);
+  st.drawing.cadSplineAttrs.push_back(EntityAttributes{});
+  CadMultileader ml;
+  ml.pathXyz = {2.f, 2.f, 0.f, 4.f, 3.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "ML";
+  st.drawing.cadMultileaders.push_back(ml);
+  st.drawing.cadMultileaderAttrs.push_back(EntityAttributes{});
+  AddBlockWithInsert(st, 3.f, 3.f);
+  using T = SelectedEntity::Type;
+  st.selection = {{T::Spline, 0}, {T::Multileader, 0}, {T::BlockRef, 0}};
+  REQUIRE(DispatchByPrimaryForTest("mirror", st, log));
+  SubmitViewportPick(st, 0.0, 0.0, log);
+  SubmitViewportPick(st, 0.0, 10.0, log);
+  SubmitLine(st, "y", log);
+  REQUIRE(st.drawing.cadSplines.size() == 1);
+  CHECK(st.drawing.cadSplines[0].fit[0].x == Catch::Approx(-2.0));
+  REQUIRE(st.drawing.cadMultileaders.size() == 1);
+  CHECK(st.drawing.cadMultileaders[0].pathXyz[0] == Catch::Approx(-2.f));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.x == Catch::Approx(-3.0));
+}

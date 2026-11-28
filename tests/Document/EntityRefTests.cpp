@@ -127,13 +127,14 @@ TEST_CASE("Capabilities declare refusal reasons for every unsupported op", "[doc
   }
 
   // STRETCH moves part of an object; kinds that can only move whole say so.
-  for (EntityKind k : {EntityKind::Solid, EntityKind::PipeRun, EntityKind::Spline, EntityKind::BlockRef,
-                       EntityKind::Mesh, EntityKind::Multileader}) {
+  for (EntityKind k : {EntityKind::Solid, EntityKind::PipeRun, EntityKind::Mesh}) {
     const doc::OpSupport stretch = doc::CheckOpSupport(k, doc::EntityOp::Stretch);
     CHECK_FALSE(stretch.supported);
     CHECK_FALSE(stretch.refusalReason.empty());
   }
-  CHECK(doc::CheckOpSupport(EntityKind::Point, doc::EntityOp::Stretch).supported);
+  // AutoCAD stretches these (issue #1700 phase 4, tools/autocad-transform-oracle/).
+  for (EntityKind k : {EntityKind::Point, EntityKind::Spline, EntityKind::BlockRef, EntityKind::Multileader})
+    CHECK(doc::CheckOpSupport(k, doc::EntityOp::Stretch).supported);
 }
 
 TEST_CASE("EntityBounds3d expands points, ignores non-finite values, and merges boxes",

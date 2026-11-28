@@ -266,13 +266,6 @@ void appendFeatureLineStrip(std::vector<float>* out, const DrawingContent& d, in
     emit(v1 - 1, v0);
 }
 
-template <class Xf>
-void appendSelectedFeatureLinePreview(std::vector<float>* out, const AppCommandState& cmd, Xf&& xf) {
-  for (const auto& e : cmd.selection)
-    if (e.type == SelectedEntity::Type::FeatureLine)
-      appendFeatureLineStrip(out, cmd.drawing, e.index, xf);
-}
-
 } // namespace
 
 /// A small X drawn at a break point, sized from the current view so it stays the same apparent size
@@ -442,6 +435,8 @@ void BuildBreakRemovalPreview(const AppCommandState& cmd, float curX, float curY
 
 static void AppendTransformPreview(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
                                    std::vector<float>* prevLines, std::vector<float>* prevCircles);
+static void AppendScratchCopies(const AppCommandState& cmd, const CadTransformPreviewScratch& scratch,
+                                std::vector<float>* prevLines, std::vector<float>* prevCircles);
 
 void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, std::vector<float>* prevLines,
                            std::vector<float>* prevCircles, float orthoHalfHeightWorld, int framebufferHeightPx) {
@@ -524,90 +519,9 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  if (const auto* stSess = cmd.sessionAs<stepengine::StretchSession>();
-      stSess && stSess->phase == MP::NeedDestination) {
-    // A translation, but each definition point is gated against the captured box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
-    const float dx = curX - stSess->baseX;
-    const float dy = curY - stSess->baseY;
-    const float mnX = stSess->rectMnX, mxX = stSess->rectMxX;
-    const float mnY = stSess->rectMnY, mxY = stSess->rectMxY;
-    auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
-    for (const auto& e : cmd.selection) {
-      if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t li = static_cast<size_t>(e.index);
-        if (li >= cmd.drawing.lineCount())
-          continue;
-        const CadLineRecord seg = cmd.drawing.line(li);
-        for (int i = 0; i < 2; ++i) {
-          float x = LineEndComp(seg, i, 0), y = LineEndComp(seg, i, 1);
-          if (inBox(x, y)) { x += dx; y += dy; }
-          prevLines->push_back(x);
-          prevLines->push_back(y);
-          prevLines->push_back(LineEndComp(seg, i, 2));
-        }
-      } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
-        if (ci >= cmd.drawing.circleCount())
-          continue;
-        float cx = cmd.drawing.circle(ci).cx, cy = cmd.drawing.circle(ci).cy;
-        if (inBox(cx, cy)) { cx += dx; cy += dy; }
-        float cnx = kFlatNormalX;
-        float cny = kFlatNormalY;
-        float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.drawing.userCircleNormals, ci, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
-        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.drawing.circle(ci).cz,
-                            cmd.drawing.circle(ci).r, cnx, cny, cnz);
-      } else if (e.type == SelectedEntity::Type::Arc) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userArcs.size())
-          continue;
-        CadArc a = cmd.drawing.userArcs[k];
-        std::vector<std::string> scratch;  // preview never surfaces refusal reasons to the log
-        StretchOneArc(a, mnX, mxX, mnY, mxY, dx, dy, scratch);
-        appendArcPolylineStrip(prevLines, a.z, a, 48);
-      } else if (e.type == SelectedEntity::Type::Ellipse) {
-        const size_t k = static_cast<size_t>(e.index);
-        if (k >= cmd.drawing.userEllipses.size())
-          continue;
-        CadEllipse el = cmd.drawing.userEllipses[k];
-        if (inBox(el.cx, el.cy)) { el.cx += dx; el.cy += dy; }
-        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
-      } else if (e.type == SelectedEntity::Type::Polyline) {
-        const int pi = e.index;
-        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.drawing.userPolylineOffsets.size())
-          continue;
-        const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
-        const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-        const bool closed =
-            static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
-        auto vert = [&](int vi, float* ox, float* oy, float* oz) {
-          *ox = cmd.drawing.vertex(static_cast<size_t>(vi)).x;
-          *oy = cmd.drawing.vertex(static_cast<size_t>(vi)).y;
-          *oz = cmd.drawing.vertex(static_cast<size_t>(vi)).z;
-          if (inBox(*ox, *oy)) { *ox += dx; *oy += dy; }
-        };
-        for (int vi = v0; vi + 1 < v1; ++vi) {
-          float x, y, z;
-          vert(vi, &x, &y, &z);
-          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
-          vert(vi + 1, &x, &y, &z);
-          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
-        }
-        if (closed && v1 - v0 >= 2) {
-          float x, y, z;
-          vert(v1 - 1, &x, &y, &z);
-          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
-          vert(v0, &x, &y, &z);
-          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
-        }
-      }
-    }
-    appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {  // REQ-087
-      if (inBox(*x, *y)) {
-        *x += dx;
-        *y += dy;
-      }
-    });
+  // STRETCH: the commit's own window and per-kind STRETCH on a scratch copy (issue #1700 phase 4).
+  if (CadTransformPreviewScratch scratch; BuildCadStretchPreviewScratch(cmd, curX, curY, &scratch)) {
+    AppendScratchCopies(cmd, scratch, prevLines, prevCircles);
     return;
   }
 
@@ -1031,6 +945,16 @@ void AppendOverlayKindPreview(const AppCommandState& cmd, const DrawingContent& 
 /// than stalling the viewport; the copies it does draw are still exactly the commit's.
 constexpr std::size_t kMaxPreviewFloats = 6000000;
 
+/// The wireframe of every copy in \p scratch (not its cached solids, pipe runs and meshes).
+static void AppendScratchCopies(const AppCommandState& cmd, const CadTransformPreviewScratch& scratch,
+                                std::vector<float>* prevLines, std::vector<float>* prevCircles) {
+  const std::vector<CadBlockDefinition>& blockDefs = scratch.source ? scratch.source->blockDefs : cmd.drawing.blockDefs;
+  for (const SelectedEntity& e : scratch.entities) {
+    AppendEntityWireframe(cmd, scratch.drawing, blockDefs, e, prevLines, prevCircles);
+    AppendOverlayKindPreview(cmd, scratch.drawing, e, prevLines, prevCircles);
+  }
+}
+
 static void AppendTransformPreview(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
                                    std::vector<float>* prevLines, std::vector<float>* prevCircles) {
   // One instance at a time, so the budget can stop an ARRAY part way.
@@ -1045,10 +969,7 @@ static void AppendTransformPreview(const AppCommandState& cmd, const CadTransfor
     BuildCadTransformPreviewScratch(cmd, one, &scratch);
     if (!scratch.source)
       return;
-    for (const SelectedEntity& e : scratch.entities) {
-      AppendEntityWireframe(cmd, scratch.drawing, scratch.source->blockDefs, e, prevLines, prevCircles);
-      AppendOverlayKindPreview(cmd, scratch.drawing, e, prevLines, prevCircles);
-    }
+    AppendScratchCopies(cmd, scratch, prevLines, prevCircles);
     // Solids, pipe runs and meshes: their existing display geometry, moved by the same transform.
     for (const CadTransformPreviewScratch::CachedDisplay& c : scratch.cached) {
       if (c.entity.type == SelectedEntity::Type::Mesh) {
