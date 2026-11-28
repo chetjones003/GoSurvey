@@ -1049,7 +1049,7 @@ template <class T>
 
 /// True when \p kind can represent the result of \p xf. Check before duplicating, so a COPY never
 /// leaves an untransformed duplicate behind. One case it cannot rule out: the B-rep kernel may still
-/// refuse a solid (ef TransformSolid returns false), so a duplicate-then-transform caller must
+/// refuse a solid (\ref TransformSolid returns false), so a duplicate-then-transform caller must
 /// remove a solid copy whose transform failed.
 ///
 /// A hatch takes any transform because its boundary is bare points. It stores no plane normal, so
@@ -1352,17 +1352,19 @@ inline bool TransformPositionMarker(CadDrawingEntityStore& store, std::size_t in
   CadPositionMarker& m = store.cadPositionMarkers[index];
   const ray3d::Vec3 p0{m.x, m.y, static_cast<double>(m.z)};
   const ray3d::Vec3 d = ray3d::Sub(xf.applyPoint(p0), p0);
+  // Add the double displacement to each stored value and round once, so a label at state-plane
+  // coordinates stays with its marker even when the move brings it near the origin.
+  const auto add = [](float* v, double delta) { *v = static_cast<float>(static_cast<double>(*v) + delta); };
   m.x += d.x;
   m.y += d.y;
-  m.z = static_cast<float>(static_cast<double>(m.z) + d.z);
-  const float fx = static_cast<float>(d.x), fy = static_cast<float>(d.y);
-  m.label.insX += fx;
-  m.label.insY += fy;
-  m.label.insZ = static_cast<float>(static_cast<double>(m.label.insZ) + d.z);
-  m.label.boxMinX += fx;
-  m.label.boxMaxX += fx;
-  m.label.boxMinY += fy;
-  m.label.boxMaxY += fy;
+  add(&m.z, d.z);
+  add(&m.label.insX, d.x);
+  add(&m.label.insY, d.y);
+  add(&m.label.insZ, d.z);
+  add(&m.label.boxMinX, d.x);
+  add(&m.label.boxMaxX, d.x);
+  add(&m.label.boxMinY, d.y);
+  add(&m.label.boxMaxY, d.y);
   return true;
 }
 

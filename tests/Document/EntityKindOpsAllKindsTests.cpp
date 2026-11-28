@@ -604,6 +604,22 @@ TEST_CASE("Multileader follows AutoCAD; Position Marker only moves", "[document]
     CHECK_FALSE(doc::TransformEntity(store, pmRef, RotMinus90()));
     CHECK(p.x == Catch::Approx(26.0));
   }
+
+  SECTION("Position Marker: a label at state-plane coordinates rounds once, not per displacement") {
+    CadPositionMarker pm;
+    pm.x = 1000000.0;
+    pm.label.kind = CadAnnotation::Kind::Mtext;
+    pm.label.insX = 1000000.f;
+    pm.label.boxMinX = 1000000.f;
+    store.cadPositionMarkers.push_back(pm);
+    store.cadPositionMarkerAttrs.push_back(EntityAttributes{});
+    const EntityRef pmRef{EntityKind::PositionMarker, static_cast<int>(store.cadPositionMarkers.size() - 1)};
+    REQUIRE(doc::TransformEntity(store, pmRef, doc::SimilarityTransform::Translation({-999999.975, 0.0, 0.0})));
+    const CadPositionMarker& p = store.cadPositionMarkers.back();
+    CHECK(p.x == Catch::Approx(0.025).margin(1e-9));
+    CHECK(p.label.insX == Catch::Approx(0.025f).margin(1e-6));
+    CHECK(p.label.boxMinX == Catch::Approx(0.025f).margin(1e-6));
+  }
 }
 
 TEST_CASE("COPY over every Document kind = DuplicateEntities + TransformEntities", "[document][entitykindops]") {
