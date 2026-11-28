@@ -34,10 +34,7 @@ void FinishRotateTransform(AppCommandState& st, double bx, double by, double bz,
   const bool tilted = !CadWorkPlaneIsWorldXy(st);
   if (copyMode) {
     // Rotate-copy is "duplicate, then rotate" through the same path as ROTATE (ADR-0011).
-    const ucs::Ucs u = CadActiveUcsStorage(st);
-    const ray3d::Vec3 axisUnit =
-        tilted ? ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z}) : ray3d::Vec3{0.0, 0.0, 1.0};
-    const auto xf = GoSurvey::Document::SimilarityTransform::RotationAboutAxis({bx, by, bz}, axisUnit, rad);
+    const auto xf = GoSurvey::Document::SimilarityTransform::RotationAboutAxis({bx, by, bz}, CadRotateAxisUnit(st), rad);
     TransformSelection(st, xf,
                        xf.isPlanarZ() ? GoSurvey::Document::EntityOp::RotatePlan : GoSurvey::Document::EntityOp::Rotate3d,
                        "ROTATE", /*duplicate=*/true, log);

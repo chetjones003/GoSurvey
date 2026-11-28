@@ -138,3 +138,59 @@ void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
 /// same reason as \ref ApplyRotationAboutUcsZ: the scale gizmo calls it too.
 void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
                                 std::vector<std::string>& log);
+
+// --- The transform preview (ADR-0011 / issue #1700 phase 3) -------------------------------------
+//
+// The preview is the commit applied to a scratch copy. The active command says which transform(s)
+// a pick at the cursor would commit, the selection is copied into a scratch store, and the same
+// Document operation the commit runs (`TransformEntity`) transforms the copies. The viewport then
+// draws the scratch store as a wireframe, so the ghost cannot disagree with the result.
+
+/// The transform(s) a pick would commit: one for MOVE, COPY, PASTE, ROTATE, SCALE and MIRROR, one per
+/// copy for ARRAY. \p op is the operation the commit checks kinds against.
+struct CadTransformPreviewPlan {
+  GoSurvey::Document::EntityOp op = GoSurvey::Document::EntityOp::Move;
+  std::vector<GoSurvey::Document::SimilarityTransform> instances;
+  bool fromClipboard = false;  ///< PASTE: the clipboard's content, not the selection
+};
+
+/// The plan for the active MOVE/COPY, PASTE, ARRAY, SCALE, MIRROR or ROTATE step if the cursor at
+/// (\p curX, \p curY) were picked. False when no such step is waiting for that pick.
+bool CadActiveTransformPreviewPlan(const AppCommandState& cmd, float curX, float curY, CadTransformPreviewPlan* plan);
+
+/// The plan for an armed gizmo drag (the same transform `CommitGizmoDrag` applies). False when no
+/// whole-object drag is armed, or it would change nothing.
+bool CadGizmoDragPreviewPlan(const AppCommandState& cmd, CadTransformPreviewPlan* plan);
+
+/// The selection transformed by a plan, in a scratch store.
+struct CadTransformPreviewScratch {
+  /// One transformed copy per selected entity per plan instance. Survey points, PDF underlays and
+  /// surfaces are not copied; the editor draws a PDF ghost from \ref CadTransformPdfUnderlayPlacement.
+  DrawingContent drawing;
+  /// The copies, as handles into \ref drawing.
+  std::vector<SelectedEntity> entities;
+  /// Solids, pipe runs and meshes: a handle into \ref source and the transform to draw its existing
+  /// display tessellation with.
+  struct CachedDisplay {
+    SelectedEntity entity;
+    GoSurvey::Document::SimilarityTransform xf;
+  };
+  std::vector<CachedDisplay> cached;
+  /// Where the copies came from (the drawing, or the clipboard for PASTE): block definitions and the
+  /// cached handles resolve against it.
+  const DrawingContent* source = nullptr;
+};
+
+/// Copy what the commit would transform into \p out and transform it with the commit's operations.
+/// Kinds the commit refuses for an instance are left out of that instance. \p only restricts the
+/// copy to one selection type (the editor's text overlay wants annotations only).
+void BuildCadTransformPreviewScratch(const AppCommandState& cmd, const CadTransformPreviewPlan& plan,
+                                     CadTransformPreviewScratch* out,
+                                     std::optional<SelectedEntity::Type> only = std::nullopt);
+
+/// True when the commit would transform a selected entry of type \p type by \p xf under \p op.
+bool CadSelectionTakesTransform(SelectedEntity::Type type, GoSurvey::Document::EntityOp op,
+                                const GoSurvey::Document::SimilarityTransform& xf);
+
+/// The placement the commit gives a PDF underlay under \p xf (insertion, rotation, scale).
+void CadTransformPdfUnderlayPlacement(PdfAttachment& att, const GoSurvey::Document::SimilarityTransform& xf);

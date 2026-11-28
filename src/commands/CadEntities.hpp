@@ -932,18 +932,6 @@ inline void RotateNormalAboutZ(float rad, float* nx, float* ny) {
   *ny = s * dx + c * dy;
 }
 
-inline void ReflectNormalAcrossLine(float x0, float y0, float x1, float y1, float* nx, float* ny) {
-  if (!nx || !ny)
-    return;
-  const float phi = std::atan2(y1 - y0, x1 - x0);
-  const float c = std::cos(2.f * phi);
-  const float s = std::sin(2.f * phi);
-  const float dx = *nx;
-  const float dy = *ny;
-  *nx = c * dx + s * dy;
-  *ny = s * dx - c * dy;
-}
-
 /// The plane a curve carrying a normal lies in (REQ-311 / REQ-312): `ucs::FromNormal` at its centre.
 ///
 /// **One function, deliberately.** The renderer, the hit test, the object snap, the DXF writer and

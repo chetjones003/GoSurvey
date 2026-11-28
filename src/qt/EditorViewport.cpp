@@ -100,15 +100,6 @@ static PdfAttachment PdfRenderCopy(const PdfAttachment& source) {
   return result;
 }
 
-static void RotatePdfInsertAroundBase(float bx, float by, float rad, float* x, float* y) {
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  const float dx = *x - bx;
-  const float dy = *y - by;
-  *x = bx + dx * c - dy * s;
-  *y = by + dx * s + dy * c;
-}
-
 static void AppendDashedPreviewSegment(std::vector<float>& lines, double ax, double ay, double az,
                                        double bx, double by, double bz, double orthoHalfH, int heightPx) {
   const double dx = bx - ax, dy = by - ay, dz = bz - az;
@@ -133,11 +124,6 @@ static void AppendDashedPreviewSegment(std::vector<float>& lines, double ax, dou
                                static_cast<float>(az + dz * t0), static_cast<float>(ax + dx * t1),
                                static_cast<float>(ay + dy * t1), static_cast<float>(az + dz * t1)});
   }
-}
-
-static void ScalePdfInsertAroundBase(float bx, float by, float sc, float* x, float* y) {
-  *x = bx + sc * (*x - bx);
-  *y = by + sc * (*y - by);
 }
 
 /// REQ-356: dismiss the grip menu once the pointer has been off it for one second. Polled rather than
@@ -182,54 +168,22 @@ static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, 
   assert(ghosts != nullptr);
   if (ghosts == nullptr)
     return;
-  using MP = stepengine::ModifyPhase;
+  // The placement the commit would give each selected underlay, per copy (issue #1700). What the
+  // commit refuses (MIRROR, a tilted turn) draws no ghost.
+  CadTransformPreviewPlan plan;
+  if (!CadActiveTransformPreviewPlan(st, curX, curY, &plan) && !CadGizmoDragPreviewPlan(st, &plan))
+    return;
+  if (plan.fromClipboard)
+    return;
   const int count = static_cast<int>(st.drawing.pdfAttachments.size());
-  if (const auto* mc = st.sessionAs<stepengine::MoveCopySession>()) {
-    if (mc->phase != MP::NeedDestination)
-      return;
-    const float dx = curX - mc->baseX;
-    const float dy = curY - mc->baseY;
+  for (const GoSurvey::Document::SimilarityTransform& xf : plan.instances) {
+    if (!CadSelectionTakesTransform(SelectedEntity::Type::PdfUnderlay, plan.op, xf))
+      continue;
     for (int pi = 0; pi < count; ++pi) {
       if (!SelectionIncludesPdfUnderlay(st, pi))
         continue;
       PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
-      ghost.insertX += dx;
-      ghost.insertY += dy;
-      ghosts->push_back(ghost);
-    }
-    return;
-  }
-  if (const auto* rs = st.sessionAs<stepengine::RotateSession>()) {
-    float theta = 0.f;
-    if (!CadRotatePreviewTheta(st, curX, curY, &theta))
-      return;
-    const float bx = rs->baseX;
-    const float by = rs->baseY;
-    constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
-    for (int pi = 0; pi < count; ++pi) {
-      if (!SelectionIncludesPdfUnderlay(st, pi))
-        continue;
-      PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
-      RotatePdfInsertAroundBase(bx, by, theta, &ghost.insertX, &ghost.insertY);
-      ghost.rotationDeg += theta * kPdfRadToDeg;
-      ghosts->push_back(ghost);
-    }
-    return;
-  }
-  if (const auto* ss = st.sessionAs<stepengine::ScaleSession>()) {
-    if (ss->phase != MP::NeedDestination)
-      return;
-    float sc = 1.f;
-    if (!CadScalePreviewFactor(st, curX, curY, &sc))
-      return;
-    const float bx = ss->baseX;
-    const float by = ss->baseY;
-    for (int pi = 0; pi < count; ++pi) {
-      if (!SelectionIncludesPdfUnderlay(st, pi))
-        continue;
-      PdfAttachment ghost = PdfRenderCopy(st.drawing.pdfAttachments[static_cast<std::size_t>(pi)]);
-      ScalePdfInsertAroundBase(bx, by, sc, &ghost.insertX, &ghost.insertY);
-      ghost.scale = std::max(ghost.scale * sc, 1e-9f);
+      CadTransformPdfUnderlayPlacement(ghost, xf);
       ghosts->push_back(ghost);
     }
   }
@@ -891,7 +845,8 @@ void EditorViewport::paintGL() {
         m_State.pdfAttachPreviewReady;
     const bool modifyingPdf = (m_State.active == AppCommandState::Kind::Move ||
         m_State.active == AppCommandState::Kind::Copy || m_State.active == AppCommandState::Kind::Scale ||
-        m_State.active == AppCommandState::Kind::Rotate) &&
+        m_State.active == AppCommandState::Kind::Rotate || m_State.active == AppCommandState::Kind::Array ||
+        m_State.gizmoDragActive) &&
         std::any_of(m_State.selection.begin(), m_State.selection.end(), [](const SelectedEntity& e) {
           return e.type == SelectedEntity::Type::PdfUnderlay;
         });
