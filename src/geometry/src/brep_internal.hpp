@@ -1,3 +1,5 @@
+#pragma once
+
 #include <GoSurvey/Geometry/brep.hpp>
 
 #include <algorithm>
